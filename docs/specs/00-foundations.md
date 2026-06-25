@@ -1,4 +1,4 @@
-# Render Agents SDK — Foundations
+# render-agents — Foundations
 
 **Author:** Jacob Prall
 **Status:** DRAFT
