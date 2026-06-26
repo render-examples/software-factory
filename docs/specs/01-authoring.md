@@ -95,8 +95,8 @@ You are a security reviewer. Given a set of file patches, analyze each for...
 
 | Field | Type | Default | Validated at |
 |---|---|---|---|
-| `model` | `string` (tier name or model id) | `"medium"` | Load time |
-| `provider` | `"anthropic" \| "openai"` | Inferred from model | Load time |
+| `model` | `string` (tier name or model id) | `"medium"` | Load time (tier alias must exist; raw model ids must be routable) |
+| `provider` | `"anthropic" \| "openai"` | Inferred from model | Load time (if set, must be a supported provider) |
 | `description` | `string` | (none) | Load time |
 | `tools` | `string[]` | `[]` | Load time (source ids or `sourceId__toolName`) |
 | `subagents` | `string[]` | `[]` | Load time (resolved against the AgentSet) |
@@ -122,6 +122,12 @@ Unknown fields are hard errors at load time.
 | `small` | anthropic | `claude-haiku-4-5` |
 | `medium` | anthropic | `claude-sonnet-4-6` |
 | `large` | anthropic | `claude-opus-4-6` |
+
+**Model resolution & validation** — model checks are intentionally split so failures are precise:
+
+1. **Routing validity (hard error):** the runtime must be able to route the resolved model to a supported provider client (`anthropic`/`openai`), either from explicit `provider` or inference from `model`.
+2. **Tier validity (hard error):** tier aliases must exist in the tier table above.
+3. **Pricing availability (warning, not hard error):** a routable model id without pricing is allowed; cost behavior is defined in [Execution → Budgets & cost](02-execution.md#budgets--cost).
 
 **Tool references** — the `tools` array accepts source ids and individual tool names. A bare source id (`github`) mounts the source and exposes all its tools; a namespaced name (`github__get_file`) mounts the source but exposes only that tool. `tools[]` is the sole allowlist: only declared tools are ever presented to the model. `requireApproval` matches the **expanded** resolved tool names (e.g. `github__merge_pr`), not source ids.
 
@@ -202,7 +208,7 @@ Agents list skill ids in frontmatter (`skills: [security-patterns]`); `loadAgent
 
 ## Workflows
 
-**Purpose** — A workflow is the composition layer: a TypeScript handler under `workflows/` that orchestrates agents and deterministic steps into a pipeline (Principle 6).
+**Purpose** — A workflow is the composition layer: a TypeScript handler under `workflows/` that orchestrates agents and deterministic steps into a pipeline.
 
 **Model** — `workflows/<dir>/index.ts` default-exports a `workflow()` definition. The name is inferred from the directory (`workflows/code-review/` → `"code-review"`); config is optional. Inside a handler, **always access agents via `ctx.agents`** (the run-scoped set) — not a module-level `loadAgents()` closure (see [Execution → Runtime & composition](02-execution.md#runtime--composition)). Side-effecting or non-deterministic work belongs in `ctx.step()`; the why is in [Execution → Determinism & replay](02-execution.md#determinism--replay).
 
@@ -316,7 +322,8 @@ Hard errors raised at `loadAgents()` time. Other layers reference this list rath
 - Unknown frontmatter fields
 - Tool reference not resolvable (unknown source id, or namespaced tool name absent from an existing source)
 - Skill name not found in the `skills/` registry
-- Model tier or model string not recognized
+- Model tier alias is unknown
+- Model/provider pair is not routable to a supported provider client
 - `plan` not a known `RenderPlan` slug
 - `output` is not a valid JSON Schema
 - `subagents` references an agent not in the AgentSet, or an agent lists itself

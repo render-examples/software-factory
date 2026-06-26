@@ -120,7 +120,7 @@ Cost is computed via `estimateCost(model, usage)` after each `complete()` call: 
 
 **Cost estimation.** `estimateCost(model, usage)` looks up per-1M-token pricing in `MODEL_PRICING`:
 
-- **Unknown models** default to `0` cost (cost budget not enforced — not a hard error), but with a **loud warning emitted at load time** (visible in CI), repeated at runtime. The other budgets (`maxIterations`, `maxTokens`, `maxWallSeconds`) still apply regardless, so an unpriced model is never fully unbounded.
+- **Routable but unpriced models** default to `0` cost (cost budget not enforced — not a hard error), but with a **loud warning emitted at load time** (visible in CI), repeated at runtime. The other budgets (`maxIterations`, `maxTokens`, `maxWallSeconds`) still apply regardless, so an unpriced model is never fully unbounded.
 - **Custom/unlisted model pricing** is supplied by extending the table via `createRuntime({ pricing })` (merged over the built-in `MODEL_PRICING`). Once registered, the model is priced and the cost budget is enforced normally.
 - **Explicit opt-out:** set `budget.maxCostUsd: null` (or `0`) to deliberately disable the cost ceiling. This silences the unknown-pricing warning for that agent — the choice is then explicit rather than accidental.
 
