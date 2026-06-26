@@ -49,7 +49,7 @@ The harness provides production-grade infrastructure that the template lacks. Th
 | **OAuth HTTP routes** | `web/src/routes/connections.ts` | Port: `/start`, `/callback`, `DELETE`. Adapt HMAC state signing. |
 | **SSRF-guarded fetch** | `core/src/builtins/fetchUrl.ts` | Direct lift into `@render-agents/engine`. DNS resolve + private IP block via `ipaddr.js`, redirect re-check, size/timeout caps. |
 | **Cooperative cancellation** | `core/src/cancel.ts` | Port pattern: Valkey `cancel:{runId}` with poll. Adapt to our `CancelStore` interface. |
-| **Conversation model** | `web/src/routes/conversations.ts`, `core/src/state/repo.ts` | Port: `loadConversationMessages` (cross-run history), sequential-only enforcement (unique index), `409 conversation_busy` on concurrent turns. |
+| **Thread model** (harness "conversation") | `web/src/routes/conversations.ts`, `core/src/state/repo.ts` | Port: `loadConversationMessages` (cross-run history), sequential-only enforcement (unique index), `409 thread_busy` on concurrent turns. Rename the harness's "conversation" to **thread**; the harness's cross-run history is exactly our thread-spans-runs model. |
 | **SSE streaming** | `web/src/routes/runs.ts` (SSE handler), `core/src/state/repo.ts` (NOTIFY) | Port the pointer-payload NOTIFY pattern + dedicated `pg.Client` for LISTEN, but point it at `run_events`: the SSE stream is a live tail of the log (`EventLogStore.tail`), resumable from a `seq` offset — no separate SSE event vocabulary. |
 | **Budget enforcement** | `core/src/loop.ts` (`overBudget`, `estimateCost`, `addUsage`) | Port cost estimation. Adapt `DEFAULT_BUDGET` (harness defaults: `maxCostUsd: 10`, `maxWallSeconds: 39600`). |
 | **Run state repo** | `core/src/state/repo.ts` | Reference for the append pattern: `next_seq()` becomes the event log's `seq`; status transitions and message history become projections folded on `events.append`; NOTIFY fires per appended event. |
@@ -77,7 +77,7 @@ The harness provides production-grade infrastructure that the template lacks. Th
 2. **Flatten the dependency graph.** The harness has 10+ packages with complex cross-deps. Our monorepo has 4 packages with a clean tree.
 3. **Delete the YAML layer.** Every place the harness reads from `render-harness.yaml` or `AgentDefinition` built by `defineFromConfig`, we read from markdown frontmatter (agent config) or `package.json` (project metadata). There is no project-level config file.
 4. **Keep the SQL.** The harness's migration patterns (advisory lock, idempotent `CREATE TABLE IF NOT EXISTS`, index naming) are production-proven.
-5. **Test against the harness's edge cases.** The harness handles: concurrent conversation turns, mid-loop crashes, OAuth token races, SSRF via DNS rebinding, budget overflow on the last turn. These are the test cases we must not lose.
+5. **Test against the harness's edge cases.** The harness handles: concurrent thread turns, mid-loop crashes, OAuth token races, SSRF via DNS rebinding, budget overflow on the last turn. These are the test cases we must not lose.
 
 ---
 

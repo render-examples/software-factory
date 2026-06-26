@@ -13,7 +13,7 @@ Foundations (L0) of the render-agents spec. Everything downstream derives from t
 
 ### The problem
 
-Production agent systems need three things at once: simple authoring, durable orchestration, and real platform infrastructure (state, sessions, HITL, auth, cost controls, tracing). Lightweight frameworks nail the authoring but lack sessions, approval gates, and multi-tenant state. Platform-rich harnesses have the substrate but bury agent identity in config objects and can't express multi-agent fan-out. Workflow-native templates get orchestration right but ship without conversations, HITL enforcement, or OAuth.
+Production agent systems need three things at once: simple authoring, durable orchestration, and real platform infrastructure (state, sessions, HITL, auth, cost controls, tracing). Lightweight frameworks nail the authoring but lack sessions, approval gates, and multi-tenant state. Platform-rich harnesses have the substrate but bury agent identity in config objects and can't express multi-agent fan-out. Workflow-native templates get orchestration right but ship without threads, HITL enforcement, or OAuth.
 
 This SDK combines them: markdown-first authoring, Render Workflows as the orchestration primitive, and the full platform substrate (Postgres-backed state, enforced HITL, per-user OAuth, sessions, cost/budget controls, span-level tracing) in one coherent package.
 
@@ -81,7 +81,7 @@ The decisions below are load-bearing: each imposes a constraint that many downst
 **Blast radius:** Runner interface, engine, `RunContext`, gateway integration.
 
 ### D10 — The append-only event log is the single source of truth
-**Decision:** Each run is an ordered, append-only log of typed events (`run_events`). Messages, spans, tool-call idempotency, step memoization, approvals, cost, run status, and the SSE stream are all **projections** of that log — not independently-authored stores. Runtime code emits events; it never writes a projection directly. Resume = replay the log; idempotency/memoization = "is it already in the log?". Events are immutable and versioned.
+**Decision:** Each run is an ordered, append-only log of typed events (`run_events`). Messages, spans, tool-call idempotency, step memoization, approvals, cost, run status, and the SSE stream are all **projections** of that log — not independently-authored stores. Runtime code emits events; it never writes a projection directly. Resume = replay the log; idempotency/memoization = "is it already in the log?". Events are immutable and versioned. *(Two narrow caveats: replay/reconstruction holds only within the configured retention horizon — once event detail is trimmed, older runs keep just their summary, see [Operations → Retention](04-operations.md#retention); and cancellation writes one control flag directly, see [Execution → Cancellation](02-execution.md#cancellation).)*
 **Why:** The same fact ("a tool ran with this input/result at this time") was being written to several tables under two key schemes and re-described in three event vocabularies. One log, many views removes that duplication and makes resume/idempotency/audit a single mechanism.
 **Blast radius:** Store schema (event log + maintained projections), `RunContext` (`emit`), tracer, SSE streaming, idempotency, checkpoint/resume, cost attribution.
 
@@ -109,12 +109,19 @@ The SDK is a pnpm + Turborepo monorepo of four runtime packages plus a scaffolde
 ```
 @render-agents/sdk
   └── @render-agents/engine  (default runner, re-exported)
+  │     └── @render-agents/store
   └── @render-agents/store   (tracer + store, re-exported)
 
 @render-agents/gateway
   └── @render-agents/sdk
   └── @render-agents/store
 ```
+
+`store` is the bottom layer (no internal dependencies); `engine` depends on `store`. This is load-bearing for **type placement**: the shared domain vocabulary must live at or below the layer that consumes it, so the graph stays acyclic. Concretely:
+
+- **`store` owns the persistence/event vocabulary** that both it and `engine` need — `RunEvent`/`RunEventRecord`/`EventCategory`, `Message`/`ContentBlock`/`MessageRole`, `ToolResult`, `TokenUsage`, `Logger` — alongside its own `Tracer`/`Span*`/`RunStore` types.
+- **`engine` owns the runtime vocabulary** — `RunContext`, `AgentRunner`, `AgentDefinition`, `Tool`/`ToolContext`, `AgentInput`/`AgentOutput`, `MountedTools`, `ContextManager`, etc. — and imports the persistence vocabulary from `store`.
+- **`sdk` re-exports** both as its public surface. A type being part of `@render-agents/sdk`'s public API (how callers import it) does **not** mean it is physically defined in the `sdk` package — most shared contracts are defined lower and re-exported. `engine` and `store` must never import from `sdk` (that would cycle).
 
 **Build + publish:** strict TypeScript, `NodeNext` resolution, declaration emit; Node 20+, ESM only; each `packages/*` publishes independently to npm.
 
@@ -132,6 +139,6 @@ The spec is split into layered files. Read top to bottom for the full picture; j
 | [`03-platform.md`](03-platform.md) | Platform | Event log + maintained projections, sessions, OAuth, webhooks/connectors/schedules, gateway, observability |
 | [`04-operations.md`](04-operations.md) | Operations | Deployment, configuration, retention, non-functional requirements |
 | [`05-type-reference.md`](05-type-reference.md) | Reference | Every `interface`/`type` definition (pure catalog, linked from the layers above) |
-| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Run list, span/trace tree, live SSE stream, pending approvals, cost summary, session/conversation browser |
+| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Run list, span/trace tree, live SSE stream, pending approvals, cost summary, session/thread browser |
 | [`porting-map.md`](porting-map.md) | Appendix | Code provenance / lift-and-shift map from the source repos |
 | [`future-considerations.md`](future-considerations.md) | Appendix | Sandboxes and other forward-looking extensions |

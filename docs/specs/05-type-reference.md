@@ -7,6 +7,8 @@
 
 Every public `interface`/`type` in one place, grouped by package. Narrative and examples live in the layer files that link here.
 
+> **Grouping denotes public-surface ownership, not physical module location.** Headers like "Core (@render-agents/sdk)" mean "exported as part of that package's public API" — which `sdk` achieves largely by **re-export**. To keep the dependency graph acyclic (`engine`/`store` must not import from `sdk`; see [Architecture at a Glance](00-foundations.md#architecture-at-a-glance)), the shared vocabulary is physically defined lower: the **persistence/event vocabulary** (`RunEvent`/`RunEventRecord`/`EventCategory`, `EventLogStore`, `EventInterceptor`, `Message`/`ContentBlock`/`MessageRole`, `ToolResult`, `TokenUsage`, `Logger`) lives in `@render-agents/store`, and the **runtime vocabulary** (`RunContext`, `AgentRunner`, `AgentDefinition`, `Tool`/`ToolContext`, `AgentInput`/`AgentOutput`, `MountedTools`, `ContextManager`, the `Hook*` authoring contract, …) lives in `@render-agents/engine`. The append path runs hooks via the `EventInterceptor` seam (engine adapts `Hook` → `EventInterceptor`); `store` never imports the `Hook` type. The **operational persistence interfaces** under the Gateway grouping (`SessionStore`/`ApprovalStore`/`OAuthStore` and their record types `Session`/`Thread`/`ThreadMessage`/`ApprovalRequest`/`OAuthConnection`) are likewise physically defined in `@render-agents/store` — `store` owns all persistence — while only the HTTP-facing `ConnectorSpec`/`ConnectorContext` are physically in `gateway`. Both layers are re-exported by `sdk`.
+
 ---
 
 ## Core (@render-agents/sdk)
@@ -124,8 +126,9 @@ The paused-boundary view of an agent invocation.
 ```ts
 interface PausedResult {
   status: "paused";
-  reason: string;
-  pendingApprovalIds: string[];
+  reason: "approval" | "input";
+  /** Set when `reason === "approval"`. */
+  pendingApprovalIds?: string[];
 }
 ```
 
@@ -133,10 +136,12 @@ interface PausedResult {
 The control-flow signal thrown by the runner on HITL pause.
 
 ```ts
-/** Thrown by the runner to unwind execution on HITL pause. Caught by the workflow/gateway runtime, which marks the run "paused". */
+/** Thrown by the runner to unwind execution on pause (HITL approval or awaiting input). Caught by the workflow/gateway runtime, which marks the run "paused". */
 declare class RunPaused extends Error {
   readonly runId: string;
-  readonly pendingApprovalIds: string[];
+  readonly reason: "approval" | "input";
+  /** Set when `reason === "approval"`. */
+  readonly pendingApprovalIds?: string[];
 }
 ```
 
@@ -487,6 +492,16 @@ interface RunContext {
   requestApproval(toolName: string, input: unknown): Promise<ApprovalResult>;
 
   /**
+   * Conversational pause (sibling of `requestApproval`). An interactive run calls
+   * this when it has finished a turn and wants the next user message instead of
+   * completing. Production (gateway) emits `run.paused { reason: "input" }` and
+   * unwinds via `RunPaused`; the run resumes when `/runs/:id/input` delivers the
+   * next turn (appended as a `message.user` event) — on resume this returns that
+   * turn's content. Autonomous runs never call it; they drive to completion.
+   */
+  awaitInput(): Promise<ContentBlock[]>;
+
+  /**
    * The single write path. Appends an event to the run's event log; the
    * store fans it out to projections (messages, spans, tool-calls, cost),
    * NOTIFYs the SSE stream, and feeds it through hooks. Runtime code never
@@ -550,9 +565,10 @@ type RunEvent =
   | { type: "run.started"; trigger?: string; input?: unknown }
   | { type: "run.completed"; result?: unknown }
   | { type: "run.failed"; error: string }
-  | { type: "run.paused"; pendingApprovalIds: string[] }
+  | { type: "run.paused"; reason: "approval" | "input"; pendingApprovalIds?: string[] }
   | { type: "run.cancelled" }
   // message
+  | { type: "message.user"; content: ContentBlock[] }
   | { type: "message.assistant"; agentName: string; content: ContentBlock[] }
   | { type: "message.tool"; agentName: string; content: ContentBlock[] }
   | { type: "text.delta"; agentName: string; text: string }
@@ -573,6 +589,10 @@ type RunEvent =
   // context
   | { type: "context.compacted"; agentName: string; strategy: string; beforeTokens: number; afterTokens: number };
 ```
+
+> **User turns are events.** `message.user` records a user/external turn delivered into a run — the initial input *and* every subsequent turn delivered via [`/runs/:id/input`](03-platform.md#gateway). Because it is in the log, it folds into `ctx.messages()` (so a resumed/revived run sees the new turn), streams over SSE, and rehydrates across a [thread's](03-platform.md#sessions--threads) runs. (`run.started.input` carries the dispatch payload; `message.user` is the conversational turn.)
+>
+> **`run.paused` carries a `reason`.** `"approval"` (a gated tool is awaiting resolution; `pendingApprovalIds` is set) vs `"input"` (an interactive run is awaiting the next user message). Both resolve via the same pause/resume-by-replay path, but the gateway uses the reason to route `/runs/:id/input` (deliver a `message.user` for `"input"`; expect an `approval.resolved` for `"approval"`). The run's [`RunStatus`](#runstatus) is `"paused"` in both cases.
 
 ### RunEventRecord
 A persisted event in the append-only log — the source of truth all projections fold from. History is immutable; `version` carries the event-schema version.
@@ -605,9 +625,27 @@ interface EventLogStore {
   /** Read events in order, optionally from a `seq` offset (for replay). */
   read(runId: string, fromSeq?: number): Promise<RunEventRecord[]>;
   /** Live tail for SSE: yields events as they are appended (Postgres LISTEN/NOTIFY). */
-  tail(filter: { runId?: string; conversationId?: string }, signal: AbortSignal): AsyncIterable<RunEventRecord>;
+  tail(filter: { runId?: string; threadId?: string }, signal: AbortSignal): AsyncIterable<RunEventRecord>;
 }
 ```
+
+### EventInterceptor
+A minimal, persistence-level append seam run **pre-commit** by `events.append`, before an event is persisted/projected/NOTIFYed. It references only the event vocabulary (no authoring/runtime types), so the bottom `store` layer stays free of higher-layer concepts. The user-facing [`Hook`](#hook) contract is defined in `@render-agents/engine` and **adapted onto this seam** (then injected at runtime composition via [`AgentRuntime`](#agentruntime)). This indirection is what lets hooks be "runtime middleware" while the append path remains a pure persistence concern. Returns `continue` (optionally with a rewritten event) or `reject` (veto, surfaced by the runtime — e.g. a rejected `tool.called` becomes an error `tool_result`).
+
+```ts
+interface EventInterceptor {
+  /** Called for each event before append. `meta` carries run-scoped identity the store already knows. */
+  intercept(
+    event: RunEvent,
+    meta: { runId: string; agentName?: string },
+  ): Promise<
+    | { action: "continue"; event?: RunEvent }   // optionally rewritten
+    | { action: "reject"; reason: string }
+  >;
+}
+```
+
+> The runtime composes the discovered [`Hook`](#hook)s + `createRuntime({ hooks })` into a [`HookRegistry`](#hookregistry), wraps it in an `EventInterceptor` adapter (building [`HookContext`](#hookcontext) from `meta` + injected `logger`/`env`), and hands that interceptor to the store's append path. `events.append` knows only `EventInterceptor`, never `Hook`.
 
 ### Hook
 Middleware that subscribes to the event stream. Hooks observe events for side effects (logging, metrics, notifications) and gate-category hooks may veto or rewrite an event *before* it is appended (e.g. block a `tool.called`). Discovered from `hooks/`, applied to all runs.
@@ -1106,6 +1144,8 @@ The lifecycle status of a run.
 type RunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
 ```
 
+`"paused"` covers **both** pause reasons (awaiting approval and awaiting input — see [`run.paused`](#runevent)); the reason is carried on the pause event, not the status. For a [thread](#thread), `"running"` means mid-turn (a new message → `409 thread_busy`) while `"paused"` means deliverable. `"paused"` is an **active** state for the single-active-run index, so an awaiting run still holds its thread.
+
 ### SpanStatus
 The lifecycle status of a span.
 
@@ -1118,6 +1158,8 @@ The persisted record of a run.
 
 `RunRecord` is a **summary projection** of the event log, maintained on append — a fast read for "current state" (list/detail/status). It is derived, not an independently-authored source of truth; status comes from the latest lifecycle event and `totalCostUsd` folds over `llm.call` events. Operationally, this summary may be retained longer than detailed event history. There is no `cursor` field — resume position is the log offset.
 
+> **`totalCostUsd` is per-run.** It folds only *this* run's `llm.call` events. A run that dispatches isolated children (`agent.task()` / subagents) gets a **separate child `RunRecord` per child run**, each with its own honest `totalCostUsd`. The "all-in" cost of a delegating run is therefore an **aggregate computed by the read layer**, not a single fold: walk the `subagent.spawned` events (each carries `childRunId`) recursively and sum the child runs' `totalCostUsd`. The same applies to the trace tree (see [`listSpans`](#runstore)) — the cross-run delegation tree is stitched via `subagent.spawned`, since each child run owns its own spans under its own `runId`.
+
 ```ts
 interface RunRecord {
   id: string;
@@ -1127,9 +1169,11 @@ interface RunRecord {
   result?: unknown;
   error?: string;
   trigger?: string;
-  /** Accumulated USD cost (folded from `llm.call` events). */
+  /** Accumulated USD cost for THIS run, folded from this run's `llm.call` events.
+   *  Cross-run (delegation) totals are aggregated by the read layer via `subagent.spawned.childRunId`. */
   totalCostUsd: number;
-  conversationId?: string;
+  /** The thread this run serves, if any. A thread spans a sequence of runs (see [Thread](#thread)). */
+  threadId?: string;
   userId?: string;
   /** Agent version, when this run corresponds to a single agent invocation (audit/repro). */
   agentVersion?: string;
@@ -1162,6 +1206,8 @@ interface SpanRecord {
 ### RunStore
 The persistence interface. Writes go through the append-only [`EventLogStore`](#eventlogstore); everything else is a **read over maintained projections** folded from the log. There are no direct projection writers (no `createRun`/`startSpan`/`appendRunMessage`) — those are internal effects of `events.append`.
 
+> **One sanctioned exception — the cancel signal.** Cancellation is an *external control signal*, not derived run state, so it is the one value written directly to the `runs` row (`status = 'cancelled'`) via [`CancelStore`](#cancelstore) — a flag the in-flight loop can poll cross-process without tailing the log. This does not make `runs` an authoritable store: the **terminal `run.cancelled` lifecycle event is still appended** by the loop when it exits, and that event is what the status projection folds for completed/audited state. Treat the directly-written `status='cancelled'` as a *request* the running loop observes and then ratifies with an event; every other field of `runs` remains a pure projection of the log.
+
 ```ts
 interface RunStore {
   init(): Promise<void>;
@@ -1174,7 +1220,9 @@ interface RunStore {
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
   /** Model-visible message history for an agent, folded from `message.*`/`tool.*` events. */
   getMessages(runId: string, agentName: string): Promise<Message[]>;
-  /** The span/trace tree, folded from span-producing events. */
+  /** The span/trace tree for a single run, folded from its span-producing events.
+   *  Child `agent.task()`/subagent runs own their spans under their own `runId`; the cross-run
+   *  delegation tree is assembled by following `subagent.spawned.childRunId` (read-layer concern). */
   listSpans(runId: string): Promise<SpanRecord[]>;
   /** Memoized `ctx.step` result, read from the `step.completed` event for `(runId, name)`. */
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
@@ -1231,9 +1279,7 @@ interface ScheduleStore {
 }
 ```
 
----
-
-## Gateway (@render-agents/gateway)
+> The session/approval/OAuth **persistence interfaces and their record types below are physically defined in `@render-agents/store`** (it owns persistence), even though their *routes* and request/response handling live in `@render-agents/gateway`. `gateway` imports these down the graph; `store` never imports from `gateway`.
 
 ### Session
 A user session.
@@ -1248,43 +1294,51 @@ interface Session {
 }
 ```
 
-### Conversation
-A multi-turn conversation within a session.
+### Thread
+A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (its run(s) drive to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#sessionstore)); `currentRunId` is the active run, if any.
 
 ```ts
-interface Conversation {
+interface Thread {
   id: string;
   sessionId: string;
-  messages: ConversationMessage[];
+  /** The active run serving this thread right now, if one is live. */
+  currentRunId?: string;
+  status: "active" | "idle" | "completed" | "failed" | "cancelled";
+  title?: string;
   createdAt: string;
+  updatedAt: string;
 }
 ```
 
-### ConversationMessage
-A single user/assistant turn in a conversation.
+### ThreadMessage
+A single user/assistant turn in a thread, linked to the run that produced (or received) it. A thread's turns span its runs.
 
 ```ts
-interface ConversationMessage {
+interface ThreadMessage {
   id: string;
+  threadId: string;
   role: "user" | "assistant";
   content: string;
+  /** The run this turn belongs to (a thread spans a sequence of runs). */
   runId?: string;
   createdAt: string;
 }
 ```
 
 ### SessionStore
-The persistence interface for sessions and conversations.
+The persistence interface for sessions and threads. Sessions and threads are operational records (created/updated directly). **Thread turns are not** — they are a projection of `message.user`/`message.assistant` events (recorded via the run's [`events.append`](#runstore), not a direct writer here), so the store exposes only a read for them.
 
 ```ts
 interface SessionStore {
   createSession(session: Session): Promise<void>;
   getSession(id: string): Promise<Session | undefined>;
   updateSession(id: string, patch: Partial<Session>): Promise<void>;
-  createConversation(conv: Conversation): Promise<void>;
-  getConversation(id: string): Promise<Conversation | undefined>;
-  appendMessage(conversationId: string, msg: ConversationMessage): Promise<void>;
-  listConversations(sessionId: string): Promise<Conversation[]>;
+  createThread(thread: Thread): Promise<void>;
+  getThread(id: string): Promise<Thread | undefined>;
+  updateThread(id: string, patch: Partial<Thread>): Promise<void>;
+  listThreads(sessionId: string): Promise<Thread[]>;
+  /** Full turn history for a thread, across all its runs (projection of `message.*`; used to rehydrate a revived run's context). */
+  getThreadMessages(threadId: string): Promise<ThreadMessage[]>;
 }
 ```
 
@@ -1346,6 +1400,10 @@ interface OAuthStore {
   listConnections(userId: string): Promise<OAuthConnection[]>;
 }
 ```
+
+---
+
+## Gateway (@render-agents/gateway)
 
 ### ConnectorSpec
 A package-contributed inbound webhook endpoint.

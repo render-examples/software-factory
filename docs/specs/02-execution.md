@@ -261,7 +261,7 @@ During tool dispatch, if `requireApproval` includes the tool name and the call h
 
 - On approval (`{ approved: true }`): continue to dispatch.
 - On denial (`{ approved: false }`): emit a canonical error `tool_result` for that `tool_use` and continue the loop (no `tool.called` is emitted).
-- On pause (`{ status: "pending" }`, production HITL): emit `approval.requested`, set run status to `"paused"`, and throw `RunPaused` carrying the pending approval id(s). The runtime catch boundary marks the run paused and (in a workflow) lets the signal unwind the handler. A `PausedResult` is available to callers that inspect the boundary instead of relying on the throw.
+- On pause (`{ status: "pending" }`, production HITL): emit `approval.requested`, set run status to `"paused"`, and throw `RunPaused` (`reason: "approval"`) carrying the pending approval id(s). The runtime catch boundary marks the run paused and (in a workflow) lets the signal unwind the handler. A `PausedResult` is available to callers that inspect the boundary instead of relying on the throw.
 
 Providers may require a matching `tool_result` block in wire-format history to resume cleanly. Those **provider placeholders are transport-only artifacts**: they are not emitted as canonical `tool.result` events, are not indexed by idempotency projections, and never count as completed/applied tool calls.
 
@@ -281,6 +281,10 @@ Providers may require a matching `tool_result` block in wire-format history to r
 | **Strict** | `RENDER_AGENTS_STRICT_APPROVAL` set | Prompts on the terminal (`y/n`) when attached to a TTY. If non-interactive (no TTY), the run errors with `approval required, no resolver available`. |
 
 This keeps local iteration fast by default while making the bypass visible, and lets you exercise real approval gates locally with one env var. The production (gateway) path is unaffected — it always enforces via `ApprovalRequest` + pause.
+
+**Awaiting external input (thread turns).** The same pause-and-resume-by-replay mechanism backs **conversational turn-taking**, not just approvals. An interactive [thread](03-platform.md#sessions--threads) is a run that, instead of driving to completion, **awaits the next external message** between turns. The primitive is [`ctx.awaitInput()`](05-type-reference.md#runcontext) (sibling of `requestApproval`): the loop calls it when a turn is done, which emits `run.paused { reason: "input" }` and unwinds via `RunPaused` (no pinned compute). The gateway delivers the user's next message via [`/runs/:id/input`](03-platform.md#gateway), which **appends a `message.user` event** and resumes the run by replay; because the new turn is in the log, the resumed loop's folded `ctx.messages()` includes it and `awaitInput()` returns it. This is why autonomous and chat runs are the *same* primitive — "chat" is simply a run that calls `awaitInput()` at the points an autonomous run would continue on its own.
+
+The only thing that distinguishes the two pause reasons is routing: a run paused for `"approval"` is resolved by an `approval.resolved`; a run paused for `"input"` is resolved by a delivered `message.user`. If the awaiting run's container is deprovisioned, resume re-dispatches a fresh run for the thread that rehydrates context from the log — the `message.user` history is what makes that rehydration faithful (see [Threads](03-platform.md#sessions--threads)).
 
 **Contract** — [`ApprovalResult`](05-type-reference.md#approvalresult), [`RunPaused`](05-type-reference.md#runpaused), [`PausedResult`](05-type-reference.md#pausedresult).
 
@@ -332,7 +336,7 @@ When no durable store is available (in-memory mode for local dev), the log is he
 
 **Model** — When an agent declares an `output` schema, the runner returns validated structured data in `AgentOutput.data` in addition to `text`:
 
-1. On the final model turn, the runner sets `CompleteArgs.responseFormat = { type: "json_schema", schema }`. Providers with native structured output (e.g. OpenAI `response_format`, Anthropic tool/JSON modes) enforce it directly; providers without it fall back to a JSON instruction appended to the system prompt.
+1. **The "final turn" is detected, not predicted.** The runner cannot know in advance which iteration is last, so it watches for the turn where the model would naturally stop — `stop_reason = end_turn` with no outstanding `tool_use`. At that boundary, instead of returning raw text, the runner performs the structured step: it issues a schema-constrained completion with `CompleteArgs.responseFormat = { type: "json_schema", schema }`. Providers with native structured output (e.g. OpenAI `response_format`, Anthropic tool/JSON modes) enforce it directly — and where the model's natural final turn was already produced under `responseFormat`, no extra round-trip is needed; providers without it fall back to a JSON instruction appended to the system prompt. The mental model for authors is simply: **"your agent's final answer is coerced to the `output` schema."**
 2. The returned content is parsed and validated against the schema. On success, `AgentOutput.data` is populated (and `text` holds the raw JSON). On validation failure, the runner retries up to a small bounded number of times (feeding the validation error back to the model); if it still fails, the run errors.
 3. Agents **without** an `output` schema are unchanged: `data` is `undefined` and only `text` is returned.
 
@@ -373,7 +377,7 @@ const loadSkill: Tool = {
 };
 ```
 
-3. **On-demand load.** When the model decides a skill applies (guided by `whenToUse`), it calls `load_skill({ id })`. The runner looks the id up in the agent's resolved `skills` set and returns that skill's `content` as the `tool_result`, so the instructions land in the conversation like any other tool output and inform subsequent turns.
+3. **On-demand load.** When the model decides a skill applies (guided by `whenToUse`), it calls `load_skill({ id })`. The runner looks the id up in the agent's resolved `skills` set and returns that skill's `content` as the `tool_result`, so the instructions land in the thread like any other tool output and inform subsequent turns.
 4. **Constrained to declared skills.** `load_skill` resolves **only** ids in the agent's declared `skills`. An undeclared or unknown id returns an **error `tool_result`** (the model can recover); it is not a crash. There is no way to load a skill the agent didn't declare.
 
 Because `load_skill` is an ordinary tool, it inherits the [tool dispatch](#tool-dispatch) path for free — input validation, a `tool` span, and idempotency (loading the same skill twice in a run short-circuits to the stored result). Skills are read-only instruction content and never have side effects. `load_skill` is a reserved model-facing tool name; a user tool source that resolves to it is a load-time collision.
@@ -403,7 +407,9 @@ There is no separate tool-call store: the `tool_calls` table is a projection tha
 
 **Model** — The default implementation checks the `runs` row in Postgres (`status = 'cancelled'`). Cancel checks happen once per loop iteration, between LLM calls that take seconds — the ~5-10ms query overhead is negligible, and no KV dependency is required.
 
-The loop checks `isCancelled` at the top of each iteration alongside budget checks. On cancellation, the run status is set to `"cancelled"` and the loop exits cleanly. Paused runs (HITL) can be cancelled directly by setting the DB status. The `CancelStore` interface allows swapping in a KV-backed implementation as a future optimization if needed.
+The loop checks `isCancelled` at the top of each iteration alongside budget checks. On cancellation, the loop exits cleanly and **appends a terminal `run.cancelled` lifecycle event** — that event is the authoritative record the status projection folds. Paused runs (HITL) can be cancelled the same way by setting the DB flag, which the resume path observes.
+
+**Relationship to the event log (D10).** The directly-written `runs.status = 'cancelled'` flag is a deliberate, narrowly-scoped exception to "everything is a projection": it is an *external control signal* the in-flight loop can poll cross-process without subscribing to the log. It is treated as a cancel *request*, which the loop then ratifies by appending `run.cancelled`. Every other field of `runs` remains a pure fold of the event log; cancellation is the only direct projection write, and it is a request flag, not authoritative state. The `CancelStore` interface allows swapping in a KV-backed implementation as a future optimization if needed.
 
 **Contract** — [`CancelStore`](05-type-reference.md#cancelstore).
 
@@ -416,7 +422,7 @@ The loop checks `isCancelled` at the top of each iteration alongside budget chec
 **Model:**
 
 - **Surface.** Each declared subagent becomes one resolved tool, `subagents__<name>`, whose description is the subagent's `description` (falling back to its name). The model calls it like any tool; input is the subagent's `AgentInput`, and the result is the subagent's `AgentOutput` (text + structured `data` when it declares an `output` schema) returned as the `tool_result`.
-- **Execution.** Subagents run as **isolated tasks** by default (`agent.task()`): a chained Render Workflows run nested under the calling agent. Spans nest naturally — calling agent → `subagents__<name>` tool span → subagent agent span — so the trace tree shows the full delegation hierarchy. `userId` propagates to the subagent; cost rolls up into the root run's `totalCostUsd`.
+- **Execution.** Subagents run as **isolated tasks** by default (`agent.task()`): a chained Render Workflows run nested under the calling agent — its **own child run with its own `runId`**. Spans nest logically — calling agent → `subagents__<name>` tool span → subagent agent span — and the full delegation tree is assembled across runs by following `subagent.spawned.childRunId` (the child run owns its own spans). `userId` propagates to the subagent. Each run keeps a per-run `totalCostUsd`; the caller's **all-in cost is a read-layer aggregate** that sums the child runs (root + recursive children via `subagent.spawned.childRunId`), not a fold into the root run's own `totalCostUsd`.
 - **Safety limits** (`DelegationLimits`, configured via `createRuntime({ delegation })` or env):
   - `maxDepth` (default 5) — a spawned subagent's run `depth` is its parent's `depth + 1`; a spawn that would exceed `maxDepth` returns an **error `tool_result`** (the model sees it; the loop doesn't crash).
   - `maxFanout` (default 50) — total subagent spawns across the whole root run tree; exceeding it returns an error `tool_result`.
@@ -438,5 +444,12 @@ Because spawning is just a tool call, it inherits idempotency (keyed on `toolCal
 - **Veto** (gate categories like `tool`) → returns `{ action: "reject", reason }`. A rejected `tool.called` becomes an error `tool_result` the model can recover from — it does not crash the loop. This is how policy gates (allow-lists, destructive-command blocks) are enforced uniformly, complementing per-agent `requireApproval`.
 
 Hooks run in registration order and must be fast and side-effect-isolated; a throwing hook is logged and treated as `continue` (fail-open for observers) except for gate hooks, which fail-closed. Hooks see the same events the SSE stream and projections do, so anything observable in a trace is hookable.
+
+**Execution model (resolved).** Hooks stay on the single write path (one taxonomy), with a sync/async split to protect append latency:
+
+- **Gates and transforms run synchronously** in the append pre-commit phase — they sit inside the event-append latency budget and must be fast.
+- **Pure observers return `continue` immediately** and schedule any heavy work (Slack, metrics) themselves *after* commit; they never block the append.
+- **Precedence with HITL:** when a hook gates a `tool.called`, it runs *after* the per-agent approval gate (`requireApproval`) in the [dispatch sequence](#tool-dispatch), so both must pass — HITL approval is the human gate, a hook veto is the automated-policy gate (defense in depth).
+- **Non-gate vetoes:** only gate categories (e.g. `tool`) can meaningfully `reject`; a veto returned for a non-gate category is treated as `continue` with a logged warning.
 
 **Contract** — [`Hook`](05-type-reference.md#hook), [`HookResult`](05-type-reference.md#hookresult), [`HookContext`](05-type-reference.md#hookcontext), [`HookRegistry`](05-type-reference.md#hookregistry).

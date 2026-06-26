@@ -31,7 +31,7 @@ interface SandboxProvider {
 
 interface SandboxAcquireOptions {
   scope: "ephemeral" | "run" | "session";
-  /** Key for reattaching a session-pinned sandbox (conversationId/sessionId). */
+  /** Key for reattaching a session-pinned sandbox (threadId/sessionId). */
   key?: string;
   /** Optional snapshot to restore from. */
   snapshotId?: string;
@@ -67,7 +67,7 @@ interface ExecResult {
 | Run-scoped (default) | acquired on first use, disposed at run end | code review running tests |
 | Session-pinned | persisted handle, reattaches across runs | a *development* agent with a durable workspace |
 
-Run-scoped reuse falls out of the `ResolvedSource` lifecycle. Session-pinned requires new state: store the sandbox id (and last snapshot) keyed by `conversationId`/`sessionId` in Postgres so the next run reattaches instead of starting clean.
+Run-scoped reuse falls out of the `ResolvedSource` lifecycle. Session-pinned requires new state: store the sandbox id (and last snapshot) keyed by `threadId`/`sessionId` in Postgres so the next run reattaches instead of starting clean.
 
 **Sketch:**
 

@@ -20,7 +20,7 @@ Concretely:
 - Inspect any run's full execution trace with cost and token attribution.
 - Watch a running agent in real time via the SSE event stream.
 - Act on pending HITL approvals without leaving the browser.
-- Browse session and conversation history to understand multi-turn behavior.
+- Browse session and thread history to understand multi-turn behavior.
 - See aggregate cost at a glance.
 
 The UI is read-only except for approval resolution. It does not edit agent definitions, configure workflows, or serve as an end-user chat interface.
@@ -156,11 +156,11 @@ Each node displays:
 
 ---
 
-## Session / conversation browser
+## Session / thread browser
 
 **Purpose** — Inspect multi-turn interactions. Shows how users interact with agents over time, with linked runs for each turn.
 
-**Data source** — `GET /sessions/:id/conversations` (conversation list) + `GET /sessions/:id/conversations/:cid/stream` (live conversation SSE stream).
+**Data source** — `GET /sessions/:id/threads` (thread list) + `GET /sessions/:id/threads/:tid/stream` (live thread SSE stream).
 
 **Model:**
 
@@ -171,20 +171,20 @@ Each node displays:
 | Session ID | `id` |
 | User | `userId` (if present) |
 | Last active | `lastActiveAt` |
-| Conversations | count |
+| Threads | count |
 
-**Conversation thread:**
+**Thread view:**
 
 - User and assistant turns rendered as a message thread.
-- Each assistant turn links to the `runId` that produced it (click-through to run detail).
-- Active conversations show a live tail via the conversation SSE stream (cross-run; stays open as new turns arrive under new runs).
+- Each assistant turn links to the `runId` that produced it (click-through to run detail). A thread spans a sequence of runs, so consecutive turns may point to different runs after a revival.
+- Active threads show a live tail via the thread SSE stream (spans the thread's runs; stays open across a revival under a new run).
 
 **Interactions:**
 
 - Search/filter sessions by user ID.
-- Click a session to list its conversations.
-- Click a conversation to view the thread.
-- Live indicator on conversations with an active (running/paused) run.
+- Click a session to list its threads.
+- Click a thread to view its messages.
+- Live indicator on threads with an active (running/paused) run.
 
 ---
 
@@ -207,7 +207,7 @@ The operator UI is a React + Vite SPA, built as part of `@render-agents/gateway`
 | Span tree (static + live SSE) | Agent definition editing or workflow configuration |
 | Pending approvals with approve/deny | End-user chat UI |
 | Cost summary (per-run, per-agent) | Custom theming or white-labeling |
-| Session/conversation browser | OAuth connection management UI |
+| Session/thread browser | OAuth connection management UI |
 | API key bearer auth (same as gateway) | Role-based access control beyond API key |
 
 ---
