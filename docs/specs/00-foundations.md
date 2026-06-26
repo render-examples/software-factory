@@ -4,9 +4,47 @@
 **Status:** DRAFT
 **Date:** 2025-06-25
 
-This is the **Foundations** layer (L0) of the render-agents technical specification. It establishes why the SDK exists and the load-bearing decisions everything else derives from. 
+This is the **Foundations** layer (L0) of the render-agents technical specification. It establishes what this project is, why it exists, and the load-bearing decisions everything else derives from.
 
 See the [Document Map](#document-map) for the full file set.
+
+---
+
+## Project Framing
+
+### What this project is
+
+`render-agents` is a Render-first, open-source TypeScript SDK for building and operating production multi-agent systems. It gives developers a single opinionated surface:
+
+- Agent behavior is authored in markdown files.
+- Orchestration is authored in TypeScript workflows.
+- Execution runs on Render primitives (Workflows + Postgres + gateway services).
+
+The goal is not a generic "agent framework abstraction layer." The goal is a practical, deployable system that makes coding agents reliable in production with minimal wiring.
+
+### Why this exists
+
+Agent workflows have converged on a common shape: inbound events trigger orchestrated LLM/tool pipelines that fan out work, run validations, and return durable outputs. Existing approaches force teams into tradeoffs:
+
+- Great authoring ergonomics but weak production substrate.
+- Strong production substrate but fragmented authoring and orchestration UX.
+- Multi-agent orchestration without sessions, HITL, OAuth, or operator-grade state.
+
+This project exists to close that gap by unifying the best parts of the current design space into one coherent model: filesystem-first authoring, platform-grade durability and governance, and native parallel orchestration.
+
+### Why Render is the substrate
+
+Render already provides the primitives agent systems need in production:
+
+- Durable orchestration via Workflows.
+- Durable state and inspectability via Postgres.
+- Long-lived services for gateways, webhook ingress, streaming, and control APIs.
+
+Because those primitives are native, the SDK can stay simpler: durability is not simulated, state is inspectable by default, and local-to-production behavior can stay consistent.
+
+### What success looks like
+
+A software engineer can define agents as markdown, compose them in TypeScript, and ship a production workflow on Render with one deploy manifest. HITL, budgets, tracing, and auth are built into the platform contract rather than bolted on per project.
 
 ---
 
