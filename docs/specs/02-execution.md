@@ -10,7 +10,7 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Runtime & composition
 
-**Purpose** — Agents returned by `loadAgents()` are inert definitions until bound to a **runtime** — the composition root that supplies the model client, store, tracer, runner registry, and (in production) the task dispatcher (Decision D5). Both the gateway and the workflow service construct the *same* `AgentRuntime` via `createRuntime()`, so wiring is identical across services.
+**Purpose** — Agents returned by `loadAgents()` are inert definitions until bound to a **runtime** — the composition root that supplies the model client, store, tracer, runner registry, and (in production) the task dispatcher. Both the gateway and the workflow service construct the *same* `AgentRuntime` via `createRuntime()`, so wiring is identical across services.
 
 **Model** — `createRuntime()` builds the runtime, auto-detecting each dependency from the environment:
 
@@ -40,11 +40,34 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ---
 
+## Events
+
+**Purpose** — Every run is an append-only log of typed events, and that log is the single source of truth. One taxonomy serves persistence, the trace tree, the SSE stream, hooks, and cost — emitted once.
+
+**Model** — Runtime code never writes a store directly; it calls `ctx.emit(event)`. Each append atomically: persists to `run_events`, updates the affected **projections** (messages, spans, tool-calls, steps, cost, run status), `NOTIFY`s the SSE tail, and passes the event through [hooks](#hooks). Events are immutable and versioned. Categories (AG-UI-aligned — subscribe by category, not by individual name):
+
+| Category | Events | Drives projection |
+|---|---|---|
+| lifecycle | `run.started/completed/failed/paused/cancelled` | run status |
+| message | `message.assistant`, `message.tool`, `text.delta` | message history |
+| tool | `tool.called`, `tool.result` | tool-calls (idempotency) |
+| step | `step.started`, `step.completed` | step memoization |
+| model | `llm.call` | cost / usage |
+| approval | `approval.requested/resolved/auto` | approvals |
+| delegation | `subagent.spawned` | trace tree |
+| context | `context.compacted` | (audit) |
+
+Everything downstream is a fold of this log: message history, the span tree (observability), tool-call idempotency, step memoization, cost, run status, and the SSE stream are all projections (see [Platform → Store](03-platform.md#store--postgres-schema)). This is why resume, idempotency, and memoization are one mechanism — "is it already in the log?" — rather than separate subsystems.
+
+**Contract** — [`RunEvent`](05-type-reference.md#runevent), [`EventCategory`](05-type-reference.md#eventcategory), [`RunEventRecord`](05-type-reference.md#runeventrecord), [`EventLogStore`](05-type-reference.md#eventlogstore).
+
+---
+
 ## The agent loop
 
 **Purpose** — The default runner drives the iterate → call model → dispatch tools cycle. The same loop runs everywhere: in-process and as a dispatched task behave identically.
 
-**Model** — Before the first iteration, the runner assembles the system prompt (agent body + `_shared.md` + skill catalog, see [Skill loading](#skill-loading)) and mounts the agent's tools — including the built-in `load_skill` tool when the agent declares any skills. Then it executes this cycle (`load_skill` is dispatched like any other `tool_use` in step 7):
+**Model** — Before the first iteration, the runner assembles the system prompt (agent body + `_shared.md` + skill catalog, see [Skill loading](#skill-loading)) and mounts the agent's tools — including the built-in `load_skill` tool when the agent declares any skills. Then it executes this cycle. Every persisting step is an `emit` to the event log (see [Events](#events)); the trace tree, messages, idempotency, and cost are projections of those emits. `load_skill` is dispatched like any other `tool_use` in step 8:
 
 ```
 [user input]
@@ -54,22 +77,22 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 │  1. Check cancellation (ctx.isCancelled)        │
 │  2. Check budget (iterations, tokens, cost)     │
 │  3. Check abort signal                          │
-│  4. Call model (LLM span)                       │
-│  5. Persist assistant message                   │
-│  6. If stop_reason = end_turn → return text     │
-│  7. For each tool_use in response:              │
-│     a. Check idempotency → short-circuit if hit │
+│  4. Compact context if over threshold           │
+│  5. Call model  → emit llm.call                 │
+│  6. Emit message.assistant                      │
+│  7. If stop_reason = end_turn → return          │
+│  8. For each tool_use in response:              │
+│     a. appliedToolResult → short-circuit if hit │
 │     b. Check requireApproval → HITL gate        │
 │     c. Validate input vs inputSchema            │
-│     d. Dispatch tool (tool span)                │
-│     e. Record tool call for idempotency         │
-│     f. Collect tool_result                      │
-│  8. Persist tool message                        │
-│  9. Go to 1                                     │
+│     d. Emit tool.called; dispatch tool          │
+│     e. Emit tool.result                         │
+│  9. Emit message.tool                           │
+│ 10. Go to 1                                     │
 └─────────────────────────────────────────────────┘
 ```
 
-**Local = production parity.** The loop, tool dispatch, permissions, budget enforcement, message persistence, and all observable behavior are identical whether an agent runs via `agent.run()` (in-process) or `agent.task()` (Workflow task). Both write messages, tool calls, and spans to whatever store is available. The only differences are in the execution container:
+**Local = production parity.** The loop, tool dispatch, permissions, budget enforcement, event emission, and all observable behavior are identical whether an agent runs via `agent.run()` (in-process) or `agent.task()` (Workflow task). Both emit the same events (and therefore produce the same projections — messages, spans, cost) to whatever store is available. The only differences are in the execution container:
 
 - `agent.run()`: shares the caller's process, no retries, no container isolation.
 - `agent.task()`: own container on the agent's `plan`, Render Workflows retries.
@@ -107,9 +130,24 @@ Transient model failures are retried transparently by the default `ModelClient` 
 
 ---
 
+## Context management
+
+**Purpose** — Context is managed, never unbounded. Budgets bound *cost*; compaction protects *quality*. "Context rot" degrades model performance well before a token budget trips — and for coding agents a single file read or test log can dwarf the rest of the window — so the model-visible window is a managed projection, not an ever-growing append.
+
+**Model** — Before each model call (loop step 4), the runner asks the `ContextManager` to `prepare` the model-visible window from the full message history:
+
+1. **Threshold.** If estimated tokens stay under the agent's `maxContextTokens` (default ~75% of the model's window), history passes through unchanged.
+2. **Compaction (default "auto" strategy).** Over the threshold, the strategy: keeps recent turns verbatim; summarizes older turns while **preserving decisions and unresolved items**; drops redundant/superseded tool output (e.g. an old file read later re-read); and prefers JIT re-retrieval over keeping large blobs resident.
+3. **Observable + recoverable.** Compaction emits a `context.compacted` event (`beforeTokens`/`afterTokens`/`strategy`). The **full history stays in the event log** — compaction only changes what the *model* sees next, never what's recorded. A run can always be reconstructed in full from the log.
+4. **Configurable.** Agents set `context: { compaction, maxContextTokens }` in frontmatter (see [Authoring → Agent markdown schema](01-authoring.md#agent-markdown-schema)); `compaction: none` disables it; custom strategies are provided via `createRuntime({ contextManager })`.
+
+**Contract** — [`ContextManager`](05-type-reference.md#contextmanager), [`ContextConfig`](05-type-reference.md#contextconfig), [`CompactionStrategy`](05-type-reference.md#compactionstrategy).
+
+---
+
 ## Run vs task dispatch
 
-**Purpose** — A single execution model: `run` vs `task` is a method call, not config (Decision D2). The same definition runs in-process or as an isolated Render Workflow task with the same output shape.
+**Purpose** — A single execution model: `run` vs `task` is a method call, not config. The same definition runs in-process or as an isolated Render Workflow task with the same output shape.
 
 **Model** — The two methods differ only in the execution container:
 
@@ -156,11 +194,11 @@ const decision = await ctx.agents.get("judge").run({ findings });
 
 ## Determinism & replay
 
-**Purpose** — Render Workflows is per-task durable, not Temporal-style deterministic-replay (Decision D3). A task runs once, returns a value, and is deprovisioned; on failure the *whole task re-runs* from the top with no memoization. The `workflow()` handler is itself the root task, so determinism is the author's contract.
+**Purpose** — Render Workflows is per-task durable, not Temporal-style deterministic-replay. A task runs once, returns a value, and is deprovisioned; on failure the *whole task re-runs* from the top with no memoization. The `workflow()` handler is itself the root task, so determinism is the author's contract.
 
 **Model** — The consequences:
 
-1. **Root handler `retries` default to 0.** A failed handler is not silently re-executed (which would duplicate side effects). The run is marked `failed`; durability and resumption come from child `agent.task()` runs plus Postgres checkpoint state, not blind handler re-runs.
+1. **Root handler `retries` default to 0.** A failed handler is not silently re-executed (which would duplicate side effects). The run is marked `failed`; durability and resumption come from child `agent.task()` runs plus the event log (replayed via `ctx.step` memoization and dispatch keys), not blind handler re-runs.
 2. **Deterministic, side-effecting, or non-deterministic work goes in `ctx.step(name, fn)`.** Step results are memoized to Postgres by `(runId, name)`. On any handler re-execution (HITL resume, explicit retry), completed steps short-circuit to their stored result. Plain function calls in the handler body are *not* memoized and will re-run.
 3. **`agent.task()` dispatches are memoized** via the deterministic dispatch key — completed child runs are not re-dispatched on re-execution.
 4. **HITL pause is a deliberate re-execution.** When a child agent pauses for approval, the runner throws `RunPaused`, which bubbles out of the handler; the runtime marks the run `paused`. On approval, the run resumes by re-executing the handler: prior `ctx.step` results and completed `agent.task()` dispatches replay from storage, and the previously-paused agent now returns its completed result.
@@ -203,7 +241,7 @@ const decision = await ctx.agents.get("judge").run({ sec, perf });
 
 ## HITL pause & resume
 
-**Purpose** — HITL pause is a control-flow signal resolved by replay (Decision D7). A gated tool awaiting approval must not pin compute for hours, and a caller must never see a partial result.
+**Purpose** — HITL pause is a control-flow signal resolved by replay. A gated tool awaiting approval must not pin compute for hours, and a caller must never see a partial result.
 
 **Model** — During tool dispatch, if `requireApproval` includes the tool name and the call has not been pre-approved, the runner invokes `ctx.requestApproval()`:
 
@@ -213,7 +251,7 @@ const decision = await ctx.agents.get("judge").run({ sec, perf });
 
 **Replay on resume.** When a run resumes after a HITL pause or checkpoint:
 
-1. Load persisted messages via `ctx.loadMessages()`.
+1. Load the folded message history via `ctx.messages(agentName)`.
 2. Find the last assistant message. If it contains `tool_use` blocks without matching `tool_result` blocks, these are **pending tool calls**.
 3. Re-dispatch pending tool calls through the normal dispatch path. The idempotency check short-circuits any that already completed before the pause.
 4. Continue the loop from the next iteration.
@@ -237,12 +275,12 @@ This keeps local iteration fast by default while making the bypass visible, and 
 
 **Model** — Tools are dispatched sequentially within a turn (parallel tool dispatch is a future optimization). For each `tool_use` block:
 
-1. **Idempotency check** → call `ctx.checkIdempotency(toolCallId)`. If a stored result exists, return it immediately without re-executing. This makes checkpoint-resume and task retries safe for non-idempotent tools.
+1. **Idempotency check** → call `ctx.appliedToolResult(toolCallId)` (a log lookup for an existing `tool.result`). If found, return it without re-executing. This makes checkpoint-resume and task retries safe for non-idempotent tools.
 2. **Approval gate** → if `requireApproval` includes this tool name and the tool call has not been pre-approved, invoke `ctx.requestApproval()` (full pause/resume mechanics in [HITL pause & resume](#hitl-pause--resume)).
 3. **Lookup** → resolve the tool by name in the mounted tools map. Error result if unknown (e.g. the model hallucinated a tool not in `tools[]`).
 4. **Validate input** → validate the model's input against the tool's `inputSchema` (applies to local *and* MCP-sourced tools, against the MCP-advertised schema). On failure, return an **error `tool_result`** with the validation message so the model can self-correct — the loop does not crash.
-5. **Dispatch** → call `tool.invoke(input, ctx)` with the tool context.
-6. **Record** → call `ctx.recordToolCall(toolCallId, toolName, input, result)` for idempotency.
+5. **Emit `tool.called`** → then call `tool.invoke(input, ctx)` with the tool context.
+6. **Emit `tool.result`** → records the result in the log (which maintains the tool-calls idempotency projection and the tool span).
 7. **Wrap** → return as a `tool_result` content block.
 
 Errors in tool execution are caught and returned as `{ isError: true }` — they do not crash the loop. The model sees the error and can retry or handle it.
@@ -251,22 +289,22 @@ Errors in tool execution are caught and returned as `{ isError: true }` — they
 
 ---
 
-## Message persistence & checkpoint
+## Event log & checkpoint
 
-**Purpose** — Postgres persists what the model saw and what ran, so a run is always inspectable and resumable (Decision D4).
+**Purpose** — The append-only event log is what makes a run inspectable and resumable. Resume is replaying the log, not loading a bespoke checkpoint.
 
-**Model** — The runner persists LLM messages to Postgres after each turn:
+**Model** — The runner emits events as it goes (`message.assistant`, `tool.called`/`tool.result`, `message.tool`, `llm.call`); the store folds them into the message and tool-call projections. To resume:
 
-1. After each model response, the runner writes the assistant message to `run_messages`.
-2. After each batch of tool results, the runner writes the tool message to `run_messages`.
-3. On HITL pause (`requireApproval`), the run status is set to `"paused"`. The persisted messages capture the exact point of interruption.
-4. On resume, the runner replays from these persisted messages and skips already-completed tool calls.
+1. `ctx.messages(agentName)` returns the model-visible history, folded from `message.*`/`tool.*` events (post-compaction).
+2. The position in the loop is reconstructed from the log: a trailing `tool.called` without a matching `tool.result` is a pending tool call.
+3. On HITL pause, a `run.paused` event is appended; the log captures the exact point of interruption.
+4. On resume, pending tool calls are re-dispatched through the normal path; `appliedToolResult` short-circuits any that already completed (their `tool.result` is in the log).
 
-This means Postgres always answers "what did the model see, what tools ran, what is paused, what can be resumed?" Span records capture the observability view (timing, cost, hierarchy); run messages capture the execution view (the actual content the model consumed and produced).
+So the log answers "what did the model see, what ran, what is paused, what can resume?" in one place; spans (observability) and messages (execution) are both projections of it, not parallel stores.
 
-When a store is not available (in-memory mode for local dev), messages are held in memory and checkpoint-resume is not supported — runs are one-shot. This is a graceful degradation; the loop logic is identical.
+When no durable store is available (in-memory mode for local dev), the log is held in memory and checkpoint-resume is not supported — runs are one-shot. This is a graceful degradation; the loop logic is identical.
 
-**Contract** — [`RunMessageRecord`](05-type-reference.md#runmessagerecord), [`RunCursor`](05-type-reference.md#runcursor).
+**Contract** — [`RunEvent`](05-type-reference.md#runevent), [`EventLogStore`](05-type-reference.md#eventlogstore), [`Message`](05-type-reference.md#message).
 
 ---
 
@@ -328,13 +366,16 @@ Because `load_skill` is an ordinary tool, it inherits the [tool dispatch](#tool-
 
 ## Idempotency
 
-**Purpose** — Tool calls must be safe to retry. On checkpoint-resume or task retry, the runner must not re-execute tool calls that already produced results.
+**Purpose** — Tool calls and child-task dispatches must be safe to retry. On checkpoint-resume or task retry, neither should re-execute work that already produced a result.
 
-**Model** — The `idempotencyKey` is `SHA-256(runId + toolCallId)`. Before dispatching a tool, the runner checks the store — if a result exists for this key, it short-circuits and returns the stored result. This is what makes checkpoint-resume safe for non-idempotent tools.
+**Model** — Idempotency is **one mechanism: "is it already in the log?"** Two keys, same question:
 
-There are **two distinct idempotency keys**. This **tool-call key** (`SHA-256(runId + toolCallId)`) dedupes *tool execution* within a run. The separate **dispatch key** (`SHA-256(runId + agentName + callSeq)`, carried on `DispatchOptions`; see [Run vs task dispatch](#run-vs-task-dispatch)) dedupes *child-task dispatch* so a resumed handler does not re-launch completed `agent.task()` runs. Different layers, different inputs.
+- **Tool-call key** `SHA-256(runId + toolCallId)` — `appliedToolResult` looks for an existing `tool.result` event; a hit short-circuits the dispatch. Dedupes *tool execution* within a run.
+- **Dispatch key** `SHA-256(runId + agentName + callSeq)` (on `DispatchOptions`; see [Run vs task dispatch](#run-vs-task-dispatch)) — a matching `subagent.spawned`/child-run event short-circuits re-dispatch. Dedupes *child-task dispatch* so a resumed handler does not re-launch completed `agent.task()` runs.
 
-**Contract** — [`idempotencyKey`](05-type-reference.md#idempotencykey), [`ToolCallStore`](05-type-reference.md#toolcallstore), [`ToolCallRecord`](05-type-reference.md#toolcallrecord).
+There is no separate tool-call store: the `tool_calls` table is a projection that indexes `tool.result` events for these lookups.
+
+**Contract** — [`idempotencyKey`](05-type-reference.md#idempotencykey), [`RunEvent`](05-type-reference.md#runevent).
 
 ---
 
@@ -365,3 +406,19 @@ The loop checks `isCancelled` at the top of each iteration alongside budget chec
 Because spawning is just a tool call, it inherits idempotency (keyed on `toolCallId`, so resumes don't re-spawn), permission gating (`requireApproval: [subagents__researcher]`), and input validation.
 
 **Contract** — [`DelegationLimits`](05-type-reference.md#delegationlimits).
+
+---
+
+## Hooks
+
+**Purpose** — Hooks are the in-between extension point: lighter than a custom runner, they let you observe and gate the run without reimplementing the loop. Because everything the runtime does is an event, hooks are simply **subscribers/transformers on the event stream** — the natural place for cross-cutting concerns (logging/metrics, notifications, policy enforcement, loop/anomaly detection, context injection).
+
+**Model** — Hooks are discovered from `hooks/` (auto-applied to all runs; see [Authoring → Hooks](01-authoring.md#hooks)) and may also be supplied via `createRuntime({ hooks })`. Each hook declares the event types/categories it reacts to via `on`. For every matching event, before it is appended, the hook's `handle` runs:
+
+- **Observation** (the common case) → returns `{ action: "continue" }`; the event is appended unchanged. Side effects (emit a metric, post to Slack) happen here.
+- **Transform** → returns `{ action: "continue", event }` with a rewritten event (e.g. redact a payload).
+- **Veto** (gate categories like `tool`) → returns `{ action: "reject", reason }`. A rejected `tool.called` becomes an error `tool_result` the model can recover from — it does not crash the loop. This is how policy gates (allow-lists, destructive-command blocks) are enforced uniformly, complementing per-agent `requireApproval`.
+
+Hooks run in registration order and must be fast and side-effect-isolated; a throwing hook is logged and treated as `continue` (fail-open for observers) except for gate hooks, which fail-closed. Hooks see the same events the SSE stream and projections do, so anything observable in a trace is hookable.
+
+**Contract** — [`Hook`](05-type-reference.md#hook), [`HookResult`](05-type-reference.md#hookresult), [`HookContext`](05-type-reference.md#hookcontext), [`HookRegistry`](05-type-reference.md#hookregistry).

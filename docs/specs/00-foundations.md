@@ -53,9 +53,9 @@ The decisions below are load-bearing: each imposes an invariant that many downst
 **Blast radius:** Handler determinism contract, `ctx.step`, `workflow_steps`, dispatch idempotency keys, retries semantics, resume.
 
 ### D4 — Workflows orchestrate, Postgres persists
-**Decision:** Workflows answer "what runs next?"; Postgres answers "what happened, what was seen, what's paused, what can resume?"
+**Decision:** Workflows answer "what runs next?"; Postgres holds the run's append-only event log, which answers "what happened, what was seen, what's paused, what can resume?"
 **Why:** Orchestration state and agent/run state are different responsibilities; conflating them loses inspectability and retry-safety.
-**Invariant:** Run messages, tool calls, approvals, steps, and traces are persisted; resume is driven from Postgres, not handler memory.
+**Invariant:** Every meaningful run fact is an appended event; resume is driven from the log, not handler memory.
 **Blast radius:** Store schema, checkpoint/resume, `RunContext`, observability.
 
 ### D5 — Injectable runtime / composition root
@@ -73,7 +73,7 @@ The decisions below are load-bearing: each imposes an invariant that many downst
 ### D7 — HITL pause is a control-flow signal resolved by replay
 **Decision:** A gated tool awaiting approval throws `RunPaused`, which unwinds the handler; the run resumes by re-executing with completed work replayed.
 **Why:** A paused run must not pin compute for hours; callers must never see a partial result.
-**Invariant:** Downstream code never runs without a needed result; resume = re-execute + replay (depends on D3/D4).
+**Invariant:** Downstream code never runs without a needed result; resume = re-execute + replay.
 **Blast radius:** `ApprovalResult`, runner contract, gateway resume, store.
 
 ### D8 — Observable by default; every unit is a span; Postgres is source of truth
@@ -88,6 +88,18 @@ The decisions below are load-bearing: each imposes an invariant that many downst
 **Invariant:** Custom runners that honor `RunContext` keep all platform guarantees; ones that skip hooks degrade gracefully.
 **Blast radius:** Runner interface, engine, `RunContext`, gateway integration.
 
+### D10 — The append-only event log is the single source of truth
+**Decision:** Each run is an ordered, append-only log of typed events (`run_events`). Messages, spans, tool-call idempotency, step memoization, approvals, cost, run status, and the SSE stream are all **projections** of that log — not independently-authored stores.
+**Why:** The same fact ("a tool ran with this input/result at this time") was being written to several tables under two key schemes and re-described in three event vocabularies. One log, many views removes that duplication and makes resume/idempotency/audit a single mechanism — the durable-execution consensus (event sourcing).
+**Invariant:** Runtime code *emits events*; it never writes a projection directly. Resume = replay the log; idempotency/memoization = "is it already in the log?". Events are immutable and versioned.
+**Blast radius:** Store schema (event log + maintained projections), `RunContext` (`emit`), tracer, SSE streaming, idempotency, checkpoint/resume, cost attribution.
+
+### D11 — Context is managed, never unbounded
+**Decision:** The model-visible window is a managed projection, not an ever-growing append. The runtime compacts context (summarize older turns, preserve decisions/unresolved items, drop redundant tool output, JIT-retrieve files) while the full history stays in the event log.
+**Why:** "Context rot" degrades model quality well before a token budget trips; for coding agents (large file reads, test logs) unmanaged context is a primary failure mode. Budgets bound cost; compaction protects quality.
+**Invariant:** A long run never silently degrades or overflows the window; compaction is observable (`context.compacted` event) and the full history remains recoverable from the log.
+**Blast radius:** The agent loop, `ContextManager`/compaction contract, prompt assembly, event log.
+
 ---
 
 ## Architecture at a Glance
@@ -97,8 +109,8 @@ The SDK is a pnpm + Turborepo monorepo of four runtime packages plus a scaffolde
 | Package | Responsibility |
 |---|---|
 | `@render-agents/sdk` | Public API surface: `createRuntime`, `loadAgents`, `workflow`, `defineTool`/`defineMcpSource`, testing utilities, all public types |
-| `@render-agents/engine` | Default runner + LLM loop, model clients, model tiers, environment/tool mounting, skill loading |
-| `@render-agents/store` | Persistence: Postgres + in-memory `RunStore`, span tracer |
+| `@render-agents/engine` | Default runner + LLM loop, model clients, model tiers, environment/tool mounting, skill loading, context management/compaction, hooks |
+| `@render-agents/store` | Persistence: the append-only event log + maintained projections (Postgres + in-memory), span/projection tracer |
 | `@render-agents/gateway` | Web service: routes, sessions, HITL, OAuth, SSE streaming, webhook dispatch |
 | `create-render-agent` | `npm create` scaffolder (no runtime deps) |
 
@@ -124,10 +136,10 @@ The spec is split into layered files. Read top to bottom for the full picture; j
 
 | File | Layer | Contents |
 |---|---|---|
-| [`00-foundations.md`](00-foundations.md) | Foundations | Objective, principles, foundational decisions, architecture at a glance, glossary, this map |
-| [`01-authoring.md`](01-authoring.md) | Authoring | Project layout & discovery, agent markdown schema, tools, skills, workflows, subagents, authoring API |
-| [`02-execution.md`](02-execution.md) | Execution | Runtime & composition, the loop, run/task dispatch, determinism & replay, HITL, budgets, structured output, idempotency, cancellation |
-| [`03-platform.md`](03-platform.md) | Platform | Store & Postgres schema, sessions, OAuth, webhooks/connectors/schedules, gateway, observability |
+| [`00-foundations.md`](00-foundations.md) | Foundations | Objective, principles, foundational decisions, architecture at a glance, this map |
+| [`01-authoring.md`](01-authoring.md) | Authoring | Project layout & discovery, agent markdown schema, tools, skills, workflows, subagents, hooks, authoring API |
+| [`02-execution.md`](02-execution.md) | Execution | Runtime & composition, the loop, events, dispatch, determinism & replay, HITL, budgets, context management, structured output, idempotency, cancellation, hooks |
+| [`03-platform.md`](03-platform.md) | Platform | Event log + maintained projections, sessions, OAuth, webhooks/connectors/schedules, gateway, observability |
 | [`04-operations.md`](04-operations.md) | Operations | Deployment, configuration, retention, non-functional requirements |
 | [`05-type-reference.md`](05-type-reference.md) | Reference | Every `interface`/`type` definition (pure catalog, linked from the layers above) |
 | [`porting-map.md`](porting-map.md) | Appendix | Code provenance / lift-and-shift map from the source repos |

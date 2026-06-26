@@ -29,8 +29,22 @@ interface AgentDefinition {
   permissions?: Permissions;
   /** Optional JSON Schema for structured output. When set, the runner returns validated `AgentOutput.data`. */
   output?: Record<string, unknown>;
+  /** Context-management / compaction settings. Defaults to auto-compaction sized to the model's window. */
+  context?: ContextConfig;
   plan?: RenderPlan;
   runner?: string;
+}
+```
+
+### ContextConfig
+Per-agent context-management settings. Controls how the model-visible window is compacted as a run grows.
+
+```ts
+interface ContextConfig {
+  /** Compaction strategy name (built-in or registered). Default "auto". Set "none" to disable. */
+  compaction?: string;
+  /** Token threshold that triggers compaction. Default: derived from the model's context window (e.g. ~75%). */
+  maxContextTokens?: number;
 }
 ```
 
@@ -463,29 +477,34 @@ interface RunContext {
   mountTools(toolIds: string[]): Promise<MountedTools>;
 
   /**
-   * HITL gate. Production (gateway) persists an ApprovalRequest and returns
-   * `{ status: "pending" }`; in-process behavior follows the approval mode.
-   * It does NOT block for hours.
+   * HITL gate. Production (gateway) records an `approval.requested` event and
+   * returns `{ status: "pending" }`; in-process behavior follows the approval
+   * mode. It does NOT block.
    */
   requestApproval(toolName: string, input: unknown): Promise<ApprovalResult>;
 
-  /** Budget accounting: called by the runner after each LLM call. */
-  recordUsage(usage: TokenUsage, cost?: number): void;
+  /**
+   * The single write path. Appends an event to the run's event log; the
+   * store fans it out to projections (messages, spans, tool-calls, cost),
+   * NOTIFYs the SSE stream, and feeds it through hooks. Runtime code never
+   * writes a projection directly — it only emits events. Cost/usage are carried
+   * on `llm.call` events; budget accounting folds over them.
+   */
+  emit(event: RunEvent): Promise<void>;
 
-  /** Streaming: emit a progress event to the gateway. */
-  emit(event: RunEvent): void;
+  /**
+   * The model-visible message history for `agentName`, folded from the event
+   * log and passed through context management/compaction. Returns [] for
+   * a fresh run; on resume it reconstructs exactly where the loop left off.
+   */
+  messages(agentName: string): Promise<Message[]>;
 
-  /** Persist a message for checkpoint-resume (called after each turn). */
-  persistMessage(agentName: string, msg: Message): Promise<void>;
-
-  /** Load persisted messages for a resumed run. Returns [] for fresh runs. */
-  loadMessages(agentName: string): Promise<Message[]>;
-
-  /** Idempotent tool dispatch: check if a tool call already has a stored result. */
-  checkIdempotency(toolCallId: string): Promise<ToolResult | undefined>;
-
-  /** Record a completed tool call for idempotency. */
-  recordToolCall(toolCallId: string, toolName: string, input: unknown, result: ToolResult): Promise<void>;
+  /**
+   * Idempotency/memoization via the log: returns a previously-recorded result
+   * for this tool-call id, if any (`tool.result` already in the log). This is
+   * the one mechanism behind tool idempotency and checkpoint-resume safety.
+   */
+  appliedToolResult(toolCallId: string): Promise<ToolResult | undefined>;
 
   /** Cooperative cancellation: check if this run has been cancelled. */
   isCancelled(): Promise<boolean>;
@@ -502,15 +521,171 @@ type ApprovalResult =
   | { status: "pending"; approvalRequestId: string };
 ```
 
+### EventCategory
+The category an event belongs to (AG-UI-aligned). Consumers subscribe by category, not by individual event name.
+
+```ts
+type EventCategory =
+  | "lifecycle"
+  | "message"
+  | "tool"
+  | "step"
+  | "model"
+  | "approval"
+  | "delegation"
+  | "context";
+```
+
 ### RunEvent
-A streamed run-progress event.
+The single, unified event taxonomy. One vocabulary serves persistence, the trace tree, the SSE stream, hooks, and cost — emitted once via `RunContext.emit`. Token-level provider deltas (see [`ModelStreamEvent`](#modelstreamevent)) are lifted by the runner into `text.delta` events; they are not a separate run vocabulary.
 
 ```ts
 type RunEvent =
-  | { type: "text"; text: string }
-  | { type: "tool_call"; name: string; input: unknown }
-  | { type: "tool_result"; name: string; result: ToolResult }
-  | { type: "status"; status: string };
+  // lifecycle
+  | { type: "run.started"; trigger?: string; input?: unknown }
+  | { type: "run.completed"; result?: unknown }
+  | { type: "run.failed"; error: string }
+  | { type: "run.paused"; pendingApprovalIds: string[] }
+  | { type: "run.cancelled" }
+  // message
+  | { type: "message.assistant"; agentName: string; content: ContentBlock[] }
+  | { type: "message.tool"; agentName: string; content: ContentBlock[] }
+  | { type: "text.delta"; agentName: string; text: string }
+  // tool
+  | { type: "tool.called"; toolCallId: string; name: string; input: unknown }
+  | { type: "tool.result"; toolCallId: string; name: string; result: ToolResult }
+  // step
+  | { type: "step.started"; name: string }
+  | { type: "step.completed"; name: string; result: unknown }
+  // model
+  | { type: "llm.call"; model: string; usage: TokenUsage; costUsd: number; stopReason: string; latencyMs: number }
+  // approval
+  | { type: "approval.requested"; approvalRequestId: string; toolName: string; input: unknown }
+  | { type: "approval.resolved"; approvalRequestId: string; approved: boolean; resolvedBy?: string; reason?: string }
+  | { type: "approval.auto"; toolName: string }
+  // delegation
+  | { type: "subagent.spawned"; agentName: string; childRunId: string; toolCallId: string }
+  // context
+  | { type: "context.compacted"; agentName: string; strategy: string; beforeTokens: number; afterTokens: number };
+```
+
+### RunEventRecord
+A persisted event in the append-only log — the source of truth all projections fold from. History is immutable; `version` carries the event-schema version.
+
+```ts
+interface RunEventRecord {
+  id: string;
+  runId: string;
+  /** Total order within the run (gap-free, assigned on append). */
+  seq: number;
+  ts: string;
+  category: EventCategory;
+  type: RunEvent["type"];
+  agentName?: string;
+  /** Set on span-producing events (agent/llm/tool/step) so the trace tree is a projection. */
+  spanId?: string;
+  parentSpanId?: string;
+  payload: RunEvent;
+  version: number;
+}
+```
+
+### EventLogStore
+The append-only log and its readers. The only write surface; projections are maintained by folding appended events.
+
+```ts
+interface EventLogStore {
+  /** Append an event. Assigns `seq`, updates maintained projections, and NOTIFYs the stream — atomically. */
+  append(event: RunEventRecord): Promise<void>;
+  /** Read events in order, optionally from a `seq` offset (for replay). */
+  read(runId: string, fromSeq?: number): Promise<RunEventRecord[]>;
+  /** Live tail for SSE: yields events as they are appended (Postgres LISTEN/NOTIFY). */
+  tail(filter: { runId?: string; conversationId?: string }, signal: AbortSignal): AsyncIterable<RunEventRecord>;
+}
+```
+
+### Hook
+Middleware that subscribes to the event stream. Hooks observe events for side effects (logging, metrics, notifications) and gate-category hooks may veto or rewrite an event *before* it is appended (e.g. block a `tool.called`). Discovered from `hooks/`, applied to all runs.
+
+```ts
+interface Hook {
+  readonly name: string;
+  /** Event types or whole categories this hook reacts to. */
+  readonly on: (EventCategory | RunEvent["type"])[];
+  /**
+   * Called for each matching event before append. Observation-only hooks return
+   * `{ action: "continue" }`. Gate hooks may rewrite the event or veto it.
+   */
+  handle(event: RunEvent, ctx: HookContext): Promise<HookResult>;
+}
+```
+
+### HookResult
+The outcome a hook returns for an event: continue (optionally rewritten) or reject (veto).
+
+```ts
+type HookResult =
+  | { action: "continue"; event?: RunEvent }   // optionally rewritten
+  | { action: "reject"; reason: string };       // veto (e.g. deny a tool call)
+```
+
+### HookContext
+The context passed to a hook's `handle`.
+
+```ts
+interface HookContext {
+  readonly runId: string;
+  readonly agentName?: string;
+  readonly logger: Logger;
+  env(name: string): string | undefined;
+}
+```
+
+### HookRegistry
+The discovered set of hooks, keyed by name.
+
+```ts
+interface HookRegistry {
+  get(name: string): Hook;
+  has(name: string): boolean;
+  ids(): string[];
+}
+```
+
+### defineHook
+Identity helper for authoring a hook in `hooks/` with full type inference.
+
+```ts
+function defineHook(spec: Hook): Hook;
+```
+
+### ContextManager
+Manages the model-visible window. Called before each model call to compact history when it grows past the threshold, while the full history stays in the event log.
+
+```ts
+interface ContextManager {
+  /** Returns the model-visible messages for the next call, compacting if needed (emitting `context.compacted`). */
+  prepare(messages: Message[], ctx: ContextPrepareContext): Promise<Message[]>;
+}
+
+interface ContextPrepareContext {
+  readonly model: ModelSpec;
+  readonly agentName: string;
+  readonly maxContextTokens: number;
+  /** Emit a `context.compacted` event when compaction occurs. */
+  emit(event: RunEvent): Promise<void>;
+}
+```
+
+### CompactionStrategy
+A named context-compaction strategy. The default "auto" summarizes older turns while preserving decisions/unresolved items, drops redundant tool output, and keeps recent turns verbatim.
+
+```ts
+interface CompactionStrategy {
+  readonly name: string;
+  shouldCompact(messages: Message[], usedTokens: number, maxTokens: number): boolean;
+  compact(messages: Message[]): Promise<{ messages: Message[]; summary: string }>;
+}
 ```
 
 ### workflow
@@ -611,41 +786,13 @@ interface WebhookMatch {
 ```
 
 ### idempotencyKey
-Deterministic key for deduplicating tool-call execution.
+Deterministic key for deduplicating execution. Two uses (same helper, different inputs): the **tool-call key** `SHA-256(runId + toolCallId)` dedupes tool execution; the **dispatch key** `SHA-256(runId + agentName + callSeq)` dedupes child-task dispatch. Both are answered by a single lookup against the event log (a matching `tool.result` / `subagent.spawned` event) — there is no separate tool-call store.
 
 ```ts
-/** Deterministic key for deduplicating tool call execution. */
-function idempotencyKey(runId: string, toolCallId: string): string;
+function idempotencyKey(runId: string, suffix: string): string;
 ```
 
-### ToolCallRecord
-A persisted tool-call execution record.
-
-```ts
-interface ToolCallRecord {
-  id: string;
-  runId: string;
-  idempotencyKey: string;
-  toolName: string;
-  input: unknown;
-  result?: ToolResult;
-  status: "pending" | "completed" | "error";
-  startedAt: string;
-  finishedAt?: string;
-}
-```
-
-### ToolCallStore
-The idempotency store for tool-call execution.
-
-```ts
-interface ToolCallStore {
-  /** Returns existing result if the key has been seen, undefined otherwise. */
-  checkIdempotency(key: string): Promise<ToolResult | undefined>;
-  recordToolCall(record: ToolCallRecord): Promise<void>;
-  completeToolCall(id: string, result: ToolResult): Promise<void>;
-}
-```
+> **No `ToolCallStore`.** Tool-call idempotency and the former `ToolCallRecord`/`ToolCallStore` are superseded by the event log: `tool.called`/`tool.result` events are the record, and `RunContext.appliedToolResult` (a log lookup) is the check. The `tool_calls` table becomes a maintained projection (see [Platform](03-platform.md#store--postgres-schema)).
 
 ### CancelStore
 The cooperative cancellation flag store.
@@ -670,6 +817,10 @@ interface AgentRuntime {
   readonly tracer: Tracer;
   readonly model: ModelClient;
   readonly runners: RunnerRegistry;
+  /** Hooks subscribing to the event stream. Discovered from `hooks/`. */
+  readonly hooks: HookRegistry;
+  /** Context manager for compaction. Defaults to the auto strategy. */
+  readonly contextManager: ContextManager;
   /** Dispatches agents as Render Workflow tasks. Absent when no workflow server is detected (local fallback to in-process run). */
   readonly dispatcher?: TaskDispatcher;
 }
@@ -742,6 +893,10 @@ interface CreateRuntimeOptions {
   dispatcher?: TaskDispatcher;
   /** Subagent delegation limits. Also configurable via env. */
   delegation?: Partial<DelegationLimits>;
+  /** Additional hooks, merged with those discovered from `hooks/`. */
+  hooks?: Hook[];
+  /** Override the default context manager / compaction strategy. */
+  contextManager?: ContextManager;
 }
 ```
 
@@ -803,7 +958,7 @@ interface ModelClient {
 ```
 
 ### ModelStreamEvent
-An incremental streaming event from a model.
+Provider-level streaming deltas yielded by `ModelClient.stream` (the wire format below the run). The runner lifts these into run-level [`RunEvent`](#runevent)s (`text.delta`, and `tool.*` once a tool call is assembled); they are the lowest-grain input the runner converts.
 
 ```ts
 type ModelStreamEvent =
@@ -956,6 +1111,8 @@ type SpanStatus = "running" | "ok" | "error";
 ### RunRecord
 The persisted record of a run.
 
+`RunRecord` is a **summary projection** of the event log, maintained on append — a fast read for "current state" (list/detail/status). It is derived, not an independently-authored source of truth; status comes from the latest lifecycle event and `totalCostUsd` folds over `llm.call` events. There is no `cursor` field — resume position is the log offset.
+
 ```ts
 interface RunRecord {
   id: string;
@@ -965,10 +1122,8 @@ interface RunRecord {
   result?: unknown;
   error?: string;
   trigger?: string;
-  /** Accumulated USD cost across all agent invocations in this run. */
+  /** Accumulated USD cost (folded from `llm.call` events). */
   totalCostUsd: number;
-  /** Serialized loop cursor for checkpoint-resume. */
-  cursor?: RunCursor;
   conversationId?: string;
   userId?: string;
   /** Agent version, when this run corresponds to a single agent invocation (audit/repro). */
@@ -978,18 +1133,8 @@ interface RunRecord {
 }
 ```
 
-### RunCursor
-The serialized loop cursor for checkpoint-resume.
-
-```ts
-interface RunCursor {
-  usage: TokenUsage;
-  iteration: number;
-}
-```
-
 ### SpanRecord
-The persisted record of a span.
+A span — a **projection** of the event log: the trace tree is folded from span-producing events (`*.started`/`*.completed` pairs carrying `spanId`/`parentSpanId`). Stored in the maintained `spans` projection for efficient tree queries.
 
 ```ts
 interface SpanRecord {
@@ -1009,51 +1154,33 @@ interface SpanRecord {
 }
 ```
 
-### RunMessageRecord
-A persisted LLM loop message.
-
-```ts
-/** LLM loop message persisted to Postgres for inspectability and resume. */
-interface RunMessageRecord {
-  id: string;
-  runId: string;
-  agentName: string;
-  seq: number;
-  role: MessageRole;
-  content: ContentBlock[];
-  createdAt: string;
-}
-```
-
 ### RunStore
-The persistence interface for runs, spans, messages, and steps.
+The persistence interface. Writes go through the append-only [`EventLogStore`](#eventlogstore); everything else is a **read over maintained projections** folded from the log. There are no direct projection writers (no `createRun`/`startSpan`/`appendRunMessage`) — those are internal effects of `events.append`.
 
 ```ts
 interface RunStore {
   init(): Promise<void>;
 
-  createRun(run: RunRecord): Promise<void>;
-  updateRun(id: string, patch: Partial<RunRecord>): Promise<void>;
+  /** The append-only event log — the single write path. Appending folds into projections. */
+  readonly events: EventLogStore;
+
+  // Projection reads (maintained tables, folded from events):
   getRun(id: string): Promise<RunRecord | undefined>;
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
-
-  startSpan(span: SpanRecord): Promise<void>;
-  endSpan(id: string, patch: Partial<SpanRecord>): Promise<void>;
+  /** Model-visible message history for an agent, folded from `message.*`/`tool.*` events. */
+  getMessages(runId: string, agentName: string): Promise<Message[]>;
+  /** The span/trace tree, folded from span-producing events. */
   listSpans(runId: string): Promise<SpanRecord[]>;
-
-  /** Persist an LLM loop message (called after each model turn and tool result). */
-  appendRunMessage(msg: RunMessageRecord): Promise<void>;
-  /** Retrieve persisted messages for checkpoint-resume. */
-  getRunMessages(runId: string, agentName: string): Promise<RunMessageRecord[]>;
-
-  /** Memoized workflow step result (ctx.step). Returns existing result if present. */
+  /** Memoized `ctx.step` result, read from the `step.completed` event for `(runId, name)`. */
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
-  /** Persist a memoized workflow step result keyed by (runId, name). */
-  putStepResult(runId: string, name: string, value: unknown): Promise<void>;
+  /** Idempotency lookup: the recorded result for a tool-call id, from its `tool.result` event. */
+  getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;
 
   close(): Promise<void>;
 }
 ```
+
+> Messages are returned as [`Message`](#message) (the model-facing shape); the former `RunMessageRecord` is gone — message history is the `message.*`/`tool.*` slice of the event log, and `getMessages` is its projection.
 
 ### ListRunsOptions
 Filter and pagination options for `listRuns`.

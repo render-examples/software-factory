@@ -10,20 +10,43 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Store & Postgres schema
 
-**Purpose** — Workflows orchestrate, Postgres persists (Decision D4): runs, spans, messages, tool calls, approvals, steps, sessions, and OAuth connections all live in one schema that is the source of truth for what happened and what can resume.
+**Purpose** — The append-only event log is the single source of truth. `run_events` is the canonical store; `runs`, `spans`, `run_messages`, `tool_calls`, `workflow_steps`, and `approval_requests` are **maintained projections** folded from it on append — kept as tables (not views) so existing indexes and query patterns stay fast. Sessions, conversations, OAuth, and schedules are independent operational tables.
 
-**Model** — Migrations are applied by `RunStore.init()` under a Postgres advisory lock, in a single canonical **dependency order** so all foreign keys resolve:
+**Model** — Writes go through `RunStore.events.append`, which (atomically) inserts the event, updates the affected projections, and `NOTIFY`s the stream. Migrations are applied by `RunStore.init()` under a Postgres advisory lock, in a single canonical **dependency order** so all foreign keys resolve:
 
 1. `sessions`
 2. `conversations` (FK → `sessions`)
 3. `runs` (FK → `conversations`)
-4. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules` (FK → `runs`)
-5. `messages` (FK → `conversations`, `runs`)
-6. `oauth_connections` (no FKs)
+4. `run_events` (FK → `runs`) — the canonical log
+5. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules` (FK → `runs`) — projections + ops
+6. `messages` (FK → `conversations`, `runs`)
+7. `oauth_connections` (no FKs)
 
-The blocks below document each table for reference; **they are not the application order** (creating `runs` before `conversations` would violate the FK). Each `CREATE TABLE` uses `IF NOT EXISTS` and is idempotent.
+The blocks below document each table for reference; **they are not the application order** (creating `runs` before `conversations` would violate the FK). Each `CREATE TABLE` uses `IF NOT EXISTS` and is idempotent. **Event payloads are versioned and immutable** — history is never rewritten; schema changes add new event versions.
 
-**`runs`** — one row per workflow run or agent invocation.
+**`run_events`** (canonical) — the append-only log; every run fact is an event here. All tables below are derived from it.
+
+```sql
+CREATE TABLE run_events (
+  id          TEXT PRIMARY KEY,
+  run_id      TEXT NOT NULL REFERENCES runs(id),
+  seq         BIGINT NOT NULL,          -- gap-free total order within the run
+  ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  category    TEXT NOT NULL,            -- lifecycle | message | tool | step | model | approval | delegation | context
+  type        TEXT NOT NULL,           -- e.g. tool.result, llm.call, run.paused
+  agent_name  TEXT,
+  span_id     TEXT,                     -- set on span-producing events
+  parent_span_id TEXT,
+  payload     JSONB NOT NULL,           -- the RunEvent
+  version     INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE UNIQUE INDEX idx_run_events_seq ON run_events(run_id, seq);
+CREATE INDEX idx_run_events_run ON run_events(run_id, id);
+CREATE INDEX idx_run_events_type ON run_events(run_id, type);
+```
+
+**`runs`** (projection) — summary row per workflow run or agent invocation; status = latest lifecycle event, `total_cost_usd` folds `llm.call` events. Maintained on append.
 
 ```sql
 CREATE TABLE runs (
@@ -35,7 +58,6 @@ CREATE TABLE runs (
   error           TEXT,
   trigger         TEXT,
   total_cost_usd  NUMERIC NOT NULL DEFAULT 0,
-  cursor          JSONB,
   conversation_id TEXT REFERENCES conversations(id),
   user_id         TEXT,
   agent_version   TEXT,
@@ -49,7 +71,7 @@ CREATE INDEX idx_runs_conversation ON runs(conversation_id);
 CREATE INDEX idx_runs_user ON runs(user_id);
 ```
 
-**`spans`** — the observability tree (one row per execution unit).
+**`spans`** (projection) — the observability tree, folded from span-producing events (`*.started`/`*.completed`).
 
 ```sql
 CREATE TABLE spans (
@@ -71,7 +93,7 @@ CREATE TABLE spans (
 CREATE INDEX idx_spans_run_id ON spans(run_id);
 ```
 
-**`tool_calls`** — idempotent tool-call records. The runner checks this table before dispatching a tool — if a result exists for the idempotency key, it short-circuits.
+**`tool_calls`** (projection) — folded from `tool.called`/`tool.result` events for fast idempotency lookups. `RunContext.appliedToolResult` reads it before dispatching a tool; if a result exists, it short-circuits. (The events are canonical; this table is the index over them.)
 
 ```sql
 CREATE TABLE tool_calls (
@@ -91,7 +113,7 @@ CREATE UNIQUE INDEX idx_tool_calls_idempotency ON tool_calls(run_id, idempotency
 CREATE INDEX idx_tool_calls_run_id ON tool_calls(run_id);
 ```
 
-**`run_messages`** — the full LLM message history per agent invocation within a run. This answers "what did the model see, what tools ran, what can be resumed?" The runner writes a row after each assistant turn and tool-result batch; on checkpoint-resume it loads persisted messages and resumes iteration where it left off (non-idempotent tool calls are not re-executed).
+**`run_messages`** (projection) — the LLM message history per agent invocation, folded from `message.*`/`tool.*` events. Answers "what did the model see, what can be resumed?" `RunStore.getMessages` reads it; on resume the runner reconstructs the loop position from here (non-idempotent tool calls are not re-executed). Canonical content lives in `run_events`.
 
 ```sql
 CREATE TABLE run_messages (
@@ -152,7 +174,7 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_conversation ON messages(conversation_id);
 ```
 
-**`approval_requests`** — pending and resolved HITL approvals.
+**`approval_requests`** (projection) — pending and resolved HITL approvals, folded from `approval.requested`/`approval.resolved` events.
 
 ```sql
 CREATE TABLE approval_requests (
@@ -205,7 +227,7 @@ CREATE TABLE schedules (
 );
 ```
 
-**`workflow_steps`** — memoized results of `ctx.step(name, fn)` calls. The workflow runtime checks this table before running a step — if a result exists for `(run_id, name)`, it short-circuits. This is what makes handler re-execution (HITL resume / retry) safe for side-effecting steps (see [Execution → Determinism & replay](02-execution.md#determinism--replay)).
+**`workflow_steps`** (projection) — memoized `ctx.step(name, fn)` results, folded from `step.completed` events. The runtime checks `(run_id, name)` before running a step and short-circuits on a hit. This is what makes handler re-execution (HITL resume / retry) safe for side-effecting steps (see [Execution → Determinism & replay](02-execution.md#determinism--replay)).
 
 ```sql
 CREATE TABLE workflow_steps (
@@ -217,7 +239,7 @@ CREATE TABLE workflow_steps (
 );
 ```
 
-**Contract** — [`RunStore`](05-type-reference.md#runstore), [`RunRecord`](05-type-reference.md#runrecord), [`SpanRecord`](05-type-reference.md#spanrecord), [`RunMessageRecord`](05-type-reference.md#runmessagerecord).
+**Contract** — [`EventLogStore`](05-type-reference.md#eventlogstore), [`RunEvent`](05-type-reference.md#runevent) / [`RunEventRecord`](05-type-reference.md#runeventrecord), [`RunStore`](05-type-reference.md#runstore), [`RunRecord`](05-type-reference.md#runrecord), [`SpanRecord`](05-type-reference.md#spanrecord).
 
 ---
 
@@ -233,9 +255,9 @@ CREATE TABLE workflow_steps (
 
 ## Approvals
 
-**Purpose** — Production HITL persists approval requests so a paused run can be resolved by a human out-of-band, then resumed (Decision D7).
+**Purpose** — Production HITL persists approval requests so a paused run can be resolved by a human out-of-band, then resumed.
 
-**Model** — When a gated tool requests approval in production, the gateway writes an `ApprovalRequest` (`status: "pending"`) and the run pauses. An operator lists pending approvals and resolves each (`approved` / `denied`, with an optional `resolvedBy` and `reason`). Resolution drives the run's resume — see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume).
+**Model** — When a gated tool requests approval in production, the runner emits an `approval.requested` event (projected into `approval_requests` with `status: "pending"`) and the run pauses. An operator lists pending approvals and resolves each, which emits `approval.resolved` (`approved` / `denied`, optional `resolvedBy` / `reason`). Resolution drives the run's resume — see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume).
 
 **Contract** — [`ApprovalRequest`](05-type-reference.md#approvalrequest), [`ApprovalStore`](05-type-reference.md#approvalstore).
 
@@ -316,20 +338,20 @@ CREATE TABLE workflow_steps (
 - Session-based auth for multi-turn conversations.
 - Per-user OAuth connections injected into tool context.
 
-**SSE streaming.** Run progress is streamed via Server-Sent Events over Postgres `LISTEN/NOTIFY`:
+**SSE streaming.** The SSE stream is simply a **live tail of the event log** (`RunStore.events.tail`) over Postgres `LISTEN/NOTIFY` — there is no separate SSE event vocabulary to keep in sync; clients receive the same [`RunEvent`](05-type-reference.md#runevent) taxonomy that is persisted.
 
-- **Payload strategy:** NOTIFY payloads are pointer-sized (`{ runId, kind, messageId }`), not full records. The SSE handler receives the notification, fetches the full row by ID, and serializes it to the client. This keeps NOTIFY payloads small and avoids Postgres payload size limits.
-- **Channel:** A single NOTIFY channel (`agent_runs`) carries all run-related events; the SSE handler filters by `runId` or `conversationId`.
-- **Events:** `run.started`, `run.completed`, `run.failed`, `run.paused`, `run.cancelled`; `agent.started`, `agent.completed`; `tool.called`, `tool.completed`; `text.delta` (token-level streaming output — **post-MVP**; requires `ModelClient.stream`; until then text is delivered per-turn as a full `agent.completed`/message event); `approval.requested`, `approval.resolved`, `approval.auto` (auto-approved in-process; also recorded as an `approval.auto` span attribute).
-- **Conversation streams** stay open across runs — a new turn creates a new run, and the stream picks up events from the new run automatically.
+- **Payload strategy:** NOTIFY payloads are pointer-sized (`{ runId, seq }`), not full records. The handler fetches the event by `(runId, seq)` and serializes it. This keeps NOTIFY payloads small and avoids Postgres payload size limits.
+- **Channel:** A single NOTIFY channel (`run_events`) carries every appended event; the handler filters by `runId` or `conversationId` and resumes from a `seq` offset on reconnect.
+- **Events:** the full `RunEvent` taxonomy — lifecycle (`run.*`), message (`message.*`, `text.delta`), tool (`tool.called`/`tool.result`), step, model (`llm.call`), approval (`approval.requested`/`resolved`/`auto`), delegation (`subagent.spawned`), context (`context.compacted`). Subscribe by category, not by individual name. (`text.delta` token-level streaming is **post-MVP**, gated on `ModelClient.stream`; until then text arrives as `message.assistant` events.) This taxonomy maps directly onto AG-UI for frontend interop.
+- **Conversation streams** stay open across runs — a new turn appends events under a new run; the tail (filtered by `conversationId`) picks them up automatically.
 
 ---
 
 ## Observability
 
-**Purpose** — Observable by default: every execution unit is a span, written to Postgres, with cost attribution — full visibility requires no external collector (Decision D8).
+**Purpose** — Observable by default: every execution unit is a span, with cost attribution — full visibility requires no external collector. The trace tree is a **projection of the event log**: spans are folded from span-producing events, so observability needs no separate instrumentation path.
 
-**Model** — Every execution unit is a span, and the hierarchy mirrors the execution tree:
+**Model** — Every execution unit is a span (a fold of its `*.started`/`*.completed` events), and the hierarchy mirrors the execution tree:
 
 ```
 workflow run (trace root)

@@ -33,6 +33,8 @@ my-project/
 │   └── code-review/index.ts          # orchestration pipelines
 ├── webhooks/                         # inbound event adapters (auto-discovered)
 │   └── github.ts
+├── hooks/                            # event-stream middleware (auto-discovered)
+│   └── audit-log.ts
 ├── runners/                          # custom AgentRunner implementations (optional)
 │   └── opencode.ts
 ├── render.yaml                       # Render deploy manifest
@@ -51,6 +53,7 @@ my-project/
 | `skills/` | directory name | `*/SKILL.md` | Hard error |
 | `workflows/` | directory name | `*/index.ts` | Hard error |
 | `webhooks/` | filename without ext | `*.ts` | Hard error |
+| `hooks/` | filename without ext | `*.ts` | Hard error |
 | `runners/` | filename without ext | `*.ts` | Hard error |
 
 All directories are optional. Missing directories are silently skipped unless an agent references a tool/skill from a missing one. All discovery/collision failures are load-time errors — see the [validation list](#validation-canonical-fail-fast-list).
@@ -59,7 +62,7 @@ All directories are optional. Missing directories are silently skipped unless an
 
 ## Agent Markdown Schema
 
-**Purpose** — An agent is a single `.md` file (Decision D1): YAML frontmatter declares configuration; the body is the system prompt.
+**Purpose** — An agent is a single `.md` file: YAML frontmatter declares configuration; the body is the system prompt.
 
 **Model** — Format:
 
@@ -100,6 +103,8 @@ You are a security reviewer. Given a set of file patches, analyze each for...
 | `skills` | `string[]` | `[]` | Load time (resolved against `skills/`) |
 | `permissions.requireApproval` | `string[]` | `[]` | Load time |
 | `output` | JSON Schema (object) | (none — text only) | Load time (valid JSON Schema) |
+| `context.compaction` | `string` (strategy name, or `none`) | `auto` | Load time |
+| `context.maxContextTokens` | `number` | ~75% of model window | Load time |
 | `budget.maxIterations` | `number` | `50` | Load time |
 | `budget.maxTokens` | `number` | `1000000` | Load time |
 | `budget.maxCostUsd` | `number` | `10` (per agent) | Load time |
@@ -118,7 +123,7 @@ Unknown fields are hard errors at load time.
 | `medium` | anthropic | `claude-sonnet-4-6` |
 | `large` | anthropic | `claude-opus-4-6` |
 
-**Tool references** — the `tools` array accepts source ids and individual tool names. A bare source id (`github`) mounts the source and exposes all its tools; a namespaced name (`github__get_file`) mounts the source but exposes only that tool. `tools[]` is the sole allowlist (Decision D6): only declared tools are ever presented to the model. `requireApproval` matches the **expanded** resolved tool names (e.g. `github__merge_pr`), not source ids.
+**Tool references** — the `tools` array accepts source ids and individual tool names. A bare source id (`github`) mounts the source and exposes all its tools; a namespaced name (`github__get_file`) mounts the source but exposes only that tool. `tools[]` is the sole allowlist: only declared tools are ever presented to the model. `requireApproval` matches the **expanded** resolved tool names (e.g. `github__merge_pr`), not source ids.
 
 **`_shared.md`** — if present, it supplies shared defaults merged into every agent:
 
@@ -133,7 +138,7 @@ Example: `_shared.md` sets `budget: { maxIterations: 30, maxCostUsd: 10 }` and a
 
 ## Tools
 
-**Purpose** — Tools are the capabilities an agent's model can call. A tool directory is a **source** that provides one or many tools (Decision D6).
+**Purpose** — Tools are the capabilities an agent's model can call. A tool directory is a **source** that provides one or many tools.
 
 **Model** — Agents reference sources by directory name in frontmatter (`tools: [github]`). Three shapes:
 
@@ -234,6 +239,34 @@ Each becomes one resolved tool, `subagents__<name>`, whose description is the su
 
 ---
 
+## Hooks
+
+**Purpose** — Hooks are event-stream middleware applied to every run: cross-cutting concerns (logging/metrics, notifications, policy gates, loop detection) without reimplementing the agent loop. They subscribe to the unified event stream — see [Execution → Hooks](02-execution.md#hooks) for the runtime mechanics.
+
+**Model** — A hook is a `*.ts` file under `hooks/` that default-exports a `Hook`. It declares the event types/categories it reacts to via `on`; `handle(event, ctx)` runs before each matching event is appended and returns `continue` (optionally rewriting the event) or `reject` (a veto, valid for gate categories like `tool`). Hooks are auto-discovered and applied to all runs (no per-agent wiring).
+
+**Contract** — [`Hook`](05-type-reference.md#hook), [`HookResult`](05-type-reference.md#hookresult), [`HookContext`](05-type-reference.md#hookcontext).
+
+**Example:**
+
+```ts
+// hooks/block-destructive.ts — a policy gate over the event stream
+import { defineHook } from "@render-agents/sdk";
+
+export default defineHook({
+  name: "block-destructive",
+  on: ["tool.called"],
+  handle: async (event, ctx) => {
+    if (event.type === "tool.called" && event.name === "github__delete_repo") {
+      return { action: "reject", reason: "delete_repo is not permitted" };
+    }
+    return { action: "continue" };
+  },
+});
+```
+
+---
+
 ## Authoring API
 
 **Purpose** — The functions you call to load, compose, and test agents. These are the authoring entry points of `@render-agents/sdk`; the runtime composition root (`createRuntime`) is covered in [Execution → Runtime & composition](02-execution.md#runtime--composition).
@@ -245,6 +278,7 @@ export function loadAgents(dir?: string, runtime?: AgentRuntime): Promise<AgentS
 export function workflow(/* opts?, handler */): WorkflowDefinition;
 export function defineTool(spec: DefineToolSpec): ToolSource;
 export function defineMcpSource(spec: DefineMcpSpec): ToolSource;
+export function defineHook(spec: Hook): Hook;
 ```
 
 `loadAgents` scans `dir` (default `./agents`), parses + validates frontmatter (failing fast — see below), merges `_shared.md`, loads the `tools/` and `skills/` registries, binds every agent to the `runtime` (default `await createRuntime()`), and returns an [`AgentSet`](05-type-reference.md#agentset). It is bootstrapping/outside-handler API; inside a handler use `ctx.agents`.

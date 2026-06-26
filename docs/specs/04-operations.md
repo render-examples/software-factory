@@ -10,7 +10,7 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Deployment model
 
-**Purpose** — A production deployment is a small set of Render primitives wired together: the same agent definitions run locally and in production with one config file (Decision D2).
+**Purpose** — A production deployment is a small set of Render primitives wired together: the same agent definitions run locally and in production with one config file.
 
 **Model** — Target architecture:
 
@@ -38,8 +38,8 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 │                         │                               │
 │                         ▼                               │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │        Postgres (runs, spans, sessions,          │   │
-│  │          conversations, approvals, OAuth)        │   │
+│  │   Postgres: run_events log → projections          │  │
+│  │   (runs, spans, messages, approvals) + OAuth      │   │
 │  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +64,8 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 - **Project metadata** (name, version) → `package.json`
 - **Deploy config** (services, databases) → `render.yaml`
 - **Secrets and connection strings** → `.env` / Render environment variables
-- **Retention policy** → `SPAN_RETENTION_DAYS`, `RUN_RETENTION_DAYS` env vars
+- **Retention policy** → `EVENT_RETENTION_DAYS`, `RUN_RETENTION_DAYS` env vars
+- **Hooks** → auto-discovered from `hooks/` (no config; see [Authoring → Hooks](01-authoring.md#hooks))
 - **Gateway port** → `PORT` env var
 - **Auth** → `WORKFLOW_API_KEY` env var
 - **Local strict approvals** → `RENDER_AGENTS_STRICT_APPROVAL` env var (see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume))
@@ -75,20 +76,16 @@ Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgr
 
 ## Retention
 
-**Purpose** — Span and message records accumulate fast; a default retention policy keeps the store bounded while preserving user data.
+**Purpose** — The event log accumulates fast; a default retention policy keeps it bounded while preserving user data. Because projections are folds of the log, they expire with their source events — there is one retention knob to reason about, not one per table.
 
 **Model** — Default retention:
 
-- Span records: 30 days, configurable via `SPAN_RETENTION_DAYS`
-- Run messages: 30 days, follows span retention (same lifecycle)
-- Workflow step records: 30 days, follows run-message lifecycle
-- Tool call records: 30 days, follows span retention
-- Run records: 90 days, configurable via `RUN_RETENTION_DAYS`
+- Event log (`run_events`) and its projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`): 30 days, configurable via `EVENT_RETENTION_DAYS`
+- Run summary records (`runs`): 90 days, configurable via `RUN_RETENTION_DAYS`
 - Sessions/conversations: no automatic expiry (user data)
-- Approval requests: follows run retention
 - Schedules: no automatic expiry (configuration data)
 
-A background cleanup job runs daily (or on a Render Cron trigger).
+Trimming events trims their projections in the same pass; conversely, a projection can be rebuilt by replaying retained events. A background cleanup job runs daily (or on a Render Cron trigger).
 
 ---
 
@@ -106,7 +103,7 @@ A background cleanup job runs daily (or on a Render Cron trigger).
 | Local dev without Postgres | In-memory store, full functionality |
 | Agent load + validation | < 500ms for 20 agents |
 | LLM loop overhead per turn | < 10ms (excluding model latency) |
-| Span write latency | < 5ms (async, non-blocking) |
-| SSE delivery latency | < 100ms from span write to client |
+| Event append latency | < 5ms (append + projection update, non-blocking) |
+| SSE delivery latency | < 100ms from event append to client |
 | Zero external dependencies for observability | Postgres is sufficient |
 | Package size (`@render-agents/sdk`) | < 100KB minified |
