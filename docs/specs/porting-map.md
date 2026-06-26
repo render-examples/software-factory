@@ -34,7 +34,7 @@ The template is the closer starting point for the SDK's core architecture. Its e
 | **Tracing** (`Tracer`, `SpanInfo`) | `src/engine/store/tracer.ts`, `types/trace.ts` | Spans become a **projection** of span-producing events; the tracer emits those events rather than writing a separate spans store. Keep the `workflow`/`step` span kinds ([Type Reference](05-type-reference.md#spankind)). |
 | **Store** (RunStore, memory + Postgres) | `src/engine/store/` | **Re-center on the event log.** New canonical `run_events` table + `EventLogStore` (append/read/tail). `runs`, `spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests` become maintained projections folded on append. The harness's separate message-persistence, idempotency store, and NOTIFY emission all collapse into `events.append`. |
 | **Workflow composition** | `src/workflows/code-review/index.ts` | Reference for `workflow()` helper design. The code-review pipeline becomes the scaffolder's default example. |
-| **Gateway + webhooks** | `src/main.ts`, `src/server/` | Adapt to Hono. Add sessions, HITL, OAuth, schedule routes (from harness). |
+| **Gateway + webhooks** | `src/main.ts`, `src/server/` | Adapt to Hono. Add threads, HITL, OAuth, schedule routes (from harness). |
 | **Trace UI** | `src/ui/` | Direct lift as dev-mode trace viewer. |
 
 ## 2. From `render-agent-harness` (platform substrate)

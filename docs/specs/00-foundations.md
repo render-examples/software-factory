@@ -13,9 +13,9 @@ Foundations (L0) of the render-agents spec. Everything downstream derives from t
 
 ### The problem
 
-Production agent systems need three things at once: simple authoring, durable orchestration, and real platform infrastructure (state, sessions, HITL, auth, cost controls, tracing). Lightweight frameworks nail the authoring but lack sessions, approval gates, and multi-tenant state. Platform-rich harnesses have the substrate but bury agent identity in config objects and can't express multi-agent fan-out. Workflow-native templates get orchestration right but ship without threads, HITL enforcement, or OAuth.
+Production agent systems need three things at once: simple authoring, durable orchestration, and real platform infrastructure (state, threads, HITL, auth, cost controls, tracing). Lightweight frameworks nail the authoring but lack durable threads, approval gates, and multi-tenant state. Platform-rich harnesses have the substrate but bury agent identity in config objects and can't express multi-agent fan-out. Workflow-native templates get orchestration right but ship without threads, HITL enforcement, or OAuth.
 
-This SDK combines them: markdown-first authoring, Render Workflows as the orchestration primitive, and the full platform substrate (Postgres-backed state, enforced HITL, per-user OAuth, sessions, cost/budget controls, span-level tracing) in one coherent package.
+This SDK combines them: markdown-first authoring, Render Workflows as the orchestration primitive, and the full platform substrate (Postgres-backed state, enforced HITL, per-user OAuth, threads, cost/budget controls, span-level tracing) in one coherent package.
 
 ### Scope
 
@@ -26,7 +26,7 @@ This SDK combines them: markdown-first authoring, Render Workflows as the orches
 | In-process and Workflow-dispatched execution | Non-Render orchestration backends |
 | Local tools and MCP tool sources | Custom tool protocols beyond MCP |
 | OTel-shaped tracing to Postgres | Third-party collector integrations (export only) |
-| Web gateway with sessions, HITL, OAuth | End-user-facing chat UI |
+| Web gateway with threads, HITL, OAuth | End-user-facing chat UI |
 | Render Workflows as the orchestration primitive | Generic workflow engine abstraction |
 
 ---
@@ -101,7 +101,7 @@ The SDK is a pnpm + Turborepo monorepo of four runtime packages plus a scaffolde
 | `@render-agents/sdk` | Public API surface: `createRuntime`, `loadAgents`, `workflow`, `defineTool`/`defineMcpSource`, testing utilities, all public types |
 | `@render-agents/engine` | Default runner + LLM loop, model clients, model tiers, environment/tool mounting, skill loading, context management/compaction, hooks |
 | `@render-agents/store` | Persistence: the append-only event log + maintained projections (Postgres + in-memory), span/projection tracer |
-| `@render-agents/gateway` | Web service: routes, sessions, HITL, OAuth, SSE streaming, webhook dispatch |
+| `@render-agents/gateway` | Web service: routes, threads, HITL, OAuth, SSE streaming, webhook dispatch |
 | `create-render-agent` | `npm create` scaffolder (no runtime deps) |
 
 **Dependency graph:**
@@ -136,9 +136,9 @@ The spec is split into layered files. Read top to bottom for the full picture; j
 | [`00-foundations.md`](00-foundations.md) | Foundations | Objective, principles, foundational decisions, architecture at a glance, this map |
 | [`01-authoring.md`](01-authoring.md) | Authoring | Project layout & discovery, agent markdown schema, tools, skills, workflows, subagents, hooks, authoring API |
 | [`02-execution.md`](02-execution.md) | Execution | Runtime & composition, the loop, events, dispatch, determinism & replay, HITL, budgets, context management, structured output, idempotency, cancellation, hooks |
-| [`03-platform.md`](03-platform.md) | Platform | Event log + maintained projections, sessions, OAuth, webhooks/connectors/schedules, gateway, observability |
+| [`03-platform.md`](03-platform.md) | Platform | Event log + maintained projections, threads, OAuth, webhooks/connectors/schedules, gateway, observability |
 | [`04-operations.md`](04-operations.md) | Operations | Deployment, configuration, retention, non-functional requirements |
 | [`05-type-reference.md`](05-type-reference.md) | Reference | Every `interface`/`type` definition (pure catalog, linked from the layers above) |
-| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Run list, span/trace tree, live SSE stream, pending approvals, cost summary, session/thread browser |
+| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Run list, span/trace tree, live SSE stream, pending approvals, cost summary, thread browser |
 | [`porting-map.md`](porting-map.md) | Appendix | Code provenance / lift-and-shift map from the source repos |
 | [`future-considerations.md`](future-considerations.md) | Appendix | Sandboxes and other forward-looking extensions |

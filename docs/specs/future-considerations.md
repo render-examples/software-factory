@@ -30,8 +30,8 @@ interface SandboxProvider {
 }
 
 interface SandboxAcquireOptions {
-  scope: "ephemeral" | "run" | "session";
-  /** Key for reattaching a session-pinned sandbox (threadId/sessionId). */
+  scope: "ephemeral" | "run" | "thread";
+  /** Key for reattaching a thread-pinned sandbox (threadId). */
   key?: string;
   /** Optional snapshot to restore from. */
   snapshotId?: string;
@@ -65,9 +65,9 @@ interface ExecResult {
 |---|---|---|
 | Ephemeral | per tool call | one-off `exec` |
 | Run-scoped (default) | acquired on first use, disposed at run end | code review running tests |
-| Session-pinned | persisted handle, reattaches across runs | a *development* agent with a durable workspace |
+| Thread-pinned | persisted handle, reattaches across runs | a *development* agent with a durable workspace |
 
-Run-scoped reuse falls out of the `ResolvedSource` lifecycle. Session-pinned requires new state: store the sandbox id (and last snapshot) keyed by `threadId`/`sessionId` in Postgres so the next run reattaches instead of starting clean.
+Run-scoped reuse falls out of the `ResolvedSource` lifecycle. Thread-pinned requires new state: store the sandbox id (and last snapshot) keyed by `threadId` in Postgres so the next run reattaches instead of starting clean.
 
 **Sketch:**
 
@@ -93,7 +93,7 @@ You are a coding agent. Clone the repo, implement the change, run the tests...
 | S3 | Secrets/OAuth injection into the sandbox env | How do per-user tokens (`ToolContext.connection`) reach processes running inside the sandbox, safely? |
 | S4 | Tracing granularity | Dedicated `sandbox` span kind vs sandbox attributes on `tool` spans (sandbox id, command, exit code). |
 | S5 | Cleanup guarantees | Dispose on run completion, cancel, and failure; reconcile orphaned sandboxes (TTL sweeper). |
-| S6 | Session-pinned persistence model | Where the reattach handle/snapshot lives (sessions table vs a `sandboxes` table); eviction policy. |
+| S6 | Thread-pinned persistence model | Where the reattach handle/snapshot lives (threads table vs a `sandboxes` table); eviction policy. |
 | S7 | Sandbox plan vs agent plan | Does the sandbox get its own `RenderPlan`, independent of the agent's task plan? |
 | S8 | Relationship to the `Environment` abstraction | Keep distinct, or unify sandbox handle under [`Environment`](05-type-reference.md#environment)? |
 

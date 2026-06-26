@@ -7,7 +7,7 @@
 
 Every public `interface`/`type` in one place, grouped by package. Narrative and examples live in the layer files that link here.
 
-> **Grouping denotes public-surface ownership, not physical module location.** Headers like "Core (@render-agents/sdk)" mean "exported as part of that package's public API" — which `sdk` achieves largely by **re-export**. To keep the dependency graph acyclic (`engine`/`store` must not import from `sdk`; see [Architecture at a Glance](00-foundations.md#architecture-at-a-glance)), the shared vocabulary is physically defined lower: the **persistence/event vocabulary** (`RunEvent`/`RunEventRecord`/`EventCategory`, `EventLogStore`, `EventInterceptor`, `Message`/`ContentBlock`/`MessageRole`, `ToolResult`, `TokenUsage`, `Logger`) lives in `@render-agents/store`, and the **runtime vocabulary** (`RunContext`, `AgentRunner`, `AgentDefinition`, `Tool`/`ToolContext`, `AgentInput`/`AgentOutput`, `MountedTools`, `ContextManager`, the `Hook*` authoring contract, …) lives in `@render-agents/engine`. The append path runs hooks via the `EventInterceptor` seam (engine adapts `Hook` → `EventInterceptor`); `store` never imports the `Hook` type. The **operational persistence interfaces** under the Gateway grouping (`SessionStore`/`ApprovalStore`/`OAuthStore` and their record types `Session`/`Thread`/`ThreadMessage`/`ApprovalRequest`/`OAuthConnection`) are likewise physically defined in `@render-agents/store` — `store` owns all persistence — while only the HTTP-facing `ConnectorSpec`/`ConnectorContext` are physically in `gateway`. Both layers are re-exported by `sdk`.
+> **Grouping denotes public-surface ownership, not physical module location.** Headers like "Core (@render-agents/sdk)" mean "exported as part of that package's public API" — which `sdk` achieves largely by **re-export**. To keep the dependency graph acyclic (`engine`/`store` must not import from `sdk`; see [Architecture at a Glance](00-foundations.md#architecture-at-a-glance)), the shared vocabulary is physically defined lower: the **persistence/event vocabulary** (`RunEvent`/`RunEventRecord`/`EventCategory`, `EventLogStore`, `EventInterceptor`, `Message`/`ContentBlock`/`MessageRole`, `ToolResult`, `TokenUsage`, `Logger`) lives in `@render-agents/store`, and the **runtime vocabulary** (`RunContext`, `AgentRunner`, `AgentDefinition`, `Tool`/`ToolContext`, `AgentInput`/`AgentOutput`, `MountedTools`, `ContextManager`, the `Hook*` authoring contract, …) lives in `@render-agents/engine`. The append path runs hooks via the `EventInterceptor` seam (engine adapts `Hook` → `EventInterceptor`); `store` never imports the `Hook` type. The **operational persistence interfaces** under the Gateway grouping (`ThreadStore`/`ApprovalStore`/`OAuthStore` and their record types `Thread`/`ThreadMessage`/`ApprovalRequest`/`OAuthConnection`) are likewise physically defined in `@render-agents/store` — `store` owns all persistence — while only the HTTP-facing `ConnectorSpec`/`ConnectorContext` are physically in `gateway`. Both layers are re-exported by `sdk`.
 
 ---
 
@@ -590,7 +590,7 @@ type RunEvent =
   | { type: "context.compacted"; agentName: string; strategy: string; beforeTokens: number; afterTokens: number };
 ```
 
-> **User turns are events.** `message.user` records a user/external turn delivered into a run — the initial input *and* every subsequent turn delivered via [`/runs/:id/input`](03-platform.md#gateway). Because it is in the log, it folds into `ctx.messages()` (so a resumed/revived run sees the new turn), streams over SSE, and rehydrates across a [thread's](03-platform.md#sessions--threads) runs. (`run.started.input` carries the dispatch payload; `message.user` is the conversational turn.)
+> **User turns are events.** `message.user` records a user/external turn delivered into a run — the initial input *and* every subsequent turn delivered via [`/runs/:id/input`](03-platform.md#gateway). Because it is in the log, it folds into `ctx.messages()` (so a resumed/revived run sees the new turn), streams over SSE, and rehydrates across a [thread's](03-platform.md#threads) runs. (`run.started.input` carries the dispatch payload; `message.user` is the conversational turn.)
 >
 > **`run.paused` carries a `reason`.** `"approval"` (a gated tool is awaiting resolution; `pendingApprovalIds` is set) vs `"input"` (an interactive run is awaiting the next user message). Both resolve via the same pause/resume-by-replay path, but the gateway uses the reason to route `/runs/:id/input` (deliver a `message.user` for `"input"`; expect an `approval.resolved` for `"approval"`). The run's [`RunStatus`](#runstatus) is `"paused"` in both cases.
 
@@ -1279,28 +1279,17 @@ interface ScheduleStore {
 }
 ```
 
-> The session/approval/OAuth **persistence interfaces and their record types below are physically defined in `@render-agents/store`** (it owns persistence), even though their *routes* and request/response handling live in `@render-agents/gateway`. `gateway` imports these down the graph; `store` never imports from `gateway`.
-
-### Session
-A user session.
-
-```ts
-interface Session {
-  id: string;
-  userId?: string;
-  metadata?: Record<string, unknown>;
-  createdAt: string;
-  lastActiveAt: string;
-}
-```
+> The thread/approval/OAuth **persistence interfaces and their record types below are physically defined in `@render-agents/store`** (it owns persistence), even though their *routes* and request/response handling live in `@render-agents/gateway`. `gateway` imports these down the graph; `store` never imports from `gateway`.
 
 ### Thread
-A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (its run(s) drive to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#sessionstore)); `currentRunId` is the active run, if any.
+A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (its run(s) drive to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#threadstore)); `currentRunId` is the active run, if any. A thread is the **top-level unit of work** — it carries its own `userId` (owner, from auth) and `metadata`; there is no separate session grouping (filter threads by `userId` for "everything this user is doing").
 
 ```ts
 interface Thread {
   id: string;
-  sessionId: string;
+  /** Owner, from the gateway's auth. Undefined for system/unauthenticated threads. Filter by this for a user's threads. */
+  userId?: string;
+  metadata?: Record<string, unknown>;
   /** The active run serving this thread right now, if one is live. */
   currentRunId?: string;
   status: "active" | "idle" | "completed" | "failed" | "cancelled";
@@ -1311,32 +1300,33 @@ interface Thread {
 ```
 
 ### ThreadMessage
-A single user/assistant turn in a thread, linked to the run that produced (or received) it. A thread's turns span its runs.
+A single user/assistant turn in a thread, linked to the run that produced (or received) it. A thread's turns span its runs. As a **projection** of `message.user`/`message.assistant` events, a turn is identified by its **source event coordinate** `(runId, seq)` — so the fold is an idempotent upsert and the table rebuilds byte-identically on replay (the same rebuildability invariant as every other projection; not an independently-authored row with a random key).
 
 ```ts
 interface ThreadMessage {
+  /** Deterministic, derived from the source event: `${runId}:${seq}` (stable across rebuilds — not a random UUID). */
   id: string;
   threadId: string;
+  /** The run whose log this turn lives in. Required: every turn folds from an event in some run. */
+  runId: string;
+  /** Event sequence within `runId`; `(runId, seq)` is the natural key. */
+  seq: number;
   role: "user" | "assistant";
   content: string;
-  /** The run this turn belongs to (a thread spans a sequence of runs). */
-  runId?: string;
   createdAt: string;
 }
 ```
 
-### SessionStore
-The persistence interface for sessions and threads. Sessions and threads are operational records (created/updated directly). **Thread turns are not** — they are a projection of `message.user`/`message.assistant` events (recorded via the run's [`events.append`](#runstore), not a direct writer here), so the store exposes only a read for them.
+### ThreadStore
+The persistence interface for threads. Threads are operational records (created/updated directly). **Thread turns are not** — they are a projection of `message.user`/`message.assistant` events (recorded via the run's [`events.append`](#runstore), not a direct writer here), so the store exposes only a read for them.
 
 ```ts
-interface SessionStore {
-  createSession(session: Session): Promise<void>;
-  getSession(id: string): Promise<Session | undefined>;
-  updateSession(id: string, patch: Partial<Session>): Promise<void>;
+interface ThreadStore {
   createThread(thread: Thread): Promise<void>;
   getThread(id: string): Promise<Thread | undefined>;
   updateThread(id: string, patch: Partial<Thread>): Promise<void>;
-  listThreads(sessionId: string): Promise<Thread[]>;
+  /** List threads, optionally scoped to one owner. */
+  listThreads(opts?: { userId?: string }): Promise<Thread[]>;
   /** Full turn history for a thread, across all its runs (projection of `message.*`; used to rehydrate a revived run's context). */
   getThreadMessages(threadId: string): Promise<ThreadMessage[]>;
 }

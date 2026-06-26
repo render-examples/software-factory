@@ -27,7 +27,7 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 │       ▼              ▼                   ▼              │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │              Web Gateway (Hono)                   │  │
-│  │  Sessions, HITL, OAuth, SSE, webhook dispatch    │   │
+│  │  Threads, HITL, OAuth, SSE, webhook dispatch     │   │
 │  └──────────────────────┬───────────────────────────┘   │
 │                         │                               │
 │                         ▼                               │
@@ -82,13 +82,13 @@ Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgr
 
 ## Retention
 
-**Purpose** — Data grows at different rates and serves different operational needs. Retention is therefore split into two domains: short-horizon **event detail** and longer-horizon **run summaries**, while preserving user/session data.
+**Purpose** — Data grows at different rates and serves different operational needs. Retention is therefore split into two domains: short-horizon **event detail** and longer-horizon **run summaries**, while preserving user/thread data.
 
 **Model** — Default retention:
 
 - **Event-detail domain** (high volume): `run_events` and event-derived detail projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`) are retained for 30 days, configurable via `RENDER_AGENTS_EVENT_RETENTION_DAYS`
 - **Run-summary domain** (lower volume): `runs` is retained for 90 days, configurable via `RENDER_AGENTS_RUN_RETENTION_DAYS`
-- Sessions/threads: no automatic expiry (user data)
+- Threads + their `messages` transcript: no automatic expiry (user data). The `messages` projection is the human-facing chat history, so it is kept with the thread even though it folds from `message.*` events — unlike the per-agent `run_messages`, which is event-detail and trimmed at the event horizon.
 - Schedules: no automatic expiry (configuration data)
 
 Event-detail trimming removes `run_events` and detail projections in the same pass. Those projections are rebuildable only within the retained event horizon.

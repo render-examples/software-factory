@@ -32,7 +32,7 @@ Ship a lightweight, read-only dev-mode trace viewer (ported from the template's 
 - **Build:** Vite static bundle embedded in `@render-agents/gateway`; served as static assets; no separate deployment.
 
 **Out:**
-- The full operator-UI feature set from [L6](../specs/06-operator-ui.md) (session/thread browser, resolved-approvals tab, cost-summary header polish, write actions beyond approval) — deferred post-MVP.
+- The full operator-UI feature set from [L6](../specs/06-operator-ui.md) (thread browser, resolved-approvals tab, cost-summary header polish, write actions beyond approval) — deferred post-MVP.
 - Charts/timeseries/dashboards (explicitly out of operator-UI scope too).
 - Custom theming/white-labeling.
 
