@@ -500,9 +500,11 @@ interface RunContext {
   messages(agentName: string): Promise<Message[]>;
 
   /**
-   * Idempotency/memoization via the log: returns a previously-recorded result
-   * for this tool-call id, if any (`tool.result` already in the log). This is
-   * the one mechanism behind tool idempotency and checkpoint-resume safety.
+   * Idempotency/memoization via the log: returns a previously-recorded
+   * CANONICAL terminal result for this tool-call id (`tool.result` already in
+   * the log). Success and canonical denial errors count; provider transport
+   * placeholders do not. This is the one mechanism behind tool idempotency and
+   * checkpoint-resume safety.
    */
   appliedToolResult(toolCallId: string): Promise<ToolResult | undefined>;
 
@@ -786,7 +788,7 @@ interface WebhookMatch {
 ```
 
 ### idempotencyKey
-Deterministic key for deduplicating execution. Two uses (same helper, different inputs): the **tool-call key** `SHA-256(runId + toolCallId)` dedupes tool execution; the **dispatch key** `SHA-256(runId + agentName + callSeq)` dedupes child-task dispatch. Both are answered by a single lookup against the event log (a matching `tool.result` / `subagent.spawned` event) — there is no separate tool-call store.
+Deterministic key for deduplicating execution. Two uses (same helper, different inputs): the **tool-call key** `SHA-256(runId + toolCallId)` dedupes tool execution using a canonical terminal `tool.result` event; the **dispatch key** `SHA-256(runId + agentName + callSeq)` dedupes child-task dispatch. Both are answered by a single lookup against the event log (a matching canonical terminal `tool.result` / `subagent.spawned` event) — there is no separate tool-call store.
 
 ```ts
 function idempotencyKey(runId: string, suffix: string): string;
@@ -1111,7 +1113,7 @@ type SpanStatus = "running" | "ok" | "error";
 ### RunRecord
 The persisted record of a run.
 
-`RunRecord` is a **summary projection** of the event log, maintained on append — a fast read for "current state" (list/detail/status). It is derived, not an independently-authored source of truth; status comes from the latest lifecycle event and `totalCostUsd` folds over `llm.call` events. There is no `cursor` field — resume position is the log offset.
+`RunRecord` is a **summary projection** of the event log, maintained on append — a fast read for "current state" (list/detail/status). It is derived, not an independently-authored source of truth; status comes from the latest lifecycle event and `totalCostUsd` folds over `llm.call` events. Operationally, this summary may be retained longer than detailed event history. There is no `cursor` field — resume position is the log offset.
 
 ```ts
 interface RunRecord {
@@ -1173,7 +1175,7 @@ interface RunStore {
   listSpans(runId: string): Promise<SpanRecord[]>;
   /** Memoized `ctx.step` result, read from the `step.completed` event for `(runId, name)`. */
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
-  /** Idempotency lookup: the recorded result for a tool-call id, from its `tool.result` event. */
+  /** Idempotency lookup: canonical terminal result for a tool-call id, from its `tool.result` event. */
   getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;
 
   close(): Promise<void>;
