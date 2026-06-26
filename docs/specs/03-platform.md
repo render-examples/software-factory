@@ -46,7 +46,7 @@ CREATE INDEX idx_run_events_run ON run_events(run_id, id);
 CREATE INDEX idx_run_events_type ON run_events(run_id, type);
 ```
 
-**`runs`** (projection) — summary row per workflow run or agent invocation; status = latest lifecycle event, `total_cost_usd` folds `llm.call` events. Maintained on append.
+**`runs`** (projection) — summary row per workflow run or agent invocation; status = latest lifecycle event, `total_cost_usd` folds `llm.call` events. Maintained on append and often retained on a longer horizon than event-detail tables for low-cost operational history.
 
 ```sql
 CREATE TABLE runs (
@@ -257,7 +257,7 @@ CREATE TABLE workflow_steps (
 
 **Purpose** — Production HITL persists approval requests so a paused run can be resolved by a human out-of-band, then resumed.
 
-**Model** — When a gated tool requests approval in production, the runner emits an `approval.requested` event (projected into `approval_requests` with `status: "pending"`) and the run pauses. An operator lists pending approvals and resolves each, which emits `approval.resolved` (`approved` / `denied`, optional `resolvedBy` / `reason`). Resolution drives the run's resume — see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume).
+**Model** — Approval events are the canonical source of truth. When a gated tool requests approval in production, the runner emits an `approval.requested` event (projected into `approval_requests` with `status: "pending"`) and the run pauses. Pending approval is "requested with no matching resolved event." An operator lists pending approvals and resolves each, which emits `approval.resolved` (`approved` / `denied`, optional `resolvedBy` / `reason`). Resolution drives the run's resume — see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume).
 
 **Contract** — [`ApprovalRequest`](05-type-reference.md#approvalrequest), [`ApprovalStore`](05-type-reference.md#approvalstore).
 

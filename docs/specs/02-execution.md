@@ -243,18 +243,32 @@ const decision = await ctx.agents.get("judge").run({ sec, perf });
 
 **Purpose** — HITL pause is a control-flow signal resolved by replay. A gated tool awaiting approval must not pin compute for hours, and a caller must never see a partial result.
 
-**Model** — During tool dispatch, if `requireApproval` includes the tool name and the call has not been pre-approved, the runner invokes `ctx.requestApproval()`:
+**Model** — Approval state is explicit, and **approval events are the source of truth** for gated tool calls. For each gated `tool_use`, the runtime follows this state machine:
+
+| State | Event / condition | Meaning |
+|---|---|---|
+| `requested` | assistant emits `tool_use` | Candidate tool call exists |
+| `pending_approval` | `approval.requested` emitted, no `approval.resolved` yet | Call is blocked; run may pause |
+| `denied` | `approval.resolved { approved: false }` | Call ends as denied; tool is not invoked |
+| `approved` | `approval.resolved { approved: true }` or `approval.auto` | Call may proceed to dispatch |
+| `executed` | `tool.called` emitted | Tool invocation started |
+| `completed` | `tool.result` emitted | Terminal applied result recorded |
+
+During tool dispatch, if `requireApproval` includes the tool name and the call has not been pre-approved, the runner invokes `ctx.requestApproval()`:
 
 - On approval (`{ approved: true }`): continue to dispatch.
-- On denial (`{ approved: false }`): return an error result.
-- On pause (`{ status: "pending" }`, production HITL): write a **placeholder `tool_result`** for all pending `tool_use` blocks in this turn (providers require every `tool_use` to have a matching result, else a 400 on resume), set run status to `"paused"`, and throw `RunPaused` carrying the pending approval id(s). The runtime catch boundary marks the run paused and (in a workflow) lets the signal unwind the handler. A `PausedResult` is available to callers that inspect the boundary instead of relying on the throw.
+- On denial (`{ approved: false }`): emit a canonical error `tool_result` for that `tool_use` and continue the loop (no `tool.called` is emitted).
+- On pause (`{ status: "pending" }`, production HITL): emit `approval.requested`, set run status to `"paused"`, and throw `RunPaused` carrying the pending approval id(s). The runtime catch boundary marks the run paused and (in a workflow) lets the signal unwind the handler. A `PausedResult` is available to callers that inspect the boundary instead of relying on the throw.
+
+Providers may require a matching `tool_result` block in wire-format history to resume cleanly. Those **provider placeholders are transport-only artifacts**: they are not emitted as canonical `tool.result` events, are not indexed by idempotency projections, and never count as completed/applied tool calls.
 
 **Replay on resume.** When a run resumes after a HITL pause or checkpoint:
 
 1. Load the folded message history via `ctx.messages(agentName)`.
-2. Find the last assistant message. If it contains `tool_use` blocks without matching `tool_result` blocks, these are **pending tool calls**.
-3. Re-dispatch pending tool calls through the normal dispatch path. The idempotency check short-circuits any that already completed before the pause.
-4. Continue the loop from the next iteration.
+2. Read approval state from approval events (or the `approval_requests` projection): `approval.requested` without matching `approval.resolved` is pending approval.
+3. For approved calls, re-dispatch through the normal path; idempotency short-circuits calls that already have a canonical terminal `tool.result`.
+4. Denied calls resolve as canonical error `tool_result`s without invoking the tool.
+5. Continue the loop from the next iteration.
 
 **In-process approval modes.** When an agent runs in-process with no gateway to resolve approvals (local dev, `agent.run()` in a script), `requestApproval` follows the approval mode:
 
@@ -275,8 +289,8 @@ This keeps local iteration fast by default while making the bypass visible, and 
 
 **Model** — Tools are dispatched sequentially within a turn (parallel tool dispatch is a future optimization). For each `tool_use` block:
 
-1. **Idempotency check** → call `ctx.appliedToolResult(toolCallId)` (a log lookup for an existing `tool.result`). If found, return it without re-executing. This makes checkpoint-resume and task retries safe for non-idempotent tools.
-2. **Approval gate** → if `requireApproval` includes this tool name and the tool call has not been pre-approved, invoke `ctx.requestApproval()` (full pause/resume mechanics in [HITL pause & resume](#hitl-pause--resume)).
+1. **Idempotency check** → call `ctx.appliedToolResult(toolCallId)` (a log lookup for a canonical terminal `tool.result`). If found, return it without re-executing. This makes checkpoint-resume and task retries safe for non-idempotent tools. "Already applied" means the call has a canonical terminal `tool.result` in the event log (success or canonical denial error), not a provider transport placeholder.
+2. **Approval gate** → if `requireApproval` includes this tool name and the call is not in an approved state, invoke `ctx.requestApproval()` (full pause/resume mechanics in [HITL pause & resume](#hitl-pause--resume)).
 3. **Lookup** → resolve the tool by name in the mounted tools map. Error result if unknown (e.g. the model hallucinated a tool not in `tools[]`).
 4. **Validate input** → validate the model's input against the tool's `inputSchema` (applies to local *and* MCP-sourced tools, against the MCP-advertised schema). On failure, return an **error `tool_result`** with the validation message so the model can self-correct — the loop does not crash.
 5. **Emit `tool.called`** → then call `tool.invoke(input, ctx)` with the tool context.
@@ -293,12 +307,13 @@ Errors in tool execution are caught and returned as `{ isError: true }` — they
 
 **Purpose** — The append-only event log is what makes a run inspectable and resumable. Resume is replaying the log, not loading a bespoke checkpoint.
 
-**Model** — The runner emits events as it goes (`message.assistant`, `tool.called`/`tool.result`, `message.tool`, `llm.call`); the store folds them into the message and tool-call projections. To resume:
+**Model** — The runner emits events as it goes (`message.assistant`, `approval.*`, `tool.called`/`tool.result`, `message.tool`, `llm.call`); the store folds them into projections. To resume:
 
 1. `ctx.messages(agentName)` returns the model-visible history, folded from `message.*`/`tool.*` events (post-compaction).
-2. The position in the loop is reconstructed from the log: a trailing `tool.called` without a matching `tool.result` is a pending tool call.
-3. On HITL pause, a `run.paused` event is appended; the log captures the exact point of interruption.
-4. On resume, pending tool calls are re-dispatched through the normal path; `appliedToolResult` short-circuits any that already completed (their `tool.result` is in the log).
+2. Pending approval is reconstructed from approval events: `approval.requested` without matching `approval.resolved`.
+3. A started-but-incomplete tool execution is reconstructed as `tool.called` without matching canonical terminal `tool.result`.
+4. On HITL pause, `run.paused` is appended; the log captures the interruption point.
+5. On resume, approved pending calls are re-dispatched through the normal path; `appliedToolResult` short-circuits any call with a canonical terminal `tool.result` already in the log.
 
 So the log answers "what did the model see, what ran, what is paused, what can resume?" in one place; spans (observability) and messages (execution) are both projections of it, not parallel stores.
 
@@ -370,7 +385,7 @@ Because `load_skill` is an ordinary tool, it inherits the [tool dispatch](#tool-
 
 **Model** — Idempotency is **one mechanism: "is it already in the log?"** Two keys, same question:
 
-- **Tool-call key** `SHA-256(runId + toolCallId)` — `appliedToolResult` looks for an existing `tool.result` event; a hit short-circuits the dispatch. Dedupes *tool execution* within a run.
+- **Tool-call key** `SHA-256(runId + toolCallId)` — `appliedToolResult` looks for an existing **canonical terminal** `tool.result` event; a hit short-circuits the dispatch. Dedupes *tool execution* within a run. Provider transport placeholders are excluded and never count as "already applied."
 - **Dispatch key** `SHA-256(runId + agentName + callSeq)` (on `DispatchOptions`; see [Run vs task dispatch](#run-vs-task-dispatch)) — a matching `subagent.spawned`/child-run event short-circuits re-dispatch. Dedupes *child-task dispatch* so a resumed handler does not re-launch completed `agent.task()` runs.
 
 There is no separate tool-call store: the `tool_calls` table is a projection that indexes `tool.result` events for these lookups.

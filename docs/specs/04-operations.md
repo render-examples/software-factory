@@ -64,7 +64,7 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 - **Project metadata** (name, version) → `package.json`
 - **Deploy config** (services, databases) → `render.yaml`
 - **Secrets and connection strings** → `.env` / Render environment variables
-- **Retention policy** → `EVENT_RETENTION_DAYS`, `RUN_RETENTION_DAYS` env vars
+- **Retention policy domains** (event detail vs run summary) → `EVENT_RETENTION_DAYS`, `RUN_RETENTION_DAYS` env vars
 - **Hooks** → auto-discovered from `hooks/` (no config; see [Authoring → Hooks](01-authoring.md#hooks))
 - **Gateway port** → `PORT` env var
 - **Auth** → `WORKFLOW_API_KEY` env var
@@ -76,16 +76,22 @@ Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgr
 
 ## Retention
 
-**Purpose** — The event log accumulates fast; a default retention policy keeps it bounded while preserving user data. Because projections are folds of the log, they expire with their source events — there is one retention knob to reason about, not one per table.
+**Purpose** — Data grows at different rates and serves different operational needs. Retention is therefore split into two domains: short-horizon **event detail** and longer-horizon **run summaries**, while preserving user/session data.
 
 **Model** — Default retention:
 
-- Event log (`run_events`) and its projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`): 30 days, configurable via `EVENT_RETENTION_DAYS`
-- Run summary records (`runs`): 90 days, configurable via `RUN_RETENTION_DAYS`
+- **Event-detail domain** (high volume): `run_events` and event-derived detail projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`) are retained for 30 days, configurable via `EVENT_RETENTION_DAYS`
+- **Run-summary domain** (lower volume): `runs` is retained for 90 days, configurable via `RUN_RETENTION_DAYS`
 - Sessions/conversations: no automatic expiry (user data)
 - Schedules: no automatic expiry (configuration data)
 
-Trimming events trims their projections in the same pass; conversely, a projection can be rebuilt by replaying retained events. A background cleanup job runs daily (or on a Render Cron trigger).
+Event-detail trimming removes `run_events` and detail projections in the same pass. Those projections are rebuildable only within the retained event horizon.
+
+`runs` may intentionally outlive event detail to preserve list/history/status/cost reporting for longer windows at lower storage cost. Tradeoff: once detailed events expire, full trace/message/tool replay is no longer reconstructable for those older runs.
+
+Recommended production baseline: keep `RUN_RETENTION_DAYS > EVENT_RETENTION_DAYS` (default 90 > 30) so operational history outlives high-volume detail.
+
+If strict replayability is required for the full run lifetime, set `RUN_RETENTION_DAYS <= EVENT_RETENTION_DAYS` (or set both equal). A background cleanup job runs daily (or on a Render Cron trigger).
 
 ---
 
@@ -100,7 +106,7 @@ Trimming events trims their projections in the same pass; conversely, a projecti
 | Node version | 20+ |
 | Module system | ESM only |
 | TypeScript | Strict mode, declaration emit |
-| Local dev without Postgres | In-memory store, full functionality |
+| Local dev without Postgres | In-memory store with equivalent loop semantics; no durable checkpoint/resume across process restarts |
 | Agent load + validation | < 500ms for 20 agents |
 | LLM loop overhead per turn | < 10ms (excluding model latency) |
 | Event append latency | < 5ms (append + projection update, non-blocking) |
