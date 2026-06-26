@@ -37,7 +37,7 @@ Stand up the `@render-agents/gateway` web service on Hono with the core run-faci
 - **Serialization** of `RunRecord`/`SpanRecord`/messages/tool-calls to JSON response shapes.
 
 **Out:**
-- SSE streaming + sessions/threads (Sprint 17).
+- SSE streaming + threads (Sprint 17).
 - Approvals + HITL resume routes (`/approvals`, `/runs/:id/input`) (Sprint 18).
 - OAuth routes (Sprint 19); webhooks/connectors (Sprint 20).
 - The dev trace viewer SPA (Sprint 22) — these routes are what it reads.
@@ -56,7 +56,7 @@ Stand up the `@render-agents/gateway` web service on Hono with the core run-faci
 
 ## Porting source
 
-- **T — Gateway + webhooks:** `agent-workflows-template/src/main.ts`, `src/server/` — adapt to Hono; this sprint takes the run routes; sessions/HITL/OAuth/schedules come from the harness in later sprints.
+- **T — Gateway + webhooks:** `agent-workflows-template/src/main.ts`, `src/server/` — adapt to Hono; this sprint takes the run routes; threads/HITL/OAuth/schedules come from the harness in later sprints.
 - **H — API key auth:** `render-agent-harness/.../web/src/auth.ts` — port constant-time compare + fail-closed.
 - **H — Run routes / serializers:** `web/src/routes/runs.ts`, `web/src/serializers.ts`, `web/src/summary.ts` — port the list/detail/spans/tool-calls read routes (SSE handler deferred to Sprint 17); adapt reads to the projection store.
 - **H — Input validation:** `web/src/routes/*.ts` — port non-empty input + name-resolution validation patterns.

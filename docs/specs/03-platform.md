@@ -5,7 +5,7 @@
 
 **Layer:** L3 — *what persists & serves.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
-This layer covers the durable substrate beneath the runtime: the Postgres schema, the stores for sessions, approvals, OAuth, webhooks, connectors, and schedules, the web gateway, and the observability model. Runtime behavior that drives these stores lives in [Execution](02-execution.md); exact type shapes live in the [Type Reference](05-type-reference.md).
+This layer covers the durable substrate beneath the runtime: the Postgres schema, the stores for threads, approvals, OAuth, webhooks, connectors, and schedules, the web gateway, and the observability model. Runtime behavior that drives these stores lives in [Execution](02-execution.md); exact type shapes live in the [Type Reference](05-type-reference.md).
 
 Each section follows the same shape: **Purpose** (what & why), **Model** (how it works), **Contract** (link to exact types), and an **Example** where useful.
 
@@ -13,17 +13,16 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Store & Postgres schema
 
-**Purpose** — The append-only event log is the single source of truth. `run_events` is the canonical store; `runs`, `spans`, `run_messages`, `tool_calls`, `workflow_steps`, and `approval_requests` are **maintained projections** folded from it on append — kept as tables (not views) so existing indexes and query patterns stay fast. Sessions, threads, OAuth, and schedules are independent operational tables.
+**Purpose** — The append-only event log is the single source of truth. `run_events` is the canonical store; `runs`, `spans`, `run_messages`, `messages`, `tool_calls`, `workflow_steps`, and `approval_requests` are **maintained projections** folded from it on append — kept as tables (not views) so existing indexes and query patterns stay fast. Threads, OAuth, and schedules are independent operational tables.
 
 **Model** — Writes go through `RunStore.events.append`, which (atomically) inserts the event, updates the affected projections, and `NOTIFY`s the stream. Migrations are applied by `RunStore.init()` under a Postgres advisory lock, in a single canonical **dependency order** so all foreign keys resolve:
 
-1. `sessions`
-2. `threads` (FK → `sessions`)
-3. `runs` (FK → `threads`)
-4. `run_events` (FK → `runs`) — the canonical log
-5. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules` (FK → `runs`) — projections + ops
-6. `messages` (FK → `threads`, `runs`)
-7. `oauth_connections` (no FKs)
+1. `threads` (no FKs — the top-level operational record)
+2. `runs` (FK → `threads`)
+3. `run_events` (FK → `runs`) — the canonical log
+4. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules` (FK → `runs`) — projections + ops
+5. `messages` (FK → `threads`; `run_id` is a non-FK provenance column)
+6. `oauth_connections` (no FKs)
 
 The blocks below document each table for reference; **they are not the application order** (creating `runs` before `threads` would violate the FK). Each `CREATE TABLE` uses `IF NOT EXISTS` and is idempotent. **Event payloads are versioned and immutable** — history is never rewritten; schema changes add new event versions.
 
@@ -132,31 +131,20 @@ CREATE TABLE run_messages (
 CREATE INDEX idx_run_messages_run_agent ON run_messages(run_id, agent_name, seq);
 ```
 
-**`sessions`** — user sessions.
-
-```sql
-CREATE TABLE sessions (
-  id             TEXT PRIMARY KEY,
-  user_id        TEXT,
-  metadata       JSONB,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-
-**`threads`** — durable lines of work within a session, each served by a *sequence* of runs over time. The partial unique index enforces at most one active run per thread, so a new turn cannot start (or a stale revived run cannot race) while one is in flight. (The [`Thread.currentRunId`](05-type-reference.md#thread) is **derived** from that index — the one run in `pending`/`running`/`paused` for the thread — not a stored column, so it can't drift from the runs table.)
+**`threads`** — the top-level operational record: a durable line of work owned by a `user_id` (from auth), each served by a *sequence* of runs over time. The partial unique index enforces at most one active run per thread, so a new turn cannot start (or a stale revived run cannot race) while one is in flight. (The [`Thread.currentRunId`](05-type-reference.md#thread) is **derived** from that index — the one run in `pending`/`running`/`paused` for the thread — not a stored column, so it can't drift from the runs table.)
 
 ```sql
 CREATE TABLE threads (
   id          TEXT PRIMARY KEY,
-  session_id  TEXT NOT NULL REFERENCES sessions(id),
+  user_id     TEXT,
+  metadata    JSONB,
   status      TEXT NOT NULL DEFAULT 'active',
   title       TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_threads_session ON threads(session_id);
+CREATE INDEX idx_threads_user ON threads(user_id);
 
 -- At most one active (pending/running/paused) run per thread.
 -- A thread spans many runs over time, but only one is live at once.
@@ -165,20 +153,24 @@ CREATE UNIQUE INDEX idx_runs_thread_active
   WHERE status IN ('pending', 'running', 'paused');
 ```
 
-**`messages`** — user/assistant thread turns (distinct from the LLM-loop `run_messages`); a **projection folded from `message.user`/`message.assistant` events** (not independently authored — D10), keyed by `thread_id` so a thread's turns span its runs, with each row carrying the `run_id` that produced it.
+**`messages`** — user/assistant thread turns: the **human-facing, agent-agnostic transcript** (distinct from the model-facing, per-agent `run_messages`). A **projection folded from `message.user`/`message.assistant` events** (not independently authored — D10). Its primary key is the **source event coordinate `(run_id, seq)`** so the fold is an idempotent upsert and the table rebuilds byte-identically on replay; it is scoped by `thread_id` so a thread's turns span its runs. Unlike the high-volume event-detail projections (`spans`/`tool_calls`/…), this transcript is **retained with the thread** (user data), not trimmed at the event-detail horizon — see [Operations → Retention](04-operations.md#retention).
 
 ```sql
 CREATE TABLE messages (
-  id          TEXT PRIMARY KEY,
+  run_id      TEXT NOT NULL,   -- provenance (the run/log this turn folded from); NOT FK-enforced:
+                               -- the transcript outlives run summaries + the event horizon
+  seq         BIGINT NOT NULL,
   thread_id   TEXT NOT NULL REFERENCES threads(id),
   role        TEXT NOT NULL,
   content     TEXT NOT NULL,
-  run_id      TEXT REFERENCES runs(id),
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, seq)
 );
 
 CREATE INDEX idx_messages_thread ON messages(thread_id);
 ```
+
+`run_id` is a deliberate **non-FK provenance column**: `messages` is retained with the thread (user data), but `runs`/`run_events` are trimmed at their retention horizons, so a hard FK would break on trim. The transcript therefore survives even after its source run's detail is gone.
 
 **`approval_requests`** (projection) — pending and resolved HITL approvals, folded from `approval.requested`/`approval.resolved` events.
 
@@ -249,21 +241,21 @@ CREATE TABLE workflow_steps (
 
 ---
 
-## Sessions & threads
+## Threads
 
-**Purpose** — The gateway tracks multi-turn work as **threads**. A session groups a user's threads; a **thread** is a durable, ordered line of work — a sequence of messages — that may be **autonomous** (its run drives to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The two are the same primitive: they differ only in whether the next message comes from the model or from an external actor, and a thread can switch between the two mid-flight (an autonomous thread that hits a HITL gate momentarily awaits input, then continues).
+**Purpose** — The gateway tracks multi-turn work as **threads**. A **thread** is the top-level unit of work: a durable, ordered line of work — a sequence of messages — owned by a `userId` and carrying arbitrary `metadata`. It may be **autonomous** (its run drives to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The two are the same primitive: they differ only in whether the next message comes from the model or from an external actor, and a thread can switch between the two mid-flight (an autonomous thread that hits a HITL gate momentarily awaits input, then continues). There is no separate "session" grouping — "everything a user is doing" is just the threads with that `userId`.
 
-**Model** — A session belongs to an optional `userId` and carries arbitrary metadata. A **thread spans a *sequence* of runs** over its lifetime, with **at most one active run at a time** (the partial unique index). The thread is the stable identity and message history; a run is the execution (a workflow task container) that serves it for a stretch. The thread's full turn history lives in the event log across its runs (`messages`/`run_messages` keyed by `threadId`), so it survives any single run.
+**Model** — A **thread spans a *sequence* of runs** over its lifetime, with **at most one active run at a time** (the partial unique index). The thread is the stable identity and message history; a run is the execution (a workflow task container) that serves it for a stretch. The thread's full turn history lives in the event log across its runs (`messages`/`run_messages` keyed by `threadId`), so it survives any single run.
 
 **How threads relate to execution — the gateway never runs an agent loop.** The gateway is a thin web service: it proxies, it does not execute. On thread creation it **dispatches one workflow run for the thread** (a Render Workflows task — its own container in the workflow service) and then simply **attaches**: it relays user messages *in* and tails the event log *out* over SSE.
 
-That **active run is the thing you converse with.** The task container hosts the agent loop and handles turns for as long as it's alive — each user message (`POST /sessions/:id/messages`) is delivered into the **existing** run as its next input via the *awaiting-input* path (see [HITL pause & resume](#hitl-pause--resume) / [`/runs/:id/input`](#gateway)), **not** as a new run. Concretely: the loop parks in [`awaitInput()`](05-type-reference.md#runcontext) (status `paused`, `reason: "input"`); the gateway appends a [`message.user`](05-type-reference.md#runevent) event and resumes the run, which picks the turn up from its folded history. This is the cheap path: no per-message dispatch, low latency. (The gateway uses the pause *reason* to route `/runs/:id/input` — a `message.user` for an input pause, an `approval.resolved` for an approval pause.)
+That **active run is the thing you converse with.** The task container hosts the agent loop and handles turns for as long as it's alive — each user message (`POST /threads/:id/messages`) is delivered into the **existing** run as its next input via the *awaiting-input* path (see [HITL pause & resume](#hitl-pause--resume) / [`/runs/:id/input`](#gateway)), **not** as a new run. Concretely: the loop parks in [`awaitInput()`](05-type-reference.md#runcontext) (status `paused`, `reason: "input"`); the gateway appends a [`message.user`](05-type-reference.md#runevent) event and resumes the run, which picks the turn up from its folded history. This is the cheap path: no per-message dispatch, low latency. (The gateway uses the pause *reason* to route `/runs/:id/input` — a `message.user` for an input pause, an `approval.resolved` for an approval pause.)
 
-**Threads outlive runs.** Between turns the active run awaits input. If the platform deprovisions the idle container (idle eviction, max-lifetime, crash), the thread persists. The next message **dispatches a *new* run for the thread**, which **rehydrates the prior context from the thread's log** (cross-run history) and continues — so a new run happens on *revival*, not per turn. The single-active-run index keeps revival races from producing two live runs; while a run is mid-turn (generating, not awaiting input) an incoming message returns `409 thread_busy`.
+**Threads outlive runs.** Between turns the active run awaits input. If the platform deprovisions the idle container (idle eviction, max-lifetime, crash), the thread persists. The next message **dispatches a *new* run for the thread**, which **rehydrates the prior context from the thread's `messages` transcript** (`getThreadMessages`, cross-run history) and continues — so a new run happens on *revival*, not per turn. Because the transcript is kept beyond the event horizon (unlike `run_events`), a thread stays continuable even after its old runs' detail has been trimmed: revival reads the durable transcript, it does not replay trimmed logs. The single-active-run index keeps revival races from producing two live runs; while a run is mid-turn (generating, not awaiting input) an incoming message returns `409 thread_busy`.
 
-The thread's workflow is chosen **once, at thread creation** (an explicit `workflow` on the session/thread, else the project's default conversational workflow) — not per message and not per revival. Multi-turn *memory* lives in the thread's event log (keyed by `threadId`), not in gateway memory; every run serving the thread reads that history and treats each delivered message as "continue this thread."
+The thread's workflow is chosen **once, at thread creation** (an explicit `workflow` on the thread, else the project's default conversational workflow) — not per message and not per revival. Multi-turn *memory* lives in the thread's event log (keyed by `threadId`), not in gateway memory; every run serving the thread reads that history and treats each delivered message as "continue this thread."
 
-**Contract** — [`Session`](05-type-reference.md#session), [`Thread`](05-type-reference.md#thread), [`ThreadMessage`](05-type-reference.md#threadmessage), [`SessionStore`](05-type-reference.md#sessionstore).
+**Contract** — [`Thread`](05-type-reference.md#thread), [`ThreadMessage`](05-type-reference.md#threadmessage), [`ThreadStore`](05-type-reference.md#threadstore).
 
 ---
 
@@ -319,7 +311,7 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 
 ## Gateway
 
-**Purpose** — The gateway is the web service: it exposes runs, sessions, HITL, OAuth, webhooks, and SSE streaming over HTTP, and is the single entry point for triggering and observing work.
+**Purpose** — The gateway is the web service: it exposes runs, threads, HITL, OAuth, webhooks, and SSE streaming over HTTP, and is the single entry point for triggering and observing work.
 
 **Model** — Routes:
 
@@ -333,10 +325,10 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 | `GET` | `/runs/:id/stream` | SSE stream of run events |
 | `POST` | `/runs/:id/cancel` | Cancel a running or paused run |
 | `POST` | `/runs/:id/input` | HITL resume (approval or user input) |
-| `POST` | `/sessions` | Create a session |
-| `POST` | `/sessions/:id/messages` | Send a message (dispatches the thread run on first message/revival, else delivers into the active run) |
-| `GET` | `/sessions/:id/threads` | List threads |
-| `GET` | `/sessions/:id/threads/:tid/stream` | SSE stream for a thread (spans the thread's runs, stays open) |
+| `POST` | `/threads` | Create a thread (optional `userId`, `metadata`, `workflow`) |
+| `GET` | `/threads` | List threads (optional `?userId=`) |
+| `POST` | `/threads/:id/messages` | Send a message (dispatches the thread run on first message/revival, else delivers into the active run) |
+| `GET` | `/threads/:id/stream` | SSE stream for a thread (spans the thread's runs, stays open) |
 | `GET` | `/approvals` | List pending approvals |
 | `POST` | `/approvals/:id/resolve` | Approve or deny a tool call |
 | `POST` | `/webhooks/:name` | Inbound webhook dispatch (user-authored) |
@@ -349,7 +341,7 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 **Authentication:**
 
 - API key bearer auth (`Authorization: Bearer <key>`) for programmatic access.
-- Session-based auth for multi-turn threads.
+- Threads are owned by `userId` (from auth) for ownership/filtering — there is no separate session token.
 - Per-user OAuth connections injected into tool context.
 
 **SSE streaming.** The SSE stream is simply a **live tail of the event log** (`RunStore.events.tail`) over Postgres `LISTEN/NOTIFY` — there is no separate SSE event vocabulary to keep in sync; clients receive the same [`RunEvent`](05-type-reference.md#runevent) taxonomy that is persisted.

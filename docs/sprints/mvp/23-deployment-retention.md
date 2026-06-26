@@ -35,7 +35,7 @@ Define and validate the production deployment: the canonical `render.yaml` topol
 - **Retention cleanup job** ([Operations → Retention](../specs/04-operations.md#retention)):
   - **Event-detail domain** (`run_events` + detail projections `spans`/`run_messages`/`tool_calls`/`workflow_steps`/`approval_requests`): default 30 days (`RENDER_AGENTS_EVENT_RETENTION_DAYS`), trimmed together.
   - **Run-summary domain** (`runs`): default 90 days (`RENDER_AGENTS_RUN_RETENTION_DAYS`).
-  - Sessions/threads/schedules: no auto-expiry.
+  - Threads (incl. their `messages` transcript)/schedules: no auto-expiry — the transcript is a projection but is user data, kept beyond the event/run horizons (its `run_id` is a non-FK provenance column so trimming runs doesn't orphan it).
   - A daily background cleanup (or Render Cron trigger) that trims both domains in one pass.
 - **Startup ordering / `init()`:** both services call `RunStore.init()` (advisory-locked migrations, Sprint 05); document boot order/health.
 
@@ -76,7 +76,7 @@ Define and validate the production deployment: the canonical `render.yaml` topol
 - A `render.yaml`-defined deployment brings up gateway + workflow service + Postgres; both migrate via `init()` without conflict; health checks pass.
 - An end-to-end production-shaped run works: trigger → workflow → `agent.task()` isolation → durable log → SSE → (optional) approval/resume.
 - The configuration contract is documented and every listed env var is honored by the code.
-- The retention job trims event-detail at `RENDER_AGENTS_EVENT_RETENTION_DAYS` and run-summaries at `RENDER_AGENTS_RUN_RETENTION_DAYS`; sessions/threads/schedules are untouched; a run older than the event horizon keeps its summary but loses detailed replay.
+- The retention job trims event-detail at `RENDER_AGENTS_EVENT_RETENTION_DAYS` and run-summaries at `RENDER_AGENTS_RUN_RETENTION_DAYS`; threads/schedules are untouched; a run older than the event horizon keeps its summary but loses detailed replay.
 - The scaffolder's emitted `render.yaml` matches this canonical manifest.
 
 ---

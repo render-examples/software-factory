@@ -71,7 +71,7 @@ Complete the trigger surfaces beyond direct HTTP: user-authored inbound webhook 
 - A `webhooks/github.ts` adapter is auto-discovered; a matching `POST /webhooks/github` dispatches the target workflow with parsed input; a non-matching request passes/404s appropriately.
 - A tool package exporting `connectors` mounts at `POST /connectors/:key` and dispatches; webhook and connector namespaces never collide.
 - A documented `render.yaml` cron job hitting `POST /workflows/:name` triggers runs on schedule (validated locally by simulating the cron POST).
-- `RunRecord.trigger` reflects the trigger source (webhook/connector/cron/api/session).
+- `RunRecord.trigger` reflects the trigger source (webhook/connector/cron/api/thread).
 - The `schedules` table/`ScheduleStore` remain present but unused in MVP.
 
 ---

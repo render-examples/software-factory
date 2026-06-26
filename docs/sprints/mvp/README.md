@@ -26,7 +26,7 @@ Three principles drive the ordering:
 | **0** | Foundations & Skeleton | 00–04 | A markdown agent runs in-process against a mock model, fully event-sourced and tested, in-memory only. |
 | **1** | Core Execution Engine | 05–10 | One agent runs durable, observable, budgeted, with real models, tools, skills, structured output, and managed context. |
 | **2** | Orchestration & Durability | 11–15 | Durable multi-agent pipelines with task isolation, HITL pause/resume, subagents, and hooks. |
-| **3** | Platform & Serving | 16–20 | A deployable gateway: triggerable, streamable, multi-tenant (sessions, approvals, OAuth, webhooks). |
+| **3** | Platform & Serving | 16–20 | A deployable gateway: triggerable, streamable, multi-tenant (threads, approvals, OAuth, webhooks). |
 | **4** | DX, Operability & Ship | 21–24 | Scaffoldable, observable (dev trace viewer), deployable, hardened, and publishable. |
 
 ---
@@ -87,7 +87,7 @@ Three principles drive the ordering:
 | # | Sprint |
 |---|---|
 | [16](16-gateway-core.md) | Gateway core (Hono, runs/spans/tool-calls routes, API-key auth) |
-| [17](17-streaming-sessions.md) | SSE streaming (live tail of log) + sessions & threads |
+| [17](17-streaming-sessions.md) | SSE streaming (live tail of log) + threads |
 | [18](18-gateway-hitl.md) | Gateway HITL (approvals API + resume endpoint) |
 | [19](19-oauth-multitenancy.md) | OAuth & multi-tenancy |
 | [20](20-webhooks-connectors-schedules.md) | Webhooks, connectors, schedules (Render Cron) |
