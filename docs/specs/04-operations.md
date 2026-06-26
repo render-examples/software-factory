@@ -67,11 +67,14 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 - **Project metadata** (name, version) → `package.json`
 - **Deploy config** (services, databases) → `render.yaml`
 - **Secrets and connection strings** → `.env` / Render environment variables
-- **Retention policy domains** (event detail vs run summary) → `EVENT_RETENTION_DAYS`, `RUN_RETENTION_DAYS` env vars
+- **Retention policy domains** (event detail vs run summary) → `RENDER_AGENTS_EVENT_RETENTION_DAYS`, `RENDER_AGENTS_RUN_RETENTION_DAYS` env vars
 - **Hooks** → auto-discovered from `hooks/` (no config; see [Authoring → Hooks](01-authoring.md#hooks))
 - **Gateway port** → `PORT` env var
-- **Auth** → `WORKFLOW_API_KEY` env var
+- **Auth** → `RENDER_AGENTS_API_KEY` env var
+- **OAuth token encryption** → `RENDER_AGENTS_ENCRYPTION_KEY` env var (see [OAuth & multi-tenancy](03-platform.md#oauth--multi-tenancy))
 - **Local strict approvals** → `RENDER_AGENTS_STRICT_APPROVAL` env var (see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume))
+
+**Naming convention.** SDK-owned settings use the `RENDER_AGENTS_` prefix. Platform- and ecosystem-standard names keep their conventional form: `DATABASE_URL`, `PORT`, the Render-provided `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV`, and provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or an agent's declared `apiKeyEnv`).
 
 Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgres vs in-memory, and `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` select the Render Workflows dispatcher vs the in-process fallback (see [Execution → Runtime & composition](02-execution.md#runtime--composition)).
 
@@ -83,18 +86,18 @@ Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgr
 
 **Model** — Default retention:
 
-- **Event-detail domain** (high volume): `run_events` and event-derived detail projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`) are retained for 30 days, configurable via `EVENT_RETENTION_DAYS`
-- **Run-summary domain** (lower volume): `runs` is retained for 90 days, configurable via `RUN_RETENTION_DAYS`
-- Sessions/conversations: no automatic expiry (user data)
+- **Event-detail domain** (high volume): `run_events` and event-derived detail projections (`spans`, `run_messages`, `tool_calls`, `workflow_steps`, `approval_requests`) are retained for 30 days, configurable via `RENDER_AGENTS_EVENT_RETENTION_DAYS`
+- **Run-summary domain** (lower volume): `runs` is retained for 90 days, configurable via `RENDER_AGENTS_RUN_RETENTION_DAYS`
+- Sessions/threads: no automatic expiry (user data)
 - Schedules: no automatic expiry (configuration data)
 
 Event-detail trimming removes `run_events` and detail projections in the same pass. Those projections are rebuildable only within the retained event horizon.
 
 `runs` may intentionally outlive event detail to preserve list/history/status/cost reporting for longer windows at lower storage cost. Tradeoff: once detailed events expire, full trace/message/tool replay is no longer reconstructable for those older runs.
 
-Recommended production baseline: keep `RUN_RETENTION_DAYS > EVENT_RETENTION_DAYS` (default 90 > 30) so operational history outlives high-volume detail.
+Recommended production baseline: keep `RENDER_AGENTS_RUN_RETENTION_DAYS > RENDER_AGENTS_EVENT_RETENTION_DAYS` (default 90 > 30) so operational history outlives high-volume detail.
 
-If strict replayability is required for the full run lifetime, set `RUN_RETENTION_DAYS <= EVENT_RETENTION_DAYS` (or set both equal). A background cleanup job runs daily (or on a Render Cron trigger).
+If strict replayability is required for the full run lifetime, set `RENDER_AGENTS_RUN_RETENTION_DAYS <= RENDER_AGENTS_EVENT_RETENTION_DAYS` (or set both equal). A background cleanup job runs daily (or on a Render Cron trigger).
 
 ---
 
