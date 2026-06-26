@@ -1,5 +1,8 @@
 # Type Reference
 
+**Status:** DRAFT
+**Date:** 2026-06-25
+
 **Layer:** L5 — *exact shapes.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
 Every public `interface`/`type` in one place, grouped by package. Narrative and examples live in the layer files that link here.

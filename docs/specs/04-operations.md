@@ -1,5 +1,8 @@
 # Operations
 
+**Status:** DRAFT
+**Date:** 2026-06-25
+
 **Layer:** L4 — *how you deploy & operate.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
 This layer covers running the system in production: the deployment topology, configuration via environment variables, data retention, and the non-functional targets the SDK is held to. The platform substrate these operate on lives in [Platform](03-platform.md); exact type shapes live in the [Type Reference](05-type-reference.md).
