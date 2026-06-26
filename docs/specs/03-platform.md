@@ -1,5 +1,8 @@
 # Platform
 
+**Status:** DRAFT
+**Date:** 2026-06-25
+
 **Layer:** L3 — *what persists & serves.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
 This layer covers the durable substrate beneath the runtime: the Postgres schema, the stores for sessions, approvals, OAuth, webhooks, connectors, and schedules, the web gateway, and the observability model. Runtime behavior that drives these stores lives in [Execution](02-execution.md); exact type shapes live in the [Type Reference](05-type-reference.md).

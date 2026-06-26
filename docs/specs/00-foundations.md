@@ -1,8 +1,7 @@
 # render-agents — Foundations
 
-**Author:** Jacob Prall
 **Status:** DRAFT
-**Date:** 2025-06-25
+**Date:** 2026-06-25
 
 Foundations (L0) of the render-agents spec. Everything downstream derives from this file. See the [Document Map](#document-map) for the full set.
 

@@ -1,5 +1,8 @@
 # Authoring
 
+**Status:** DRAFT
+**Date:** 2026-06-25
+
 **Layer:** L1 — *what you write.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
 This layer covers everything a developer authors in a project: the directory layout, the agent markdown schema, tools, skills, workflows, subagents, and the API you call. Exact type shapes live in the [Type Reference](05-type-reference.md); runtime behavior lives in [Execution](02-execution.md).

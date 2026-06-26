@@ -1,5 +1,8 @@
 # Execution
 
+**Status:** DRAFT
+**Date:** 2026-06-25
+
 **Layer:** L2 — *what happens at runtime.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
 This layer covers everything that happens when an agent runs: how the runtime is composed, the agent loop, dispatch, determinism and replay, HITL pause/resume, tool execution, persistence, structured output, and the safety rails around it all. What you author lives in [Authoring](01-authoring.md); exact type shapes live in the [Type Reference](05-type-reference.md); what persists and serves lives in [Platform](03-platform.md).
