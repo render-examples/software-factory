@@ -4,55 +4,23 @@
 **Status:** DRAFT
 **Date:** 2025-06-25
 
-This is the **Foundations** layer (L0) of the render-agents technical specification. It establishes what this project is, why it exists, and the load-bearing decisions everything else derives from.
-
-See the [Document Map](#document-map) for the full file set.
+Foundations (L0) of the render-agents spec. Everything downstream derives from this file. See the [Document Map](#document-map) for the full set.
 
 ---
 
-## Project Framing
+## What this is and why it exists
 
-### What this project is
+`render-agents` is an open-source TypeScript SDK for building multi-agent systems that run on Render. An agent is a markdown file. A pipeline is a TypeScript function that composes agents and deterministic steps. Deployment is one `render.yaml`. The SDK handles the authoring model, execution kernel, tool system, observability, and platform substrate. The agent loop is pluggable; everything else is opinionated.
 
-`render-agents` is a Render-first, open-source TypeScript SDK for building and operating production multi-agent systems. It gives developers a single opinionated surface:
+### The problem
 
-- Agent behavior is authored in markdown files.
-- Orchestration is authored in TypeScript workflows.
-- Execution runs on Render primitives (Workflows + Postgres + gateway services).
+Production agent systems need three things at once: simple authoring, durable orchestration, and real platform infrastructure (state, sessions, HITL, auth, cost controls, tracing). Lightweight frameworks nail the authoring but lack sessions, approval gates, and multi-tenant state. Platform-rich harnesses have the substrate but bury agent identity in config objects and can't express multi-agent fan-out. Workflow-native templates get orchestration right but ship without conversations, HITL enforcement, or OAuth.
 
-The goal is not a generic "agent framework abstraction layer." The goal is a practical, deployable system that makes coding agents reliable in production with minimal wiring.
+This SDK combines them: markdown-first authoring, Render Workflows as the orchestration primitive, and the full platform substrate (Postgres-backed state, enforced HITL, per-user OAuth, sessions, cost/budget controls, span-level tracing) in one coherent package.
 
-### Why this exists
+### Why Render
 
-Agent workflows have converged on a common shape: inbound events trigger orchestrated LLM/tool pipelines that fan out work, run validations, and return durable outputs. Existing approaches force teams into tradeoffs:
-
-- Great authoring ergonomics but weak production substrate.
-- Strong production substrate but fragmented authoring and orchestration UX.
-- Multi-agent orchestration without sessions, HITL, OAuth, or operator-grade state.
-
-This project exists to close that gap by unifying the best parts of the current design space into one coherent model: filesystem-first authoring, platform-grade durability and governance, and native parallel orchestration.
-
-### Why Render is the substrate
-
-Render already provides the primitives agent systems need in production:
-
-- Durable orchestration via Workflows.
-- Durable state and inspectability via Postgres.
-- Long-lived services for gateways, webhook ingress, streaming, and control APIs.
-
-Because those primitives are native, the SDK can stay simpler: durability is not simulated, state is inspectable by default, and local-to-production behavior can stay consistent.
-
-### What success looks like
-
-A software engineer can define agents as markdown, compose them in TypeScript, and ship a production workflow on Render with one deploy manifest. HITL, budgets, tracing, and auth are built into the platform contract rather than bolted on per project.
-
----
-
-## Objective
-
-### North star
-
-A software engineer defines agents as markdown files, composes them into pipelines with TypeScript, and deploys the result on Render with one config file. The SDK provides the authoring model, execution kernel, tool system, observability, and platform substrate. The agent loop is pluggable. Everything else is opinionated.
+Render provides the primitives natively rather than through compensating abstractions: Workflows for durable task orchestration with per-task compute isolation, Postgres for state and inspectability, and long-lived services for gateways, webhook ingress, and streaming. Building directly on these means the SDK stays simpler — durability is not simulated, state is queryable SQL, and the same agent definition runs identically in local dev and production.
 
 ### Scope
 
