@@ -17,10 +17,6 @@ Production agent systems need three things at once: simple authoring, durable or
 
 This SDK combines them: markdown-first authoring, Render Workflows as the orchestration primitive, and the full platform substrate (Postgres-backed state, enforced HITL, per-user OAuth, sessions, cost/budget controls, span-level tracing) in one coherent package.
 
-### Why Render
-
-Render provides the primitives natively rather than through compensating abstractions: Workflows for durable task orchestration with per-task compute isolation, Postgres for state and inspectability, and long-lived services for gateways, webhook ingress, and streaming. Building directly on these means the SDK stays simpler — durability is not simulated, state is queryable SQL, and the same agent definition runs identically in local dev and production.
-
 ### Scope
 
 | In scope | Out of scope |
