@@ -46,7 +46,13 @@ export type {
   RetryPolicy,
   ModelPricing,
 } from "./model.js";
-export { MODEL_PRICING, estimateCost } from "./model.js";
+export { MODEL_PRICING, estimateCost, addUsage } from "./model.js";
+
+export { AnthropicClient } from "./clients/anthropic-client.js";
+export { OpenAIClient } from "./clients/openai-client.js";
+export { withRetry } from "./clients/retry.js";
+export { resolveClient } from "./clients/index.js";
+export type { ResolveClientOptions } from "./clients/index.js";
 
 export type {
   HookResult,

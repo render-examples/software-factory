@@ -18,7 +18,7 @@ import type {
   RetryPolicy,
   ModelPricing,
 } from "@render-agents/engine";
-import { DefaultRunner, passThroughContextManager } from "@render-agents/engine";
+import { DefaultRunner, passThroughContextManager, resolveClient, resolveModelSpec } from "@render-agents/engine";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -73,16 +73,29 @@ const noopTracer: Tracer = {
 };
 
 /**
- * Placeholder model used when none is provided and none can be inferred from the
- * environment. Returning a runtime is always safe (Wave 0 exit criterion); the
- * error only surfaces if an agent is actually run without a configured model.
- * Real provider clients are wired in Sprint 06.
+ * Attempt to auto-detect a model client from environment variables.
+ * Falls back to the unconfigured placeholder when no API key is found.
+ */
+function detectModel(retry?: Partial<RetryPolicy>): ModelClient {
+  if (process.env.ANTHROPIC_API_KEY) {
+    const { spec } = resolveModelSpec("medium");
+    return resolveClient(spec, { retry });
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return resolveClient({ provider: "openai", model: "gpt-4o" }, { retry });
+  }
+  return unconfiguredModel;
+}
+
+/**
+ * Placeholder model used when none is provided and no API key is detected.
+ * The error only surfaces if an agent is actually run without a configured model.
  */
 const unconfiguredModel: ModelClient = {
   async complete(_args: CompleteArgs): Promise<CompleteResult> {
     throw new Error(
       "No model configured. Pass one via createRuntime({ model }) (e.g. mockModel in tests), " +
-        "or set a provider API key once real model clients land (Sprint 06).",
+        "or set ANTHROPIC_API_KEY / OPENAI_API_KEY to enable auto-detection.",
     );
   },
 };
@@ -123,7 +136,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   await store.init();
 
   const tracer = opts?.tracer ?? noopTracer;
-  const model = opts?.model ?? unconfiguredModel;
+  const model = opts?.model ?? detectModel(opts?.retry);
   const contextManager = opts?.contextManager ?? passThroughContextManager;
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
