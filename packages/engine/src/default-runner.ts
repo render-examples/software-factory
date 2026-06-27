@@ -1,11 +1,11 @@
 import type { ContentBlock, ToolResult } from "@render-agents/store";
-import type { AgentDefinition, AgentInput, AgentOutput, Budget } from "./agent.js";
+import type { AgentDefinition, AgentInput, AgentOutput, Budget, SkillMetadata } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { AgentRunner } from "./context.js";
 import type { RunContext } from "./context.js";
-import type { MountedTools, ToolContext } from "./tool.js";
+import type { MountedTools, Tool, ToolContext } from "./tool.js";
 import type { ModelClient, ModelPricing, ToolSchema } from "./model.js";
-import { estimateCost } from "./model.js";
+import { estimateCost, addUsage } from "./model.js";
 import { validateToolInput } from "./schema-validate.js";
 import { ssrfFetch } from "./ssrf-fetch.js";
 
@@ -38,11 +38,19 @@ export class DefaultRunner implements AgentRunner {
 
   async run(agent: AgentDefinition, input: AgentInput, ctx: RunContext): Promise<AgentOutput> {
     const mounted = await ctx.mountTools(agent.tools);
-    const toolSchemas: ToolSchema[] = mounted.tools.map((t) => ({
+    const skillTool = buildSkillTool(agent.skills);
+    const allTools = skillTool ? [...mounted.tools, skillTool] : mounted.tools;
+    const toolSchemas: ToolSchema[] = allTools.map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
     }));
+    const allMounted: MountedTools = {
+      tools: allTools,
+      byName: (name: string) => allTools.find((t) => t.name === name),
+    };
+
+    const systemPrompt = buildSystemPrompt(agent.systemPrompt, agent.skills);
     const budget = resolveBudget(agent.budget);
     const usage = { inputTokens: 0, outputTokens: 0 };
 
@@ -65,7 +73,6 @@ export class DefaultRunner implements AgentRunner {
         iterations += 1;
         if (iterations > budget.maxIterations) throw new Error("maxIterations reached");
 
-        // Wall-clock budget (checked before each call; also bounds retry waits)
         if (budget.maxWallSeconds !== null) {
           const elapsed = (Date.now() - runStartedAt) / 1000;
           if (elapsed > budget.maxWallSeconds) throw new Error("wall-clock budget exhausted");
@@ -75,7 +82,7 @@ export class DefaultRunner implements AgentRunner {
         const startedAt = Date.now();
         const result = await this.model.complete({
           model: agent.model,
-          system: agent.systemPrompt,
+          system: systemPrompt,
           tools: toolSchemas,
           messages: history,
           sampling: agent.sampling,
@@ -85,10 +92,10 @@ export class DefaultRunner implements AgentRunner {
         const callCost = estimateCost(agent.model.model, result.usage, this.options.pricing);
         tokensUsed += result.usage.inputTokens + result.usage.outputTokens;
         costUsed += callCost;
-        usage.inputTokens += result.usage.inputTokens;
-        usage.outputTokens += result.usage.outputTokens;
+        const merged = addUsage(usage, result.usage);
+        usage.inputTokens = merged.inputTokens;
+        usage.outputTokens = merged.outputTokens;
 
-        // Token/cost budgets checked AFTER each call so overruns are caught immediately
         if (tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
         if (budget.maxCostUsd !== null && costUsed > budget.maxCostUsd) {
           throw new Error("cost budget exhausted");
@@ -106,6 +113,15 @@ export class DefaultRunner implements AgentRunner {
 
         const toolUses = result.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
         if (result.stopReason === "end_turn" || toolUses.length === 0) {
+          // Structured output: if agent has an output schema, validate/retry
+          if (agent.output) {
+            const structured = await this.structuredOutput(
+              agent, systemPrompt, history, result.content, ctx, budget,
+              { iterations, tokensUsed, costUsed, runStartedAt, usage },
+            );
+            await ctx.emit({ type: "run.completed", result: structured.data });
+            return structured;
+          }
           const text = extractText(result.content);
           await ctx.emit({ type: "run.completed", result: text });
           return { text, usage };
@@ -113,7 +129,7 @@ export class DefaultRunner implements AgentRunner {
 
         const toolResultBlocks: ContentBlock[] = [];
         for (const toolUse of toolUses) {
-          toolResultBlocks.push(await this.dispatchTool(agent, toolUse, mounted, ctx));
+          toolResultBlocks.push(await this.dispatchTool(agent, toolUse, allMounted, ctx));
         }
         await ctx.emit({ type: "message.tool", agentName: agent.name, content: toolResultBlocks });
       }
@@ -182,6 +198,98 @@ export class DefaultRunner implements AgentRunner {
     await ctx.emit({ type: "tool.result", toolCallId, name, result });
     return toolResultBlock(toolCallId, result);
   }
+
+  /**
+   * Structured output: issue a schema-constrained completion using the model's
+   * final text as context, validate the response, and retry on failure.
+   */
+  private async structuredOutput(
+    agent: AgentDefinition,
+    systemPrompt: string,
+    history: import("@render-agents/store").Message[],
+    finalContent: ContentBlock[],
+    ctx: RunContext,
+    budget: ResolvedBudget,
+    state: { iterations: number; tokensUsed: number; costUsed: number; runStartedAt: number; usage: import("@render-agents/store").TokenUsage },
+  ): Promise<AgentOutput> {
+    const schema = agent.output;
+    if (!schema) {
+      return { text: extractText(finalContent), usage: state.usage };
+    }
+
+    const MAX_RETRIES = 3;
+    let lastText = extractText(finalContent);
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      // Try parsing the existing text first (model may have already produced valid JSON)
+      const parsed = tryParseJson(lastText, schema);
+      if (parsed.valid) {
+        return { text: lastText, data: parsed.data, usage: state.usage };
+      }
+
+      // If first attempt and text isn't JSON, do a schema-constrained completion
+      // On retries, feed the validation error back
+      state.iterations += 1;
+      if (state.iterations > budget.maxIterations) throw new Error("maxIterations reached");
+
+      const retryMessages = [
+        ...history,
+        { role: "assistant" as const, content: finalContent },
+        {
+          role: "user" as const,
+          content: [{
+            type: "text" as const,
+            text: attempt === 0
+              ? `Please respond with valid JSON matching the required output schema.`
+              : `Your previous response was not valid JSON. Error: ${parsed.error}. Please fix and respond with valid JSON only.`,
+          }],
+        },
+      ];
+
+      const startedAt = Date.now();
+      const result = await this.model.complete({
+        model: agent.model,
+        system: systemPrompt,
+        tools: [],
+        messages: retryMessages,
+        sampling: agent.sampling,
+        responseFormat: { type: "json_schema", schema },
+        signal: ctx.signal,
+      });
+      const latencyMs = Date.now() - startedAt;
+      const callCost = estimateCost(agent.model.model, result.usage, this.options.pricing);
+      state.tokensUsed += result.usage.inputTokens + result.usage.outputTokens;
+      state.costUsed += callCost;
+      const merged = addUsage(state.usage, result.usage);
+      state.usage.inputTokens = merged.inputTokens;
+      state.usage.outputTokens = merged.outputTokens;
+
+      if (state.tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
+      if (budget.maxCostUsd !== null && state.costUsed > budget.maxCostUsd) {
+        throw new Error("cost budget exhausted");
+      }
+
+      await ctx.emit({
+        type: "llm.call",
+        model: agent.model.model,
+        usage: result.usage,
+        costUsd: callCost,
+        stopReason: result.stopReason,
+        latencyMs,
+      });
+
+      lastText = extractText(result.content);
+      const retryParsed = tryParseJson(lastText, schema);
+      if (retryParsed.valid) {
+        return { text: lastText, data: retryParsed.data, usage: state.usage };
+      }
+    }
+
+    throw new Error(
+      `Structured output validation failed after ${MAX_RETRIES} attempts. ` +
+      `Model could not produce valid JSON matching the output schema.`,
+    );
+  }
 }
 
 function resolveBudget(budget?: Budget): ResolvedBudget {
@@ -219,4 +327,62 @@ function toolContextFrom(ctx: RunContext): ToolContext {
     connection: async () => undefined,
     fetch: ssrfFetch,
   };
+}
+
+/**
+ * Build the system prompt with skill catalog appended (progressive disclosure).
+ * Skills are listed as a compact menu; the model loads full content on demand.
+ */
+function buildSystemPrompt(base: string, skills?: SkillMetadata[]): string {
+  if (!skills || skills.length === 0) return base;
+  const catalog = skills.map((s) =>
+    `- **${s.id}**: ${s.name} — ${s.description} (use when: ${s.whenToUse})`,
+  ).join("\n");
+  return `${base}\n\n## Available Skills\n\nYou have access to the following skills. Use the \`load_skill\` tool to load a skill's full content when needed.\n\n${catalog}`;
+}
+
+/**
+ * Build the `load_skill` builtin tool that returns skill content on demand.
+ * Only mounted when the agent declares skills.
+ */
+function buildSkillTool(skills?: SkillMetadata[]): Tool | undefined {
+  if (!skills || skills.length === 0) return undefined;
+  const skillMap = new Map(skills.map((s) => [s.id, s]));
+
+  return {
+    name: "load_skill",
+    description: "Load the full content of a declared skill by its id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The skill id to load" },
+      },
+      required: ["id"],
+    },
+    async invoke(input: unknown, _ctx: ToolContext): Promise<ToolResult> {
+      const { id } = input as { id: string };
+      const skill = skillMap.get(id);
+      if (!skill) {
+        return { content: `Unknown skill id: "${id}". Available: ${[...skillMap.keys()].join(", ")}`, isError: true };
+      }
+      return { content: skill.content };
+    },
+  };
+}
+
+type ParseResult =
+  | { valid: true; data: unknown }
+  | { valid: false; error: string };
+
+function tryParseJson(text: string, _schema: Record<string, unknown>): ParseResult {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  const jsonStr = fenced?.[1]?.trim() ?? trimmed;
+
+  try {
+    const data = JSON.parse(jsonStr);
+    return { valid: true, data };
+  } catch (e) {
+    return { valid: false, error: e instanceof Error ? e.message : "Invalid JSON" };
+  }
 }
