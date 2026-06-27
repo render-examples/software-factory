@@ -6,6 +6,8 @@ import type { RunContext } from "./context.js";
 import type { MountedTools, ToolContext } from "./tool.js";
 import type { ModelClient, ModelPricing, ToolSchema } from "./model.js";
 import { estimateCost } from "./model.js";
+import { validateToolInput } from "./schema-validate.js";
+import { ssrfFetch } from "./ssrf-fetch.js";
 
 type ToolUseBlock = Extract<ContentBlock, { type: "tool_use" }>;
 
@@ -148,7 +150,13 @@ export class DefaultRunner implements AgentRunner {
       return toolResultBlock(toolCallId, err);
     }
 
-    // 4. Deep input validation against inputSchema: Sprint 07/08.
+    // 4. Validate input vs inputSchema — error result so the model can self-correct.
+    const validationError = validateToolInput(toolUse.input, tool.inputSchema);
+    if (validationError) {
+      const err: ToolResult = { content: validationError, isError: true };
+      return toolResultBlock(toolCallId, err);
+    }
+
     // 5. Dispatch.
     await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
     let result: ToolResult;
@@ -196,6 +204,6 @@ function toolContextFrom(ctx: RunContext): ToolContext {
     signal: ctx.signal,
     logger: ctx.logger,
     connection: async () => undefined,
-    fetch: (url, init) => fetch(url, init),
+    fetch: ssrfFetch,
   };
 }
