@@ -201,11 +201,12 @@ export class PgEventLogStore implements EventLogStore {
     switch (p.type) {
       case "run.started":
         await client.query(
-          `INSERT INTO runs (id, workflow, status, input, trigger, started_at, thread_id, user_id)
-           VALUES ($1, $2, 'running', $3, $4, $5, $6, $7)
+          `INSERT INTO runs (id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version)
+           VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8)
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
-             started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow`,
+             started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
+             agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version)`,
           [
             rec.runId,
             rec.agentName ?? "",
@@ -214,6 +215,7 @@ export class PgEventLogStore implements EventLogStore {
             rec.ts,
             null, // thread_id set by gateway dispatch, not here
             null, // user_id set by gateway dispatch
+            p.agentVersion ?? null,
           ],
         );
         break;
