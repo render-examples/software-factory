@@ -47,6 +47,8 @@ export interface AgentRuntime {
   readonly hooks: HookRegistry;
   readonly contextManager: ContextManager;
   readonly dispatcher?: TaskDispatcher;
+  /** Resolved tool sources from the tools/ directory, keyed by source id. */
+  readonly toolSources: Map<string, import("@render-agents/engine").ToolSource>;
 }
 
 export interface CreateRuntimeOptions {
@@ -60,6 +62,8 @@ export interface CreateRuntimeOptions {
   delegation?: Partial<DelegationLimits>;
   hooks?: Hook[];
   contextManager?: ContextManager;
+  /** Pre-resolved tool sources, keyed by source id. When provided (e.g. from the loader), agents can mount tools at run time. */
+  toolSources?: Map<string, import("@render-agents/engine").ToolSource>;
 }
 
 /** A no-op tracer. Span/trace tree is a projection of the event log; OTel export is layered on later (Sprint 10). */
@@ -132,5 +136,6 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     hooks,
     contextManager,
     dispatcher: opts?.dispatcher,
+    toolSources: opts?.toolSources ?? new Map(),
   };
 }

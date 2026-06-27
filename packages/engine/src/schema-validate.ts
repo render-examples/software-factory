@@ -10,7 +10,12 @@ const ajv = new Ajv.default({ allErrors: true, strict: false });
  */
 export function validateToolInput(input: unknown, schema: Record<string, unknown>): string | undefined {
   if (!schema || Object.keys(schema).length === 0) return undefined;
-  const validate = ajv.compile(schema);
+  let validate;
+  try {
+    validate = ajv.compile(schema);
+  } catch (err) {
+    return `Schema compilation error: ${err instanceof Error ? err.message : String(err)}`;
+  }
   const valid = validate(input);
   if (valid) return undefined;
   const errors = (validate.errors ?? [] as ErrorObject[])

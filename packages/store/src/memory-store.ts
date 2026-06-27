@@ -123,9 +123,10 @@ export class MemoryEventLogStore implements EventLogStore {
   }
 
   private publish(rec: RunEventRecord): void {
+    const copy = { ...rec, payload: { ...rec.payload } };
     for (const sub of this.subscribers) {
       if (sub.filter.runId && sub.filter.runId !== rec.runId) continue;
-      sub.queue.push(rec);
+      sub.queue.push(copy);
       sub.wake?.();
     }
   }

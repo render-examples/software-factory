@@ -15,6 +15,7 @@ interface ResolvedBudget {
   maxIterations: number;
   maxTokens: number;
   maxCostUsd: number | null;
+  maxWallSeconds: number | null;
 }
 
 export interface DefaultRunnerOptions {
@@ -51,6 +52,7 @@ export class DefaultRunner implements AgentRunner {
     let iterations = 0;
     let tokensUsed = 0;
     let costUsed = 0;
+    const runStartedAt = Date.now();
 
     try {
       while (true) {
@@ -62,9 +64,11 @@ export class DefaultRunner implements AgentRunner {
 
         iterations += 1;
         if (iterations > budget.maxIterations) throw new Error("maxIterations reached");
-        if (tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
-        if (budget.maxCostUsd !== null && costUsed > budget.maxCostUsd) {
-          throw new Error("cost budget exhausted");
+
+        // Wall-clock budget (checked before each call; also bounds retry waits)
+        if (budget.maxWallSeconds !== null) {
+          const elapsed = (Date.now() - runStartedAt) / 1000;
+          if (elapsed > budget.maxWallSeconds) throw new Error("wall-clock budget exhausted");
         }
 
         const history = await ctx.messages(agent.name);
@@ -83,6 +87,12 @@ export class DefaultRunner implements AgentRunner {
         costUsed += callCost;
         usage.inputTokens += result.usage.inputTokens;
         usage.outputTokens += result.usage.outputTokens;
+
+        // Token/cost budgets checked AFTER each call so overruns are caught immediately
+        if (tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
+        if (budget.maxCostUsd !== null && costUsed > budget.maxCostUsd) {
+          throw new Error("cost budget exhausted");
+        }
 
         await ctx.emit({
           type: "llm.call",
@@ -147,6 +157,7 @@ export class DefaultRunner implements AgentRunner {
     const tool = mounted.byName(name);
     if (!tool) {
       const err: ToolResult = { content: `Unknown tool: ${name}`, isError: true };
+      await ctx.emit({ type: "tool.result", toolCallId, name, result: err });
       return toolResultBlock(toolCallId, err);
     }
 
@@ -154,6 +165,8 @@ export class DefaultRunner implements AgentRunner {
     const validationError = validateToolInput(toolUse.input, tool.inputSchema);
     if (validationError) {
       const err: ToolResult = { content: validationError, isError: true };
+      await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
+      await ctx.emit({ type: "tool.result", toolCallId, name, result: err });
       return toolResultBlock(toolCallId, err);
     }
 
@@ -173,12 +186,12 @@ export class DefaultRunner implements AgentRunner {
 
 function resolveBudget(budget?: Budget): ResolvedBudget {
   const rawCost = budget?.maxCostUsd === undefined ? 10 : budget.maxCostUsd;
-  // null or 0 deliberately disables the cost ceiling.
   const maxCostUsd = rawCost === null || rawCost === 0 ? null : rawCost;
   return {
     maxIterations: budget?.maxIterations ?? 50,
     maxTokens: budget?.maxTokens ?? 1_000_000,
     maxCostUsd,
+    maxWallSeconds: budget?.maxWallSeconds ?? null,
   };
 }
 

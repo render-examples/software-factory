@@ -150,7 +150,8 @@ export class InProcessRunContext implements RunContext {
    * - strict (`RENDER_AGENTS_STRICT_APPROVAL`): prompt on a TTY, else error.
    */
   async requestApproval(toolName: string, _input: unknown): Promise<ApprovalResult> {
-    const strict = this.envFn(STRICT_APPROVAL_ENV);
+    const raw = this.envFn(STRICT_APPROVAL_ENV);
+    const strict = raw !== undefined && raw !== "" && raw !== "0" && raw.toLowerCase() !== "false";
     if (!strict) {
       await this.emit({ type: "approval.auto", toolName });
       return { approved: true };

@@ -100,6 +100,7 @@ function runInProcess<T>(
     signal: opts?.signal ?? new AbortController().signal,
     parentSpanId: opts?.parentSpanId,
     maxContextTokens: definition.context?.maxContextTokens,
+    toolSources: runtime.toolSources,
   });
   return runner.run(definition, input, ctx) as Promise<AgentOutput<T>>;
 }
