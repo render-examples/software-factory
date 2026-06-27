@@ -13,8 +13,9 @@ import { buildEventRecord } from "@render-agents/store";
 import type { ModelSpec } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
-import type { MountedTools, Tool } from "./tool.js";
+import type { MountedTools, Tool, ToolSource } from "./tool.js";
 import type { RunContext, ApprovalResult } from "./context.js";
+import { ToolEnvironment } from "./tool-impl.js";
 
 const STRICT_APPROVAL_ENV = "RENDER_AGENTS_STRICT_APPROVAL";
 
@@ -39,8 +40,10 @@ export interface InProcessRunContextOptions {
   maxContextTokens?: number;
   logger?: Logger;
   env?: (name: string) => string | undefined;
-  /** Wave 0 flat tool map: real mounting (sources/MCP) lands in Sprint 07. */
+  /** Flat tool map for tests / backward compat (tools mounted directly by name). */
   tools?: Map<string, Tool>;
+  /** Tool sources registered from the tools/ directory — used by the ToolEnvironment at mount time. */
+  toolSources?: Map<string, ToolSource>;
   isCancelledFn?: () => boolean | Promise<boolean>;
 }
 
@@ -66,7 +69,9 @@ export class InProcessRunContext implements RunContext {
   private readonly maxContextTokens: number;
   private readonly envFn: (name: string) => string | undefined;
   private readonly tools: Map<string, Tool>;
+  private readonly toolSources: Map<string, ToolSource>;
   private readonly isCancelledFn: () => boolean | Promise<boolean>;
+  private toolEnv?: ToolEnvironment;
 
   private readonly agentSpanId = randomUUID();
   private readonly toolSpanIds = new Map<string, string>();
@@ -87,6 +92,7 @@ export class InProcessRunContext implements RunContext {
     this.logger = opts.logger ?? consoleLogger;
     this.envFn = opts.env ?? ((name) => process.env[name]);
     this.tools = opts.tools ?? new Map();
+    this.toolSources = opts.toolSources ?? new Map();
     this.isCancelledFn = opts.isCancelledFn ?? (() => false);
   }
 
@@ -123,6 +129,12 @@ export class InProcessRunContext implements RunContext {
   }
 
   async mountTools(toolIds: string[]): Promise<MountedTools> {
+    // If tool sources are provided, use the real ToolEnvironment mount path.
+    if (this.toolSources.size > 0) {
+      this.toolEnv = new ToolEnvironment();
+      return this.toolEnv.mount(this.toolSources, toolIds, this.logger, this.signal);
+    }
+    // Fallback: flat tool map (tests, Wave 0 compat).
     const tools = toolIds
       .map((id) => this.tools.get(id))
       .filter((t): t is Tool => t !== undefined);

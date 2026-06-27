@@ -66,6 +66,9 @@ export { DefaultRunner } from "./default-runner.js";
 export type { DefaultRunnerOptions } from "./default-runner.js";
 export { InProcessRunContext } from "./run-context.js";
 export type { InProcessRunContextOptions } from "./run-context.js";
+export { defineTool, defineToolSource, defineMcpSource, ToolEnvironment, buildToolContext } from "./tool-impl.js";
+export { ssrfFetch } from "./ssrf-fetch.js";
+export { validateToolInput } from "./schema-validate.js";
 
 export type { DelegationLimits } from "./delegation.js";
 

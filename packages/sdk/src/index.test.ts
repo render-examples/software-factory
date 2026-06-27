@@ -19,14 +19,14 @@ describe("@render-agents/sdk", () => {
     expect(() => workflow(async () => {})).toThrow("not implemented");
   });
 
-  it("defineTool throws not implemented", () => {
-    expect(() =>
-      defineTool({ name: "test", description: "test", inputSchema: {}, invoke: async () => "" }),
-    ).toThrow("not implemented");
+  it("defineTool returns a ToolSource", () => {
+    const source = defineTool({ name: "test", description: "test", inputSchema: {}, invoke: async () => "" });
+    expect(source.id).toBe("test");
   });
 
-  it("defineMcpSource throws not implemented", () => {
-    expect(() => defineMcpSource({ transport: "stdio" })).toThrow("not implemented");
+  it("defineMcpSource returns a ToolSource (mount deferred)", () => {
+    const source = defineMcpSource({ transport: "stdio" });
+    expect(source.id).toBe("mcp");
   });
 
   it("defineHook returns the spec", () => {
