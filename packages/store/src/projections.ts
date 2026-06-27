@@ -88,6 +88,7 @@ export class Projections {
         r.input = p.input;
         r.trigger = p.trigger;
         if (rec.agentName) r.workflow = rec.agentName;
+        if (p.agentVersion) r.agentVersion = p.agentVersion;
         break;
       }
       case "run.completed": {

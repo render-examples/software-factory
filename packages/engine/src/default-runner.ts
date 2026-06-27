@@ -54,7 +54,7 @@ export class DefaultRunner implements AgentRunner {
     const budget = resolveBudget(agent.budget);
     const usage = { inputTokens: 0, outputTokens: 0 };
 
-    await ctx.emit({ type: "run.started", input });
+    await ctx.emit({ type: "run.started", input, agentVersion: agent.version });
     await ctx.emit({ type: "message.user", content: inputToContent(input) });
 
     let iterations = 0;

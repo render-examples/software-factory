@@ -18,7 +18,7 @@ import type {
   RetryPolicy,
   ModelPricing,
 } from "@render-agents/engine";
-import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec } from "@render-agents/engine";
+import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer } from "@render-agents/engine";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -65,12 +65,6 @@ export interface CreateRuntimeOptions {
   /** Pre-resolved tool sources, keyed by source id. When provided (e.g. from the loader), agents can mount tools at run time. */
   toolSources?: Map<string, import("@render-agents/engine").ToolSource>;
 }
-
-/** A no-op tracer. Span/trace tree is a projection of the event log; OTel export is layered on later (Sprint 10). */
-const noopTracer: Tracer = {
-  onStart: () => {},
-  onEnd: () => {},
-};
 
 /**
  * Attempt to auto-detect a model client from environment variables.
