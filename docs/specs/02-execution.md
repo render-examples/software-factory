@@ -26,12 +26,12 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 **Binding.** `loadAgents(dir?, runtime?)` accepts an optional runtime. When omitted, the loader lazily builds one with `createRuntime()` (env-driven defaults). Every `Agent` produced by the set closes over this runtime, so `agent.run()` / `agent.task()` already know which model, store, tracer, runner, and dispatcher to use — there is no global singleton and no per-call dependency wiring. `loadAgents()` itself:
 
-1. `dir` defaults to `"./agents"` relative to the project root.
+1. `dir` defaults to `"."` — the **project root** that contains the convention directories (`agents/`, `tools/`, `skills/`, `workflows/`, `webhooks/`, `hooks/`, `runners/`), per [Authoring → Project Layout & Discovery](01-authoring.md#project-layout--discovery). It is the project root, **not** the `agents/` folder.
 2. `runtime` defaults to `await createRuntime()` (env-driven auto-detection).
-3. Scans `dir` for `*.md` files (non-recursive). Skips `_shared.md`.
+3. Scans `<dir>/agents/` for `*.md` files (non-recursive). Skips `_shared.md`.
 4. Parses each file: extracts YAML frontmatter and body.
-5. If `_shared.md` exists, loads it and merges into each definition.
-6. Loads `tools/` and `skills/` registries from sibling directories.
+5. If `<dir>/agents/_shared.md` exists, loads it and merges into each definition.
+6. Loads the `<dir>/tools/` and `<dir>/skills/` registries (peers of `agents/` under the project root).
 7. Validates every frontmatter field. Fails fast on the first error.
 8. Resolves model spec (tier or raw string) and `plan` (must be a known `RenderPlan`).
 9. Binds every `Agent` to the `runtime` (model, store, tracer, runner registry, dispatcher).

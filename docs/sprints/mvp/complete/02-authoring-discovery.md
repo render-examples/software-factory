@@ -76,7 +76,7 @@ Implement project discovery and the markdown authoring model: scan the conventio
 
 ## Exit criteria / acceptance
 
-- `loadAgents("./agents")` against a fixture project returns an `AgentSet` with `.get()/.has()/.all()` over fully-resolved `AgentDefinition`s (model resolved, skills resolved, tools expanded). Runtime binding is injected/stubbed.
+- `loadAgents(projectRoot)` against a fixture project (the project root containing `agents/`, `tools/`, `skills/`) returns an `AgentSet` with `.get()/.has()/.all()` over fully-resolved `AgentDefinition`s (model resolved, skills resolved, tools expanded). Runtime binding is injected/stubbed.
 - Every rule in the [canonical fail-fast list](../specs/01-authoring.md#validation-canonical-fail-fast-list) has a dedicated failing-fixture test asserting the specific error.
 - `_shared.md` merge matches the spec's worked example and array-union/scalar-precedence rules.
 - Unknown frontmatter field → hard error; empty body → hard error; self-referential `subagents` → hard error.

@@ -51,6 +51,17 @@ describe("loadAgentsFromDir", () => {
     expect(security.definition.tools).toContain("github");
     expect(security.definition.tools).toContain("sandbox");
   });
+
+  it("errors clearly when passed the agents/ folder instead of the project root", async () => {
+    const agentsDir = join(VALID_PROJECT, "agents");
+    await expect(loadAgentsFromDir(agentsDir)).rejects.toThrow(/expects the project root/);
+  });
+
+  it("returns an empty AgentSet for a directory with no agent markdown (no false positive)", async () => {
+    // The skills/ dir has no agents/ subdir and no top-level *.md — must not trip the guard.
+    const agents = await loadAgentsFromDir(join(VALID_PROJECT, "skills"));
+    expect(agents.all()).toEqual([]);
+  });
 });
 
 describe("parseAgentMarkdown", () => {
