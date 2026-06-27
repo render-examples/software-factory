@@ -290,7 +290,7 @@ export function defineMcpSource(spec: DefineMcpSpec): ToolSource;
 export function defineHook(spec: Hook): Hook;
 ```
 
-`loadAgents` scans `dir` (default `./agents`), parses + validates frontmatter (failing fast — see below), merges `_shared.md`, loads the `tools/` and `skills/` registries, binds every agent to the `runtime` (default `await createRuntime()`), and returns an [`AgentSet`](05-type-reference.md#agentset). It is bootstrapping/outside-handler API; inside a handler use `ctx.agents`.
+`loadAgents` takes the **project root** `dir` (default `"."`) — the directory that contains the convention folders (`agents/`, `tools/`, `skills/`, …), not the `agents/` folder itself. It discovers `agents/*.md`, parses + validates frontmatter (failing fast — see below), merges `_shared.md`, loads the `tools/` and `skills/` registries from under the same root, binds every agent to the `runtime` (default `await createRuntime()`), and returns an [`AgentSet`](05-type-reference.md#agentset). It is bootstrapping/outside-handler API; inside a handler use `ctx.agents`.
 
 **Testing** (`@render-agents/sdk/testing`) — because the runtime is injectable, tests run the *real* loop against a mock model and in-memory store (no network/Postgres/Workflows):
 
@@ -304,7 +304,7 @@ const model = mockModel((args) => ({
   stopReason: "end_turn",
 }));
 const runtime = await createTestRuntime({ model });
-const agents = await loadAgents("./agents", runtime);
+const agents = await loadAgents(".", runtime);
 const { data } = await agents.get("judge").run<{ decision: string }>({ findings: [] });
 ```
 

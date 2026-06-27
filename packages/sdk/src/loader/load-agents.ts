@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentDefinition } from "@render-agents/engine";
 import { resolveModelSpec } from "@render-agents/engine";
@@ -8,7 +9,30 @@ import { mergeFrontmatter, mergeBody } from "./shared-merge.js";
 import { buildToolRegistry, resolveToolReferences, validateApprovalRefs } from "./tool-resolver.js";
 import { loadSkillRegistry, resolveSkills } from "./skill-resolver.js";
 import { validatePlan, validateBudget, validateOutput, validateSubagents, validateRunner } from "./validate.js";
+import { LoadError, ERR_LIKELY_AGENTS_DIR } from "./errors.js";
 
+/** Common top-level markdown files that are not agents — ignored by the misuse guard. */
+const ROOT_MARKDOWN_DENYLIST = new Set([
+  "readme",
+  "changelog",
+  "contributing",
+  "license",
+  "code_of_conduct",
+  "security",
+]);
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `dir` is the **project root** (the directory that contains `agents/`,
+ * `tools/`, `skills/`, …) — not the `agents/` folder itself.
+ */
 export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
   const agentsDir = join(dir, "agents");
   const toolsDir = join(dir, "tools");
@@ -24,6 +48,27 @@ export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
   const runnerKeys = new Set(runnerItems.map(i => i.key));
 
   const agentItems = await discoverDirectory(agentsDir, { pattern: "md", skip: ["_shared.md"] });
+
+  // Robustness guard: catch the most common misuse — passing the `agents/`
+  // folder instead of the project root. If there's no `agents/` subdir but
+  // `dir` itself directly holds agent-looking markdown (a `_shared.md`, or a
+  // `.md` that isn't a common root doc like README), it's almost certainly the
+  // agents folder. Fail loudly instead of returning a silent empty AgentSet.
+  if (agentItems.length === 0 && !(await isDirectory(agentsDir))) {
+    const directMd = await discoverDirectory(dir, { pattern: "md" });
+    const looksLikeAgentsDir = directMd.some(
+      i => i.key === "_shared" || !ROOT_MARKDOWN_DENYLIST.has(i.key.toLowerCase()),
+    );
+    if (looksLikeAgentsDir) {
+      throw new LoadError(
+        ERR_LIKELY_AGENTS_DIR,
+        `No "agents/" directory found under "${dir}", but it contains agent-looking markdown directly. ` +
+          `loadAgents() expects the project root (the directory that contains agents/, tools/, skills/, …), ` +
+          `not the agents/ folder itself. Pass the parent directory instead.`,
+        { dir },
+      );
+    }
+  }
 
   let sharedFrontmatter: ParsedFrontmatter | undefined;
   let sharedBody = "";
