@@ -67,6 +67,7 @@ export type {
   CompactionStrategy,
 } from "./context-manager.js";
 export { passThroughContextManager } from "./context-manager.js";
+export { DefaultContextManager, NoCompactionContextManager, AutoCompactionStrategy, estimateTokens, defaultMaxContextTokens } from "./context-manager-impl.js";
 
 export { DefaultRunner } from "./default-runner.js";
 export type { DefaultRunnerOptions } from "./default-runner.js";

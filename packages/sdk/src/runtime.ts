@@ -18,7 +18,7 @@ import type {
   RetryPolicy,
   ModelPricing,
 } from "@render-agents/engine";
-import { DefaultRunner, passThroughContextManager, resolveClient, resolveModelSpec } from "@render-agents/engine";
+import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec } from "@render-agents/engine";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -137,7 +137,11 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
 
   const tracer = opts?.tracer ?? noopTracer;
   const model = opts?.model ?? detectModel(opts?.retry);
-  const contextManager = opts?.contextManager ?? passThroughContextManager;
+  const contextManager = opts?.contextManager ?? (
+    model !== unconfiguredModel
+      ? new DefaultContextManager({ model })
+      : passThroughContextManager
+  );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
 
