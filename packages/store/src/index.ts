@@ -9,3 +9,14 @@ export type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 export type { ApprovalRequest, ApprovalStore } from "./approval-store.js";
 export type { OAuthConnection, OAuthStore } from "./oauth-store.js";
 export { idempotencyKey } from "./idempotency.js";
+export { categoryOf } from "./categories.js";
+export { Projections } from "./projections.js";
+export type { ProjectionSnapshot, ApprovalProjectionRecord } from "./projections.js";
+export {
+  MemoryEventLogStore,
+  MemoryRunStore,
+  EventRejectedError,
+  createMemoryStore,
+  replay,
+  buildEventRecord,
+} from "./memory-store.js";

@@ -95,6 +95,9 @@ importers:
 
   packages/store:
     devDependencies:
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.0.1
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
