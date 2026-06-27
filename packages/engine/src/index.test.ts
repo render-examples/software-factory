@@ -2,8 +2,13 @@ import { describe, it, expect } from "vitest";
 import { estimateCost, RunPaused, MODEL_PRICING } from "../src/index.js";
 
 describe("@render-agents/engine", () => {
-  it("estimateCost throws not implemented", () => {
-    expect(() => estimateCost("claude-sonnet-4-6", { inputTokens: 100, outputTokens: 50 })).toThrow("not implemented");
+  it("estimateCost computes USD cost from per-1M pricing", () => {
+    // 1M input @ $3.00 + 1M output @ $15.00
+    expect(estimateCost("claude-sonnet-4-6", { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBeCloseTo(18, 10);
+  });
+
+  it("estimateCost returns 0 for unpriced (but routable) models", () => {
+    expect(estimateCost("some-unlisted-model", { inputTokens: 1000, outputTokens: 1000 })).toBe(0);
   });
 
   it("RunPaused is a proper Error subclass", () => {

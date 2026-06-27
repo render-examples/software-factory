@@ -60,6 +60,12 @@ export type {
   ContextManager,
   CompactionStrategy,
 } from "./context-manager.js";
+export { passThroughContextManager } from "./context-manager.js";
+
+export { DefaultRunner } from "./default-runner.js";
+export type { DefaultRunnerOptions } from "./default-runner.js";
+export { InProcessRunContext } from "./run-context.js";
+export type { InProcessRunContextOptions } from "./run-context.js";
 
 export type { DelegationLimits } from "./delegation.js";
 

@@ -52,6 +52,21 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-6": { inputPer1M: 15.00, outputPer1M: 75.00 },
 };
 
-export function estimateCost(_model: string, _usage: TokenUsage): number {
-  throw new Error("not implemented");
+/**
+ * Estimate the USD cost of a single LLM call from per-1M-token pricing.
+ * Unpriced (but routable) models default to `0` — the cost budget is simply not
+ * enforced for them (the other budgets still apply). Custom pricing is layered
+ * in via `createRuntime({ pricing })` by merging onto `MODEL_PRICING`.
+ */
+export function estimateCost(
+  model: string,
+  usage: TokenUsage,
+  pricing: Record<string, ModelPricing> = MODEL_PRICING,
+): number {
+  const rate = pricing[model];
+  if (!rate) return 0;
+  const cost =
+    (usage.inputTokens / 1_000_000) * rate.inputPer1M +
+    (usage.outputTokens / 1_000_000) * rate.outputPer1M;
+  return Math.round(cost * 1e12) / 1e12;
 }
