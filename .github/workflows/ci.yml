@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm turbo run build
+
+      - name: Typecheck
+        run: pnpm turbo run typecheck
+
+      - name: Lint
+        run: pnpm turbo run lint
+
+      - name: Test
+        run: pnpm turbo run test
+
+      - name: Verify dependency graph
+        run: |
+          # Ensure engine/store never import from sdk (guards acyclic graph)
+          if grep -r "from ['\"]@render-agents/sdk" packages/engine/src/ packages/store/src/ 2>/dev/null; then
+            echo "ERROR: engine or store must not import from sdk"
+            exit 1
+          fi
+          # Ensure store never imports from engine
+          if grep -r "from ['\"]@render-agents/engine" packages/store/src/ 2>/dev/null; then
+            echo "ERROR: store must not import from engine"
+            exit 1
+          fi
+          echo "Dependency graph check passed"
