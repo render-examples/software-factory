@@ -21,6 +21,8 @@ export interface ToolResult {
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export type RunEvent =

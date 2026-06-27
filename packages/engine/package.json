@@ -22,8 +22,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "@render-agents/store": "workspace:*",
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "openai": "^6.45.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
