@@ -2,7 +2,7 @@ import type {
   RunStore,
   Tracer,
 } from "@render-agents/store";
-import { createMemoryStore } from "@render-agents/store";
+import { createStore } from "@render-agents/store";
 import type {
   ModelClient,
   CompleteArgs,
@@ -119,7 +119,7 @@ function buildRunnerRegistry(model: ModelClient, pricing?: Record<string, ModelP
  * clients are wired in later sprints.
  */
 export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentRuntime> {
-  const store: RunStore = opts?.store ?? createMemoryStore();
+  const store: RunStore = opts?.store ?? createStore();
   await store.init();
 
   const tracer = opts?.tracer ?? noopTracer;
