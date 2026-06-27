@@ -11,5 +11,5 @@ import { createHash } from "node:crypto";
  * against the event log, so there is no separate tool-call store.
  */
 export function idempotencyKey(runId: string, suffix: string): string {
-  return createHash("sha256").update(`${runId}${suffix}`).digest("hex");
+  return createHash("sha256").update(`${runId}\0${suffix}`).digest("hex");
 }
