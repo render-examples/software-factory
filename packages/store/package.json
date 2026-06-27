@@ -8,7 +8,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "sql"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -21,7 +24,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "@types/pg": "^8.20.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
   }
 }
