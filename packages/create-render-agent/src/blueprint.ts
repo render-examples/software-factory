@@ -1,0 +1,488 @@
+/**
+ * Pure project blueprint: `buildFileMap(opts)` returns a map of
+ * relativePath → file contents for a complete, runnable render-agents project
+ * in the spec's convention layout (the code-review default example).
+ *
+ * No filesystem or prompt side effects — the writer + wizard layer on top.
+ */
+
+export type PackageManager = "pnpm" | "npm" | "yarn";
+export type Provider = "anthropic" | "openai";
+
+export interface ScaffoldOptions {
+  /** Project (and package) name. */
+  name: string;
+  packageManager: PackageManager;
+  provider: Provider;
+  /** Env var holding the provider API key (e.g. ANTHROPIC_API_KEY). */
+  apiKeyEnv: string;
+  /** Include a local Postgres compose file + DATABASE_URL guidance. */
+  withPostgres: boolean;
+  /**
+   * Version range for the generated project's `@render-agents/*` deps. Defaults
+   * to a caret range; the smoke test passes `file:` paths to the local packages.
+   */
+  renderAgentsVersion?: string;
+}
+
+const DEFAULT_VERSION = "^0.1.0";
+
+export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
+  const v = opts.renderAgentsVersion ?? DEFAULT_VERSION;
+  const files = new Map<string, string>();
+  const set = (p: string, c: string) => files.set(p, c.endsWith("\n") ? c : c + "\n");
+
+  set("package.json", packageJson(opts, v));
+  set("tsconfig.json", tsconfig());
+  set(".gitignore", gitignore());
+  set(".env.example", envExample(opts));
+  set("README.md", readme(opts));
+  set("render.yaml", renderYaml(opts));
+  if (opts.withPostgres) set("compose.yaml", composeYaml());
+
+  // agents/
+  set("agents/_shared.md", sharedAgent(opts));
+  set("agents/security.md", securityAgent());
+  set("agents/performance.md", performanceAgent());
+  set("agents/judge.md", judgeAgent());
+
+  // tools/
+  set("tools/github/index.ts", githubTool());
+  set("tools/linear/index.ts", linearTool());
+
+  // skills/
+  set("skills/security-patterns/SKILL.md", securitySkill());
+
+  // workflows/
+  set("workflows/code-review/index.ts", codeReviewWorkflow());
+
+  // webhooks/ + hooks/
+  set("webhooks/github.ts", githubWebhook());
+  set("hooks/audit.ts", auditHook());
+
+  // entrypoints
+  set("src/server.ts", serverEntry());
+  set("src/worker.ts", workerEntry());
+
+  return files;
+}
+
+// --- top-level files ---
+
+function packageJson(opts: ScaffoldOptions, v: string): string {
+  return JSON.stringify(
+    {
+      name: opts.name,
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      engines: { node: ">=20" },
+      scripts: {
+        build: "tsc",
+        dev: "tsx watch src/server.ts",
+        start: "node dist/server.js",
+        worker: "node dist/worker.js",
+      },
+      dependencies: {
+        "@render-agents/sdk": v,
+        "@render-agents/gateway": v,
+      },
+      devDependencies: {
+        "@types/node": "^22.0.0",
+        tsx: "^4.0.0",
+        typescript: "^5.5.0",
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function tsconfig(): string {
+  return JSON.stringify(
+    {
+      compilerOptions: {
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        strict: true,
+        esModuleInterop: true,
+        skipLibCheck: true,
+        outDir: "dist",
+        rootDir: ".",
+        declaration: false,
+        resolveJsonModule: true,
+      },
+      include: ["src", "workflows", "tools", "webhooks", "hooks"],
+      exclude: ["node_modules", "dist"],
+    },
+    null,
+    2,
+  );
+}
+
+function gitignore(): string {
+  return ["node_modules", "dist", ".env", "*.tsbuildinfo"].join("\n");
+}
+
+function envExample(opts: ScaffoldOptions): string {
+  return [
+    "# --- Provider credentials ---",
+    `${opts.apiKeyEnv}=`,
+    "",
+    "# --- Gateway ---",
+    "PORT=3000",
+    "# API key required by the gateway (Bearer auth). Generate a strong random value.",
+    "RENDER_AGENTS_API_KEY=",
+    "",
+    "# --- Persistence (omit for in-memory local dev) ---",
+    opts.withPostgres ? "DATABASE_URL=postgres://postgres:postgres@localhost:5432/agents" : "# DATABASE_URL=postgres://...",
+    "",
+    "# --- HITL / security ---",
+    "# Set to 1 to require human approval for gated tools locally.",
+    "RENDER_AGENTS_STRICT_APPROVAL=",
+    "# 32+ char secret used to encrypt OAuth tokens at rest + sign state.",
+    "RENDER_AGENTS_ENCRYPTION_KEY=",
+    "",
+    "# --- Retention (days) ---",
+    "RENDER_AGENTS_EVENT_RETENTION_DAYS=30",
+    "RENDER_AGENTS_RUN_RETENTION_DAYS=90",
+  ].join("\n");
+}
+
+// --- agents ---
+
+function sharedAgent(opts: ScaffoldOptions): string {
+  return [
+    "---",
+    `model: ${opts.provider === "openai" ? "gpt-4o" : "medium"}`,
+    "budget:",
+    "  maxIterations: 20",
+    "  maxCostUsd: 5",
+    "---",
+    "",
+    "You are a meticulous senior engineer reviewing a code change.",
+    "Be concise, specific, and cite concrete lines or patterns.",
+  ].join("\n");
+}
+
+function securityAgent(): string {
+  return [
+    "---",
+    "description: Reviews a diff for security vulnerabilities",
+    "tools: [github]",
+    "skills: [security-patterns]",
+    "permissions:",
+    "  requireApproval: [github]",
+    "plan: standard",
+    "---",
+    "",
+    "You are a security reviewer. Identify vulnerabilities in the provided diff:",
+    "injection, auth/access-control, secrets, SSRF, unsafe deserialization.",
+    "Summarize findings with severity.",
+  ].join("\n");
+}
+
+function performanceAgent(): string {
+  return [
+    "---",
+    "description: Reviews a diff for performance issues",
+    "---",
+    "",
+    "You are a performance reviewer. Flag N+1 queries, unbounded loops,",
+    "needless allocations, and blocking I/O. Summarize with impact.",
+  ].join("\n");
+}
+
+function judgeAgent(): string {
+  return [
+    "---",
+    "model: large",
+    "description: Makes the final approve/reject decision",
+    "output:",
+    "  type: object",
+    "  properties:",
+    "    decision:",
+    "      type: string",
+    "      enum: [approve, request_changes]",
+    "    summary:",
+    "      type: string",
+    "  required: [decision, summary]",
+    "---",
+    "",
+    "You are the lead reviewer. Given the security and performance reviews,",
+    "decide whether to approve or request changes. Respond as JSON.",
+  ].join("\n");
+}
+
+// --- tools ---
+
+function githubTool(): string {
+  return [
+    `import { defineTool } from "@render-agents/sdk";`,
+    "",
+    "// A sample local tool. Real implementations call the GitHub API using the",
+    "// caller's OAuth token via ctx.connection(\"github\").",
+    "export default defineTool({",
+    `  name: "github",`,
+    `  description: "Post a review comment on the pull request",`,
+    "  inputSchema: {",
+    `    type: "object",`,
+    "    properties: {",
+    `      body: { type: "string", description: "The review comment body" },`,
+    "    },",
+    `    required: ["body"],`,
+    "  },",
+    "  async invoke(input, ctx) {",
+    "    const { body } = input as { body: string };",
+    `    const conn = await ctx.connection("github");`,
+    "    ctx.logger.info(\"github.comment\", { hasToken: !!conn });",
+    "    // Stub: echo the action. Wire to the GitHub API in production.",
+    "    return `Posted comment: ${body}`;",
+    "  },",
+    "});",
+  ].join("\n");
+}
+
+function linearTool(): string {
+  return [
+    `import { defineMcpSource } from "@render-agents/sdk";`,
+    "",
+    "// Example MCP-backed tool source. Resolved lazily — only connects when an",
+    "// agent references it. Point it at your MCP server (stdio or http).",
+    "export default defineMcpSource({",
+    `  name: "linear",`,
+    `  transport: "http",`,
+    `  url: process.env.LINEAR_MCP_URL ?? "http://localhost:8080/mcp",`,
+    "});",
+  ].join("\n");
+}
+
+// --- skills ---
+
+function securitySkill(): string {
+  return [
+    "---",
+    "name: Security patterns",
+    "description: Common vulnerability patterns to check during review",
+    "whenToUse: When reviewing code for security issues",
+    "---",
+    "",
+    "Check for: SQL/command injection, XSS, SSRF, broken access control,",
+    "hardcoded secrets, unsafe deserialization, and missing input validation.",
+  ].join("\n");
+}
+
+// --- workflows ---
+
+function codeReviewWorkflow(): string {
+  return [
+    `import { workflow } from "@render-agents/sdk";`,
+    "",
+    "// The default example: fan out to security + performance reviewers as",
+    "// isolated tasks, then a judge makes the final structured decision via a",
+    "// memoized step. Inside a handler, always use ctx.agents (run-scoped).",
+    "export default workflow({ name: \"code-review\" }, async (ctx) => {",
+    "  const input = ctx.input as { diff?: string; message?: string } | string;",
+    "  const diff = typeof input === \"string\" ? input : input.diff ?? input.message ?? \"\";",
+    "",
+    "  const [security, performance] = await Promise.all([",
+    `    ctx.agents.get("security").task(diff),`,
+    `    ctx.agents.get("performance").task(diff),`,
+    "  ]);",
+    "",
+    "  return ctx.step(\"judge\", async () => {",
+    `    const out = await ctx.agents.get("judge").run(`,
+    "      `Security review:\\n${security.text}\\n\\nPerformance review:\\n${performance.text}`,",
+    "    );",
+    "    return out.data ?? out.text;",
+    "  });",
+    "});",
+  ].join("\n");
+}
+
+// --- webhooks / hooks ---
+
+function githubWebhook(): string {
+  return [
+    "// Auto-discovered at POST /webhooks/github. `match` routes (cheaply) and",
+    "// `parse` extracts the workflow input. Verify signatures in `match` before",
+    "// dispatching in production.",
+    "export default {",
+    `  name: "github",`,
+    "  match(req: Request) {",
+    `    const event = req.headers.get("x-github-event");`,
+    `    return event === "pull_request" ? { workflow: "code-review", trigger: "github.pull_request" } : null;`,
+    "  },",
+    "  async parse(req: Request) {",
+    "    const body = (await req.json()) as { pull_request?: { diff_url?: string } };",
+    "    return { diff: body.pull_request?.diff_url ?? \"\" };",
+    "  },",
+    "};",
+  ].join("\n");
+}
+
+function auditHook(): string {
+  return [
+    `import { defineHook } from "@render-agents/sdk";`,
+    "",
+    "// Hooks observe (and may transform/veto) every appended event before commit.",
+    "export default defineHook({",
+    `  name: "audit",`,
+    "  async intercept(event) {",
+    `    if (event.type === "tool.called") {`,
+    `      console.log("[audit] tool.called", (event as { name?: string }).name);`,
+    "    }",
+    `    return { action: "continue" };`,
+    "  },",
+    "});",
+  ].join("\n");
+}
+
+// --- entrypoints ---
+
+function serverEntry(): string {
+  return [
+    `import { createRuntime, loadAgents, loadWorkflows, loadWebhooks, loadToolSources } from "@render-agents/sdk";`,
+    `import { startGateway } from "@render-agents/gateway";`,
+    "",
+    "// The project root holds the convention directories (agents/, tools/, …).",
+    `const root = new URL("..", import.meta.url).pathname;`,
+    "",
+    "const toolSources = await loadToolSources(root);",
+    "const runtime = await createRuntime({ toolSources });",
+    "await loadAgents(root, runtime);",
+    "const workflows = await loadWorkflows(root, runtime);",
+    "const webhooks = await loadWebhooks(root);",
+    "",
+    "const { port } = await startGateway({",
+    "  runtime,",
+    "  workflows,",
+    "  webhooks,",
+    `  defaultWorkflow: "code-review",`,
+    "});",
+    "console.log(`gateway listening on :${port}`);",
+  ].join("\n");
+}
+
+function workerEntry(): string {
+  return [
+    "// Workflow service entrypoint (Render Workflows). Registers the same",
+    "// runtime + agents + workflows; task handlers run here in production.",
+    `import { createRuntime, loadAgents, loadWorkflows, loadToolSources } from "@render-agents/sdk";`,
+    "",
+    `const root = new URL("..", import.meta.url).pathname;`,
+    "const toolSources = await loadToolSources(root);",
+    "const runtime = await createRuntime({ toolSources });",
+    "await loadAgents(root, runtime);",
+    "await loadWorkflows(root, runtime);",
+    "console.log(`workflow service ready (${runtime.agentDefinitions.size} agents)`);",
+  ].join("\n");
+}
+
+// --- deploy ---
+
+function renderYaml(opts: ScaffoldOptions): string {
+  return [
+    "# Canonical render-agents deployment: gateway (web) + workflow service +",
+    "# Postgres. See the @render-agents docs for details.",
+    "databases:",
+    `  - name: ${opts.name}-db`,
+    "    plan: basic-256mb",
+    "",
+    "services:",
+    "  - type: web",
+    `    name: ${opts.name}-gateway`,
+    "    runtime: node",
+    "    plan: starter",
+    "    buildCommand: npm install && npm run build",
+    "    startCommand: npm run start",
+    "    healthCheckPath: /health",
+    "    envVars:",
+    "      - key: DATABASE_URL",
+    "        fromDatabase:",
+    `          name: ${opts.name}-db`,
+    "          property: connectionString",
+    "      - key: RENDER_AGENTS_API_KEY",
+    "        generateValue: true",
+    "      - key: RENDER_AGENTS_ENCRYPTION_KEY",
+    "        generateValue: true",
+    `      - key: ${opts.apiKeyEnv}`,
+    "        sync: false",
+    "",
+    "  - type: worker",
+    `    name: ${opts.name}-workflows`,
+    "    runtime: node",
+    "    plan: starter",
+    "    buildCommand: npm install && npm run build",
+    "    startCommand: npm run worker",
+    "    envVars:",
+    "      - key: DATABASE_URL",
+    "        fromDatabase:",
+    `          name: ${opts.name}-db`,
+    "          property: connectionString",
+    `      - key: ${opts.apiKeyEnv}`,
+    "        sync: false",
+  ].join("\n");
+}
+
+function composeYaml(): string {
+  return [
+    "# Local Postgres for the durable path. `docker compose up -d`.",
+    "services:",
+    "  postgres:",
+    "    image: postgres:16",
+    "    environment:",
+    "      POSTGRES_USER: postgres",
+    "      POSTGRES_PASSWORD: postgres",
+    `      POSTGRES_DB: agents`,
+    "    ports:",
+    '      - "5432:5432"',
+    "    volumes:",
+    "      - pgdata:/var/lib/postgresql/data",
+    "volumes:",
+    "  pgdata:",
+  ].join("\n");
+}
+
+function readme(opts: ScaffoldOptions): string {
+  const pm = opts.packageManager;
+  const install = pm === "npm" ? "npm install" : `${pm} install`;
+  const dev = pm === "npm" ? "npm run dev" : `${pm} dev`;
+  return [
+    `# ${opts.name}`,
+    "",
+    "A render-agents project scaffolded with `create-render-agent`. The default",
+    "example is a **code-review** pipeline (security + performance reviewers → judge).",
+    "",
+    "## Run locally",
+    "",
+    "```sh",
+    install,
+    `cp .env.example .env   # add your ${opts.apiKeyEnv}`,
+    dev,
+    "```",
+    "",
+    "Then dispatch a run:",
+    "",
+    "```sh",
+    `curl -X POST localhost:3000/workflows/code-review \\`,
+    `  -H "Authorization: Bearer $RENDER_AGENTS_API_KEY" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{"input":{"diff":"--- a/app.ts\\n+++ b/app.ts"}}'`,
+    "```",
+    "",
+    "## Deploy to Render",
+    "",
+    "Commit and create a Blueprint from `render.yaml` (gateway + workflow service + Postgres).",
+    "",
+    "## Layout",
+    "",
+    "- `agents/` — markdown agents (`_shared.md` holds defaults)",
+    "- `tools/` — local + MCP tool sources",
+    "- `skills/` — progressive-disclosure skill docs",
+    "- `workflows/` — orchestration (`code-review`)",
+    "- `webhooks/`, `hooks/` — triggers + event middleware",
+    "- `src/server.ts` — gateway entrypoint",
+  ].join("\n");
+}
