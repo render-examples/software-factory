@@ -1,7 +1,11 @@
 {
   "name": "@render-agents/engine",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
