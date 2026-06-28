@@ -37,6 +37,7 @@ export interface InProcessRunContextOptions {
   signal: AbortSignal;
   parentSpanId?: string;
   userId?: string;
+  threadId?: string;
   depth?: number;
   maxContextTokens?: number;
   logger?: Logger;
@@ -66,6 +67,7 @@ export class InProcessRunContext implements RunContext {
   readonly runId: string;
   readonly parentSpanId?: string;
   readonly userId?: string;
+  readonly threadId?: string;
   readonly depth: number;
 
   private readonly store: RunStore;
@@ -96,6 +98,7 @@ export class InProcessRunContext implements RunContext {
     this.signal = opts.signal;
     this.parentSpanId = opts.parentSpanId;
     this.userId = opts.userId;
+    this.threadId = opts.threadId;
     this.depth = opts.depth ?? 0;
     this.maxContextTokens = opts.maxContextTokens ?? 100_000;
     this.logger = opts.logger ?? consoleLogger;
@@ -119,6 +122,13 @@ export class InProcessRunContext implements RunContext {
   }
 
   async emit(event: RunEvent): Promise<void> {
+    // Enrich the opening event with thread/user identity from the context so the
+    // run projection (and thread transcript) carry it, without the runner having
+    // to thread these through. A thread spans many runs (D-thread model).
+    if (event.type === "run.started") {
+      if (this.threadId !== undefined && event.threadId === undefined) event = { ...event, threadId: this.threadId };
+      if (this.userId !== undefined && event.userId === undefined) event = { ...event, userId: this.userId };
+    }
     const span = this.spanCorrelation(event);
     const record = buildEventRecord(this.runId, event, {
       agentName: this.agentName,

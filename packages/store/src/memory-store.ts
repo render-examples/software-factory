@@ -8,7 +8,9 @@ import type {
 } from "./events.js";
 import { categoryOf } from "./categories.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "./run-store.js";
+import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
+import type { ApprovalProjectionRecord } from "./projections.js";
 import { Projections, type ProjectionSnapshot } from "./projections.js";
 
 /** Thrown by `append` when an `EventInterceptor` vetoes an event pre-commit. */
@@ -141,8 +143,10 @@ export class MemoryEventLogStore implements EventLogStore {
  * Writes go exclusively through `events.append` — there are no direct
  * projection writers.
  */
-export class MemoryRunStore implements RunStore {
+export class MemoryRunStore implements RunStore, ThreadStore {
   private readonly projections = new Projections();
+  /** Thread metadata (created via the gateway API, not folded from events). */
+  private readonly threads = new Map<string, Thread>();
   readonly events: MemoryEventLogStore;
 
   constructor() {
@@ -180,12 +184,40 @@ export class MemoryRunStore implements RunStore {
     return this.projections.getToolResult(runId, toolCallId);
   }
 
-  async getApprovals(runId: string): Promise<import("./projections.js").ApprovalProjectionRecord[]> {
+  async getApprovals(runId: string): Promise<ApprovalProjectionRecord[]> {
     return this.projections.getApprovals(runId);
   }
 
-  async listApprovals(opts?: import("./run-store.js").ListApprovalsOptions): Promise<import("./projections.js").ApprovalProjectionRecord[]> {
+  async listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]> {
     return this.projections.listApprovals(opts);
+  }
+
+  // --- ThreadStore (metadata in-memory; transcript folded from the event log) ---
+
+  async createThread(thread: Thread): Promise<void> {
+    this.threads.set(thread.id, { ...thread });
+  }
+
+  async getThread(id: string): Promise<Thread | undefined> {
+    const t = this.threads.get(id);
+    return t ? { ...t } : undefined;
+  }
+
+  async updateThread(id: string, patch: Partial<Thread>): Promise<void> {
+    const t = this.threads.get(id);
+    if (!t) return;
+    this.threads.set(id, { ...t, ...patch, updatedAt: new Date().toISOString() });
+  }
+
+  async listThreads(opts?: { userId?: string }): Promise<Thread[]> {
+    let rows = [...this.threads.values()];
+    if (opts?.userId) rows = rows.filter(t => t.userId === opts.userId);
+    rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    return rows.map(t => ({ ...t }));
+  }
+
+  async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
+    return this.projections.getThreadMessages(threadId);
   }
 
   /** All projections for a run as a plain snapshot (used to validate replay equivalence). */

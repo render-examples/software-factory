@@ -226,6 +226,76 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
   });
 });
 
+describeWithPg("threads — metadata, run thread_id, and transcript parity", () => {
+  let pgStore: PgRunStore;
+  let memStore: ReturnType<typeof createMemoryStore>;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+    memStore = createMemoryStore();
+  });
+
+  afterAll(async () => {
+    await pgStore.close();
+  });
+
+  it("persists thread metadata, sets run.thread_id, and folds the transcript identically", async () => {
+    const threadId = `thread-${Date.now()}`;
+    const runId = `${threadId}-run`;
+    const now = new Date().toISOString();
+    const thread = { id: threadId, userId: "u1", status: "active" as const, title: "t", createdAt: now, updatedAt: now };
+
+    // Thread must exist before a run references it (FK in Postgres).
+    await pgStore.createThread(thread);
+    await memStore.createThread(thread);
+
+    const events: RunEvent[] = [
+      { type: "run.started", threadId, userId: "u1", input: "hi" },
+      { type: "message.user", content: [{ type: "text", text: "hello there" }] },
+      { type: "message.assistant", agentName: AGENT, content: [{ type: "text", text: "hi back" }] },
+      { type: "run.completed", result: "done" },
+    ];
+    for (const e of events) {
+      await emit(pgStore, runId, e);
+      await emit(memStore, runId, e);
+    }
+
+    // Thread metadata round-trips.
+    const pgThread = await pgStore.getThread(threadId);
+    const memThread = await memStore.getThread(threadId);
+    expect(pgThread?.userId).toBe(memThread?.userId);
+    expect(pgThread?.title).toBe("t");
+
+    // Run carries the thread id.
+    expect((await pgStore.getRun(runId))?.threadId).toBe(threadId);
+    expect((await memStore.getRun(runId))?.threadId).toBe(threadId);
+
+    // listRuns filters by thread identically.
+    expect((await pgStore.listRuns({ threadId })).map(r => r.id)).toEqual(
+      (await memStore.listRuns({ threadId })).map(r => r.id),
+    );
+
+    // Transcript folds identically (flattened text, user+assistant only).
+    const pgMsgs = await pgStore.getThreadMessages(threadId);
+    const memMsgs = await memStore.getThreadMessages(threadId);
+    expect(pgMsgs.map(m => [m.role, m.content])).toEqual([["user", "hello there"], ["assistant", "hi back"]]);
+    expect(memMsgs.map(m => [m.role, m.content])).toEqual(pgMsgs.map(m => [m.role, m.content]));
+  });
+
+  it("enforces one active run per thread (unique index → 23505)", async () => {
+    const threadId = `thread-busy-${Date.now()}`;
+    const now = new Date().toISOString();
+    await pgStore.createThread({ id: threadId, status: "active", createdAt: now, updatedAt: now });
+
+    await emit(pgStore, `${threadId}-r1`, { type: "run.started", threadId, input: "a" });
+    // Second active run for the same thread must violate the partial unique index.
+    await expect(
+      emit(pgStore, `${threadId}-r2`, { type: "run.started", threadId, input: "b" }),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+});
+
 describeWithPg("PgRunStore.init() idempotency", () => {
   it("is safe to call multiple times (advisory lock)", async () => {
     const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });

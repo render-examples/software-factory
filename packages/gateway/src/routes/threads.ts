@@ -1,72 +1,70 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { RunStore } from "@render-agents/store";
+import type { RunStore, ThreadStore, Thread } from "@render-agents/store";
 import { buildEventRecord } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
 
 export interface ThreadRouteDeps {
   store: RunStore;
+  threadStore: ThreadStore;
   workflows: Map<string, WorkflowDefinition>;
   defaultWorkflow?: string;
   resume?: (runId: string) => Promise<unknown>;
 }
 
+/** Postgres unique-violation (one active run per thread) → treat as thread-busy. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
+}
+
 /**
- * Thread management routes: create, list, send messages.
- * Threads are the top-level unit of multi-turn work.
+ * Thread management routes: create, list, get, send messages. Threads are the
+ * top-level unit of multi-turn work; each turn is a run carrying the thread id,
+ * and the thread transcript folds from `message.*` events across those runs.
  */
 export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
-  const { store, workflows, defaultWorkflow, resume } = deps;
+  const { store, threadStore, workflows, defaultWorkflow, resume } = deps;
 
-  // POST /threads — create a thread
+  // POST /threads — create + persist a thread
   app.post("/threads", async (c) => {
-    let body: { userId?: string; metadata?: Record<string, unknown>; workflow?: string; title?: string } = {};
+    let body: { userId?: string; metadata?: Record<string, unknown>; title?: string } = {};
     try {
       body = await c.req.json();
     } catch {
       body = {};
     }
 
-    const thread = {
+    const now = new Date().toISOString();
+    const thread: Thread = {
       id: randomUUID(),
       userId: body.userId,
       metadata: body.metadata,
-      status: "active" as const,
+      status: "active",
       title: body.title,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
-
-    // Store the thread (via a run_events-independent table — threads are operational)
-    // For now, threads are tracked via the runs table's thread_id FK.
-    // Full ThreadStore implementation comes with the Postgres impl.
+    await threadStore.createThread(thread);
     return c.json(thread, 201);
   });
 
-  // GET /threads — list threads
+  // GET /threads — list persisted threads (optionally by user)
   app.get("/threads", async (c) => {
-    // Thread listing reads from the runs projection grouped by thread_id
     const userId = c.req.query("userId");
-    const runs = await store.listRuns({ limit: 100 });
-    const threadIds = new Set<string>();
-    const threads = runs
-      .filter((r): r is typeof r & { threadId: string } => !!r.threadId)
-      .filter((r) => !userId || r.userId === userId)
-      .filter((r) => {
-        if (threadIds.has(r.threadId)) return false;
-        threadIds.add(r.threadId);
-        return true;
-      })
-      .map((r) => ({
-        id: r.threadId,
-        userId: r.userId,
-        status: "active",
-        latestRunId: r.id,
-        latestRunStatus: r.status,
-        startedAt: r.startedAt,
-      }));
+    const threads = await threadStore.listThreads(userId ? { userId } : undefined);
     return c.json({ threads });
+  });
+
+  // GET /threads/:id — thread metadata + transcript
+  app.get("/threads/:id", async (c) => {
+    const id = c.req.param("id");
+    const thread = await threadStore.getThread(id);
+    if (!thread) {
+      return c.json({ error: `Thread "${id}" not found` }, 404);
+    }
+    const messages = await threadStore.getThreadMessages(id);
+    return c.json({ thread, messages });
   });
 
   // POST /threads/:id/messages — deliver a message to a thread
@@ -83,32 +81,34 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       return c.json({ error: "content is required and must be non-empty" }, 400);
     }
 
-    // Find the active run for this thread
-    const runs = await store.listRuns({ limit: 50 });
-    const activeRun = runs.find(
-      (r) => r.threadId === threadId && (r.status === "running" || r.status === "paused" || r.status === "pending"),
+    const thread = await threadStore.getThread(threadId);
+    if (!thread) {
+      return c.json({ error: `Thread "${threadId}" not found` }, 404);
+    }
+
+    // Sequential-turn enforcement: at most one active run per thread.
+    const active = (await store.listRuns({ threadId, limit: 50 })).find(
+      (r) => r.status === "running" || r.status === "paused" || r.status === "pending",
     );
 
-    if (activeRun) {
-      if (activeRun.status === "running") {
-        return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
+    if (active) {
+      if (active.status === "running" || active.status === "pending") {
+        return c.json({ error: "Thread is busy (active run mid-turn)", runId: active.id }, 409);
       }
-
-      // Deliver into the paused run (awaiting input), then re-drive it.
+      // Paused awaiting input → deliver the message and re-drive the run.
       await store.events.append(
-        buildEventRecord(activeRun.id, {
+        buildEventRecord(active.id, {
           type: "message.user",
           content: [{ type: "text", text: body.content }],
         }),
       );
       if (resume) {
-        try { await resume(activeRun.id); } catch (err) { console.error(`resume(${activeRun.id}) failed`, err); }
+        try { await resume(active.id); } catch (err) { console.error(`resume(${active.id}) failed`, err); }
       }
-
-      return c.json({ runId: activeRun.id, delivered: true }, 200);
+      return c.json({ runId: active.id, delivered: true }, 200);
     }
 
-    // No active run — dispatch a new one for this thread
+    // No active run — dispatch a new one for this thread.
     const workflowName = defaultWorkflow ?? "default";
     const workflow = workflows.get(workflowName);
     if (!workflow) {
@@ -117,8 +117,20 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       }, 500);
     }
 
-    const run = await workflow.dispatch({ message: body.content, threadId }, "thread_message");
-    return c.json({ runId: run.id, dispatched: true }, 202);
+    try {
+      const run = await workflow.dispatch(
+        { message: body.content, threadId },
+        "thread_message",
+        { threadId, userId: body.userId ?? thread.userId },
+      );
+      return c.json({ runId: run.id, dispatched: true }, 202);
+    } catch (err) {
+      // DB-level guard (race that slipped past the soft check above).
+      if (isUniqueViolation(err)) {
+        return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
+      }
+      throw err;
+    }
   });
 
   return app;

@@ -1,6 +1,7 @@
-import type { RunEventRecord, ToolResult } from "./events.js";
+import type { RunEventRecord, ToolResult, ContentBlock } from "./events.js";
 import type { Message } from "./messages.js";
 import type { RunRecord, SpanRecord, ListRunsOptions } from "./run-store.js";
+import type { ThreadMessage } from "./thread-store.js";
 
 /**
  * A folded approval record. Not part of the public `RunStore` read surface in
@@ -41,6 +42,14 @@ function round(n: number): number {
   return Math.round(n * 1e12) / 1e12;
 }
 
+/** Flatten content blocks to plain text for the human-facing transcript. */
+function flattenContent(content: ContentBlock[]): string {
+  return content
+    .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /**
  * The projection-fold framework. Every read model (runs, messages, spans,
  * tool-calls, steps, approvals) is a pure fold of the append-only event log.
@@ -49,6 +58,8 @@ function round(n: number): number {
 export class Projections {
   private runs = new Map<string, RunRecord>();
   private messages = new Map<string, MessageEntry[]>();
+  /** Human-facing per-thread transcript, folded from message.* on thread-scoped runs. */
+  private threadMessages = new Map<string, ThreadMessage[]>();
   private spans = new Map<string, Map<string, SpanRecord>>();
   private toolResults = new Map<string, Map<string, ToolResult>>();
   private steps = new Map<string, Map<string, { value: unknown }>>();
@@ -89,6 +100,8 @@ export class Projections {
         r.trigger = p.trigger;
         if (rec.agentName) r.workflow = rec.agentName;
         if (p.agentVersion) r.agentVersion = p.agentVersion;
+        if (p.threadId) r.threadId = p.threadId;
+        if (p.userId) r.userId = p.userId;
         break;
       }
       case "run.completed": {
@@ -133,14 +146,39 @@ export class Projections {
     switch (p.type) {
       case "message.user":
         push(undefined, { role: "user", content: p.content });
+        this.pushThreadMessage(rec, "user", p.content);
         break;
       case "message.assistant":
         push(p.agentName, { role: "assistant", content: p.content });
+        this.pushThreadMessage(rec, "assistant", p.content);
         break;
       case "message.tool":
         push(p.agentName, { role: "tool", content: p.content });
         break;
     }
+  }
+
+  /**
+   * Append to the human-facing thread transcript when the run belongs to a
+   * thread. `run.started` folds before messages (same `apply` order), so the
+   * run's `threadId` is known by the time its messages arrive. The transcript
+   * flattens content blocks to text and is keyed by the thread, ordered by
+   * (runId, seq) — the same coordinate the Postgres `messages` table uses.
+   */
+  private pushThreadMessage(rec: RunEventRecord, role: "user" | "assistant", content: ContentBlock[]): void {
+    const threadId = this.runs.get(rec.runId)?.threadId;
+    if (!threadId) return;
+    const arr = this.threadMessages.get(threadId) ?? [];
+    arr.push({
+      id: `${rec.runId}:${rec.seq}`,
+      threadId,
+      runId: rec.runId,
+      seq: rec.seq,
+      role,
+      content: flattenContent(content),
+      createdAt: rec.ts,
+    });
+    this.threadMessages.set(threadId, arr);
   }
 
   private foldSpans(rec: RunEventRecord): void {
@@ -277,6 +315,7 @@ export class Projections {
     let rows = [...this.runs.values()];
     if (opts?.workflow) rows = rows.filter(r => r.workflow === opts.workflow);
     if (opts?.status) rows = rows.filter(r => r.status === opts.status);
+    if (opts?.threadId) rows = rows.filter(r => r.threadId === opts.threadId);
     rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
     if (opts?.before) {
       const idx = rows.findIndex(r => r.id === opts.before);
@@ -311,6 +350,14 @@ export class Projections {
 
   getApprovals(runId: string): ApprovalProjectionRecord[] {
     return [...(this.approvals.get(runId)?.values() ?? [])].map(a => ({ ...a }));
+  }
+
+  /** The human-facing transcript for a thread, ordered by (runId, seq). */
+  getThreadMessages(threadId: string): ThreadMessage[] {
+    const arr = this.threadMessages.get(threadId) ?? [];
+    return [...arr]
+      .sort((a, b) => (a.runId === b.runId ? a.seq - b.seq : a.runId < b.runId ? -1 : 1))
+      .map(m => ({ ...m }));
   }
 
   /** All approvals across every run, newest request first, optional status filter. */
