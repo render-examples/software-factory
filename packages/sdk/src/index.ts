@@ -101,7 +101,7 @@ export type {
 export { createRuntime } from "./runtime.js";
 
 export type { AgentSet, Agent } from "./agents.js";
-export { loadAgents } from "./agents.js";
+export { loadAgents, resumeRun } from "./agents.js";
 
 export type {
   WorkflowOptions,

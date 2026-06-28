@@ -3,9 +3,11 @@ import type {
   AgentDefinition,
   AgentInput,
   AgentOutput,
+  AgentResult,
   RunOptions,
   TaskOptions,
 } from "@render-agents/engine";
+import { RunPaused } from "@render-agents/engine";
 import { idempotencyKey } from "@render-agents/store";
 import type { AgentRuntime } from "./runtime.js";
 import { createRuntime } from "./runtime.js";
@@ -89,6 +91,64 @@ function bindAgent(definition: AgentDefinition, runtime: AgentRuntime): Agent {
       }) as Promise<AgentOutput<T>>;
     },
   };
+}
+
+/**
+ * Resume a paused agent run (HITL pause → out-of-band approval/input → resume).
+ *
+ * The pause is recorded in the event log (`run.paused`) and the resolution
+ * (`approval.resolved` / a new `message.user`) is appended out-of-band by the
+ * gateway. Resuming re-invokes the agent loop with the **same** runId: the
+ * runner's `hasStarted()` guard skips the opening events and its
+ * pending-tool-use replay dispatches the now-unblocked tool calls, driving the
+ * run to completion (or the next pause). Idempotent — resolved approvals and
+ * already-applied tool results short-circuit on replay.
+ *
+ * In production the workflow service owns durable resume; this in-process driver
+ * provides identical observable behavior for local dev and the gateway.
+ */
+export async function resumeRun<T = unknown>(
+  runId: string,
+  runtime: AgentRuntime,
+  opts?: { signal?: AbortSignal },
+): Promise<AgentResult<T>> {
+  const run = await runtime.store.getRun(runId);
+  if (!run) throw new Error(`resumeRun: run "${runId}" not found`);
+  if (run.status !== "paused") {
+    // Nothing to resume — report the current terminal/active state.
+    if (run.status === "completed") {
+      return { status: "completed", text: "", data: run.result as T, usage: { inputTokens: 0, outputTokens: 0 } };
+    }
+    return { status: "paused", reason: "input" } as AgentResult<T>;
+  }
+
+  // The agent name is the run's workflow label (set from the run.started event's
+  // agentName when an agent run is started).
+  const agentName = run.workflow;
+  const definition = runtime.agentDefinitions.get(agentName);
+  if (!definition) {
+    throw new Error(
+      `resumeRun: agent "${agentName}" for run "${runId}" not found in the runtime. ` +
+      `Ensure agents are loaded via loadAgents() before resuming.`,
+    );
+  }
+
+  // Recover the original input from the log (the runner ignores it on resume,
+  // but pass it for correctness/fidelity).
+  const events = await runtime.store.events.read(runId);
+  const started = events.find((e) => e.payload.type === "run.started");
+  const input: AgentInput =
+    started?.payload.type === "run.started" ? ((started.payload.input as AgentInput) ?? "") : "";
+
+  try {
+    const output = await runInProcess<T>(definition, input, runtime, { runId, signal: opts?.signal });
+    return { status: "completed", ...output };
+  } catch (err) {
+    if (err instanceof RunPaused) {
+      return { status: "paused", reason: err.reason, pendingApprovalIds: err.pendingApprovalIds };
+    }
+    throw err;
+  }
 }
 
 function runInProcess<T>(

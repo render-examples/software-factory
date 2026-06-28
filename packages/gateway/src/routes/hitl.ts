@@ -4,10 +4,25 @@ import { buildEventRecord } from "@render-agents/store";
 
 /**
  * HITL routes: list pending approvals, resolve them, and resume paused runs.
+ *
+ * Resolving an approval / delivering input appends the resolution event and then
+ * re-drives the paused run via `resume(runId)` so the loop continues from the
+ * logged state (resume-by-replay). `resume` is awaited so the response reflects
+ * the post-resume state; errors are isolated so a resume failure doesn't mask
+ * the (durably recorded) resolution.
  */
-export function hitlRoutes(deps: { store: RunStore }) {
+export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => Promise<unknown> }) {
   const app = new Hono();
-  const { store } = deps;
+  const { store, resume } = deps;
+
+  const driveResume = async (runId: string): Promise<void> => {
+    if (!resume) return;
+    try {
+      await resume(runId);
+    } catch (err) {
+      console.error(`resume(${runId}) failed`, err);
+    }
+  };
 
   // GET /approvals — list pending approvals (read directly from the projection)
   app.get("/approvals", async (c) => {
@@ -59,6 +74,9 @@ export function hitlRoutes(deps: { store: RunStore }) {
       }),
     );
 
+    // Re-drive the paused run now that the approval is resolved.
+    await driveResume(targetRunId);
+
     return c.json({ resolved: true, approvalId, runId: targetRunId });
   });
 
@@ -95,6 +113,7 @@ export function hitlRoutes(deps: { store: RunStore }) {
           content: [{ type: "text", text: body.content }],
         }),
       );
+      await driveResume(runId);
       return c.json({ resumed: true, runId, via: "message" });
     }
 
@@ -111,6 +130,7 @@ export function hitlRoutes(deps: { store: RunStore }) {
           reason: body.reason,
         }),
       );
+      await driveResume(runId);
       return c.json({ resumed: true, runId, via: "approval" });
     }
 

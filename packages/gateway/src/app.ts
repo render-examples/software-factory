@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { CancelStore } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
+import { resumeRun } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
@@ -21,6 +22,11 @@ export interface GatewayOptions {
   oauthProviders?: Map<string, OAuthProviderConfig>;
   webhooks?: Map<string, WebhookAdapter>;
   connectors?: Map<string, ConnectorSpec>;
+  /**
+   * Resume driver for paused runs. Defaults to the in-process `resumeRun` over
+   * the provided runtime. Injectable for tests / a workflow-service dispatch.
+   */
+  resume?: (runId: string) => Promise<unknown>;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
 }
@@ -44,6 +50,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   const store = runtime.store;
   const cancel = cancelStore ?? { requestCancel: async () => {}, isCancelled: async () => false, clearCancel: async () => {} };
   const wf = workflows ?? new Map();
+  // Resolving an approval / delivering input must re-drive the paused run.
+  const resume = opts.resume ?? ((runId: string) => resumeRun(runId, runtime));
 
   // Core run routes
   app.route("/", runRoutes({ store, cancelStore: cancel, workflows: wf }));
@@ -52,10 +60,10 @@ export function createGatewayApp(opts: GatewayOptions) {
   app.route("/", streamRoutes({ store }));
 
   // Thread routes
-  app.route("/", threadRoutes({ store, workflows: wf, defaultWorkflow: opts.defaultWorkflow }));
+  app.route("/", threadRoutes({ store, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume }));
 
   // HITL routes (approvals + resume)
-  app.route("/", hitlRoutes({ store }));
+  app.route("/", hitlRoutes({ store, resume }));
 
   // OAuth routes
   if (opts.oauthProviders && opts.oauthProviders.size > 0) {
