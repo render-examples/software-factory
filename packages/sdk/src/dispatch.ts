@@ -275,7 +275,15 @@ export function computeRequiredPlans(definitions: AgentDefinition[]): RenderPlan
 
 /**
  * Detect whether the Render Workflows runtime is available.
- * Present when running inside a Render Workflow service container.
+ *
+ * Per the execution spec ([Execution → Runtime & composition] and
+ * [Execution → Task dispatch]): the Render Workflows dispatcher is selected when
+ * `RENDER_SDK_SOCKET_PATH` **or** `RENDER_USE_LOCAL_DEV` is present, and the
+ * in-process fallback (`.task()` runs as `.run()`) is used when **both** are
+ * unset. `RENDER_SDK_SOCKET_PATH` is set inside a deployed Render Workflow
+ * service container; `RENDER_USE_LOCAL_DEV` signals the Render CLI's local-dev
+ * workflows mode (where `@renderinc/sdk` provides a local workflows socket).
+ * Both therefore mean "a workflow server is reachable", not "force local".
  */
 export function isWorkflowsEnvironment(): boolean {
   return !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);
