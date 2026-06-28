@@ -112,4 +112,14 @@ export type {
 } from "./workflow.js";
 export { workflow } from "./workflow.js";
 
+export {
+  InProcessDispatcher,
+  RenderWorkflowsDispatcher,
+  agentTaskHandler,
+  computeDispatchKey,
+  computeRequiredPlans,
+  isWorkflowsEnvironment,
+} from "./dispatch.js";
+export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
+
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";

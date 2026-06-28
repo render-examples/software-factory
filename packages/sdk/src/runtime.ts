@@ -19,6 +19,7 @@ import type {
   ModelPricing,
 } from "@render-agents/engine";
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer } from "@render-agents/engine";
+import { RenderWorkflowsDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -120,6 +121,16 @@ function buildRunnerRegistry(model: ModelClient, pricing?: Record<string, ModelP
 }
 
 /**
+ * Detect whether a Render Workflows dispatcher should be used.
+ * Returns a dispatcher for production, undefined for local dev/test.
+ */
+function detectDispatcher(): TaskDispatcher | undefined {
+  if (!isWorkflowsEnvironment()) return undefined;
+  const slug = process.env.RENDER_WORKFLOW_SLUG ?? "default";
+  return new RenderWorkflowsDispatcher({ workflowSlug: slug });
+}
+
+/**
  * Builds the composition root (D5). Each dependency is an optional override;
  * Wave 0 defaults to an in-memory store and an in-process fallback (no
  * dispatcher, so `.task()` runs as `.run()`). Postgres detection and real model
@@ -138,6 +149,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
+  const dispatcher = opts?.dispatcher ?? detectDispatcher();
 
   return {
     store,
@@ -146,7 +158,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     runners,
     hooks,
     contextManager,
-    dispatcher: opts?.dispatcher,
+    dispatcher,
     toolSources: opts?.toolSources ?? new Map(),
   };
 }
