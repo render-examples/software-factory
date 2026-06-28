@@ -1,6 +1,6 @@
 # Sprint 23 — Deployment, Configuration, Retention
 
-**Status:** DRAFT
+**Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
 **Depends on:** Wave 3 (the services to deploy)
 **Unblocks:** —

@@ -1,6 +1,6 @@
 # render-agents — MVP Sprint Plan
 
-**Status:** DRAFT
+**Status:** ✅ COMPLETE — all sprints (00–24) implemented across Waves 0–4.
 **Date:** 2026-06-26
 
 This directory decomposes the [render-agents specification](../specs/00-foundations.md) into an ordered set of MVP sprints, built **sequentially** in the numbered order. Each sprint is a self-contained build spec; this file is the index that groups them into waves and records the per-wave exit criteria. (Each sprint doc lists its own depends-on/unblocks for context; because the build is sequential, the index does not re-track them.)
@@ -102,10 +102,12 @@ Three principles drive the ordering:
 
 | # | Sprint |
 |---|---|
-| [21](21-scaffolder.md) | Scaffolder (`create-render-agent`) + default example project |
-| [22](22-dev-trace-viewer.md) | Dev-mode trace viewer (port template `src/ui/`) |
-| [23](23-deployment-retention.md) | Deployment (`render.yaml`), configuration, retention cleanup |
-| [24](24-hardening-release.md) | NFR hardening, docs, release/publish |
+| [21](complete/21-scaffolder.md) | Scaffolder (`create-render-agent`) + default example project |
+| [22](complete/22-dev-trace-viewer.md) | Dev-mode trace viewer (`/ui`) |
+| [23](complete/23-deployment-retention.md) | Deployment (`render.yaml`), configuration, retention cleanup |
+| [24](complete/24-hardening-release.md) | NFR hardening, docs, release/publish |
+
+**Status:** ✅ Complete — all Wave 4 sprints implemented.
 
 **Wave exit:** `npm create render-agent` scaffolds a working project that deploys to Render with one `render.yaml`; packages publish to npm; NFR targets are met.
 

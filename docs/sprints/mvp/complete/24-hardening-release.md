@@ -1,6 +1,6 @@
 # Sprint 24 — NFR Hardening, Docs, Release/Publish
 
-**Status:** DRAFT
+**Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
 **Depends on:** all prior sprints
 **Unblocks:** — (ships MVP)
