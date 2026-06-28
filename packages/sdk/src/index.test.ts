@@ -15,8 +15,10 @@ describe("@render-agents/sdk", () => {
     expect(agents.all()).toEqual([]);
   });
 
-  it("workflow throws not implemented", () => {
-    expect(() => workflow(async () => {})).toThrow("not implemented");
+  it("workflow returns a WorkflowDefinition", () => {
+    const def = workflow(async () => {});
+    expect(def.name).toBe("unnamed");
+    expect(def.options.retries).toBe(0);
   });
 
   it("defineTool returns a ToolSource", () => {

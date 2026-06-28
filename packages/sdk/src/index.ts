@@ -110,7 +110,7 @@ export type {
   WebhookAdapter,
   WebhookMatch,
 } from "./workflow.js";
-export { workflow } from "./workflow.js";
+export { workflow, bindWorkflow } from "./workflow.js";
 
 export {
   InProcessDispatcher,
