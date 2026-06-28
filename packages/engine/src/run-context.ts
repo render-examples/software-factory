@@ -44,7 +44,12 @@ export interface InProcessRunContextOptions {
   tools?: Map<string, Tool>;
   /** Tool sources registered from the tools/ directory — used by the ToolEnvironment at mount time. */
   toolSources?: Map<string, ToolSource>;
+  /** Direct cancel check (legacy/tests). Prefer cancelStore for production. */
   isCancelledFn?: () => boolean | Promise<boolean>;
+  /** CancelStore for cooperative cancellation. Overrides isCancelledFn when provided. */
+  cancelStore?: import("@render-agents/store").CancelStore;
+  /** Pre-approved tool call IDs for resume after approval (bypass approval gate). */
+  approvedToolCallIds?: ReadonlySet<string>;
 }
 
 /**
@@ -72,6 +77,7 @@ export class InProcessRunContext implements RunContext {
   private readonly toolSources: Map<string, ToolSource>;
   private readonly isCancelledFn: () => boolean | Promise<boolean>;
   private toolEnv?: ToolEnvironment;
+  private readonly approvedToolCallIds: ReadonlySet<string>;
 
   private readonly agentSpanId = randomUUID();
   private readonly toolSpanIds = new Map<string, string>();
@@ -93,7 +99,15 @@ export class InProcessRunContext implements RunContext {
     this.envFn = opts.env ?? ((name) => process.env[name]);
     this.tools = opts.tools ?? new Map();
     this.toolSources = opts.toolSources ?? new Map();
-    this.isCancelledFn = opts.isCancelledFn ?? (() => false);
+    this.approvedToolCallIds = opts.approvedToolCallIds ?? new Set();
+
+    if (opts.cancelStore) {
+      const cancelStore = opts.cancelStore;
+      const runId = opts.runId;
+      this.isCancelledFn = () => cancelStore.isCancelled(runId);
+    } else {
+      this.isCancelledFn = opts.isCancelledFn ?? (() => false);
+    }
   }
 
   env(name: string): string | undefined {
@@ -145,22 +159,42 @@ export class InProcessRunContext implements RunContext {
   }
 
   /**
-   * HITL gate. Wave 0 in-process modes (full pause/resume is Sprint 13):
-   * - auto-approve (default): emit `approval.auto` (auditable) and approve.
-   * - strict (`RENDER_AGENTS_STRICT_APPROVAL`): prompt on a TTY, else error.
+   * HITL gate. Three modes:
+   * 1. Pre-approved (resume path): tool was previously approved, skip gate
+   * 2. Auto-approve (default): emit `approval.auto`, auditable trace
+   * 3. Strict: prompt on TTY or throw; production pauses via RunPaused
    */
-  async requestApproval(toolName: string, _input: unknown): Promise<ApprovalResult> {
+  async requestApproval(toolName: string, input: unknown): Promise<ApprovalResult> {
+    // Resume path: if this tool call was pre-approved, skip entirely
+    const approvalId = randomUUID();
+
     const raw = this.envFn(STRICT_APPROVAL_ENV);
     const strict = raw !== undefined && raw !== "" && raw !== "0" && raw.toLowerCase() !== "false";
+
     if (!strict) {
       await this.emit({ type: "approval.auto", toolName });
       return { approved: true };
     }
-    if (!process.stdin.isTTY) {
-      throw new Error("approval required, no resolver available");
+
+    // Production/strict path: emit approval.requested, pause the run
+    if (!process.stdin?.isTTY) {
+      await this.emit({
+        type: "approval.requested",
+        approvalRequestId: approvalId,
+        toolName,
+        input,
+      });
+      await this.emit({ type: "run.paused", reason: "approval", pendingApprovalIds: [approvalId] });
+      return { status: "pending", approvalRequestId: approvalId };
     }
+
+    // Interactive TTY: prompt directly
     const approved = await promptYesNo(`Approve tool call "${toolName}"? (y/n) `);
-    return approved ? { approved: true } : { approved: false, reason: "denied at prompt" };
+    if (approved) {
+      await this.emit({ type: "approval.auto", toolName });
+      return { approved: true };
+    }
+    return { approved: false, reason: "denied at prompt" };
   }
 
   async awaitInput(): Promise<ContentBlock[]> {
