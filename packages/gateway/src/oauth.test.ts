@@ -74,3 +74,43 @@ describe("gateway OAuth — connect / persist / revoke", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("dev trace viewer (/ui)", () => {
+  it("serves the SPA shell without auth and the compiled helpers module", async () => {
+    const { createGatewayApp } = await import("../src/index.js");
+    const { createMemoryStore, MemoryCancelStore } = await import("@render-agents/store");
+    const store = createMemoryStore();
+    await store.init();
+    const runtime = {
+      store, threadStore: store, oauthStore: store, oauthRefreshers: new Map(),
+      tracer: { onStart: () => {}, onEnd: () => {} },
+      model: { complete: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" }) },
+      runners: { get: () => { throw new Error("no"); }, has: () => false },
+      hooks: { get: () => { throw new Error("no"); }, has: () => false, ids: () => [] },
+      contextManager: { prepare: async (m: unknown) => m },
+      cancelStore: new MemoryCancelStore(), agentDefinitions: new Map(), toolSources: new Map(),
+    } as unknown as Parameters<typeof createGatewayApp>[0]["runtime"];
+
+    // Auth ENABLED — the UI shell must still load (registered before auth).
+    process.env.RENDER_AGENTS_API_KEY = "test-key";
+    const app = createGatewayApp({ runtime });
+
+    const shell = await app.request("/ui");
+    expect(shell.status).toBe(200);
+    expect(shell.headers.get("content-type")).toContain("text/html");
+    expect(await shell.text()).toContain("trace viewer");
+
+    const js = await app.request("/ui/trace.js");
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("javascript");
+    expect(await js.text()).toContain("buildSpanTree");
+
+    // SPA fallback for client routes.
+    expect((await app.request("/ui/runs/abc")).status).toBe(200);
+
+    // Data routes still require the key, but accept it via ?key= (for EventSource).
+    expect((await app.request("/runs")).status).toBe(401);
+    expect((await app.request("/runs?key=test-key")).status).toBe(200);
+    delete process.env.RENDER_AGENTS_API_KEY;
+  });
+});
