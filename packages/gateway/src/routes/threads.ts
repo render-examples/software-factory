@@ -8,6 +8,7 @@ export interface ThreadRouteDeps {
   store: RunStore;
   workflows: Map<string, WorkflowDefinition>;
   defaultWorkflow?: string;
+  resume?: (runId: string) => Promise<unknown>;
 }
 
 /**
@@ -16,7 +17,7 @@ export interface ThreadRouteDeps {
  */
 export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
-  const { store, workflows, defaultWorkflow } = deps;
+  const { store, workflows, defaultWorkflow, resume } = deps;
 
   // POST /threads — create a thread
   app.post("/threads", async (c) => {
@@ -93,13 +94,16 @@ export function threadRoutes(deps: ThreadRouteDeps) {
         return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
       }
 
-      // Deliver into the paused run (awaiting input)
+      // Deliver into the paused run (awaiting input), then re-drive it.
       await store.events.append(
         buildEventRecord(activeRun.id, {
           type: "message.user",
           content: [{ type: "text", text: body.content }],
         }),
       );
+      if (resume) {
+        try { await resume(activeRun.id); } catch (err) { console.error(`resume(${activeRun.id}) failed`, err); }
+      }
 
       return c.json({ runId: activeRun.id, delivered: true }, 200);
     }
