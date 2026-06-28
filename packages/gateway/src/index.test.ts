@@ -1,7 +1,27 @@
 import { describe, it, expect } from "vitest";
 import type { ConnectorSpec, ConnectorContext, WebhookMatch } from "../src/index.js";
 import { createGatewayApp } from "../src/index.js";
-import { createMemoryStore } from "@render-agents/store";
+import type { GatewayOptions } from "../src/index.js";
+import { createMemoryStore, MemoryCancelStore, type RunStore } from "@render-agents/store";
+
+/**
+ * Build a minimal `AgentRuntime` satisfying the full interface for route tests.
+ * Routes only touch `store` (+ optional cancelStore), but the type requires the
+ * complete composition root, so we supply no-op stand-ins for the rest.
+ */
+function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
+  return {
+    store,
+    tracer: { onStart: () => {}, onEnd: () => {} },
+    model: { complete: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" }) },
+    runners: { get: () => { throw new Error("no runner"); }, has: () => false },
+    hooks: { get: () => { throw new Error("no hook"); }, has: () => false, ids: () => [] },
+    contextManager: { prepare: async (m) => m },
+    cancelStore: new MemoryCancelStore(),
+    agentDefinitions: new Map(),
+    toolSources: new Map(),
+  };
+}
 
 describe("@render-agents/gateway", () => {
   it("ConnectorSpec type is assignable", () => {
@@ -19,15 +39,7 @@ describe("@render-agents/gateway", () => {
     const store = createMemoryStore();
     await store.init();
     const app = createGatewayApp({
-      runtime: {
-        store,
-        tracer: { onStart: () => {}, onEnd: () => {} },
-        model: { complete: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" }) },
-        runners: { get: () => { throw new Error("no runner"); }, has: () => false },
-        hooks: { get: () => { throw new Error("no hook"); }, has: () => false, ids: () => [] },
-        contextManager: { prepare: async (m) => m },
-        toolSources: new Map(),
-      },
+      runtime: makeTestRuntime(store),
       disableAuth: true,
     });
 
@@ -41,15 +53,7 @@ describe("@render-agents/gateway", () => {
     const store = createMemoryStore();
     await store.init();
     const app = createGatewayApp({
-      runtime: {
-        store,
-        tracer: { onStart: () => {}, onEnd: () => {} },
-        model: { complete: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" }) },
-        runners: { get: () => { throw new Error("no runner"); }, has: () => false },
-        hooks: { get: () => { throw new Error("no hook"); }, has: () => false, ids: () => [] },
-        contextManager: { prepare: async (m) => m },
-        toolSources: new Map(),
-      },
+      runtime: makeTestRuntime(store),
       disableAuth: true,
     });
 
@@ -61,15 +65,7 @@ describe("@render-agents/gateway", () => {
     const store = createMemoryStore();
     await store.init();
     const app = createGatewayApp({
-      runtime: {
-        store,
-        tracer: { onStart: () => {}, onEnd: () => {} },
-        model: { complete: async () => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" }) },
-        runners: { get: () => { throw new Error("no runner"); }, has: () => false },
-        hooks: { get: () => { throw new Error("no hook"); }, has: () => false, ids: () => [] },
-        contextManager: { prepare: async (m) => m },
-        toolSources: new Map(),
-      },
+      runtime: makeTestRuntime(store),
       disableAuth: true,
     });
 
