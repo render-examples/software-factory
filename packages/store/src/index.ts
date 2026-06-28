@@ -22,5 +22,6 @@ export {
 } from "./memory-store.js";
 export { PgEventLogStore, PgRunStore, createPgStore } from "./pg/postgres-store.js";
 export { getPool, createPool, closeSharedPool, applyMigrations } from "./pg/index.js";
+export { PgCancelStore, MemoryCancelStore } from "./pg/cancel-store.js";
 export type { PoolConfig } from "./pg/index.js";
 export { createStore } from "./create-store.js";
