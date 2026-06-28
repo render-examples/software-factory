@@ -1,6 +1,6 @@
 # Sprint 21 — Scaffolder (`create-render-agent`) + Default Example
 
-**Status:** DRAFT
+**Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
 **Depends on:** Wave 3 (a complete, deployable project shape to generate)
 **Unblocks:** —

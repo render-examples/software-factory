@@ -1,6 +1,6 @@
 # Sprint 22 — Dev-Mode Trace Viewer
 
-**Status:** DRAFT
+**Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
 **Depends on:** 10 (span projections), 16 (gateway read routes), 17 (SSE)
 **Unblocks:** —
