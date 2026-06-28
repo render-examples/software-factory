@@ -6,6 +6,10 @@ import { apiKeyAuth } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
 import { threadRoutes } from "./routes/threads.js";
+import { hitlRoutes } from "./routes/hitl.js";
+import { oauthRoutes, type OAuthProviderConfig } from "./routes/oauth.js";
+import { webhookRoutes, type WebhookAdapter } from "./routes/webhooks.js";
+import type { ConnectorSpec } from "./connector.js";
 
 export interface GatewayOptions {
   runtime: AgentRuntime;
@@ -13,6 +17,10 @@ export interface GatewayOptions {
   cancelStore?: CancelStore;
   port?: number;
   defaultWorkflow?: string;
+  baseUrl?: string;
+  oauthProviders?: Map<string, OAuthProviderConfig>;
+  webhooks?: Map<string, WebhookAdapter>;
+  connectors?: Map<string, ConnectorSpec>;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
 }
@@ -33,16 +41,38 @@ export function createGatewayApp(opts: GatewayOptions) {
     app.use("/*", apiKeyAuth());
   }
 
-  // Core run routes
   const store = runtime.store;
   const cancel = cancelStore ?? { requestCancel: async () => {}, isCancelled: async () => false, clearCancel: async () => {} };
-  app.route("/", runRoutes({ store, cancelStore: cancel, workflows: workflows ?? new Map() }));
+  const wf = workflows ?? new Map();
+
+  // Core run routes
+  app.route("/", runRoutes({ store, cancelStore: cancel, workflows: wf }));
 
   // SSE streaming routes
   app.route("/", streamRoutes({ store }));
 
   // Thread routes
-  app.route("/", threadRoutes({ store, workflows: workflows ?? new Map(), defaultWorkflow: opts.defaultWorkflow }));
+  app.route("/", threadRoutes({ store, workflows: wf, defaultWorkflow: opts.defaultWorkflow }));
+
+  // HITL routes (approvals + resume)
+  app.route("/", hitlRoutes({ store }));
+
+  // OAuth routes
+  if (opts.oauthProviders && opts.oauthProviders.size > 0) {
+    app.route("/", oauthRoutes({
+      providers: opts.oauthProviders,
+      baseUrl: opts.baseUrl ?? `http://localhost:${opts.port ?? 3000}`,
+    }));
+  }
+
+  // Webhook + connector routes
+  if ((opts.webhooks && opts.webhooks.size > 0) || (opts.connectors && opts.connectors.size > 0)) {
+    app.route("/", webhookRoutes({
+      webhooks: opts.webhooks ?? new Map(),
+      connectors: opts.connectors ?? new Map(),
+      workflows: wf,
+    }));
+  }
 
   return app;
 }
