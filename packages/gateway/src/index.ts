@@ -10,3 +10,6 @@ export { oauthRoutes, buildRefresher, encryptToken, decryptToken } from "./route
 export type { OAuthProviderConfig, OAuthRouteDeps } from "./routes/oauth.js";
 export { webhookRoutes } from "./routes/webhooks.js";
 export type { WebhookAdapter } from "./routes/webhooks.js";
+export { uiRoutes } from "./routes/ui.js";
+export { buildSpanTree, flattenTree, perAgentCost, formatCost, formatDuration } from "./ui/trace.js";
+export type { SpanLike, SpanNode } from "./ui/trace.js";

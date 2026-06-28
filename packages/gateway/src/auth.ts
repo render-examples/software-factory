@@ -14,11 +14,18 @@ export function apiKeyAuth(envKey = "RENDER_AGENTS_API_KEY") {
     }
 
     const header = c.req.header("authorization");
-    if (!header || !header.startsWith("Bearer ")) {
-      return c.json({ error: "Missing or malformed Authorization header" }, 401);
+    let provided: string | undefined;
+    if (header && header.startsWith("Bearer ")) {
+      provided = header.slice(7);
+    } else {
+      // EventSource (SSE) can't set headers — accept a `?key=` query param as a
+      // fallback. Used by the dev trace viewer's live view.
+      provided = c.req.query("key");
     }
 
-    const provided = header.slice(7);
+    if (!provided) {
+      return c.json({ error: "Missing or malformed Authorization header" }, 401);
+    }
     if (!constantTimeEqual(expected, provided)) {
       return c.json({ error: "Invalid API key" }, 401);
     }

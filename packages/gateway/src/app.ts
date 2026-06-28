@@ -10,6 +10,7 @@ import { threadRoutes } from "./routes/threads.js";
 import { hitlRoutes } from "./routes/hitl.js";
 import { oauthRoutes, buildRefresher, type OAuthProviderConfig } from "./routes/oauth.js";
 import { webhookRoutes, type WebhookAdapter } from "./routes/webhooks.js";
+import { uiRoutes } from "./routes/ui.js";
 import type { ConnectorSpec } from "./connector.js";
 
 export interface GatewayOptions {
@@ -27,6 +28,8 @@ export interface GatewayOptions {
    * the provided runtime. Injectable for tests / a workflow-service dispatch.
    */
   resume?: (runId: string) => Promise<unknown>;
+  /** Serve the dev-mode trace viewer at `/ui` (default true). */
+  serveUI?: boolean;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
 }
@@ -42,7 +45,13 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Health check (no auth)
   app.get("/health", (c) => c.json({ status: "ok" }));
 
-  // Auth middleware on all routes except health
+  // Dev trace viewer shell (no auth on the static shell; data fetches carry the
+  // API key). Registered before the auth middleware so it stays unauthenticated.
+  if (opts.serveUI !== false) {
+    app.route("/", uiRoutes());
+  }
+
+  // Auth middleware on all routes except health + the UI shell
   if (!opts.disableAuth) {
     app.use("/*", apiKeyAuth());
   }
