@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { RunStore } from "@render-agents/store";
+import type { RunStore, CancelStore, Tracer } from "@render-agents/store";
+import { buildEventRecord } from "@render-agents/store";
 import type {
   AgentDefinition,
   AgentInput,
@@ -7,9 +8,15 @@ import type {
   RenderPlan,
   ModelClient,
   ContextManager,
+  DelegationLimits,
+  ToolSource,
 } from "@render-agents/engine";
-import { InProcessRunContext } from "@render-agents/engine";
+import { noopTracer } from "@render-agents/engine";
 import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry } from "./runtime.js";
+import { runAgentInProcess } from "./run-in-process.js";
+
+/** Reserved step name used to memoize a task's output for idempotent re-dispatch. */
+const TASK_OUTPUT_STEP = "__task_output__";
 
 /**
  * Compute a deterministic dispatch key from the caller's runId, the
@@ -46,8 +53,11 @@ export interface InProcessDispatcherOptions {
   runners: RunnerRegistry;
   model: ModelClient;
   contextManager: ContextManager;
-  toolSources: Map<string, import("@render-agents/engine").ToolSource>;
+  cancelStore: CancelStore;
+  toolSources: Map<string, ToolSource>;
   getDefinition: (name: string) => AgentDefinition | undefined;
+  tracer?: Tracer;
+  delegation?: Partial<DelegationLimits>;
 }
 
 /**
@@ -64,8 +74,12 @@ export class InProcessDispatcher implements TaskDispatcher {
   async dispatch(agentName: string, input: AgentInput, dispatchOpts: DispatchOptions): Promise<AgentOutput> {
     assertSerializable(input, `Task input for agent "${agentName}"`);
 
-    // Idempotent re-dispatch: check if we already have a completed child run
-    const existing = await this.lookupExistingResult(dispatchOpts.idempotencyKey);
+    const runId = dispatchOpts.runId;
+
+    // Idempotent re-dispatch: a previously completed run for this (deterministic)
+    // runId memoized its output as a reserved step — replay returns it instead
+    // of re-executing the child.
+    const existing = await this.lookupExistingResult(runId);
     if (existing) return existing;
 
     const definition = this.opts.getDefinition(agentName);
@@ -76,40 +90,46 @@ export class InProcessDispatcher implements TaskDispatcher {
       );
     }
 
-    const runId = dispatchOpts.runId;
-    const runner = this.opts.runners.get(definition.runner ?? "default");
-    const ctx = new InProcessRunContext({
-      runId,
+    const result = await runAgentInProcess(definition, input, {
       store: this.opts.store,
-      tracer: { onStart: () => {}, onEnd: () => {} },
-      model: definition.model,
-      agentName: definition.name,
+      tracer: this.opts.tracer ?? noopTracer,
+      runners: this.opts.runners,
       contextManager: this.opts.contextManager,
-      signal: dispatchOpts.signal ?? new AbortController().signal,
+      cancelStore: this.opts.cancelStore,
+      toolSources: this.opts.toolSources,
+      getDefinition: this.opts.getDefinition,
+      childDispatcher: this,
+      delegation: this.opts.delegation,
+    }, {
+      runId,
       parentSpanId: dispatchOpts.parentSpanId,
       userId: dispatchOpts.userId,
       depth: (dispatchOpts.depth ?? 0) + 1,
-      maxContextTokens: definition.context?.maxContextTokens,
-      toolSources: this.opts.toolSources,
+      signal: dispatchOpts.signal,
     });
 
-    const result = await runner.run(definition, input, ctx);
     assertSerializable(result, `Task output from agent "${agentName}"`);
+
+    // Memoize for idempotent re-dispatch (durable, event-sourced).
+    await this.opts.store.events.append(
+      buildEventRecord(
+        runId,
+        { type: "step.completed", name: TASK_OUTPUT_STEP, result },
+        { agentName: definition.name },
+      ),
+    );
     return result;
   }
 
   /**
-   * Look up a previously completed child run by its dispatch idempotency key.
-   * Returns the AgentOutput if found, undefined otherwise.
+   * Return the memoized output of a prior completed dispatch for this runId, if
+   * any. The output is persisted as a reserved `step.completed` event, so a
+   * re-dispatch (handler replay after crash/pause) short-circuits to the same
+   * result rather than re-running the child.
    */
-  private async lookupExistingResult(idempotencyKey: string): Promise<AgentOutput | undefined> {
-    // The idempotency key for task dispatch is stored as a step result
-    // in the parent run's workflow_steps projection (key = dispatch key).
-    // This allows re-execution to short-circuit.
-    // For now, return undefined — full memoization requires the parent
-    // run context, which is wired in Sprint 12 (ctx.step).
-    void idempotencyKey;
-    return undefined;
+  private async lookupExistingResult(runId: string): Promise<AgentOutput | undefined> {
+    const memo = await this.opts.store.getStepResult(runId, TASK_OUTPUT_STEP);
+    return memo ? (memo.value as AgentOutput) : undefined;
   }
 }
 
@@ -211,23 +231,26 @@ export async function agentTaskHandler(
     );
   }
 
-  const runner = runtime.runners.get(definition.runner ?? "default");
-  const ctx = new InProcessRunContext({
-    runId,
+  return runAgentInProcess(definition, input, {
     store: runtime.store,
     tracer: runtime.tracer,
-    model: definition.model,
-    agentName: definition.name,
+    runners: runtime.runners,
     contextManager: runtime.contextManager,
-    signal: new AbortController().signal,
+    cancelStore: runtime.cancelStore,
+    toolSources: runtime.toolSources,
+    getDefinition,
+    childDispatcher: runtime.dispatcher ?? throwNoDispatcher(),
+    delegation: runtime.delegation,
+  }, {
+    runId,
     parentSpanId,
     userId,
     depth: depth + 1,
-    maxContextTokens: definition.context?.maxContextTokens,
-    toolSources: runtime.toolSources,
   });
+}
 
-  return runner.run(definition, input, ctx);
+function throwNoDispatcher(): never {
+  throw new Error("agentTaskHandler: runtime has no dispatcher configured for subagent delegation");
 }
 
 // --- Plan registration helpers ---

@@ -19,14 +19,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_events_seq ON run_events(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(run_id, type);
 
--- Gap-free seq allocation per run. Called inside the append transaction
--- to serialize concurrent writers on the same run.
+-- Gap-free seq allocation per run. Called inside the append transaction.
+-- A transaction-scoped advisory lock keyed on the run id genuinely serializes
+-- concurrent writers on the same run (MAX(seq)+1 alone races under READ
+-- COMMITTED); the lock auto-releases at COMMIT/ROLLBACK. The unique index on
+-- (run_id, seq) remains a correctness backstop.
 CREATE OR REPLACE FUNCTION next_event_seq(p_run_id TEXT) RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
     next_val BIGINT;
 BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('render-agents:run_seq'), hashtext(p_run_id));
     SELECT COALESCE(MAX(seq), 0) + 1 INTO next_val
     FROM run_events
     WHERE run_id = p_run_id;

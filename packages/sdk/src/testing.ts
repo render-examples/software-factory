@@ -14,14 +14,14 @@ export function mockModel(
 }
 
 /**
- * In-memory runtime for tests: memory store, provided/mock model, and no
- * dispatcher (so `.task()` falls back to `.run()`). Runs the *real* DefaultRunner
- * — only the model and store are swapped.
+ * In-memory runtime for tests: memory store, provided/mock model, and the
+ * default in-process dispatcher (so `.task()` runs in-process with the same
+ * observable behavior as `.run()`). Runs the *real* DefaultRunner — only the
+ * model and store are swapped.
  */
 export function createTestRuntime(opts?: Partial<CreateRuntimeOptions>): Promise<AgentRuntime> {
   return createRuntime({
     ...opts,
     store: opts?.store ?? createMemoryStore(),
-    dispatcher: undefined,
   });
 }

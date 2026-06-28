@@ -7,9 +7,10 @@ import type {
   ToolResult,
   Logger,
   Tracer,
+  SpanKind,
   RunStore,
 } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
+import { buildEventRecord, idempotencyKey } from "@render-agents/store";
 import type { ModelSpec } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
@@ -79,7 +80,9 @@ export class InProcessRunContext implements RunContext {
   private toolEnv?: ToolEnvironment;
   private readonly approvedToolCallIds: ReadonlySet<string>;
 
-  private readonly agentSpanId = randomUUID();
+  // Deterministic so resume/replay reuses the same agent span id and the
+  // terminal run.completed/failed/cancelled close the original span.
+  private readonly agentSpanId: string;
   private readonly toolSpanIds = new Map<string, string>();
   private readonly stepSpanIds = new Map<string, string>();
 
@@ -100,6 +103,7 @@ export class InProcessRunContext implements RunContext {
     this.tools = opts.tools ?? new Map();
     this.toolSources = opts.toolSources ?? new Map();
     this.approvedToolCallIds = opts.approvedToolCallIds ?? new Set();
+    this.agentSpanId = idempotencyKey(opts.runId, `agent-span:${opts.agentName}`);
 
     if (opts.cancelStore) {
       const cancelStore = opts.cancelStore;
@@ -122,6 +126,61 @@ export class InProcessRunContext implements RunContext {
       parentSpanId: span?.parentSpanId,
     });
     await this.store.events.append(record);
+    if (span) this.notifyTracer(event, span);
+  }
+
+  /**
+   * Notify the (optional) external tracer as a pure observer. Span data is still
+   * sourced from the event-log projections; this lets a custom tracer (e.g. an
+   * OTel exporter) see every span without the loop emitting through it. The
+   * default `noopTracer` does nothing.
+   */
+  private notifyTracer(event: RunEvent, span: { spanId: string; parentSpanId?: string }): void {
+    const kind = spanKindOf(event.type);
+    if (!kind) return;
+    const info = { spanId: span.spanId, parentSpanId: span.parentSpanId, runId: this.runId, name: this.agentName, kind };
+    try {
+      switch (event.type) {
+        case "run.started":
+          this.tracer.onStart({ ...info, name: this.agentName }, event.input);
+          break;
+        case "run.completed":
+          this.tracer.onEnd(info, { ok: true, output: event.result });
+          break;
+        case "run.failed":
+          this.tracer.onEnd(info, { ok: false, error: event.error });
+          break;
+        case "run.cancelled":
+          this.tracer.onEnd(info, { ok: false, error: "cancelled" });
+          break;
+        case "tool.called":
+          this.tracer.onStart({ ...info, name: event.name }, event.input);
+          break;
+        case "tool.result":
+          this.tracer.onEnd(
+            { ...info, name: event.name },
+            event.result.isError ? { ok: false, error: event.result.content } : { ok: true, output: event.result.content },
+          );
+          break;
+        case "step.started":
+          this.tracer.onStart({ ...info, name: event.name }, undefined);
+          break;
+        case "step.completed":
+          this.tracer.onEnd({ ...info, name: event.name }, { ok: true, output: event.result });
+          break;
+        case "llm.call":
+          this.tracer.onStart({ ...info, name: event.model, kind: "llm" }, undefined);
+          this.tracer.onEnd({ ...info, name: event.model, kind: "llm" }, { ok: true, output: { usage: event.usage, costUsd: event.costUsd } });
+          break;
+      }
+    } catch {
+      // A misbehaving observer tracer must never break the run.
+    }
+  }
+
+  async hasStarted(): Promise<boolean> {
+    const events = await this.store.events.read(this.runId);
+    return events.some((e) => e.payload.type === "run.started");
   }
 
   async messages(agentName: string): Promise<Message[]> {
@@ -159,42 +218,81 @@ export class InProcessRunContext implements RunContext {
   }
 
   /**
-   * HITL gate. Three modes:
-   * 1. Pre-approved (resume path): tool was previously approved, skip gate
-   * 2. Auto-approve (default): emit `approval.auto`, auditable trace
-   * 3. Strict: prompt on TTY or throw; production pauses via RunPaused
+   * HITL gate, resolved by replay against the event log (D7). The approval id is
+   * deterministic per `(runId, toolCallId)` so a resumed run looks up the same
+   * request:
+   * 1. Already resolved in the log → return that decision (approved/denied).
+   * 2. Pre-approved tool-call id (in-process resume convenience) → approve.
+   * 3. Auto-approve (default) → emit `approval.auto`, auditable.
+   * 4. Strict + already requested (pending) → re-pause without a duplicate request.
+   * 5. Strict + first encounter → emit `approval.requested` + `run.paused`, pause.
+   * 6. Strict + interactive TTY → prompt directly.
    */
-  async requestApproval(toolName: string, input: unknown): Promise<ApprovalResult> {
-    // Resume path: if this tool call was pre-approved, skip entirely
-    const approvalId = randomUUID();
+  async requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult> {
+    const approvalId = idempotencyKey(this.runId, `approval:${toolCallId}`);
+
+    // 1. Resolved already? Honor the recorded decision.
+    const state = await this.approvalState(approvalId);
+    if (state.resolved) {
+      return state.approved ? { approved: true } : { approved: false, reason: state.reason };
+    }
+
+    // 2. Pre-approved tool call (resume convenience).
+    if (this.approvedToolCallIds.has(toolCallId)) {
+      return { approved: true };
+    }
 
     const raw = this.envFn(STRICT_APPROVAL_ENV);
     const strict = raw !== undefined && raw !== "" && raw !== "0" && raw.toLowerCase() !== "false";
 
+    // 3. Auto-approve (default).
     if (!strict) {
       await this.emit({ type: "approval.auto", toolName });
       return { approved: true };
     }
 
-    // Production/strict path: emit approval.requested, pause the run
-    if (!process.stdin?.isTTY) {
+    // 6. Interactive TTY prompt (only when not already requested).
+    if (process.stdin?.isTTY && !state.requested) {
+      const approved = await promptYesNo(`Approve tool call "${toolName}"? (y/n) `);
+      if (approved) {
+        await this.emit({ type: "approval.auto", toolName });
+        return { approved: true };
+      }
       await this.emit({
-        type: "approval.requested",
+        type: "approval.resolved",
         approvalRequestId: approvalId,
-        toolName,
-        input,
+        approved: false,
+        reason: "denied at prompt",
       });
-      await this.emit({ type: "run.paused", reason: "approval", pendingApprovalIds: [approvalId] });
-      return { status: "pending", approvalRequestId: approvalId };
+      return { approved: false, reason: "denied at prompt" };
     }
 
-    // Interactive TTY: prompt directly
-    const approved = await promptYesNo(`Approve tool call "${toolName}"? (y/n) `);
-    if (approved) {
-      await this.emit({ type: "approval.auto", toolName });
-      return { approved: true };
+    // 4./5. Non-interactive: request once (if not already), then pause.
+    if (!state.requested) {
+      await this.emit({ type: "approval.requested", approvalRequestId: approvalId, toolName, input });
     }
-    return { approved: false, reason: "denied at prompt" };
+    await this.emit({ type: "run.paused", reason: "approval", pendingApprovalIds: [approvalId] });
+    return { status: "pending", approvalRequestId: approvalId };
+  }
+
+  /** Fold approval events from the log for a specific approval id. */
+  private async approvalState(approvalId: string): Promise<{ requested: boolean; resolved: boolean; approved: boolean; reason?: string }> {
+    const events = await this.store.events.read(this.runId);
+    let requested = false;
+    let resolved = false;
+    let approved = false;
+    let reason: string | undefined;
+    for (const e of events) {
+      const p = e.payload;
+      if (p.type === "approval.requested" && p.approvalRequestId === approvalId) {
+        requested = true;
+      } else if (p.type === "approval.resolved" && p.approvalRequestId === approvalId) {
+        resolved = true;
+        approved = p.approved;
+        reason = p.reason;
+      }
+    }
+    return { requested, resolved, approved, reason };
   }
 
   async awaitInput(): Promise<ContentBlock[]> {
@@ -233,6 +331,26 @@ export class InProcessRunContext implements RunContext {
       default:
         return undefined;
     }
+  }
+}
+
+function spanKindOf(type: RunEvent["type"]): SpanKind | undefined {
+  switch (type) {
+    case "run.started":
+    case "run.completed":
+    case "run.failed":
+    case "run.cancelled":
+      return "agent";
+    case "tool.called":
+    case "tool.result":
+      return "tool";
+    case "step.started":
+    case "step.completed":
+      return "step";
+    case "llm.call":
+      return "llm";
+    default:
+      return undefined;
   }
 }
 

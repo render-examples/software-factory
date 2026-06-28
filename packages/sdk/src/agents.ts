@@ -6,10 +6,10 @@ import type {
   RunOptions,
   TaskOptions,
 } from "@render-agents/engine";
-import { InProcessRunContext } from "@render-agents/engine";
 import { idempotencyKey } from "@render-agents/store";
 import type { AgentRuntime } from "./runtime.js";
 import { createRuntime } from "./runtime.js";
+import { runAgentInProcess } from "./run-in-process.js";
 import { loadAgentsFromDir } from "./loader/load-agents.js";
 
 export interface AgentSet {
@@ -39,6 +39,10 @@ function bindAgentSet(definitions: AgentDefinition[], runtime: AgentRuntime): Ag
   const byName = new Map<string, AgentDefinition>();
   for (const def of definitions) byName.set(def.name, def);
 
+  // Publish the loaded definitions to the runtime so the dispatcher and
+  // subagent delegation can resolve agents by name.
+  for (const def of definitions) runtime.agentDefinitions.set(def.name, def);
+
   const getOne = (id: string): Agent => {
     const def = byName.get(id);
     if (!def) throw new Error(`Agent "${id}" not found`);
@@ -59,6 +63,11 @@ function bindAgentSet(definitions: AgentDefinition[], runtime: AgentRuntime): Ag
 }
 
 function bindAgent(definition: AgentDefinition, runtime: AgentRuntime): Agent {
+  // Ensure the definition is resolvable for subagent/dispatch lookups even when
+  // an agent is constructed directly (not via loadAgents).
+  if (!runtime.agentDefinitions.has(definition.name)) {
+    runtime.agentDefinitions.set(definition.name, definition);
+  }
   return {
     name: definition.name,
     definition,
@@ -88,19 +97,45 @@ function runInProcess<T>(
   runtime: AgentRuntime,
   opts?: RunOptions,
 ): Promise<AgentOutput<T>> {
-  const runId = opts?.runId ?? randomUUID();
-  const runner = runtime.runners.get(definition.runner ?? "default");
-  const ctx = new InProcessRunContext({
-    runId,
+  return runAgentInProcess<T>(definition, input, {
     store: runtime.store,
     tracer: runtime.tracer,
-    model: definition.model,
-    agentName: definition.name,
+    runners: runtime.runners,
     contextManager: runtime.contextManager,
-    signal: opts?.signal ?? new AbortController().signal,
-    parentSpanId: opts?.parentSpanId,
-    maxContextTokens: definition.context?.maxContextTokens,
+    cancelStore: runtime.cancelStore,
     toolSources: runtime.toolSources,
+    getDefinition: (name) => runtime.agentDefinitions.get(name),
+    childDispatcher: runtime.dispatcher ?? createInlineDispatcher(runtime),
+    delegation: runtime.delegation,
+  }, {
+    runId: opts?.runId,
+    parentSpanId: opts?.parentSpanId,
+    signal: opts?.signal,
+    approvedToolCallIds: opts?.approvedToolCallIds,
   });
-  return runner.run(definition, input, ctx) as Promise<AgentOutput<T>>;
+}
+
+/**
+ * Fallback dispatcher for subagent children when a runtime somehow has no
+ * dispatcher configured. createRuntime always installs one, so this is only a
+ * safety net for hand-assembled runtimes.
+ */
+function createInlineDispatcher(runtime: AgentRuntime) {
+  return {
+    dispatch: (name: string, input: AgentInput, dOpts: { runId: string; parentSpanId?: string; userId?: string; depth?: number; signal?: AbortSignal }) => {
+      const def = runtime.agentDefinitions.get(name);
+      if (!def) throw new Error(`Agent "${name}" not found in the runtime`);
+      return runAgentInProcess(def, input, {
+        store: runtime.store,
+        tracer: runtime.tracer,
+        runners: runtime.runners,
+        contextManager: runtime.contextManager,
+        cancelStore: runtime.cancelStore,
+        toolSources: runtime.toolSources,
+        getDefinition: (n) => runtime.agentDefinitions.get(n),
+        childDispatcher: createInlineDispatcher(runtime),
+        delegation: runtime.delegation,
+      }, { runId: dOpts.runId, parentSpanId: dOpts.parentSpanId, userId: dOpts.userId, depth: dOpts.depth, signal: dOpts.signal });
+    },
+  };
 }

@@ -101,6 +101,12 @@ export interface RunOptions {
   signal?: AbortSignal;
   runId?: string;
   parentSpanId?: string;
+  /**
+   * Tool-call ids to treat as pre-approved when resuming a paused run, bypassing
+   * the approval gate for those calls. Approvals already recorded in the event
+   * log are honored automatically and don't need to be listed here.
+   */
+  approvedToolCallIds?: ReadonlySet<string>;
 }
 
 export type TaskOptions = RunOptions;

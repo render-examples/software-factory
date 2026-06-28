@@ -1,6 +1,8 @@
 import type { RunEvent, Message } from "@render-agents/store";
 import type { ModelSpec } from "./agent.js";
 
+export type { ModelSpec };
+
 export interface ContextPrepareContext {
   readonly model: ModelSpec;
   readonly agentName: string;
@@ -15,7 +17,8 @@ export interface ContextManager {
 export interface CompactionStrategy {
   readonly name: string;
   shouldCompact(messages: Message[], usedTokens: number, maxTokens: number): boolean;
-  compact(messages: Message[]): Promise<{ messages: Message[]; summary: string }>;
+  /** `modelSpec` selects the provider/model used for summarization (defaults to a small tier). */
+  compact(messages: Message[], modelSpec?: ModelSpec): Promise<{ messages: Message[]; summary: string }>;
 }
 
 /**

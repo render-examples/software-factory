@@ -10,6 +10,7 @@ import type {
   ToolContext,
   OAuthTokens,
 } from "./tool.js";
+import { connectMcp } from "./mcp-client.js";
 
 /**
  * `defineTool` produces a single-tool source. The model-facing name is the
@@ -64,25 +65,35 @@ export function defineToolSource(id: string, specs: DefineToolSpec[]): ToolSourc
 
 /**
  * `defineMcpSource` produces an MCP-backed tool source. On `resolve`, it connects
- * to the MCP server (stdio or http), fetches the tool list, and exposes them as
- * `sourceId__toolName`.
- *
- * Wave 1 MVP: stdio/http connection via `@modelcontextprotocol/sdk` or a minimal
- * client. Until the MCP SDK is wired (a separate dep we defer), this returns a
- * stub that errors clearly at mount time.
+ * to the MCP server (stdio or http), performs the initialize handshake, fetches
+ * the tool list, and exposes each as `sourceId__toolName`. Tool invocations are
+ * proxied over JSON-RPC `tools/call`; `close()` tears down the connection.
  */
 export function defineMcpSource(spec: DefineMcpSpec): ToolSource {
   const id = spec.name ?? "mcp";
   return {
     id,
     async resolve(_env: Environment): Promise<ResolvedSource> {
-      // TODO(sprint-07): wire real MCP client transport (stdio/http).
-      // For now, we provide the structure so the authoring contract works;
-      // the actual MCP connection is a follow-up once the MCP SDK dep lands.
-      throw new Error(
-        `MCP source "${id}" cannot be mounted yet: MCP transport is not implemented. ` +
-          `Use defineTool for local tools, or add MCP transport support.`,
-      );
+      const connection = await connectMcp(spec);
+      let descriptors;
+      try {
+        descriptors = await connection.listTools();
+      } catch (err) {
+        await connection.close().catch(() => {});
+        throw err;
+      }
+
+      const tools: Tool[] = descriptors.map((d) => ({
+        name: `${id}__${d.name}`,
+        description: d.description ?? `MCP tool ${d.name}`,
+        inputSchema: d.inputSchema ?? { type: "object" },
+        async invoke(input: unknown): Promise<ToolResult> {
+          const result = await connection.callTool(d.name, input);
+          return { content: result.content, isError: result.isError };
+        },
+      }));
+
+      return { tools, close: () => connection.close() };
     },
   };
 }

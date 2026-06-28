@@ -1,13 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { createRuntime, loadAgents, workflow, defineTool, defineMcpSource, defineHook, idempotencyKey } from "../src/index.js";
+import { createRuntime, loadAgents, workflow, defineTool, defineMcpSource, defineHook, idempotencyKey, InProcessDispatcher } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
 
 describe("@render-agents/sdk", () => {
-  it("createRuntime returns an in-memory, in-process-fallback runtime", async () => {
+  it("createRuntime returns an in-memory runtime with an in-process dispatcher", async () => {
     const runtime = await createRuntime();
     expect(runtime.store).toBeDefined();
     expect(runtime.runners.has("default")).toBe(true);
-    expect(runtime.dispatcher).toBeUndefined();
+    // Local fallback is a functional in-process dispatcher (not the dead-code
+    // undefined of earlier waves): `.task()` runs through it with idempotent
+    // re-dispatch and identical observable behavior to production.
+    expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
   });
 
   it("loadAgents returns an AgentSet", async () => {
@@ -26,7 +29,7 @@ describe("@render-agents/sdk", () => {
     expect(source.id).toBe("test");
   });
 
-  it("defineMcpSource returns a ToolSource (mount deferred)", () => {
+  it("defineMcpSource returns a ToolSource (connects on mount)", () => {
     const source = defineMcpSource({ transport: "stdio" });
     expect(source.id).toBe("mcp");
   });
@@ -62,9 +65,9 @@ describe("@render-agents/sdk/testing", () => {
     expect(result.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
-  it("createTestRuntime builds a memory runtime with no dispatcher", async () => {
+  it("createTestRuntime builds a memory runtime with an in-process dispatcher", async () => {
     const runtime = await createTestRuntime();
-    expect(runtime.dispatcher).toBeUndefined();
+    expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
     expect(runtime.runners.has("default")).toBe(true);
   });
 });

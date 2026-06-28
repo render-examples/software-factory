@@ -37,7 +37,11 @@ export class DefaultRunner implements AgentRunner {
   ) {}
 
   async run(agent: AgentDefinition, input: AgentInput, ctx: RunContext): Promise<AgentOutput> {
-    const mounted = await ctx.mountTools(agent.tools);
+    // Declared tools plus, if the agent delegates, the `subagents__<name>`
+    // delegation tools (resolved from the "subagents" source mounted by the
+    // run context when subagents are present).
+    const subagentToolIds = (agent.subagents ?? []).map((name) => `subagents__${name}`);
+    const mounted = await ctx.mountTools([...agent.tools, ...subagentToolIds]);
     const skillTool = buildSkillTool(agent.skills);
     const allTools = skillTool ? [...mounted.tools, skillTool] : mounted.tools;
     const toolSchemas: ToolSchema[] = allTools.map((t) => ({
@@ -54,8 +58,12 @@ export class DefaultRunner implements AgentRunner {
     const budget = resolveBudget(agent.budget);
     const usage = { inputTokens: 0, outputTokens: 0 };
 
-    await ctx.emit({ type: "run.started", input, agentVersion: agent.version });
-    await ctx.emit({ type: "message.user", content: inputToContent(input) });
+    // Resume support (D7): a run already in the log is being re-executed; do not
+    // re-emit its opening events (that would duplicate the user turn).
+    if (!(await ctx.hasStarted())) {
+      await ctx.emit({ type: "run.started", input, agentVersion: agent.version });
+      await ctx.emit({ type: "message.user", content: inputToContent(input) });
+    }
 
     let iterations = 0;
     let tokensUsed = 0;
@@ -79,6 +87,22 @@ export class DefaultRunner implements AgentRunner {
         }
 
         const history = await ctx.messages(agent.name);
+
+        // Resume-by-replay: if the latest turn is an assistant message with
+        // tool_use blocks that haven't been answered yet (the run paused here,
+        // or this is a fresh continuation), dispatch those tools instead of
+        // re-calling the model. Idempotency short-circuits already-applied
+        // tools; a now-resolved approval lets the previously-paused tool run.
+        const pending = pendingToolUses(history);
+        if (pending.length > 0) {
+          const toolResultBlocks: ContentBlock[] = [];
+          for (const toolUse of pending) {
+            toolResultBlocks.push(await this.dispatchTool(agent, toolUse, allMounted, ctx));
+          }
+          await ctx.emit({ type: "message.tool", agentName: agent.name, content: toolResultBlocks });
+          continue;
+        }
+
         const startedAt = Date.now();
         const result = await this.model.complete({
           model: agent.model,
@@ -96,11 +120,9 @@ export class DefaultRunner implements AgentRunner {
         usage.inputTokens = merged.inputTokens;
         usage.outputTokens = merged.outputTokens;
 
-        if (tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
-        if (budget.maxCostUsd !== null && costUsed > budget.maxCostUsd) {
-          throw new Error("cost budget exhausted");
-        }
-
+        // Record the call (cost + assistant output) *before* enforcing budgets,
+        // so the call we already paid the provider for is always in the log and
+        // attributed to `totalCostUsd`.
         await ctx.emit({
           type: "llm.call",
           model: agent.model.model,
@@ -111,9 +133,14 @@ export class DefaultRunner implements AgentRunner {
         });
         await ctx.emit({ type: "message.assistant", agentName: agent.name, content: result.content });
 
+        if (tokensUsed > budget.maxTokens) throw new Error("token budget exhausted");
+        if (budget.maxCostUsd !== null && costUsed > budget.maxCostUsd) {
+          throw new Error("cost budget exhausted");
+        }
+
         const toolUses = result.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
-        if (result.stopReason === "end_turn" || toolUses.length === 0) {
-          // Structured output: if agent has an output schema, validate/retry
+        if (toolUses.length === 0) {
+          // No tools requested → terminal turn (regardless of stop reason).
           if (agent.output) {
             const structured = await this.structuredOutput(
               agent, systemPrompt, history, result.content, ctx, budget,
@@ -126,12 +153,8 @@ export class DefaultRunner implements AgentRunner {
           await ctx.emit({ type: "run.completed", result: text });
           return { text, usage };
         }
-
-        const toolResultBlocks: ContentBlock[] = [];
-        for (const toolUse of toolUses) {
-          toolResultBlocks.push(await this.dispatchTool(agent, toolUse, allMounted, ctx));
-        }
-        await ctx.emit({ type: "message.tool", agentName: agent.name, content: toolResultBlocks });
+        // Tools requested: the next loop iteration dispatches them (via the
+        // pending-tool-uses path), unifying the fresh and resume flows.
       }
     } catch (err) {
       if (err instanceof RunPaused) throw err;
@@ -153,8 +176,8 @@ export class DefaultRunner implements AgentRunner {
     if (applied) return toolResultBlock(toolCallId, applied);
 
     // 2. Approval gate.
-    if (agent.permissions?.requireApproval?.includes(name)) {
-      const approval = await ctx.requestApproval(name, toolUse.input);
+    if (requiresApproval(agent, name)) {
+      const approval = await ctx.requestApproval(name, toolUse.input, toolCallId);
       if ("status" in approval) {
         throw new RunPaused(ctx.runId, "approval", [approval.approvalRequestId]);
       }
@@ -190,7 +213,7 @@ export class DefaultRunner implements AgentRunner {
     await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
     let result: ToolResult;
     try {
-      result = await tool.invoke(toolUse.input, toolContextFrom(ctx));
+      result = await tool.invoke(toolUse.input, toolContextFrom(ctx, toolCallId));
     } catch (err) {
       result = { content: err instanceof Error ? err.message : String(err), isError: true };
     }
@@ -319,14 +342,43 @@ function toolResultBlock(toolCallId: string, result: ToolResult): ContentBlock {
   return { type: "tool_result", toolUseId: toolCallId, content: result.content, isError: result.isError };
 }
 
-function toolContextFrom(ctx: RunContext): ToolContext {
+function toolContextFrom(ctx: RunContext, toolCallId: string): ToolContext {
   return {
     env: (name) => ctx.env(name),
     signal: ctx.signal,
     logger: ctx.logger,
+    toolCallId,
     connection: async () => undefined,
     fetch: ssrfFetch,
   };
+}
+
+/**
+ * Approval matching that respects multi-tool sources (L2). An agent that mounts
+ * the source `github` exposes runtime tools named `github__create_issue`. The
+ * author may gate either the whole source (`github`) or a specific expanded
+ * tool (`github__create_issue`); both must match.
+ */
+function requiresApproval(agent: AgentDefinition, expandedToolName: string): boolean {
+  const list = agent.permissions?.requireApproval;
+  if (!list || list.length === 0) return false;
+  if (list.includes(expandedToolName)) return true;
+  const sourcePrefix = expandedToolName.includes("__")
+    ? expandedToolName.slice(0, expandedToolName.indexOf("__"))
+    : undefined;
+  return sourcePrefix !== undefined && list.includes(sourcePrefix);
+}
+
+/**
+ * The unanswered tool_use blocks of the latest assistant turn. Non-empty only
+ * when the most recent message is an assistant turn carrying tool calls (the
+ * loop always emits the matching `message.tool` immediately after dispatch, so
+ * an answered turn is never the last message).
+ */
+function pendingToolUses(history: import("@render-agents/store").Message[]): ToolUseBlock[] {
+  const last = history[history.length - 1];
+  if (!last || last.role !== "assistant") return [];
+  return last.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
 }
 
 /**
@@ -374,15 +426,22 @@ type ParseResult =
   | { valid: true; data: unknown }
   | { valid: false; error: string };
 
-function tryParseJson(text: string, _schema: Record<string, unknown>): ParseResult {
+function tryParseJson(text: string, schema: Record<string, unknown>): ParseResult {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   const jsonStr = fenced?.[1]?.trim() ?? trimmed;
 
+  let data: unknown;
   try {
-    const data = JSON.parse(jsonStr);
-    return { valid: true, data };
+    data = JSON.parse(jsonStr);
   } catch (e) {
     return { valid: false, error: e instanceof Error ? e.message : "Invalid JSON" };
   }
+
+  // Enforce the declared output schema — valid JSON alone is not enough.
+  const schemaError = validateToolInput(data, schema);
+  if (schemaError) {
+    return { valid: false, error: schemaError };
+  }
+  return { valid: true, data };
 }
