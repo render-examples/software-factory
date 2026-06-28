@@ -5,3 +5,8 @@ export { apiKeyAuth } from "./auth.js";
 export { runRoutes } from "./routes/runs.js";
 export { streamRoutes } from "./routes/stream.js";
 export { threadRoutes } from "./routes/threads.js";
+export { hitlRoutes } from "./routes/hitl.js";
+export { oauthRoutes, encryptToken, decryptToken } from "./routes/oauth.js";
+export type { OAuthProviderConfig } from "./routes/oauth.js";
+export { webhookRoutes } from "./routes/webhooks.js";
+export type { WebhookAdapter } from "./routes/webhooks.js";
