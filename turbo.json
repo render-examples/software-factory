@@ -9,7 +9,8 @@
       "dependsOn": ["^build"]
     },
     "test": {
-      "dependsOn": ["build"]
+      "dependsOn": ["build"],
+      "env": ["TEST_DATABASE_URL", "DATABASE_URL"]
     },
     "lint": {},
     "clean": {
