@@ -60,7 +60,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   app.route("/", streamRoutes({ store }));
 
   // Thread routes
-  app.route("/", threadRoutes({ store, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume }));
+  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume }));
 
   // HITL routes (approvals + resume)
   app.route("/", hitlRoutes({ store, resume }));

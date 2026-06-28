@@ -11,6 +11,7 @@ import { EventRejectedError } from "../memory-store.js";
 import type { Message } from "../messages.js";
 import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "../run-store.js";
 import type { ApprovalProjectionRecord } from "../projections.js";
+import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import { categoryOf } from "../categories.js";
 import { idempotencyKey } from "../idempotency.js";
 import { applyMigrations } from "./migrations.js";
@@ -226,6 +227,8 @@ export class PgEventLogStore implements EventLogStore {
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
              started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
+             thread_id = COALESCE(EXCLUDED.thread_id, runs.thread_id),
+             user_id = COALESCE(EXCLUDED.user_id, runs.user_id),
              agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version)`,
           [
             rec.runId,
@@ -233,8 +236,8 @@ export class PgEventLogStore implements EventLogStore {
             p.input !== undefined ? JSON.stringify(p.input) : null,
             p.trigger ?? null,
             rec.ts,
-            null, // thread_id set by gateway dispatch, not here
-            null, // user_id set by gateway dispatch
+            p.threadId ?? null,
+            p.userId ?? null,
             p.agentVersion ?? null,
           ],
         );
@@ -487,7 +490,7 @@ export class PgEventLogStore implements EventLogStore {
 
 // --- Postgres RunStore implementation ---
 
-export class PgRunStore implements RunStore {
+export class PgRunStore implements RunStore, ThreadStore {
   private readonly pool: Pool;
   readonly events: PgEventLogStore;
 
@@ -530,6 +533,10 @@ export class PgRunStore implements RunStore {
     if (opts?.status) {
       conditions.push(`status = $${paramIdx++}`);
       params.push(opts.status);
+    }
+    if (opts?.threadId) {
+      conditions.push(`thread_id = $${paramIdx++}`);
+      params.push(opts.threadId);
     }
     if (opts?.before) {
       // Keyset pagination: runs started before the cursor run's started_at
@@ -625,6 +632,67 @@ export class PgRunStore implements RunStore {
     );
     return res.rows.map(mapApprovalRow);
   }
+
+  // --- ThreadStore (metadata in `threads`; transcript in `messages`) ---
+
+  async createThread(thread: Thread): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO threads (id, user_id, metadata, status, title, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        thread.id, thread.userId ?? null,
+        thread.metadata !== undefined ? JSON.stringify(thread.metadata) : null,
+        thread.status, thread.title ?? null, thread.createdAt, thread.updatedAt,
+      ],
+    );
+  }
+
+  async getThread(id: string): Promise<Thread | undefined> {
+    const res = await this.pool.query<PgThreadRow>(
+      `SELECT id, user_id, metadata, status, title, created_at, updated_at FROM threads WHERE id = $1`,
+      [id],
+    );
+    return res.rows.length > 0 ? mapThreadRow(res.rows[0]) : undefined;
+  }
+
+  async updateThread(id: string, patch: Partial<Thread>): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (patch.status !== undefined) add("status", patch.status);
+    if (patch.title !== undefined) add("title", patch.title);
+    if (patch.userId !== undefined) add("user_id", patch.userId);
+    if (patch.metadata !== undefined) add("metadata", JSON.stringify(patch.metadata));
+    params.push(new Date().toISOString());
+    sets.push(`updated_at = $${params.length}`);
+    if (sets.length === 1) return; // only updated_at → nothing meaningful
+    await this.pool.query(`UPDATE threads SET ${sets.join(", ")} WHERE id = $1`, params);
+  }
+
+  async listThreads(opts?: { userId?: string }): Promise<Thread[]> {
+    const params: unknown[] = [];
+    let where = "";
+    if (opts?.userId) {
+      params.push(opts.userId);
+      where = `WHERE user_id = $1`;
+    }
+    const res = await this.pool.query<PgThreadRow>(
+      `SELECT id, user_id, metadata, status, title, created_at, updated_at
+       FROM threads ${where} ORDER BY created_at DESC`,
+      params,
+    );
+    return res.rows.map(mapThreadRow);
+  }
+
+  async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
+    const res = await this.pool.query<PgMessageRow>(
+      `SELECT run_id, seq, thread_id, role, content, created_at
+       FROM messages WHERE thread_id = $1 ORDER BY run_id, seq`,
+      [threadId],
+    );
+    return res.rows.map(mapMessageRow);
+  }
 }
 
 // --- Row types and mappers ---
@@ -719,6 +787,49 @@ function mapRunRow(row: PgRunRow): RunRecord {
     agentVersion: row.agent_version ?? undefined,
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
+  };
+}
+
+interface PgThreadRow {
+  id: string;
+  user_id: string | null;
+  metadata: unknown;
+  status: string;
+  title: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface PgMessageRow {
+  run_id: string;
+  seq: string;
+  thread_id: string;
+  role: string;
+  content: string;
+  created_at: Date;
+}
+
+function mapThreadRow(row: PgThreadRow): Thread {
+  return {
+    id: row.id,
+    userId: row.user_id ?? undefined,
+    metadata: (coerceJson(row.metadata) as Record<string, unknown>) ?? undefined,
+    status: row.status as Thread["status"],
+    title: row.title ?? undefined,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapMessageRow(row: PgMessageRow): ThreadMessage {
+  return {
+    id: `${row.run_id}:${row.seq}`,
+    threadId: row.thread_id,
+    runId: row.run_id,
+    seq: Number(row.seq),
+    role: row.role as ThreadMessage["role"],
+    content: row.content,
+    createdAt: row.created_at.toISOString(),
   };
 }
 

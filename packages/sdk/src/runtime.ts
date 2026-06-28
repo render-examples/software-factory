@@ -2,6 +2,9 @@ import type {
   RunStore,
   Tracer,
   CancelStore,
+  ThreadStore,
+  Thread,
+  ThreadMessage,
 } from "@render-agents/store";
 import { createStore, MemoryCancelStore } from "@render-agents/store";
 import type {
@@ -32,6 +35,7 @@ export interface DispatchOptions {
   runId: string;
   parentSpanId?: string;
   userId?: string;
+  threadId?: string;
   depth?: number;
   idempotencyKey: string;
   plan?: RenderPlan;
@@ -44,6 +48,8 @@ export interface TaskDispatcher {
 
 export interface AgentRuntime {
   readonly store: RunStore;
+  /** Thread metadata + transcript store. Defaults to the run store when it implements ThreadStore. */
+  readonly threadStore: ThreadStore;
   readonly tracer: Tracer;
   readonly model: ModelClient;
   readonly runners: RunnerRegistry;
@@ -188,6 +194,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
 
   return {
     store,
+    threadStore: asThreadStore(store),
     tracer,
     model,
     runners,
@@ -198,5 +205,28 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     agentDefinitions,
     delegation: opts?.delegation,
     toolSources,
+  };
+}
+
+/**
+ * Use the run store as the thread store when it implements the ThreadStore
+ * surface (the bundled memory + Postgres stores do). Falls back to an in-memory
+ * no-op for hand-rolled stores so the runtime field is always present.
+ */
+function asThreadStore(store: RunStore): ThreadStore {
+  const candidate = store as Partial<ThreadStore>;
+  if (typeof candidate.createThread === "function") return store as unknown as ThreadStore;
+  const threads = new Map<string, Thread>();
+  return {
+    async createThread(thread: Thread) { threads.set(thread.id, { ...thread }); },
+    async getThread(id: string) { const t = threads.get(id); return t ? { ...t } : undefined; },
+    async updateThread(id: string, patch: Partial<Thread>) {
+      const t = threads.get(id);
+      if (t) threads.set(id, { ...t, ...patch, updatedAt: new Date().toISOString() });
+    },
+    async listThreads(o?: { userId?: string }) {
+      return [...threads.values()].filter(t => !o?.userId || t.userId === o.userId).map(t => ({ ...t }));
+    },
+    async getThreadMessages(_threadId: string): Promise<ThreadMessage[]> { return []; },
   };
 }

@@ -36,6 +36,7 @@ export interface RunInProcessOptions {
   runId?: string;
   parentSpanId?: string;
   userId?: string;
+  threadId?: string;
   depth?: number;
   signal?: AbortSignal;
   approvedToolCallIds?: ReadonlySet<string>;
@@ -75,6 +76,7 @@ export function runAgentInProcess<T = unknown>(
     signal: opts?.signal ?? new AbortController().signal,
     parentSpanId: opts?.parentSpanId,
     userId: opts?.userId,
+    threadId: opts?.threadId,
     depth,
     maxContextTokens: definition.context?.maxContextTokens,
     toolSources,

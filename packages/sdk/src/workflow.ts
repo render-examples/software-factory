@@ -36,10 +36,15 @@ export interface WorkflowContext {
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
 }
 
+export interface WorkflowDispatchOptions {
+  threadId?: string;
+  userId?: string;
+}
+
 export interface WorkflowDefinition {
   readonly name: string;
   readonly options: WorkflowOptions;
-  dispatch(input: unknown, trigger?: string): Promise<RunRecord>;
+  dispatch(input: unknown, trigger?: string, opts?: WorkflowDispatchOptions): Promise<RunRecord>;
 }
 
 type WorkflowHandler = (ctx: WorkflowContext) => Promise<unknown>;
@@ -82,7 +87,7 @@ export function workflow(
     get name() { return boundName; },
     get options() { return resolvedOpts; },
 
-    async dispatch(input: unknown, trigger?: string): Promise<RunRecord> {
+    async dispatch(input: unknown, trigger?: string, dispatchOpts?: WorkflowDispatchOptions): Promise<RunRecord> {
       if (!boundRuntime) {
         throw new Error(
           `Workflow "${boundName}" is not bound to a runtime. ` +
@@ -97,6 +102,8 @@ export function workflow(
           type: "run.started",
           input,
           trigger,
+          threadId: dispatchOpts?.threadId,
+          userId: dispatchOpts?.userId,
         }, { agentName: boundName, spanId: runId }),
       );
 
@@ -112,6 +119,8 @@ export function workflow(
           runtime: boundRuntime,
           workflowName: boundName,
           signal: new AbortController().signal,
+          threadId: dispatchOpts?.threadId,
+          userId: dispatchOpts?.userId,
         });
       } catch {
         // Terminal state (run.failed) is recorded in executeHandler; surface it
@@ -162,6 +171,7 @@ interface ExecuteOpts {
   workflowName: string;
   signal: AbortSignal;
   userId?: string;
+  threadId?: string;
 }
 
 async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Promise<void> {
@@ -198,7 +208,7 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
     runId,
     trigger: opts.trigger,
     input: opts.input,
-    agents: createRunScopedAgentSet(runtime, runId, nextOrdinal),
+    agents: createRunScopedAgentSet(runtime, runId, nextOrdinal, { threadId: opts.threadId, userId: opts.userId }),
     tracer: runtime.tracer,
     logger: { debug: console.debug, info: console.info, warn: console.warn, error: console.error },
     signal: opts.signal,
@@ -250,24 +260,30 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
 
 // --- Run-scoped AgentSet ---
 
+interface ScopedIdentity {
+  threadId?: string;
+  userId?: string;
+}
+
 function createRunScopedAgentSet(
   runtime: AgentRuntime,
   parentRunId: string,
   nextOrdinal: (name: string) => number,
+  identity: ScopedIdentity,
 ): AgentSet {
   return {
     get(id: string | string[]): Agent | Agent[] {
       if (Array.isArray(id)) {
-        return id.map(name => createRunScopedAgent(name, runtime, parentRunId, nextOrdinal));
+        return id.map(name => createRunScopedAgent(name, runtime, parentRunId, nextOrdinal, identity));
       }
-      return createRunScopedAgent(id as string, runtime, parentRunId, nextOrdinal);
+      return createRunScopedAgent(id as string, runtime, parentRunId, nextOrdinal, identity);
     },
     has(id: string): boolean {
       return runtime.agentDefinitions.has(id);
     },
     all(): Agent[] {
       return [...runtime.agentDefinitions.keys()].map((name) =>
-        createRunScopedAgent(name, runtime, parentRunId, nextOrdinal),
+        createRunScopedAgent(name, runtime, parentRunId, nextOrdinal, identity),
       );
     },
   } as AgentSet;
@@ -289,6 +305,7 @@ function createRunScopedAgent(
   runtime: AgentRuntime,
   parentRunId: string,
   nextOrdinal: (name: string) => number,
+  identity: ScopedIdentity,
 ): Agent {
   return {
     name,
@@ -298,7 +315,8 @@ function createRunScopedAgent(
     // `.run()` executes in-process within the workflow's span tree; `.task()`
     // dispatches an isolated (durable, memoized) child run. Both use a
     // deterministic child run id derived from the parent run + call ordinal so
-    // workflow replay is idempotent.
+    // workflow replay is idempotent. Thread/user identity propagates so a thread
+    // spans every run it triggers (transcript + thread SSE).
     async run<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       const def = resolveScopedDefinition(name, runtime);
       const childRunId = opts?.runId ?? idempotencyKey(parentRunId, `run:${name}:${nextOrdinal(name)}`);
@@ -315,7 +333,8 @@ function createRunScopedAgent(
       }, {
         runId: childRunId,
         parentSpanId: parentRunId,
-        userId: undefined,
+        userId: identity.userId,
+        threadId: identity.threadId,
         signal: opts?.signal,
       });
     },
@@ -326,6 +345,8 @@ function createRunScopedAgent(
       return dispatcher.dispatch(name, input, {
         runId,
         parentSpanId: parentRunId,
+        userId: identity.userId,
+        threadId: identity.threadId,
         idempotencyKey: runId,
         plan: runtime.agentDefinitions.get(name)?.plan,
         signal: opts?.signal,

@@ -104,6 +104,7 @@ export class InProcessDispatcher implements TaskDispatcher {
       runId,
       parentSpanId: dispatchOpts.parentSpanId,
       userId: dispatchOpts.userId,
+      threadId: dispatchOpts.threadId,
       depth: (dispatchOpts.depth ?? 0) + 1,
       signal: dispatchOpts.signal,
     });
@@ -165,6 +166,7 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
       runId: opts.runId,
       parentSpanId: opts.parentSpanId,
       userId: opts.userId,
+      threadId: opts.threadId,
       depth: opts.depth ?? 0,
       idempotencyKey: opts.idempotencyKey,
     };
@@ -207,6 +209,7 @@ export interface AgentTaskInput {
   runId: string;
   parentSpanId?: string;
   userId?: string;
+  threadId?: string;
   depth: number;
   idempotencyKey: string;
 }
@@ -221,7 +224,7 @@ export async function agentTaskHandler(
   runtime: AgentRuntime,
   getDefinition: (name: string) => AgentDefinition | undefined,
 ): Promise<AgentOutput> {
-  const { agentName, input, runId, parentSpanId, userId, depth } = taskInput;
+  const { agentName, input, runId, parentSpanId, userId, threadId, depth } = taskInput;
 
   const definition = getDefinition(agentName);
   if (!definition) {
@@ -245,6 +248,7 @@ export async function agentTaskHandler(
     runId,
     parentSpanId,
     userId,
+    threadId,
     depth: depth + 1,
   });
 }

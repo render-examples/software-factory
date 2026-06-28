@@ -20,6 +20,7 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     cancelStore: new MemoryCancelStore(),
     agentDefinitions: new Map(),
     toolSources: new Map(),
+    threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
   };
 }
 

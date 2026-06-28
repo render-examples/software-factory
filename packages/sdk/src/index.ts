@@ -107,6 +107,7 @@ export type {
   WorkflowOptions,
   WorkflowContext,
   WorkflowDefinition,
+  WorkflowDispatchOptions,
   WebhookAdapter,
   WebhookMatch,
 } from "./workflow.js";

@@ -45,6 +45,7 @@ export interface SpanRecord {
 export interface ListRunsOptions {
   workflow?: string;
   status?: RunStatus;
+  threadId?: string;
   limit?: number;
   before?: string;
 }
