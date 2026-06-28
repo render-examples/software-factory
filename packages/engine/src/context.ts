@@ -1,5 +1,5 @@
 import type { RunEvent, Message, Logger, Tracer, ContentBlock, ToolResult } from "@render-agents/store";
-import type { MountedTools } from "./tool.js";
+import type { MountedTools, OAuthTokens } from "./tool.js";
 import type { AgentDefinition, AgentInput, AgentOutput } from "./agent.js";
 
 export type ApprovalResult =
@@ -16,6 +16,12 @@ export interface RunContext {
   readonly userId?: string;
   readonly depth: number;
   env(name: string): string | undefined;
+  /**
+   * Resolve the current user's OAuth tokens for a provider (decrypted, and
+   * refreshed if expired). Returns undefined when no store/user/connection is
+   * available. Surfaced to tools via `ToolContext.connection()`.
+   */
+  connection(provider: string): Promise<OAuthTokens | undefined>;
   mountTools(toolIds: string[]): Promise<MountedTools>;
   requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
   awaitInput(): Promise<ContentBlock[]>;

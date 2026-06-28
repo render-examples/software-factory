@@ -8,7 +8,7 @@ import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
 import { threadRoutes } from "./routes/threads.js";
 import { hitlRoutes } from "./routes/hitl.js";
-import { oauthRoutes, type OAuthProviderConfig } from "./routes/oauth.js";
+import { oauthRoutes, buildRefresher, type OAuthProviderConfig } from "./routes/oauth.js";
 import { webhookRoutes, type WebhookAdapter } from "./routes/webhooks.js";
 import type { ConnectorSpec } from "./connector.js";
 
@@ -67,9 +67,16 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   // OAuth routes
   if (opts.oauthProviders && opts.oauthProviders.size > 0) {
+    // Register token refreshers so the loop can refresh expired tokens mid-run.
+    for (const [name, config] of opts.oauthProviders) {
+      if (!runtime.oauthRefreshers.has(name)) {
+        runtime.oauthRefreshers.set(name, buildRefresher(config));
+      }
+    }
     app.route("/", oauthRoutes({
       providers: opts.oauthProviders,
       baseUrl: opts.baseUrl ?? `http://localhost:${opts.port ?? 3000}`,
+      oauthStore: runtime.oauthStore,
     }));
   }
 

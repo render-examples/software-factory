@@ -348,7 +348,8 @@ function toolContextFrom(ctx: RunContext, toolCallId: string): ToolContext {
     signal: ctx.signal,
     logger: ctx.logger,
     toolCallId,
-    connection: async () => undefined,
+    // OAuth tokens for the run's user, resolved (and refreshed) by the context.
+    connection: (provider: string) => ctx.connection(provider),
     fetch: ssrfFetch,
   };
 }

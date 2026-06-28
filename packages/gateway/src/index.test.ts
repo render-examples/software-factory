@@ -21,6 +21,8 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     agentDefinitions: new Map(),
     toolSources: new Map(),
     threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
+    oauthStore: store as unknown as GatewayOptions["runtime"]["oauthStore"],
+    oauthRefreshers: new Map(),
   };
 }
 

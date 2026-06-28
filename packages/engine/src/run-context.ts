@@ -9,13 +9,22 @@ import type {
   Tracer,
   SpanKind,
   RunStore,
+  OAuthStore,
+  OAuthConnection,
+  RefreshedTokens,
 } from "@render-agents/store";
 import { buildEventRecord, idempotencyKey } from "@render-agents/store";
 import type { ModelSpec } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
-import type { MountedTools, Tool, ToolSource } from "./tool.js";
+import type { MountedTools, Tool, ToolSource, OAuthTokens } from "./tool.js";
 import type { RunContext, ApprovalResult } from "./context.js";
+
+/** Refreshes a provider's tokens (provided by the composition root that knows token endpoints). */
+export type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>;
+
+/** Seconds of clock skew before expiry at which a token is considered stale. */
+const TOKEN_EXPIRY_SKEW_MS = 60_000;
 import { ToolEnvironment } from "./tool-impl.js";
 
 const STRICT_APPROVAL_ENV = "RENDER_AGENTS_STRICT_APPROVAL";
@@ -52,6 +61,10 @@ export interface InProcessRunContextOptions {
   cancelStore?: import("@render-agents/store").CancelStore;
   /** Pre-approved tool call IDs for resume after approval (bypass approval gate). */
   approvedToolCallIds?: ReadonlySet<string>;
+  /** OAuth store for resolving `ToolContext.connection()`; tokens are per-user. */
+  oauthStore?: OAuthStore;
+  /** Per-provider token refreshers (token-endpoint exchange), keyed by provider. */
+  oauthRefreshers?: Map<string, OAuthRefresher>;
 }
 
 /**
@@ -81,6 +94,8 @@ export class InProcessRunContext implements RunContext {
   private readonly isCancelledFn: () => boolean | Promise<boolean>;
   private toolEnv?: ToolEnvironment;
   private readonly approvedToolCallIds: ReadonlySet<string>;
+  private readonly oauthStore?: OAuthStore;
+  private readonly oauthRefreshers: Map<string, OAuthRefresher>;
 
   // Deterministic so resume/replay reuses the same agent span id and the
   // terminal run.completed/failed/cancelled close the original span.
@@ -106,6 +121,8 @@ export class InProcessRunContext implements RunContext {
     this.tools = opts.tools ?? new Map();
     this.toolSources = opts.toolSources ?? new Map();
     this.approvedToolCallIds = opts.approvedToolCallIds ?? new Set();
+    this.oauthStore = opts.oauthStore;
+    this.oauthRefreshers = opts.oauthRefreshers ?? new Map();
     this.agentSpanId = idempotencyKey(opts.runId, `agent-span:${opts.agentName}`);
 
     if (opts.cancelStore) {
@@ -119,6 +136,31 @@ export class InProcessRunContext implements RunContext {
 
   env(name: string): string | undefined {
     return this.envFn(name);
+  }
+
+  /**
+   * Resolve the current user's OAuth tokens for a provider. Reads the connection
+   * from the OAuth store, and if it is expired (or about to be) and refreshable,
+   * performs a single-flight refresh via the registered provider refresher.
+   */
+  async connection(provider: string): Promise<OAuthTokens | undefined> {
+    if (!this.oauthStore || !this.userId) return undefined;
+    const userId = this.userId;
+    let conn = await this.oauthStore.getConnection(userId, provider);
+    if (!conn) return undefined;
+
+    const refresher = this.oauthRefreshers.get(provider);
+    if (refresher && conn.refreshToken && isTokenExpired(conn.expiresAt)) {
+      conn = await this.oauthStore.refreshConnection(
+        userId,
+        provider,
+        (c) => isTokenExpired(c.expiresAt),
+        refresher,
+      );
+      if (!conn) return undefined;
+    }
+
+    return { accessToken: conn.accessToken, refreshToken: conn.refreshToken, expiresAt: conn.expiresAt };
   }
 
   async emit(event: RunEvent): Promise<void> {
@@ -342,6 +384,14 @@ export class InProcessRunContext implements RunContext {
         return undefined;
     }
   }
+}
+
+/** A token with no expiry never expires; otherwise stale once within the skew window. */
+function isTokenExpired(expiresAt: string | undefined): boolean {
+  if (!expiresAt) return false;
+  const expMs = Date.parse(expiresAt);
+  if (Number.isNaN(expMs)) return false;
+  return Date.now() >= expMs - TOKEN_EXPIRY_SKEW_MS;
 }
 
 function spanKindOf(type: RunEvent["type"]): SpanKind | undefined {

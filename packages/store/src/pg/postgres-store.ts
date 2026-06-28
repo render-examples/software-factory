@@ -12,6 +12,8 @@ import type { Message } from "../messages.js";
 import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "../run-store.js";
 import type { ApprovalProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
+import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
+import { encrypt, decrypt, encryptionKeyFromEnv } from "../crypto.js";
 import { categoryOf } from "../categories.js";
 import { idempotencyKey } from "../idempotency.js";
 import { applyMigrations } from "./migrations.js";
@@ -490,7 +492,7 @@ export class PgEventLogStore implements EventLogStore {
 
 // --- Postgres RunStore implementation ---
 
-export class PgRunStore implements RunStore, ThreadStore {
+export class PgRunStore implements RunStore, ThreadStore, OAuthStore {
   private readonly pool: Pool;
   readonly events: PgEventLogStore;
 
@@ -693,6 +695,101 @@ export class PgRunStore implements RunStore, ThreadStore {
     );
     return res.rows.map(mapMessageRow);
   }
+
+  // --- OAuthStore (tokens encrypted at rest via AES-256-GCM) ---
+
+  async getConnection(userId: string, provider: string): Promise<OAuthConnection | undefined> {
+    const res = await this.pool.query<PgOAuthRow>(
+      `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
+       FROM oauth_connections WHERE user_id = $1 AND provider = $2`,
+      [userId, provider],
+    );
+    return res.rows.length > 0 ? mapOAuthRow(res.rows[0], encryptionKeyFromEnv()) : undefined;
+  }
+
+  async upsertConnection(conn: OAuthConnection): Promise<void> {
+    const key = encryptionKeyFromEnv();
+    await this.pool.query(
+      `INSERT INTO oauth_connections (id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (user_id, provider) DO UPDATE SET
+         access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
+         expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes, updated_at = EXCLUDED.updated_at`,
+      [
+        conn.id, conn.userId, conn.provider,
+        encrypt(conn.accessToken, key),
+        conn.refreshToken !== undefined ? encrypt(conn.refreshToken, key) : null,
+        conn.expiresAt ?? null, conn.scopes, conn.createdAt, conn.updatedAt,
+      ],
+    );
+  }
+
+  async deleteConnection(userId: string, provider: string): Promise<void> {
+    await this.pool.query(`DELETE FROM oauth_connections WHERE user_id = $1 AND provider = $2`, [userId, provider]);
+  }
+
+  async listConnections(userId: string): Promise<OAuthConnection[]> {
+    const key = encryptionKeyFromEnv();
+    const res = await this.pool.query<PgOAuthRow>(
+      `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
+       FROM oauth_connections WHERE user_id = $1`,
+      [userId],
+    );
+    return res.rows.map((r) => mapOAuthRow(r, key));
+  }
+
+  async refreshConnection(
+    userId: string,
+    provider: string,
+    isExpired: (conn: OAuthConnection) => boolean,
+    doRefresh: (conn: OAuthConnection) => Promise<RefreshedTokens>,
+  ): Promise<OAuthConnection | undefined> {
+    const key = encryptionKeyFromEnv();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Exclusive row lock → concurrent refreshers serialize and coalesce.
+      const res = await client.query<PgOAuthRow>(
+        `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
+         FROM oauth_connections WHERE user_id = $1 AND provider = $2 FOR UPDATE`,
+        [userId, provider],
+      );
+      if (res.rows.length === 0) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const current = mapOAuthRow(res.rows[0], key);
+      if (!isExpired(current)) {
+        await client.query("COMMIT");
+        return current;
+      }
+      const tokens = await doRefresh(current);
+      const updatedAt = new Date().toISOString();
+      await client.query(
+        `UPDATE oauth_connections SET access_token = $3, refresh_token = $4, expires_at = $5, updated_at = $6
+         WHERE user_id = $1 AND provider = $2`,
+        [
+          userId, provider,
+          encrypt(tokens.accessToken, key),
+          tokens.refreshToken !== undefined ? encrypt(tokens.refreshToken, key) : (current.refreshToken !== undefined ? encrypt(current.refreshToken, key) : null),
+          tokens.expiresAt ?? null, updatedAt,
+        ],
+      );
+      await client.query("COMMIT");
+      return {
+        ...current,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken ?? current.refreshToken,
+        expiresAt: tokens.expiresAt,
+        updatedAt,
+      };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // --- Row types and mappers ---
@@ -807,6 +904,32 @@ interface PgMessageRow {
   role: string;
   content: string;
   created_at: Date;
+}
+
+interface PgOAuthRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  access_token: string;
+  refresh_token: string | null;
+  expires_at: Date | null;
+  scopes: string[];
+  created_at: Date;
+  updated_at: Date;
+}
+
+function mapOAuthRow(row: PgOAuthRow, key: Buffer): OAuthConnection {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    provider: row.provider,
+    accessToken: decrypt(row.access_token, key),
+    refreshToken: row.refresh_token !== null ? decrypt(row.refresh_token, key) : undefined,
+    expiresAt: row.expires_at?.toISOString(),
+    scopes: row.scopes ?? [],
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
 }
 
 function mapThreadRow(row: PgThreadRow): Thread {

@@ -296,6 +296,60 @@ describeWithPg("threads — metadata, run thread_id, and transcript parity", () 
   });
 });
 
+describeWithPg("OAuth connections — encryption at rest + single-flight refresh", () => {
+  let pgStore: PgRunStore;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+  });
+
+  afterAll(async () => {
+    await pgStore.close();
+  });
+
+  it("stores tokens encrypted at rest and decrypts on read", async () => {
+    const now = new Date().toISOString();
+    await pgStore.upsertConnection({
+      id: "uA:github", userId: "uA", provider: "github",
+      accessToken: "plain-access", refreshToken: "plain-refresh", scopes: ["repo"], createdAt: now, updatedAt: now,
+    });
+
+    // Read-through decrypts.
+    const conn = await pgStore.getConnection("uA", "github");
+    expect(conn?.accessToken).toBe("plain-access");
+    expect(conn?.refreshToken).toBe("plain-refresh");
+
+    // The raw column is ciphertext, not the plaintext.
+    const raw = await (pgStore as unknown as { ["pool"]: import("pg").Pool }).pool.query<{ access_token: string }>(
+      "SELECT access_token FROM oauth_connections WHERE user_id = 'uA' AND provider = 'github'",
+    );
+    expect(raw.rows[0].access_token).not.toContain("plain-access");
+    expect(raw.rows[0].access_token.split(":")).toHaveLength(3); // iv:tag:ciphertext
+  });
+
+  it("coalesces concurrent refreshes via SELECT ... FOR UPDATE", async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await pgStore.upsertConnection({
+      id: "uB:github", userId: "uB", provider: "github",
+      accessToken: "stale", refreshToken: "rt", expiresAt: past, scopes: [], createdAt: past, updatedAt: past,
+    });
+
+    let refreshCount = 0;
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        pgStore.refreshConnection("uB", "github",
+          (c) => (c.expiresAt ? Date.now() >= Date.parse(c.expiresAt) - 60_000 : false),
+          async () => { refreshCount += 1; await new Promise(r => setTimeout(r, 10)); return { accessToken: "fresh", refreshToken: "rt2", expiresAt: new Date(Date.now() + 3600_000).toISOString() }; },
+        ),
+      ),
+    );
+
+    expect(refreshCount).toBe(1);
+    expect(results.every((r) => r?.accessToken === "fresh")).toBe(true);
+  });
+});
+
 describeWithPg("PgRunStore.init() idempotency", () => {
   it("is safe to call multiple times (advisory lock)", async () => {
     const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });

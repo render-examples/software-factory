@@ -5,6 +5,7 @@ import type {
   ThreadStore,
   Thread,
   ThreadMessage,
+  OAuthStore,
 } from "@render-agents/store";
 import { createStore, MemoryCancelStore } from "@render-agents/store";
 import type {
@@ -22,6 +23,7 @@ import type {
   RenderPlan,
   RetryPolicy,
   ModelPricing,
+  OAuthRefresher,
 } from "@render-agents/engine";
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
 import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
@@ -50,6 +52,10 @@ export interface AgentRuntime {
   readonly store: RunStore;
   /** Thread metadata + transcript store. Defaults to the run store when it implements ThreadStore. */
   readonly threadStore: ThreadStore;
+  /** OAuth connection store (per-user tokens). Defaults to the run store when it implements OAuthStore. */
+  readonly oauthStore: OAuthStore;
+  /** Per-provider token refreshers, populated by the gateway from provider configs. */
+  readonly oauthRefreshers: Map<string, OAuthRefresher>;
   readonly tracer: Tracer;
   readonly model: ModelClient;
   readonly runners: RunnerRegistry;
@@ -80,6 +86,8 @@ export interface CreateRuntimeOptions {
   contextManager?: ContextManager;
   /** Pre-resolved tool sources, keyed by source id. When provided (e.g. from the loader), agents can mount tools at run time. */
   toolSources?: Map<string, import("@render-agents/engine").ToolSource>;
+  /** Per-provider OAuth token refreshers (token-endpoint exchange). */
+  oauthRefreshers?: Map<string, OAuthRefresher>;
 }
 
 /**
@@ -167,6 +175,10 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   const cancelStore = opts?.cancelStore ?? new MemoryCancelStore();
   const agentDefinitions = new Map<string, AgentDefinition>();
   const toolSources = opts?.toolSources ?? new Map();
+  // Shared instances so the dispatcher and any later registrations (e.g. the
+  // gateway populating refreshers from provider configs) see the same objects.
+  const oauthStore = asOAuthStore(store);
+  const oauthRefreshers = opts?.oauthRefreshers ?? new Map<string, OAuthRefresher>();
 
   // `.task()` always runs through a dispatcher: the Render Workflows dispatcher
   // in production, otherwise an in-process dispatcher that provides identical
@@ -183,6 +195,8 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       toolSources,
       delegation: opts?.delegation,
       getDefinition: (name) => agentDefinitions.get(name),
+      oauthStore,
+      oauthRefreshers,
     });
 
   // Inject hook interceptor into the store's append pipeline
@@ -195,6 +209,8 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   return {
     store,
     threadStore: asThreadStore(store),
+    oauthStore,
+    oauthRefreshers,
     tracer,
     model,
     runners,
@@ -228,5 +244,31 @@ function asThreadStore(store: RunStore): ThreadStore {
       return [...threads.values()].filter(t => !o?.userId || t.userId === o.userId).map(t => ({ ...t }));
     },
     async getThreadMessages(_threadId: string): Promise<ThreadMessage[]> { return []; },
+  };
+}
+
+/**
+ * Use the run store as the OAuth store when it implements that surface (the
+ * bundled stores do). Falls back to an in-memory store for hand-rolled stores.
+ */
+function asOAuthStore(store: RunStore): OAuthStore {
+  const candidate = store as Partial<OAuthStore>;
+  if (typeof candidate.getConnection === "function") return store as unknown as OAuthStore;
+  const conns = new Map<string, import("@render-agents/store").OAuthConnection>();
+  const k = (u: string, p: string) => `${u}:${p}`;
+  return {
+    async getConnection(u, p) { const c = conns.get(k(u, p)); return c ? { ...c } : undefined; },
+    async upsertConnection(c) { conns.set(k(c.userId, c.provider), { ...c }); },
+    async deleteConnection(u, p) { conns.delete(k(u, p)); },
+    async listConnections(u) { return [...conns.values()].filter(c => c.userId === u); },
+    async refreshConnection(u, p, isExpired, doRefresh) {
+      const c = conns.get(k(u, p));
+      if (!c) return undefined;
+      if (!isExpired(c)) return { ...c };
+      const t = await doRefresh(c);
+      const updated = { ...c, accessToken: t.accessToken, refreshToken: t.refreshToken ?? c.refreshToken, expiresAt: t.expiresAt, updatedAt: new Date().toISOString() };
+      conns.set(k(u, p), updated);
+      return { ...updated };
+    },
   };
 }
