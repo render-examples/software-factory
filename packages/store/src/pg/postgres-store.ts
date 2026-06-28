@@ -9,7 +9,7 @@ import type {
 } from "../events.js";
 import { EventRejectedError } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "../run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult } from "../run-store.js";
 import type { ApprovalProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
@@ -694,6 +694,58 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore {
       [threadId],
     );
     return res.rows.map(mapMessageRow);
+  }
+
+  async cleanup(opts: RetentionOptions): Promise<RetentionResult> {
+    const now = opts.now ?? new Date();
+    const eventHorizon = new Date(now.getTime() - opts.eventRetentionDays * 86_400_000).toISOString();
+    const runHorizon = new Date(now.getTime() - opts.runRetentionDays * 86_400_000).toISOString();
+    const TERMINAL = ["completed", "failed", "cancelled"];
+    const ageExpr = "COALESCE(finished_at, started_at)";
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Event-detail domain: terminal runs older than the event horizon.
+      const detail = await client.query<{ id: string }>(
+        `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
+        [TERMINAL, eventHorizon],
+      );
+      const detailIds = detail.rows.map((r) => r.id);
+      if (detailIds.length > 0) {
+        await this.deleteDetail(client, detailIds);
+      }
+
+      // Run-summary domain: terminal runs older than the run horizon.
+      const summary = await client.query<{ id: string }>(
+        `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
+        [TERMINAL, runHorizon],
+      );
+      const summaryIds = summary.rows.map((r) => r.id);
+      if (summaryIds.length > 0) {
+        // Detail may still exist if runHorizon < eventHorizon; clear it first (FK).
+        await this.deleteDetail(client, summaryIds);
+        // Null schedule provenance refs (FK), then delete the summaries.
+        await client.query(`UPDATE schedules SET last_run_id = NULL WHERE last_run_id = ANY($1)`, [summaryIds]);
+        await client.query(`DELETE FROM runs WHERE id = ANY($1)`, [summaryIds]);
+      }
+
+      await client.query("COMMIT");
+      return { eventDetailTrimmed: detailIds.length, runsDeleted: summaryIds.length };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Delete event-detail rows for the given runs. `messages` (transcript) is preserved. */
+  private async deleteDetail(client: PoolClient, runIds: string[]): Promise<void> {
+    for (const table of ["spans", "run_messages", "tool_calls", "workflow_steps", "approval_requests", "run_events"]) {
+      await client.query(`DELETE FROM ${table} WHERE run_id = ANY($1)`, [runIds]);
+    }
   }
 
   // --- OAuthStore (tokens encrypted at rest via AES-256-GCM) ---

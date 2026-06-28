@@ -423,6 +423,20 @@ function renderYaml(opts: ScaffoldOptions): string {
     "          property: connectionString",
     `      - key: ${opts.apiKeyEnv}`,
     "        sync: false",
+    "",
+    "  # Daily retention cleanup (trims event-detail + old run summaries).",
+    "  - type: cron",
+    `    name: ${opts.name}-retention`,
+    "    runtime: node",
+    "    plan: starter",
+    `    schedule: "0 4 * * *"`,
+    "    buildCommand: npm install && npm run build",
+    `    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'`,
+    "    envVars:",
+    "      - key: GATEWAY_URL",
+    `        fromService: { type: web, name: ${opts.name}-gateway, property: hostport }`,
+    "      - key: RENDER_AGENTS_API_KEY",
+    `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
   ].join("\n");
 }
 
