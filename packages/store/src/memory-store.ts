@@ -126,6 +126,10 @@ export class MemoryEventLogStore implements EventLogStore {
     const copy = { ...rec, payload: { ...rec.payload } };
     for (const sub of this.subscribers) {
       if (sub.filter.runId && sub.filter.runId !== rec.runId) continue;
+      // The in-memory store has no thread→run mapping (threads are Postgres-only
+      // for now). A threadId-only filter therefore matches nothing here rather
+      // than incorrectly leaking every run's events.
+      if (sub.filter.threadId && !sub.filter.runId) continue;
       sub.queue.push(copy);
       sub.wake?.();
     }

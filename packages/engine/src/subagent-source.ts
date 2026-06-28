@@ -1,5 +1,6 @@
 import type { ToolResult, Logger } from "@render-agents/store";
 import type { AgentDefinition, AgentOutput } from "./agent.js";
+import { RunPaused } from "./agent.js";
 import type { Tool, ToolSource, ResolvedSource, ToolContext } from "./tool.js";
 import type { DelegationLimits } from "./delegation.js";
 
@@ -11,6 +12,7 @@ export interface SubagentDispatcher {
     parentSpanId: string;
     userId?: string;
     depth: number;
+    toolCallId: string;
   }): Promise<AgentOutput>;
 }
 
@@ -55,7 +57,7 @@ export function buildSubagentToolSource(
           },
           required: ["input"],
         },
-        async invoke(rawInput: unknown, _ctx: ToolContext): Promise<ToolResult> {
+        async invoke(rawInput: unknown, ctx: ToolContext): Promise<ToolResult> {
           const input = typeof rawInput === "object" && rawInput !== null
             ? (rawInput as Record<string, unknown>).input ?? rawInput
             : rawInput;
@@ -85,6 +87,7 @@ export function buildSubagentToolSource(
               parentSpanId: opts.parentSpanId,
               userId: opts.userId,
               depth: childDepth,
+              toolCallId: ctx.toolCallId ?? "",
             });
 
             // Return structured data if available, otherwise text
@@ -93,6 +96,9 @@ export function buildSubagentToolSource(
             }
             return { content: result.text };
           } catch (err) {
+            // A paused subagent must surface up so the parent run also pauses for
+            // approval/input — never swallow it into a generic error result.
+            if (err instanceof RunPaused) throw err;
             return {
               content: `Subagent "${sub.name}" failed: ${err instanceof Error ? err.message : String(err)}`,
               isError: true,

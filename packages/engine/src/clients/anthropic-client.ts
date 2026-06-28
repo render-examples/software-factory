@@ -20,7 +20,7 @@ export class AnthropicClient implements ModelClient {
   }
 
   async complete(args: CompleteArgs): Promise<CompleteResult> {
-    const { model, system, tools, messages, sampling, signal } = args;
+    const { model, system, tools, messages, sampling, signal, responseFormat } = args;
 
     const apiMessages = messages
       .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
@@ -28,10 +28,17 @@ export class AnthropicClient implements ModelClient {
 
     const apiTools = tools.map(toApiTool);
 
+    // Anthropic has no native json_schema response_format; steer the model with
+    // the schema appended to the system prompt. The engine still validates the
+    // returned JSON against the schema.
+    const systemText = responseFormat?.type === "json_schema"
+      ? `${system}\n\nYou must respond with a single JSON object that strictly conforms to this JSON Schema. Output only the JSON, with no prose or code fences:\n${JSON.stringify(responseFormat.schema)}`
+      : system;
+
     const systemBlock: Anthropic.TextBlockParam[] = [
       {
         type: "text",
-        text: system,
+        text: systemText,
         cache_control: { type: "ephemeral" },
       },
     ];

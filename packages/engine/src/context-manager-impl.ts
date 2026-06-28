@@ -1,4 +1,5 @@
 import type { ContentBlock, Message, RunEvent } from "@render-agents/store";
+import type { ModelSpec } from "./agent.js";
 import type { ModelClient, CompleteResult } from "./model.js";
 import type {
   ContextManager,
@@ -75,12 +76,24 @@ export class AutoCompactionStrategy implements CompactionStrategy {
     return usedTokens > maxTokens;
   }
 
-  async compact(messages: Message[]): Promise<{ messages: Message[]; summary: string }> {
+  async compact(messages: Message[], modelSpec?: ModelSpec): Promise<{ messages: Message[]; summary: string }> {
     if (messages.length <= RECENT_TURNS_TO_KEEP) {
       return { messages, summary: "" };
     }
 
-    const recentStart = messages.length - RECENT_TURNS_TO_KEEP;
+    // Snap the recent-window boundary to an assistant message so the wire
+    // history after the (user-role) summary starts cleanly and never splits an
+    // assistant `tool_use` from its following `tool_result` turn. If no safe
+    // boundary exists in range, skip compaction rather than emit an invalid
+    // history that providers will reject.
+    let recentStart = messages.length - RECENT_TURNS_TO_KEEP;
+    while (recentStart > 0 && messages[recentStart].role !== "assistant") {
+      recentStart--;
+    }
+    if (recentStart <= 0) {
+      return { messages, summary: "" };
+    }
+
     const olderMessages = messages.slice(0, recentStart);
     const recentMessages = messages.slice(recentStart);
 
@@ -88,7 +101,7 @@ export class AutoCompactionStrategy implements CompactionStrategy {
     const dedupedOlder = dropSupersededToolOutputs(olderMessages);
 
     // Summarize older messages
-    const summaryText = await this.summarize(dedupedOlder);
+    const summaryText = await this.summarize(dedupedOlder, modelSpec);
 
     const summaryMessage: Message = {
       role: "user",
@@ -101,7 +114,7 @@ export class AutoCompactionStrategy implements CompactionStrategy {
     };
   }
 
-  private async summarize(messages: Message[]): Promise<string> {
+  private async summarize(messages: Message[], modelSpec?: ModelSpec): Promise<string> {
     const transcript = messages.map((m) => {
       const text = m.content
         .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
@@ -111,7 +124,9 @@ export class AutoCompactionStrategy implements CompactionStrategy {
     }).join("\n\n");
 
     const result: CompleteResult = await this.summarizer.complete({
-      model: { provider: "anthropic", model: "claude-haiku-4-5" },
+      // Summarize with the agent's own provider/model so a single-provider
+      // deployment never sends a cross-provider model id to its client.
+      model: modelSpec ?? { provider: "anthropic", model: "claude-haiku-4-5" },
       system:
         "You are a conversation summarizer. Produce a concise summary that preserves:\n" +
         "1. All decisions made\n" +
@@ -132,30 +147,24 @@ export class AutoCompactionStrategy implements CompactionStrategy {
   }
 }
 
+const LARGE_TOOL_RESULT_CHARS = 2000;
+const TOOL_RESULT_KEEP_CHARS = 500;
+
 /**
- * Drop tool_result messages whose resource was re-read later in the conversation.
- * Detects supersession by matching tool names that indicate reads (simple heuristic).
+ * Truncate large tool outputs in the older window before summarization. These
+ * messages are about to be replaced by a summary anyway, so verbose tool dumps
+ * (file reads, test logs) are trimmed to bound the summarization prompt while
+ * keeping a head sample for context.
  */
 function dropSupersededToolOutputs(messages: Message[]): Message[] {
-  const toolResultIndices = new Map<string, number>();
-
-  // Find the last occurrence of each tool-result by tool name
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role !== "tool") continue;
-    for (const block of msg.content) {
-      if (block.type === "tool_result") {
-        toolResultIndices.set(block.toolUseId, i);
-      }
-    }
-  }
-
-  // Keep messages, but truncate large tool results that appear before a later re-read
-  return messages.map((msg, _idx) => {
+  return messages.map((msg) => {
     if (msg.role !== "tool") return msg;
     const truncated = msg.content.map((block) => {
-      if (block.type === "tool_result" && block.content.length > 2000) {
-        return { ...block, content: block.content.slice(0, 500) + "\n[... truncated for context management ...]" };
+      if (block.type === "tool_result" && block.content.length > LARGE_TOOL_RESULT_CHARS) {
+        return {
+          ...block,
+          content: block.content.slice(0, TOOL_RESULT_KEEP_CHARS) + "\n[... truncated for context management ...]",
+        };
       }
       return block;
     });
@@ -183,7 +192,13 @@ export class DefaultContextManager implements ContextManager {
       return messages;
     }
 
-    const { messages: compacted } = await this.strategy.compact(messages);
+    const { messages: compacted } = await this.strategy.compact(messages, ctx.model);
+
+    // If compaction couldn't find a safe boundary it returns the input
+    // unchanged — don't emit a no-op context.compacted event in that case.
+    if (compacted === messages) {
+      return messages;
+    }
     const afterTokens = estimateTokens(compacted);
 
     await ctx.emit({

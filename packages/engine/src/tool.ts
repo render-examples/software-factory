@@ -10,6 +10,8 @@ export interface ToolContext {
   env(name: string): string | undefined;
   readonly signal: AbortSignal;
   readonly logger: Logger;
+  /** The model-assigned id of the tool call being executed (for correlation). */
+  readonly toolCallId?: string;
   connection(provider: string): Promise<OAuthTokens | undefined>;
   fetch(url: string, init?: RequestInit): Promise<Response>;
 }

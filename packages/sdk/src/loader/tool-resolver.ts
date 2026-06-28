@@ -66,12 +66,31 @@ export function validateApprovalRefs(
 
   const toolSet = new Set(expandedTools);
   for (const name of requireApproval) {
-    if (!toolSet.has(name)) {
-      throw new LoadError(
-        ERR_APPROVAL_NOT_IN_TOOLS,
-        `Agent "${agentName}" has requireApproval for "${name}" which is not in its expanded tool set`,
-        { agent: agentName, approval: name, tools: expandedTools },
-      );
-    }
+    if (approvalRefMatches(name, toolSet)) continue;
+    throw new LoadError(
+      ERR_APPROVAL_NOT_IN_TOOLS,
+      `Agent "${agentName}" has requireApproval for "${name}" which is not in its tool set`,
+      { agent: agentName, approval: name, tools: expandedTools },
+    );
   }
+}
+
+/**
+ * An approval ref is valid against an agent's tool references when it matches a
+ * whole source, an explicitly-referenced expanded tool, OR a specific tool of a
+ * whole-source mount (e.g. `requireApproval: [github__create_issue]` with
+ * `tools: [github]`). Conversely, gating a whole source (`github`) is valid when
+ * the agent referenced specific tools of that source (`github__create_issue`).
+ */
+function approvalRefMatches(name: string, toolSet: Set<string>): boolean {
+  if (toolSet.has(name)) return true;
+  if (name.includes("__")) {
+    const sourcePrefix = name.slice(0, name.indexOf("__"));
+    return toolSet.has(sourcePrefix);
+  }
+  // `name` is a source id — match if any referenced tool belongs to that source.
+  for (const ref of toolSet) {
+    if (ref.startsWith(`${name}__`)) return true;
+  }
+  return false;
 }

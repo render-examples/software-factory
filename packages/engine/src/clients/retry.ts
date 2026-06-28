@@ -81,9 +81,13 @@ function extractRetryAfter(err: unknown): number | undefined {
     // SDK errors often have headers or a retryAfter field
     if (typeof obj.retryAfter === "number") return obj.retryAfter;
     const headers = obj.headers as Record<string, string> | undefined;
-    if (headers?.["retry-after"]) {
-      const val = Number(headers["retry-after"]);
-      if (!isNaN(val)) return val;
+    const raw = headers?.["retry-after"];
+    if (raw) {
+      // Retry-After may be delta-seconds or an HTTP-date (RFC 7231).
+      const seconds = Number(raw);
+      if (!isNaN(seconds)) return seconds;
+      const dateMs = Date.parse(raw);
+      if (!isNaN(dateMs)) return Math.max(0, (dateMs - Date.now()) / 1000);
     }
   }
   return undefined;
@@ -92,8 +96,12 @@ function extractRetryAfter(err: unknown): number | undefined {
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(resolve, ms);
     const onAbort = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => {
+      // Remove the listener so it doesn't accumulate across retries.
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }

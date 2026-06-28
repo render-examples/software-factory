@@ -5,7 +5,7 @@ import type {
   RunRecord,
   RunEvent,
 } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
+import { buildEventRecord, idempotencyKey } from "@render-agents/store";
 import type {
   RenderPlan,
   AgentDefinition,
@@ -15,6 +15,7 @@ import type {
 } from "@render-agents/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
+import { runAgentInProcess } from "./run-in-process.js";
 
 export interface WorkflowOptions {
   name?: string;
@@ -99,17 +100,23 @@ export function workflow(
         }, { agentName: boundName, spanId: runId }),
       );
 
-      // Execute the handler (in-process for now; production registers as root task)
-      executeHandler(handler, {
-        runId,
-        trigger: trigger ?? "api",
-        input,
-        runtime: boundRuntime,
-        workflowName: boundName,
-        signal: new AbortController().signal,
-      }).catch(() => {
-        // errors are recorded via run.failed in executeHandler
-      });
+      // Run the handler to completion in-process. (In production the workflow
+      // service registers this as a root task with its own durability; locally
+      // we await so the returned RunRecord reflects the terminal state instead
+      // of racing the handler and swallowing its errors.)
+      try {
+        await executeHandler(handler, {
+          runId,
+          trigger: trigger ?? "api",
+          input,
+          runtime: boundRuntime,
+          workflowName: boundName,
+          signal: new AbortController().signal,
+        });
+      } catch {
+        // Terminal state (run.failed) is recorded in executeHandler; surface it
+        // via the returned RunRecord rather than throwing from dispatch.
+      }
 
       const run = await store.getRun(runId);
       return run ?? {
@@ -177,11 +184,21 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
     );
   };
 
+  // Per-agent call ordinals make child run ids deterministic so a handler
+  // replay (after crash/pause) re-dispatches to the same child run and reuses
+  // its memoized result instead of duplicating work.
+  const callOrdinals = new Map<string, number>();
+  const nextOrdinal = (name: string): number => {
+    const n = callOrdinals.get(name) ?? 0;
+    callOrdinals.set(name, n + 1);
+    return n;
+  };
+
   const ctx: WorkflowContext = {
     runId,
     trigger: opts.trigger,
     input: opts.input,
-    agents: createRunScopedAgentSet(runtime, runId),
+    agents: createRunScopedAgentSet(runtime, runId, nextOrdinal),
     tracer: runtime.tracer,
     logger: { debug: console.debug, info: console.info, warn: console.warn, error: console.error },
     signal: opts.signal,
@@ -233,66 +250,112 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
 
 // --- Run-scoped AgentSet ---
 
-function createRunScopedAgentSet(runtime: AgentRuntime, parentRunId: string): AgentSet {
-  const allDefs = runtime.toolSources; // placeholder — real agent definitions from runtime
-  void allDefs;
-  void parentRunId;
-
-  // The run-scoped AgentSet wraps the runtime's agents with run context
-  // (parentSpanId, userId propagation). For now, return a proxy that
-  // binds agents to the current run's span tree on access.
+function createRunScopedAgentSet(
+  runtime: AgentRuntime,
+  parentRunId: string,
+  nextOrdinal: (name: string) => number,
+): AgentSet {
   return {
     get(id: string | string[]): Agent | Agent[] {
       if (Array.isArray(id)) {
-        return id.map(name => createRunScopedAgent(name, runtime, parentRunId));
+        return id.map(name => createRunScopedAgent(name, runtime, parentRunId, nextOrdinal));
       }
-      return createRunScopedAgent(id as string, runtime, parentRunId);
+      return createRunScopedAgent(id as string, runtime, parentRunId, nextOrdinal);
     },
-    has(_id: string): boolean {
-      return true; // validated at load time
+    has(id: string): boolean {
+      return runtime.agentDefinitions.has(id);
     },
     all(): Agent[] {
-      return []; // full enumeration not typically needed in workflow handlers
+      return [...runtime.agentDefinitions.keys()].map((name) =>
+        createRunScopedAgent(name, runtime, parentRunId, nextOrdinal),
+      );
     },
   } as AgentSet;
+}
+
+function resolveScopedDefinition(name: string, runtime: AgentRuntime): AgentDefinition {
+  const def = runtime.agentDefinitions.get(name);
+  if (!def) {
+    throw new Error(
+      `Agent "${name}" not found in the runtime. Ensure it was loaded via loadAgents() ` +
+      `before the workflow runs.`,
+    );
+  }
+  return def;
 }
 
 function createRunScopedAgent(
   name: string,
   runtime: AgentRuntime,
   parentRunId: string,
+  nextOrdinal: (name: string) => number,
 ): Agent {
   return {
     name,
     get definition(): AgentDefinition {
-      throw new Error(
-        `Use ctx.agents.get("${name}").run() or .task() to invoke agents. ` +
-        `Direct definition access is not supported in workflow context.`,
-      );
+      return resolveScopedDefinition(name, runtime);
     },
-    async run<T>(_input: AgentInput, _opts?: RunOptions): Promise<AgentOutput<T>> {
-      // Run-scoped agents in workflow context should use .task() for isolation.
-      // Direct .run() requires the runtime to expose loaded definitions, which
-      // is wired when the runtime caches its AgentSet at startup.
-      throw new Error(
-        `Run-scoped agent "${name}" requires the runtime to expose loaded definitions. ` +
-        `Use agent.task() for isolated dispatch, or load agents outside the handler.`,
-      );
+    // `.run()` executes in-process within the workflow's span tree; `.task()`
+    // dispatches an isolated (durable, memoized) child run. Both use a
+    // deterministic child run id derived from the parent run + call ordinal so
+    // workflow replay is idempotent.
+    async run<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
+      const def = resolveScopedDefinition(name, runtime);
+      const childRunId = opts?.runId ?? idempotencyKey(parentRunId, `run:${name}:${nextOrdinal(name)}`);
+      return runAgentInProcess<T>(def, input, {
+        store: runtime.store,
+        tracer: runtime.tracer,
+        runners: runtime.runners,
+        contextManager: runtime.contextManager,
+        cancelStore: runtime.cancelStore,
+        toolSources: runtime.toolSources,
+        getDefinition: (n) => runtime.agentDefinitions.get(n),
+        childDispatcher: runtime.dispatcher ?? inlineWorkflowDispatcher(runtime),
+        delegation: runtime.delegation,
+      }, {
+        runId: childRunId,
+        parentSpanId: parentRunId,
+        userId: undefined,
+        signal: opts?.signal,
+      });
     },
     async task<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
-      if (!runtime.dispatcher) {
-        throw new Error(
-          `agent.task() requires a dispatcher. In workflow handlers, ` +
-          `ensure the runtime has a configured dispatcher.`,
-        );
-      }
-      const runId = opts?.runId ?? randomUUID();
-      return runtime.dispatcher.dispatch(name, input, {
+      resolveScopedDefinition(name, runtime);
+      const dispatcher = runtime.dispatcher ?? inlineWorkflowDispatcher(runtime);
+      const runId = opts?.runId ?? idempotencyKey(parentRunId, `task:${name}:${nextOrdinal(name)}`);
+      return dispatcher.dispatch(name, input, {
         runId,
         parentSpanId: parentRunId,
-        idempotencyKey: `${parentRunId}:${name}:${runId}`,
+        idempotencyKey: runId,
+        plan: runtime.agentDefinitions.get(name)?.plan,
         signal: opts?.signal,
       }) as Promise<AgentOutput<T>>;
+    },
+  };
+}
+
+/** In-process dispatcher fallback for workflows whose runtime lacks one. */
+function inlineWorkflowDispatcher(runtime: AgentRuntime): NonNullable<AgentRuntime["dispatcher"]> {
+  return {
+    dispatch(name: string, input: AgentInput, dOpts) {
+      const def = resolveScopedDefinition(name, runtime);
+      return runAgentInProcess(def, input, {
+        store: runtime.store,
+        tracer: runtime.tracer,
+        runners: runtime.runners,
+        contextManager: runtime.contextManager,
+        cancelStore: runtime.cancelStore,
+        toolSources: runtime.toolSources,
+        getDefinition: (n) => runtime.agentDefinitions.get(n),
+        childDispatcher: inlineWorkflowDispatcher(runtime),
+        delegation: runtime.delegation,
+      }, {
+        runId: dOpts.runId,
+        parentSpanId: dOpts.parentSpanId,
+        userId: dOpts.userId,
+        depth: dOpts.depth,
+        signal: dOpts.signal,
+      });
     },
   };
 }

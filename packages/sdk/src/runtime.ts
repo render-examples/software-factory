@@ -1,13 +1,15 @@
 import type {
   RunStore,
   Tracer,
+  CancelStore,
 } from "@render-agents/store";
-import { createStore } from "@render-agents/store";
+import { createStore, MemoryCancelStore } from "@render-agents/store";
 import type {
   ModelClient,
   CompleteArgs,
   CompleteResult,
   AgentRunner,
+  AgentDefinition,
   Hook,
   HookRegistry,
   ContextManager,
@@ -19,7 +21,7 @@ import type {
   ModelPricing,
 } from "@render-agents/engine";
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
-import { RenderWorkflowsDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
+import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -48,6 +50,12 @@ export interface AgentRuntime {
   readonly hooks: HookRegistry;
   readonly contextManager: ContextManager;
   readonly dispatcher?: TaskDispatcher;
+  /** Cooperative cancellation store, shared across in-process runs/dispatch. */
+  readonly cancelStore: CancelStore;
+  /** Loaded agent definitions keyed by name. Populated by `loadAgents`; used by the dispatcher and subagent delegation. */
+  readonly agentDefinitions: Map<string, AgentDefinition>;
+  /** Optional delegation limits (depth/fanout) for subagents. */
+  readonly delegation?: Partial<DelegationLimits>;
   /** Resolved tool sources from the tools/ directory, keyed by source id. */
   readonly toolSources: Map<string, import("@render-agents/engine").ToolSource>;
 }
@@ -60,6 +68,7 @@ export interface CreateRuntimeOptions {
   retry?: Partial<RetryPolicy>;
   runners?: RunnerRegistry;
   dispatcher?: TaskDispatcher;
+  cancelStore?: CancelStore;
   delegation?: Partial<DelegationLimits>;
   hooks?: Hook[];
   contextManager?: ContextManager;
@@ -149,7 +158,26 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
-  const dispatcher = opts?.dispatcher ?? detectDispatcher();
+  const cancelStore = opts?.cancelStore ?? new MemoryCancelStore();
+  const agentDefinitions = new Map<string, AgentDefinition>();
+  const toolSources = opts?.toolSources ?? new Map();
+
+  // `.task()` always runs through a dispatcher: the Render Workflows dispatcher
+  // in production, otherwise an in-process dispatcher that provides identical
+  // observable behavior (events/spans/output + idempotent re-dispatch) minus
+  // container isolation. Tests can still pass an explicit dispatcher override.
+  const dispatcher = opts?.dispatcher
+    ?? detectDispatcher()
+    ?? new InProcessDispatcher({
+      store,
+      runners,
+      model,
+      contextManager,
+      cancelStore,
+      toolSources,
+      delegation: opts?.delegation,
+      getDefinition: (name) => agentDefinitions.get(name),
+    });
 
   // Inject hook interceptor into the store's append pipeline
   if (hooks.ids().length > 0 && "setInterceptor" in store) {
@@ -166,6 +194,9 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     hooks,
     contextManager,
     dispatcher,
-    toolSources: opts?.toolSources ?? new Map(),
+    cancelStore,
+    agentDefinitions,
+    delegation: opts?.delegation,
+    toolSources,
   };
 }

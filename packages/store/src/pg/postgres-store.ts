@@ -2,10 +2,12 @@ import pg from "pg";
 import type { Pool, PoolClient } from "pg";
 import type {
   EventLogStore,
+  EventInterceptor,
   RunEvent,
   RunEventRecord,
   ToolResult,
 } from "../events.js";
+import { EventRejectedError } from "../memory-store.js";
 import type { Message } from "../messages.js";
 import type { RunStore, RunRecord, SpanRecord, ListRunsOptions } from "../run-store.js";
 import { categoryOf } from "../categories.js";
@@ -23,9 +25,26 @@ const NOTIFY_CHANNEL = "run_events";
  * 4. NOTIFY's the stream with a pointer payload `{ runId, seq }`
  */
 export class PgEventLogStore implements EventLogStore {
+  private interceptor?: EventInterceptor;
+
   constructor(private readonly pool: Pool) {}
 
+  setInterceptor(interceptor?: EventInterceptor): void {
+    this.interceptor = interceptor;
+  }
+
   async append(record: RunEventRecord): Promise<void> {
+    let payload: RunEvent = record.payload;
+    if (this.interceptor) {
+      const res = await this.interceptor.intercept(payload, {
+        runId: record.runId,
+        agentName: record.agentName,
+      });
+      if (res.action === "reject") throw new EventRejectedError(res.reason);
+      if (res.event) payload = res.event;
+    }
+    record = { ...record, payload, type: payload.type, category: categoryOf(payload.type) };
+
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -246,8 +265,9 @@ export class PgEventLogStore implements EventLogStore {
         break;
 
       case "llm.call":
+        // Round to 1e-12 to match the in-memory fold and keep parity stable.
         await client.query(
-          `UPDATE runs SET total_cost_usd = total_cost_usd + $2 WHERE id = $1`,
+          `UPDATE runs SET total_cost_usd = round((total_cost_usd + $2)::numeric, 12) WHERE id = $1`,
           [rec.runId, p.costUsd],
         );
         break;
@@ -479,6 +499,10 @@ export class PgRunStore implements RunStore {
     await applyMigrations(this.pool);
   }
 
+  setInterceptor(interceptor?: EventInterceptor): void {
+    this.events.setInterceptor(interceptor);
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -513,21 +537,23 @@ export class PgRunStore implements RunStore {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = opts?.limit ?? 50;
+    // Parity with the in-memory store: no limit ⇒ return all matching runs.
+    const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
+    const finalParams = opts?.limit !== undefined ? [...params, opts.limit] : params;
 
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
               thread_id, user_id, agent_version, started_at, finished_at
        FROM runs ${where}
-       ORDER BY started_at DESC
-       LIMIT $${paramIdx}`,
-      [...params, limit],
+       ORDER BY started_at DESC, id DESC
+       ${limitClause}`,
+      finalParams,
     );
     return res.rows.map(mapRunRow);
   }
 
   async getMessages(runId: string, agentName: string): Promise<Message[]> {
-    const res = await this.pool.query<{ role: string; content: string }>(
+    const res = await this.pool.query<{ role: string; content: unknown }>(
       `SELECT role, content FROM run_messages
        WHERE run_id = $1 AND (agent_name = $2 OR agent_name = '')
        ORDER BY seq`,
@@ -535,7 +561,7 @@ export class PgRunStore implements RunStore {
     );
     return res.rows.map((row) => ({
       role: row.role as Message["role"],
-      content: JSON.parse(row.content),
+      content: coerceJson(row.content) as Message["content"],
     }));
   }
 
@@ -549,13 +575,13 @@ export class PgRunStore implements RunStore {
   }
 
   async getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined> {
-    const res = await this.pool.query<{ result: string | null }>(
+    const res = await this.pool.query<{ result: unknown }>(
       `SELECT result FROM workflow_steps WHERE run_id = $1 AND name = $2`,
       [runId, name],
     );
     const row = res.rows[0];
     if (!row) return undefined;
-    return { value: row.result != null ? JSON.parse(row.result) : null };
+    return { value: row.result != null ? coerceJson(row.result) : null };
   }
 
   async getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined> {
@@ -672,6 +698,20 @@ function mapSpanRow(row: PgSpanRow): SpanRecord {
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
   };
+}
+
+/**
+ * node-pg parses `json`/`jsonb` columns into JS values by default, so a column
+ * read normally arrives already-parsed. Guard against environments that disable
+ * the default parsers (returning raw text) by parsing strings on demand.
+ */
+function coerceJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function flattenContent(content: Array<{ type: string; text?: string }>): string {

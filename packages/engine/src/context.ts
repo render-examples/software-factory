@@ -17,12 +17,18 @@ export interface RunContext {
   readonly depth: number;
   env(name: string): string | undefined;
   mountTools(toolIds: string[]): Promise<MountedTools>;
-  requestApproval(toolName: string, input: unknown): Promise<ApprovalResult>;
+  requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
   awaitInput(): Promise<ContentBlock[]>;
   emit(event: RunEvent): Promise<void>;
   messages(agentName: string): Promise<Message[]>;
   appliedToolResult(toolCallId: string): Promise<ToolResult | undefined>;
   isCancelled(): Promise<boolean>;
+  /**
+   * True when this run already has a `run.started` event in the log — i.e. this
+   * is a resume/replay execution, not a fresh start. The runner uses this to
+   * avoid re-emitting the initial `run.started`/`message.user` on resume.
+   */
+  hasStarted(): Promise<boolean>;
 }
 
 export interface AgentRunner {
