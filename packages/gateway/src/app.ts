@@ -4,12 +4,15 @@ import type { CancelStore } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
+import { streamRoutes } from "./routes/stream.js";
+import { threadRoutes } from "./routes/threads.js";
 
 export interface GatewayOptions {
   runtime: AgentRuntime;
   workflows?: Map<string, WorkflowDefinition>;
   cancelStore?: CancelStore;
   port?: number;
+  defaultWorkflow?: string;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
 }
@@ -34,6 +37,12 @@ export function createGatewayApp(opts: GatewayOptions) {
   const store = runtime.store;
   const cancel = cancelStore ?? { requestCancel: async () => {}, isCancelled: async () => false, clearCancel: async () => {} };
   app.route("/", runRoutes({ store, cancelStore: cancel, workflows: workflows ?? new Map() }));
+
+  // SSE streaming routes
+  app.route("/", streamRoutes({ store }));
+
+  // Thread routes
+  app.route("/", threadRoutes({ store, workflows: workflows ?? new Map(), defaultWorkflow: opts.defaultWorkflow }));
 
   return app;
 }
