@@ -58,6 +58,8 @@ export interface InProcessDispatcherOptions {
   getDefinition: (name: string) => AgentDefinition | undefined;
   tracer?: Tracer;
   delegation?: Partial<DelegationLimits>;
+  oauthStore?: import("@render-agents/store").OAuthStore;
+  oauthRefreshers?: Map<string, import("@render-agents/engine").OAuthRefresher>;
 }
 
 /**
@@ -100,6 +102,8 @@ export class InProcessDispatcher implements TaskDispatcher {
       getDefinition: this.opts.getDefinition,
       childDispatcher: this,
       delegation: this.opts.delegation,
+      oauthStore: this.opts.oauthStore,
+      oauthRefreshers: this.opts.oauthRefreshers,
     }, {
       runId,
       parentSpanId: dispatchOpts.parentSpanId,
@@ -244,6 +248,8 @@ export async function agentTaskHandler(
     getDefinition,
     childDispatcher: runtime.dispatcher ?? throwNoDispatcher(),
     delegation: runtime.delegation,
+    oauthStore: runtime.oauthStore,
+    oauthRefreshers: runtime.oauthRefreshers,
   }, {
     runId,
     parentSpanId,

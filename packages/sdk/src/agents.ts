@@ -167,6 +167,8 @@ function runInProcess<T>(
     getDefinition: (name) => runtime.agentDefinitions.get(name),
     childDispatcher: runtime.dispatcher ?? createInlineDispatcher(runtime),
     delegation: runtime.delegation,
+    oauthStore: runtime.oauthStore,
+    oauthRefreshers: runtime.oauthRefreshers,
   }, {
     runId: opts?.runId,
     parentSpanId: opts?.parentSpanId,
@@ -195,6 +197,8 @@ function createInlineDispatcher(runtime: AgentRuntime) {
         getDefinition: (n) => runtime.agentDefinitions.get(n),
         childDispatcher: createInlineDispatcher(runtime),
         delegation: runtime.delegation,
+        oauthStore: runtime.oauthStore,
+        oauthRefreshers: runtime.oauthRefreshers,
       }, { runId: dOpts.runId, parentSpanId: dOpts.parentSpanId, userId: dOpts.userId, depth: dOpts.depth, signal: dOpts.signal });
     },
   };

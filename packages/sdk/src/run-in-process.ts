@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RunStore, Tracer, CancelStore, Logger } from "@render-agents/store";
+import type { RunStore, Tracer, CancelStore, Logger, OAuthStore } from "@render-agents/store";
 import { idempotencyKey } from "@render-agents/store";
 import type {
   AgentDefinition,
@@ -8,6 +8,7 @@ import type {
   ContextManager,
   DelegationLimits,
   ToolSource,
+  OAuthRefresher,
 } from "@render-agents/engine";
 import { InProcessRunContext, buildSubagentToolSource } from "@render-agents/engine";
 import type { RunnerRegistry, TaskDispatcher } from "./runtime.js";
@@ -30,6 +31,9 @@ export interface RunInProcessDeps {
   /** Dispatcher used for any subagent child runs (depth/idempotency propagation). */
   childDispatcher: TaskDispatcher;
   delegation?: Partial<DelegationLimits>;
+  /** OAuth store + refreshers so tools can resolve the run user's tokens. */
+  oauthStore?: OAuthStore;
+  oauthRefreshers?: Map<string, OAuthRefresher>;
 }
 
 export interface RunInProcessOptions {
@@ -82,6 +86,8 @@ export function runAgentInProcess<T = unknown>(
     toolSources,
     cancelStore: deps.cancelStore,
     approvedToolCallIds: opts?.approvedToolCallIds,
+    oauthStore: deps.oauthStore,
+    oauthRefreshers: deps.oauthRefreshers,
   });
 
   if (definition.subagents && definition.subagents.length > 0) {

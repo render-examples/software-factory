@@ -10,6 +10,7 @@ import { categoryOf } from "./categories.js";
 import type { Message } from "./messages.js";
 import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
+import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
 import type { ApprovalProjectionRecord } from "./projections.js";
 import { Projections, type ProjectionSnapshot } from "./projections.js";
 
@@ -143,10 +144,14 @@ export class MemoryEventLogStore implements EventLogStore {
  * Writes go exclusively through `events.append` — there are no direct
  * projection writers.
  */
-export class MemoryRunStore implements RunStore, ThreadStore {
+export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore {
   private readonly projections = new Projections();
   /** Thread metadata (created via the gateway API, not folded from events). */
   private readonly threads = new Map<string, Thread>();
+  /** OAuth connections keyed by `${userId}:${provider}` (plaintext in-memory). */
+  private readonly connections = new Map<string, OAuthConnection>();
+  /** Per-connection refresh mutex so concurrent refreshes coalesce. */
+  private readonly refreshLocks = new Map<string, Promise<OAuthConnection | undefined>>();
   readonly events: MemoryEventLogStore;
 
   constructor() {
@@ -218,6 +223,59 @@ export class MemoryRunStore implements RunStore, ThreadStore {
 
   async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     return this.projections.getThreadMessages(threadId);
+  }
+
+  // --- OAuthStore (plaintext in-memory; encryption is a Postgres at-rest concern) ---
+
+  async getConnection(userId: string, provider: string): Promise<OAuthConnection | undefined> {
+    const c = this.connections.get(`${userId}:${provider}`);
+    return c ? { ...c } : undefined;
+  }
+
+  async upsertConnection(conn: OAuthConnection): Promise<void> {
+    this.connections.set(`${conn.userId}:${conn.provider}`, { ...conn });
+  }
+
+  async deleteConnection(userId: string, provider: string): Promise<void> {
+    this.connections.delete(`${userId}:${provider}`);
+  }
+
+  async listConnections(userId: string): Promise<OAuthConnection[]> {
+    return [...this.connections.values()].filter(c => c.userId === userId).map(c => ({ ...c }));
+  }
+
+  async refreshConnection(
+    userId: string,
+    provider: string,
+    isExpired: (conn: OAuthConnection) => boolean,
+    doRefresh: (conn: OAuthConnection) => Promise<RefreshedTokens>,
+  ): Promise<OAuthConnection | undefined> {
+    const key = `${userId}:${provider}`;
+    const inflight = this.refreshLocks.get(key);
+    if (inflight) return inflight;
+
+    const run = (async (): Promise<OAuthConnection | undefined> => {
+      const conn = this.connections.get(key);
+      if (!conn) return undefined;
+      if (!isExpired(conn)) return { ...conn };
+      const tokens = await doRefresh(conn);
+      const updated: OAuthConnection = {
+        ...conn,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken ?? conn.refreshToken,
+        expiresAt: tokens.expiresAt,
+        updatedAt: new Date().toISOString(),
+      };
+      this.connections.set(key, updated);
+      return { ...updated };
+    })();
+
+    this.refreshLocks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      this.refreshLocks.delete(key);
+    }
   }
 
   /** All projections for a run as a plain snapshot (used to validate replay equivalence). */
