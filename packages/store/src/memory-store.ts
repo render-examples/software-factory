@@ -180,6 +180,14 @@ export class MemoryRunStore implements RunStore {
     return this.projections.getToolResult(runId, toolCallId);
   }
 
+  async getApprovals(runId: string): Promise<import("./projections.js").ApprovalProjectionRecord[]> {
+    return this.projections.getApprovals(runId);
+  }
+
+  async listApprovals(opts?: import("./run-store.js").ListApprovalsOptions): Promise<import("./projections.js").ApprovalProjectionRecord[]> {
+    return this.projections.listApprovals(opts);
+  }
+
   /** All projections for a run as a plain snapshot (used to validate replay equivalence). */
   snapshot(runId: string): ProjectionSnapshot {
     return this.projections.dump(runId);

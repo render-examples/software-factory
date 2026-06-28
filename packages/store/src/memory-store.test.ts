@@ -19,6 +19,33 @@ async function emit(
   await store.events.append(buildEventRecord(runId, event, { agentName: AGENT, ...meta }));
 }
 
+describe("approvals read-surface", () => {
+  it("getApprovals folds per-run; listApprovals spans runs with status filter", async () => {
+    const store = createMemoryStore();
+    // run A: one pending approval
+    await emit(store, "A", { type: "run.started" });
+    await emit(store, "A", { type: "approval.requested", approvalRequestId: "ap-A", toolName: "github", input: { x: 1 } });
+    // run B: one approval, later resolved (approved)
+    await emit(store, "B", { type: "run.started" });
+    await emit(store, "B", { type: "approval.requested", approvalRequestId: "ap-B", toolName: "deploy", input: {} });
+    await emit(store, "B", { type: "approval.resolved", approvalRequestId: "ap-B", approved: true, resolvedBy: "alice" });
+
+    const aprA = await store.getApprovals("A");
+    expect(aprA).toHaveLength(1);
+    expect(aprA[0]).toMatchObject({ approvalRequestId: "ap-A", runId: "A", status: "pending", toolName: "github" });
+
+    const pending = await store.listApprovals({ status: "pending" });
+    expect(pending.map((a) => a.approvalRequestId)).toEqual(["ap-A"]);
+
+    const approved = await store.listApprovals({ status: "approved" });
+    expect(approved.map((a) => a.approvalRequestId)).toEqual(["ap-B"]);
+    expect(approved[0].resolvedBy).toBe("alice");
+
+    const all = await store.listApprovals();
+    expect(all).toHaveLength(2);
+  });
+});
+
 describe("MemoryEventLogStore.append", () => {
   it("assigns a gap-free, monotonic seq per run", async () => {
     const store = createMemoryStore();

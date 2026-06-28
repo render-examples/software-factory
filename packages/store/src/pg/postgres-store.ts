@@ -9,7 +9,8 @@ import type {
 } from "../events.js";
 import { EventRejectedError } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions } from "../run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "../run-store.js";
+import type { ApprovalProjectionRecord } from "../projections.js";
 import { categoryOf } from "../categories.js";
 import { idempotencyKey } from "../idempotency.js";
 import { applyMigrations } from "./migrations.js";
@@ -598,6 +599,32 @@ export class PgRunStore implements RunStore {
       isError: row.result_is_error || undefined,
     };
   }
+
+  async getApprovals(runId: string): Promise<ApprovalProjectionRecord[]> {
+    const res = await this.pool.query<PgApprovalRow>(
+      `SELECT id, run_id, tool_name, tool_input, agent_name, status, requested_at, resolved_at, resolved_by, reason
+       FROM approval_requests WHERE run_id = $1 ORDER BY requested_at`,
+      [runId],
+    );
+    return res.rows.map(mapApprovalRow);
+  }
+
+  async listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]> {
+    const params: unknown[] = [];
+    let where = "";
+    if (opts?.status) {
+      params.push(opts.status);
+      where = `WHERE status = $${params.length}`;
+    }
+    const limitClause = opts?.limit !== undefined ? `LIMIT $${params.length + 1}` : "";
+    if (opts?.limit !== undefined) params.push(opts.limit);
+    const res = await this.pool.query<PgApprovalRow>(
+      `SELECT id, run_id, tool_name, tool_input, agent_name, status, requested_at, resolved_at, resolved_by, reason
+       FROM approval_requests ${where} ORDER BY requested_at DESC ${limitClause}`,
+      params,
+    );
+    return res.rows.map(mapApprovalRow);
+  }
 }
 
 // --- Row types and mappers ---
@@ -630,6 +657,19 @@ interface PgRunRow {
   agent_version: string | null;
   started_at: Date;
   finished_at: Date | null;
+}
+
+interface PgApprovalRow {
+  id: string;
+  run_id: string;
+  tool_name: string;
+  tool_input: unknown;
+  agent_name: string | null;
+  status: string;
+  requested_at: Date;
+  resolved_at: Date | null;
+  resolved_by: string | null;
+  reason: string | null;
 }
 
 interface PgSpanRow {
@@ -679,6 +719,21 @@ function mapRunRow(row: PgRunRow): RunRecord {
     agentVersion: row.agent_version ?? undefined,
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
+  };
+}
+
+function mapApprovalRow(row: PgApprovalRow): ApprovalProjectionRecord {
+  return {
+    approvalRequestId: row.id,
+    runId: row.run_id,
+    toolName: row.tool_name,
+    input: coerceJson(row.tool_input),
+    agentName: row.agent_name ?? undefined,
+    status: row.status as ApprovalProjectionRecord["status"],
+    requestedAt: row.requested_at.toISOString(),
+    resolvedAt: row.resolved_at?.toISOString(),
+    resolvedBy: row.resolved_by ?? undefined,
+    reason: row.reason ?? undefined,
   };
 }
 
