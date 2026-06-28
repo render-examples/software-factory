@@ -50,6 +50,9 @@ jobs:
       - name: Lint
         run: pnpm turbo run lint
 
+      - name: Bundle-size gate (sdk < 100KB)
+        run: pnpm check:bundle-size
+
       - name: Test
         run: pnpm turbo run test
         env:
