@@ -46,6 +46,43 @@ describe("approvals read-surface", () => {
   });
 });
 
+describe("retention cleanup", () => {
+  /** Append a full terminal run with a fixed timestamp. */
+  async function seedRun(store: ReturnType<typeof createMemoryStore>, runId: string, ts: string) {
+    await store.events.append(buildEventRecord(runId, { type: "run.started", input: "x" }, { agentName: AGENT, ts }));
+    await store.events.append(buildEventRecord(runId, { type: "message.user", content: [{ type: "text", text: "hi" }] }, { agentName: AGENT, ts }));
+    await store.events.append(buildEventRecord(runId, { type: "run.completed", result: "ok" }, { agentName: AGENT, ts }));
+  }
+
+  it("trims event-detail at the event horizon, keeps summaries to the run horizon, guards active runs", async () => {
+    const store = createMemoryStore();
+    const now = new Date("2026-06-28T00:00:00Z");
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+
+    await seedRun(store, "old", daysAgo(100));     // > both horizons → detail + summary gone
+    await seedRun(store, "mid", daysAgo(45));       // > event, < run → detail gone, summary kept
+    await seedRun(store, "fresh", daysAgo(5));      // < both → untouched
+    // An active (paused) run that is ancient must never be trimmed.
+    await store.events.append(buildEventRecord("active", { type: "run.started", input: "x" }, { agentName: AGENT, ts: daysAgo(200) }));
+    await store.events.append(buildEventRecord("active", { type: "run.paused", reason: "approval" }, { agentName: AGENT, ts: daysAgo(200) }));
+
+    const res = await store.cleanup({ eventRetentionDays: 30, runRetentionDays: 90, now });
+    expect(res).toEqual({ eventDetailTrimmed: 2, runsDeleted: 1 });
+
+    // old: gone entirely.
+    expect(await store.getRun("old")).toBeUndefined();
+    // mid: summary kept, detail trimmed.
+    expect((await store.getRun("mid"))?.status).toBe("completed");
+    expect(await store.events.read("mid")).toHaveLength(0);
+    expect(await store.getMessages("mid", AGENT)).toHaveLength(0);
+    // fresh: intact.
+    expect(await store.events.read("fresh")).toHaveLength(3);
+    // active: untouched despite age.
+    expect((await store.getRun("active"))?.status).toBe("paused");
+    expect((await store.events.read("active")).length).toBeGreaterThan(0);
+  });
+});
+
 describe("MemoryEventLogStore.append", () => {
   it("assigns a gap-free, monotonic seq per run", async () => {
     const store = createMemoryStore();

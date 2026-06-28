@@ -8,7 +8,8 @@ import type {
 } from "./events.js";
 import { categoryOf } from "./categories.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult } from "./run-store.js";
+import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
 import type { ApprovalProjectionRecord } from "./projections.js";
@@ -125,6 +126,11 @@ export class MemoryEventLogStore implements EventLogStore {
     return generator();
   }
 
+  /** Drop all stored events for a run (retention event-detail trim). */
+  deleteRun(runId: string): void {
+    this.byRun.delete(runId);
+  }
+
   private publish(rec: RunEventRecord): void {
     const copy = { ...rec, payload: { ...rec.payload } };
     for (const sub of this.subscribers) {
@@ -195,6 +201,30 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore {
 
   async listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]> {
     return this.projections.listApprovals(opts);
+  }
+
+  async cleanup(opts: RetentionOptions): Promise<RetentionResult> {
+    const now = (opts.now ?? new Date()).getTime();
+    const eventHorizon = now - opts.eventRetentionDays * 86_400_000;
+    const runHorizon = now - opts.runRetentionDays * 86_400_000;
+    let eventDetailTrimmed = 0;
+    let runsDeleted = 0;
+
+    for (const run of this.projections.listRuns()) {
+      if (!TERMINAL_STATUSES.has(run.status)) continue; // never trim active runs
+      const age = Date.parse(run.finishedAt ?? run.startedAt);
+      if (Number.isNaN(age)) continue;
+      if (age < eventHorizon) {
+        this.projections.trimEventDetail(run.id);
+        this.events.deleteRun(run.id);
+        eventDetailTrimmed += 1;
+      }
+      if (age < runHorizon) {
+        this.projections.deleteRunSummary(run.id);
+        runsDeleted += 1;
+      }
+    }
+    return { eventDetailTrimmed, runsDeleted };
   }
 
   // --- ThreadStore (metadata in-memory; transcript folded from the event log) ---

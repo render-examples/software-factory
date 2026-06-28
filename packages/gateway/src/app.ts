@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { CancelStore } from "@render-agents/store";
+import { runRetention } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
 import { resumeRun } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
@@ -42,6 +43,15 @@ export function createGatewayApp(opts: GatewayOptions) {
   const app = new Hono();
   const { runtime, workflows, cancelStore } = opts;
 
+  // Production-readiness config audit: OAuth token encryption falls back to an
+  // insecure dev key when this is unset — warn loudly so it isn't shipped.
+  if (!opts.disableAuth && !process.env.RENDER_AGENTS_ENCRYPTION_KEY) {
+    console.warn(
+      "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; OAuth tokens use an INSECURE dev key. " +
+        "Set a strong 32+ char secret in production.",
+    );
+  }
+
   // Health check (no auth)
   app.get("/health", (c) => c.json({ status: "ok" }));
 
@@ -61,6 +71,12 @@ export function createGatewayApp(opts: GatewayOptions) {
   const wf = workflows ?? new Map();
   // Resolving an approval / delivering input must re-drive the paused run.
   const resume = opts.resume ?? ((runId: string) => resumeRun(runId, runtime));
+
+  // Admin: retention cleanup (authed) — wired to a daily Render Cron.
+  app.post("/admin/retention", async (c) => {
+    const result = await runRetention(store);
+    return c.json(result);
+  });
 
   // Core run routes
   app.route("/", runRoutes({ store, cancelStore: cancel, workflows: wf }));

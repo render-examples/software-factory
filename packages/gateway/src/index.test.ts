@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ConnectorSpec, ConnectorContext, WebhookMatch } from "../src/index.js";
 import { createGatewayApp } from "../src/index.js";
 import type { GatewayOptions } from "../src/index.js";
-import { createMemoryStore, MemoryCancelStore, type RunStore } from "@render-agents/store";
+import { createMemoryStore, MemoryCancelStore, buildEventRecord, type RunStore } from "@render-agents/store";
 
 /**
  * Build a minimal `AgentRuntime` satisfying the full interface for route tests.
@@ -78,5 +78,21 @@ describe("@render-agents/gateway", () => {
       body: JSON.stringify({ input: "test" }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it("POST /admin/retention runs the cleanup and returns counts", async () => {
+    const store = createMemoryStore();
+    await store.init();
+    // Seed an ancient terminal run.
+    const old = new Date(Date.now() - 200 * 86_400_000).toISOString();
+    await store.events.append(buildEventRecord("ret-old", { type: "run.started", input: "x" }, { agentName: "w", ts: old }));
+    await store.events.append(buildEventRecord("ret-old", { type: "run.completed", result: "ok" }, { agentName: "w", ts: old }));
+
+    const app = createGatewayApp({ runtime: makeTestRuntime(store), disableAuth: true });
+    const res = await app.request("/admin/retention", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.eventDetailTrimmed).toBeGreaterThanOrEqual(1);
+    expect(body.runsDeleted).toBeGreaterThanOrEqual(1);
   });
 });

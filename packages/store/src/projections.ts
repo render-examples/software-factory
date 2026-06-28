@@ -372,6 +372,24 @@ export class Projections {
     return rows;
   }
 
+  /**
+   * Trim event-detail projections for a run (spans, run_messages, tool_calls,
+   * steps, approvals). The human-facing thread transcript is intentionally
+   * preserved (kept with the thread per the retention policy).
+   */
+  trimEventDetail(runId: string): void {
+    this.messages.delete(runId);
+    this.spans.delete(runId);
+    this.toolResults.delete(runId);
+    this.steps.delete(runId);
+    this.approvals.delete(runId);
+  }
+
+  /** Delete a run summary (the `runs` row). */
+  deleteRunSummary(runId: string): void {
+    this.runs.delete(runId);
+  }
+
   dump(runId: string): ProjectionSnapshot {
     return {
       run: this.getRun(runId),

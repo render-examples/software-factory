@@ -350,6 +350,50 @@ describeWithPg("OAuth connections — encryption at rest + single-flight refresh
   });
 });
 
+describeWithPg("retention cleanup parity", () => {
+  let pgStore: PgRunStore;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+  });
+  afterAll(async () => { await pgStore.close(); });
+
+  it("trims event-detail + old summaries, preserves transcript/thread/active runs", async () => {
+    const now = new Date();
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+    const tag = `ret-${Date.now()}`;
+    const threadId = `${tag}-thread`;
+    await pgStore.createThread({ id: threadId, status: "active", createdAt: daysAgo(100), updatedAt: daysAgo(100) });
+
+    const seed = async (runId: string, ts: string, threaded = false) => {
+      await pgStore.events.append(buildEventRecord(runId, { type: "run.started", input: "x", threadId: threaded ? threadId : undefined }, { agentName: AGENT, ts }));
+      await pgStore.events.append(buildEventRecord(runId, { type: "message.user", content: [{ type: "text", text: "hello" }] }, { agentName: AGENT, ts }));
+      await pgStore.events.append(buildEventRecord(runId, { type: "run.completed", result: "ok" }, { agentName: AGENT, ts }));
+    };
+    await seed(`${tag}-old`, daysAgo(100), true);   // detail+summary gone, transcript kept
+    await seed(`${tag}-mid`, daysAgo(45));          // detail gone, summary kept
+    await seed(`${tag}-fresh`, daysAgo(2));         // untouched
+    // ancient active run — never trimmed
+    await pgStore.events.append(buildEventRecord(`${tag}-active`, { type: "run.started", input: "x" }, { agentName: AGENT, ts: daysAgo(300) }));
+    await pgStore.events.append(buildEventRecord(`${tag}-active`, { type: "run.paused", reason: "approval" }, { agentName: AGENT, ts: daysAgo(300) }));
+
+    const res = await pgStore.cleanup({ eventRetentionDays: 30, runRetentionDays: 90, now });
+    expect(res.eventDetailTrimmed).toBeGreaterThanOrEqual(2);
+    expect(res.runsDeleted).toBeGreaterThanOrEqual(1);
+
+    expect(await pgStore.getRun(`${tag}-old`)).toBeUndefined();
+    expect((await pgStore.getRun(`${tag}-mid`))?.status).toBe("completed");
+    expect(await pgStore.events.read(`${tag}-mid`)).toHaveLength(0);
+    expect((await pgStore.events.read(`${tag}-fresh`)).length).toBe(3);
+    expect((await pgStore.getRun(`${tag}-active`))?.status).toBe("paused");
+
+    // The human-facing transcript outlives the trimmed run detail.
+    const transcript = await pgStore.getThreadMessages(threadId);
+    expect(transcript.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describeWithPg("PgRunStore.init() idempotency", () => {
   it("is safe to call multiple times (advisory lock)", async () => {
     const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
