@@ -9,41 +9,18 @@ export function hitlRoutes(deps: { store: RunStore }) {
   const app = new Hono();
   const { store } = deps;
 
-  // GET /approvals — list pending approvals
+  // GET /approvals — list pending approvals (read directly from the projection)
   app.get("/approvals", async (c) => {
-    const runs = await store.listRuns({ status: "paused", limit: 100 });
-    const pending: Array<{ id: string; runId: string; toolName: string; input: unknown; requestedAt: string }> = [];
-
-    for (const run of runs) {
-      const events = await store.events.read(run.id);
-      const requested = new Set<string>();
-      const resolved = new Set<string>();
-
-      for (const e of events) {
-        if (e.payload.type === "approval.requested") {
-          requested.add(e.payload.approvalRequestId);
-          pending.push({
-            id: e.payload.approvalRequestId,
-            runId: run.id,
-            toolName: e.payload.toolName,
-            input: e.payload.input,
-            requestedAt: e.ts,
-          });
-        }
-        if (e.payload.type === "approval.resolved") {
-          resolved.add(e.payload.approvalRequestId);
-        }
-      }
-
-      // Remove already-resolved from the pending list
-      for (let i = pending.length - 1; i >= 0; i--) {
-        if (resolved.has(pending[i].id)) {
-          pending.splice(i, 1);
-        }
-      }
-    }
-
-    return c.json({ approvals: pending });
+    const records = await store.listApprovals({ status: "pending" });
+    const approvals = records.map((a) => ({
+      id: a.approvalRequestId,
+      runId: a.runId,
+      toolName: a.toolName,
+      input: a.input,
+      agentName: a.agentName,
+      requestedAt: a.requestedAt,
+    }));
+    return c.json({ approvals });
   });
 
   // POST /approvals/:id/resolve — approve or deny
@@ -60,24 +37,16 @@ export function hitlRoutes(deps: { store: RunStore }) {
       return c.json({ error: "approved (boolean) is required" }, 400);
     }
 
-    // Find the run containing this approval
-    const runs = await store.listRuns({ status: "paused", limit: 100 });
-    let targetRunId: string | undefined;
-
-    for (const run of runs) {
-      const events = await store.events.read(run.id);
-      for (const e of events) {
-        if (e.payload.type === "approval.requested" && e.payload.approvalRequestId === approvalId) {
-          targetRunId = run.id;
-          break;
-        }
-      }
-      if (targetRunId) break;
+    // Find the run containing this approval via the projection (any status).
+    const all = await store.listApprovals();
+    const target = all.find((a) => a.approvalRequestId === approvalId);
+    if (!target) {
+      return c.json({ error: `Approval "${approvalId}" not found` }, 404);
     }
-
-    if (!targetRunId) {
-      return c.json({ error: `Approval "${approvalId}" not found or already resolved` }, 404);
+    if (target.status !== "pending") {
+      return c.json({ error: `Approval "${approvalId}" already ${target.status}` }, 409);
     }
+    const targetRunId = target.runId;
 
     // Emit resolution event
     await store.events.append(

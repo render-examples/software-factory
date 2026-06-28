@@ -313,6 +313,18 @@ export class Projections {
     return [...(this.approvals.get(runId)?.values() ?? [])].map(a => ({ ...a }));
   }
 
+  /** All approvals across every run, newest request first, optional status filter. */
+  listApprovals(opts?: { status?: "pending" | "approved" | "denied"; limit?: number }): ApprovalProjectionRecord[] {
+    let rows: ApprovalProjectionRecord[] = [];
+    for (const map of this.approvals.values()) {
+      for (const a of map.values()) rows.push({ ...a });
+    }
+    if (opts?.status) rows = rows.filter(a => a.status === opts.status);
+    rows.sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : a.requestedAt > b.requestedAt ? -1 : 0));
+    if (opts?.limit !== undefined) rows = rows.slice(0, opts.limit);
+    return rows;
+  }
+
   dump(runId: string): ProjectionSnapshot {
     return {
       run: this.getRun(runId),
