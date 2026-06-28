@@ -80,5 +80,10 @@ export { validateToolInput } from "./schema-validate.js";
 
 export type { DelegationLimits } from "./delegation.js";
 
+export { buildSubagentToolSource } from "./subagent-source.js";
+export type { SubagentDispatcher, SubagentSourceOptions } from "./subagent-source.js";
+
+export { buildHookInterceptor } from "./hook-adapter.js";
+
 export type { TierEntry, ResolveModelResult } from "./tiers.js";
 export { isTierAlias, inferProvider, resolveModelSpec } from "./tiers.js";

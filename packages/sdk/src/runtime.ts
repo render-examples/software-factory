@@ -18,7 +18,7 @@ import type {
   RetryPolicy,
   ModelPricing,
 } from "@render-agents/engine";
-import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer } from "@render-agents/engine";
+import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
 import { RenderWorkflowsDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
 
 export interface RunnerRegistry {
@@ -150,6 +150,13 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
   const dispatcher = opts?.dispatcher ?? detectDispatcher();
+
+  // Inject hook interceptor into the store's append pipeline
+  if (hooks.ids().length > 0 && "setInterceptor" in store) {
+    const consoleLogger = { debug: () => {}, info: () => {}, warn: console.warn, error: console.error };
+    const interceptor = buildHookInterceptor(hooks, consoleLogger, (name) => process.env[name]);
+    (store as { setInterceptor: (i: unknown) => void }).setInterceptor(interceptor);
+  }
 
   return {
     store,
