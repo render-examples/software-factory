@@ -8,6 +8,7 @@ export { runRetention } from "./retention.js";
 export { aggregateRunCost } from "./aggregate.js";
 export type { CancelStore } from "./cancel-store.js";
 export type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";
+export { parseCron, matchesCron, validateCron, dueSchedules } from "./cron.js";
 export type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 export type { ApprovalRequest, ApprovalStore } from "./approval-store.js";
 export type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";

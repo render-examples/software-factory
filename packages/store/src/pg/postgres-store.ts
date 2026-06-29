@@ -13,6 +13,7 @@ import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOpt
 import type { ApprovalProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
+import type { ScheduleRecord, ScheduleStore } from "../schedule-store.js";
 import { encrypt, decrypt, encryptionKeyFromEnv } from "../crypto.js";
 import { categoryOf } from "../categories.js";
 import { idempotencyKey } from "../idempotency.js";
@@ -534,7 +535,7 @@ export class PgEventLogStore implements EventLogStore {
 
 // --- Postgres RunStore implementation ---
 
-export class PgRunStore implements RunStore, ThreadStore, OAuthStore {
+export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleStore {
   private readonly pool: Pool;
   readonly events: PgEventLogStore;
 
@@ -736,6 +737,66 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore {
       [threadId],
     );
     return res.rows.map(mapMessageRow);
+  }
+
+  // --- ScheduleStore (operational table; never auto-expired) ---
+
+  async createSchedule(s: ScheduleRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO schedules (id, workflow, cron_expression, input, enabled, last_run_id, last_run_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        s.id, s.workflow, s.cronExpression,
+        s.input !== undefined ? JSON.stringify(s.input) : null,
+        s.enabled, s.lastRunId ?? null, s.lastRunAt ?? null, s.createdAt, s.updatedAt,
+      ],
+    );
+  }
+
+  async getSchedule(id: string): Promise<ScheduleRecord | undefined> {
+    const res = await this.pool.query<PgScheduleRow>(
+      `SELECT id, workflow, cron_expression, input, enabled, last_run_id, last_run_at, created_at, updated_at
+       FROM schedules WHERE id = $1`,
+      [id],
+    );
+    return res.rows.length > 0 ? mapScheduleRow(res.rows[0]) : undefined;
+  }
+
+  async updateSchedule(id: string, patch: Partial<ScheduleRecord>): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (patch.workflow !== undefined) add("workflow", patch.workflow);
+    if (patch.cronExpression !== undefined) add("cron_expression", patch.cronExpression);
+    if (patch.input !== undefined) add("input", JSON.stringify(patch.input));
+    if (patch.enabled !== undefined) add("enabled", patch.enabled);
+    if (patch.lastRunId !== undefined) add("last_run_id", patch.lastRunId);
+    if (patch.lastRunAt !== undefined) add("last_run_at", patch.lastRunAt);
+    params.push(new Date().toISOString());
+    sets.push(`updated_at = $${params.length}`);
+    if (sets.length === 1) return; // only updated_at → nothing meaningful
+    await this.pool.query(`UPDATE schedules SET ${sets.join(", ")} WHERE id = $1`, params);
+  }
+
+  async deleteSchedule(id: string): Promise<void> {
+    await this.pool.query(`DELETE FROM schedules WHERE id = $1`, [id]);
+  }
+
+  async listSchedules(): Promise<ScheduleRecord[]> {
+    const res = await this.pool.query<PgScheduleRow>(
+      `SELECT id, workflow, cron_expression, input, enabled, last_run_id, last_run_at, created_at, updated_at
+       FROM schedules ORDER BY created_at DESC`,
+    );
+    return res.rows.map(mapScheduleRow);
+  }
+
+  async listEnabled(): Promise<ScheduleRecord[]> {
+    const res = await this.pool.query<PgScheduleRow>(
+      `SELECT id, workflow, cron_expression, input, enabled, last_run_id, last_run_at, created_at, updated_at
+       FROM schedules WHERE enabled = true ORDER BY created_at DESC`,
+    );
+    return res.rows.map(mapScheduleRow);
   }
 
   async cleanup(opts: RetentionOptions): Promise<RetentionResult> {
@@ -1000,6 +1061,18 @@ interface PgMessageRow {
   created_at: Date;
 }
 
+interface PgScheduleRow {
+  id: string;
+  workflow: string;
+  cron_expression: string;
+  input: unknown;
+  enabled: boolean;
+  last_run_id: string | null;
+  last_run_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 interface PgOAuthRow {
   id: string;
   user_id: string;
@@ -1047,6 +1120,20 @@ function mapMessageRow(row: PgMessageRow): ThreadMessage {
     role: row.role as ThreadMessage["role"],
     content: row.content,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+function mapScheduleRow(row: PgScheduleRow): ScheduleRecord {
+  return {
+    id: row.id,
+    workflow: row.workflow,
+    cronExpression: row.cron_expression,
+    input: coerceJson(row.input) ?? undefined,
+    enabled: row.enabled,
+    lastRunId: row.last_run_id ?? undefined,
+    lastRunAt: row.last_run_at ? row.last_run_at.toISOString() : undefined,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
   };
 }
 

@@ -17,6 +17,7 @@ const CORE_MIGRATIONS = [
   "0003_run_events.sql",
   "0004_projections.sql",
   "0005_messages_oauth.sql",
+  "0006_schedules_fk.sql",
 ];
 
 /**

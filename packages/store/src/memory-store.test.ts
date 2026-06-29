@@ -329,3 +329,44 @@ describe("tail", () => {
     expect(received).toEqual(["run.started", "run.completed"]);
   });
 });
+
+describe("ScheduleStore (memory)", () => {
+  const rec = (id: string, over: Partial<import("./schedule-store.js").ScheduleRecord> = {}) => ({
+    id,
+    workflow: "code-review",
+    cronExpression: "*/5 * * * *",
+    enabled: true,
+    createdAt: "2026-06-29T00:00:00.000Z",
+    updatedAt: "2026-06-29T00:00:00.000Z",
+    ...over,
+  });
+
+  it("creates, reads, updates, lists, and deletes schedules", async () => {
+    const store = createMemoryStore();
+    await store.createSchedule(rec("s1"));
+    await store.createSchedule(rec("s2", { enabled: false }));
+
+    expect((await store.getSchedule("s1"))?.workflow).toBe("code-review");
+    expect(await store.listSchedules()).toHaveLength(2);
+    expect((await store.listEnabled()).map((s) => s.id)).toEqual(["s1"]);
+
+    await store.updateSchedule("s1", { enabled: false, lastRunId: "run-1", lastRunAt: "2026-06-29T00:05:00.000Z" });
+    const updated = await store.getSchedule("s1");
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.lastRunId).toBe("run-1");
+    expect(await store.listEnabled()).toHaveLength(0);
+
+    await store.deleteSchedule("s1");
+    expect(await store.getSchedule("s1")).toBeUndefined();
+    expect(await store.listSchedules()).toHaveLength(1);
+  });
+
+  it("never mutates id/createdAt on update", async () => {
+    const store = createMemoryStore();
+    await store.createSchedule(rec("s1"));
+    await store.updateSchedule("s1", { id: "hacked", createdAt: "1999-01-01T00:00:00.000Z", enabled: false } as never);
+    const s = await store.getSchedule("s1");
+    expect(s?.id).toBe("s1");
+    expect(s?.createdAt).toBe("2026-06-29T00:00:00.000Z");
+  });
+});
