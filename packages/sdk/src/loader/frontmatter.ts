@@ -5,7 +5,7 @@ import { LoadError, ERR_UNKNOWN_FIELD, ERR_EMPTY_BODY, ERR_FRONTMATTER_VALIDATIO
 const KNOWN_FIELDS = new Set([
   "model", "provider", "description", "tools", "subagents",
   "skills", "permissions", "output", "context", "budget",
-  "plan", "sampling", "runner",
+  "plan", "sampling", "runner", "interactive",
 ]);
 
 const FrontmatterSchema = z.object({
@@ -36,6 +36,8 @@ const FrontmatterSchema = z.object({
     maxOutputTokens: z.number().optional(),
   }).optional(),
   runner: z.string().optional(),
+  /** Conversational agent: parks on `awaitInput()` between turns instead of completing. */
+  interactive: z.boolean().optional(),
 });
 
 export type ParsedFrontmatter = z.infer<typeof FrontmatterSchema>;

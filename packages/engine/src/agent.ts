@@ -63,6 +63,12 @@ export interface AgentDefinition {
   context?: ContextConfig;
   plan?: RenderPlan;
   runner?: string;
+  /**
+   * Conversational agent. When true, the runner parks on `ctx.awaitInput()`
+   * after a terminal turn (emitting `run.paused { reason: "input" }`) instead of
+   * completing, so the run awaits the next user message — the basis for threads.
+   */
+  interactive?: boolean;
 }
 
 export type AgentInput = string | Record<string, unknown>;

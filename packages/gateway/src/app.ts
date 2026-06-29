@@ -3,7 +3,7 @@ import { serve } from "@hono/node-server";
 import type { CancelStore } from "@render-agents/store";
 import { runRetention } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
-import { resumeRun } from "@render-agents/sdk";
+import { resumeRun, RunPaused } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
@@ -20,6 +20,12 @@ export interface GatewayOptions {
   cancelStore?: CancelStore;
   port?: number;
   defaultWorkflow?: string;
+  /**
+   * Conversational agent for threads. When set, a thread's first message
+   * dispatches this (interactive) agent run; subsequent messages resume it. When
+   * unset, threads fall back to `defaultWorkflow`.
+   */
+  defaultAgent?: string;
   baseUrl?: string;
   oauthProviders?: Map<string, OAuthProviderConfig>;
   webhooks?: Map<string, WebhookAdapter>;
@@ -92,8 +98,22 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   const awaitResume = opts.awaitResume ?? false;
 
+  // Start an interactive chat agent run for a thread's first message. The agent
+  // parks on awaitInput after replying (throws RunPaused) — expected, not an error.
+  const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string }): Promise<void> => {
+    if (!runtime.dispatcher) throw new Error("No dispatcher configured for conversational threads");
+    try {
+      await runtime.dispatcher.dispatch(agentName, input, {
+        runId: o.runId, threadId: o.threadId, userId: o.userId,
+        idempotencyKey: o.runId, plan: runtime.agentDefinitions.get(agentName)?.plan,
+      });
+    } catch (err) {
+      if (!(err instanceof RunPaused)) throw err;
+    }
+  };
+
   // Thread routes
-  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume, awaitResume }));
+  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, defaultAgent: opts.defaultAgent, startAgentRun, resume, awaitResume }));
 
   // HITL routes (approvals + resume)
   app.route("/", hitlRoutes({ store, resume, awaitResume }));

@@ -9,6 +9,9 @@ export interface ThreadRouteDeps {
   threadStore: ThreadStore;
   workflows: Map<string, WorkflowDefinition>;
   defaultWorkflow?: string;
+  /** Conversational agent for threads; takes precedence over defaultWorkflow when set. */
+  defaultAgent?: string;
+  startAgentRun?: (agentName: string, input: string, opts: { runId: string; threadId: string; userId?: string }) => Promise<void>;
   resume?: (runId: string) => Promise<unknown>;
   awaitResume?: boolean;
 }
@@ -25,7 +28,7 @@ function isUniqueViolation(err: unknown): boolean {
  */
 export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
-  const { store, threadStore, workflows, defaultWorkflow, resume, awaitResume } = deps;
+  const { store, threadStore, workflows, defaultWorkflow, defaultAgent, startAgentRun, resume, awaitResume } = deps;
 
   const driveResume = (runId: string): Promise<void> => {
     if (!resume) return Promise.resolve();
@@ -132,7 +135,15 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       return c.json({ runId: active.id, delivered: true }, 200);
     }
 
-    // No active run — dispatch a new one for this thread.
+    // No active run — start a new turn for this thread. A conversational
+    // `defaultAgent` (interactive) is preferred: it parks awaiting the next
+    // message, so memory accrues in one run; subsequent messages resume it.
+    if (defaultAgent && startAgentRun) {
+      const runId = randomUUID();
+      await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: body.userId ?? thread.userId });
+      return c.json({ runId, dispatched: true, agent: defaultAgent }, 202);
+    }
+
     const workflowName = defaultWorkflow ?? "default";
     const workflow = workflows.get(workflowName);
     if (!workflow) {

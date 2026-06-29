@@ -27,7 +27,7 @@ describe("buildFileMap", () => {
   it("emits the full spec-layout project", () => {
     for (const expected of [
       "package.json", "tsconfig.json", ".env.example", "render.yaml", "compose.yaml", "README.md",
-      "agents/_shared.md", "agents/security.md", "agents/performance.md", "agents/judge.md",
+      "agents/_shared.md", "agents/security.md", "agents/performance.md", "agents/judge.md", "agents/assistant.md",
       "tools/github/index.ts", "tools/linear/index.ts",
       "skills/security-patterns/SKILL.md",
       "workflows/code-review/index.ts",

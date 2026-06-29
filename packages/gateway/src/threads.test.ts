@@ -31,6 +31,41 @@ async function buildApp() {
   return { app, runtime };
 }
 
+describe("gateway threads — conversational (interactive agent) memory", () => {
+  async function buildChatApp() {
+    const runtime = await createTestRuntime({
+      model: mockModel((args) => {
+        const users = args.messages.filter((m) => m.role === "user").length;
+        return { content: [{ type: "text", text: `users=${users}` }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" };
+      }),
+    });
+    runtime.agentDefinitions.set("assistant", {
+      name: "assistant", model: { provider: "anthropic", model: "claude-haiku-4-5" }, systemPrompt: "chat", tools: [], interactive: true,
+    });
+    const app = createGatewayApp({ runtime, defaultAgent: "assistant", disableAuth: true, awaitResume: true });
+    return { app, runtime };
+  }
+
+  it("dispatches a chat agent, parks, and remembers across turns via the thread", async () => {
+    const { app } = await buildChatApp();
+    const thread = await (await app.request("/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+
+    // Turn 1
+    const r1 = await app.request(`/threads/${thread.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "hello" }) });
+    expect(r1.status).toBe(202);
+    expect((await r1.json()).agent).toBe("assistant");
+
+    // Turn 2 — delivered into the same parked run (not a new dispatch).
+    const r2 = await app.request(`/threads/${thread.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "again" }) });
+    expect(r2.status).toBe(200);
+    expect((await r2.json()).delivered).toBe(true);
+
+    // Transcript shows the conversation with memory (users=1 then users=2).
+    const { messages } = await (await app.request(`/threads/${thread.id}`)).json();
+    expect(messages.filter((m: { role: string }) => m.role === "assistant").map((m: { content: string }) => m.content)).toEqual(["users=1", "users=2"]);
+  });
+});
+
 describe("gateway threads — end-to-end", () => {
   it("creates a thread, dispatches a thread run, and folds the transcript", async () => {
     const { app, runtime } = await buildApp();

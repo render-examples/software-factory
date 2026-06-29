@@ -24,6 +24,7 @@ export function mergeFrontmatter(
     plan: agent.plan ?? shared.plan,
     sampling: mergeObject(shared.sampling, agent.sampling),
     runner: agent.runner ?? shared.runner,
+    interactive: agent.interactive ?? shared.interactive,
   };
 }
 
