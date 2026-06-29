@@ -22,6 +22,7 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     toolSources: new Map(),
     threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
     oauthStore: store as unknown as GatewayOptions["runtime"]["oauthStore"],
+    scheduleStore: store as unknown as GatewayOptions["runtime"]["scheduleStore"],
     oauthRefreshers: new Map(),
   };
 }

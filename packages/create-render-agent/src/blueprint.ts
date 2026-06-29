@@ -458,6 +458,22 @@ function renderYaml(opts: ScaffoldOptions): string {
     `        fromService: { type: web, name: ${opts.name}-gateway, property: hostport }`,
     "      - key: RENDER_AGENTS_API_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
+    "",
+    "  # Per-minute tick that fires any due runtime-managed schedules",
+    "  # (created via POST /schedules). Remove this if you only trigger via",
+    "  # webhooks / the HTTP API and don't use the schedule store.",
+    "  - type: cron",
+    `    name: ${opts.name}-schedules`,
+    "    runtime: node",
+    "    plan: starter",
+    `    schedule: "* * * * *"`,
+    "    buildCommand: npm install && npm run build",
+    `    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/schedules/tick" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'`,
+    "    envVars:",
+    "      - key: GATEWAY_URL",
+    `        fromService: { type: web, name: ${opts.name}-gateway, property: hostport }`,
+    "      - key: RENDER_AGENTS_API_KEY",
+    `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
   ].join("\n");
 }
 

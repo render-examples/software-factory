@@ -409,6 +409,43 @@ describeWithPg("OAuth connections — encryption at rest + single-flight refresh
   });
 });
 
+describeWithPg("ScheduleStore parity", () => {
+  let pgStore: PgRunStore;
+  let memStore: ReturnType<typeof createMemoryStore>;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+    memStore = createMemoryStore();
+  });
+  afterAll(async () => { await pgStore.close(); });
+
+  it("CRUD + listEnabled fold identically across stores", async () => {
+    const id = `sched-${Date.now()}`;
+    const ts = new Date().toISOString();
+    const rec = { id, workflow: "code-review", cronExpression: "*/5 * * * *", input: { x: 1 }, enabled: true, createdAt: ts, updatedAt: ts };
+
+    for (const store of [pgStore, memStore]) {
+      await store.createSchedule(rec);
+    }
+    expect((await pgStore.getSchedule(id))).toMatchObject({ id, workflow: "code-review", cronExpression: "*/5 * * * *", input: { x: 1 }, enabled: true });
+    expect(await pgStore.getSchedule(id)).toEqual(await memStore.getSchedule(id));
+
+    for (const store of [pgStore, memStore]) {
+      // (lastRunId references runs(id), so only toggle enabled here.)
+      await store.updateSchedule(id, { enabled: false, lastRunAt: ts });
+    }
+    const pgEnabled = (await pgStore.listEnabled()).map((s) => s.id);
+    const memEnabled = (await memStore.listEnabled()).map((s) => s.id);
+    expect(pgEnabled).not.toContain(id);
+    expect(pgEnabled.includes(id)).toBe(memEnabled.includes(id));
+
+    for (const store of [pgStore, memStore]) await store.deleteSchedule(id);
+    expect(await pgStore.getSchedule(id)).toBeUndefined();
+    expect(await memStore.getSchedule(id)).toBeUndefined();
+  });
+});
+
 describeWithPg("retention cleanup parity", () => {
   let pgStore: PgRunStore;
 
@@ -450,6 +487,29 @@ describeWithPg("retention cleanup parity", () => {
     // The human-facing transcript outlives the trimmed run detail.
     const transcript = await pgStore.getThreadMessages(threadId);
     expect(transcript.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("a schedule pinning a trimmed run survives (FK ON DELETE SET NULL)", async () => {
+    const now = new Date();
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
+    const tag = `sched-ret-${Date.now()}`;
+    const runId = `${tag}-run`;
+    // Old terminal run, then a schedule referencing it as last_run_id.
+    await pgStore.events.append(buildEventRecord(runId, { type: "run.started", input: "x" }, { agentName: AGENT, ts: daysAgo(100) }));
+    await pgStore.events.append(buildEventRecord(runId, { type: "run.completed", result: "ok" }, { agentName: AGENT, ts: daysAgo(100) }));
+    await pgStore.createSchedule({
+      id: tag, workflow: "code-review", cronExpression: "0 4 * * *", enabled: true,
+      lastRunId: runId, lastRunAt: daysAgo(100), createdAt: daysAgo(100), updatedAt: daysAgo(100),
+    });
+
+    // Retention deletes the run summary; the FK must clear the pointer, not block.
+    await pgStore.cleanup({ eventRetentionDays: 30, runRetentionDays: 90, now });
+
+    expect(await pgStore.getRun(runId)).toBeUndefined();
+    const sched = await pgStore.getSchedule(tag);
+    expect(sched).toBeDefined();
+    expect(sched?.lastRunId).toBeUndefined(); // SET NULL
+    await pgStore.deleteSchedule(tag);
   });
 });
 

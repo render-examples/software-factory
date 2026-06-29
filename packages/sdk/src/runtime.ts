@@ -6,6 +6,8 @@ import type {
   Thread,
   ThreadMessage,
   OAuthStore,
+  ScheduleStore,
+  ScheduleRecord,
 } from "@render-agents/store";
 import { createStore, MemoryCancelStore } from "@render-agents/store";
 import type {
@@ -54,6 +56,8 @@ export interface AgentRuntime {
   readonly threadStore: ThreadStore;
   /** OAuth connection store (per-user tokens). Defaults to the run store when it implements OAuthStore. */
   readonly oauthStore: OAuthStore;
+  /** Runtime-managed schedule store. Defaults to the run store when it implements ScheduleStore. */
+  readonly scheduleStore: ScheduleStore;
   /** Per-provider token refreshers, populated by the gateway from provider configs. */
   readonly oauthRefreshers: Map<string, OAuthRefresher>;
   readonly tracer: Tracer;
@@ -218,6 +222,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     store,
     threadStore: asThreadStore(store),
     oauthStore,
+    scheduleStore: asScheduleStore(store),
     oauthRefreshers,
     tracer,
     model,
@@ -252,6 +257,28 @@ function asThreadStore(store: RunStore): ThreadStore {
       return [...threads.values()].filter(t => !o?.userId || t.userId === o.userId).map(t => ({ ...t }));
     },
     async getThreadMessages(_threadId: string): Promise<ThreadMessage[]> { return []; },
+  };
+}
+
+/**
+ * Use the run store as the schedule store when it implements that surface (the
+ * bundled memory + Postgres stores do). Falls back to an in-memory map for
+ * hand-rolled stores so the runtime field is always present.
+ */
+function asScheduleStore(store: RunStore): ScheduleStore {
+  const candidate = store as Partial<ScheduleStore>;
+  if (typeof candidate.createSchedule === "function") return store as unknown as ScheduleStore;
+  const schedules = new Map<string, ScheduleRecord>();
+  return {
+    async createSchedule(s: ScheduleRecord) { schedules.set(s.id, { ...s }); },
+    async getSchedule(id: string) { const s = schedules.get(id); return s ? { ...s } : undefined; },
+    async updateSchedule(id: string, patch: Partial<ScheduleRecord>) {
+      const s = schedules.get(id);
+      if (s) schedules.set(id, { ...s, ...patch, id: s.id, createdAt: s.createdAt, updatedAt: new Date().toISOString() });
+    },
+    async deleteSchedule(id: string) { schedules.delete(id); },
+    async listSchedules() { return [...schedules.values()].map(s => ({ ...s })); },
+    async listEnabled() { return [...schedules.values()].filter(s => s.enabled).map(s => ({ ...s })); },
   };
 }
 

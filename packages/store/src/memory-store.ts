@@ -12,6 +12,7 @@ import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOpt
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
+import type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";
 import type { ApprovalProjectionRecord } from "./projections.js";
 import { Projections, type ProjectionSnapshot } from "./projections.js";
 
@@ -150,10 +151,12 @@ export class MemoryEventLogStore implements EventLogStore {
  * Writes go exclusively through `events.append` — there are no direct
  * projection writers.
  */
-export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore {
+export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleStore {
   private readonly projections = new Projections();
   /** Thread metadata (created via the gateway API, not folded from events). */
   private readonly threads = new Map<string, Thread>();
+  /** Runtime-managed schedules (operational table, not folded from events). */
+  private readonly schedules = new Map<string, ScheduleRecord>();
   /** OAuth connections keyed by `${userId}:${provider}` (plaintext in-memory). */
   private readonly connections = new Map<string, OAuthConnection>();
   /** Per-connection refresh mutex so concurrent refreshes coalesce. */
@@ -253,6 +256,40 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore {
 
   async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     return this.projections.getThreadMessages(threadId);
+  }
+
+  // --- ScheduleStore (operational records; never auto-expired) ---
+
+  async createSchedule(schedule: ScheduleRecord): Promise<void> {
+    this.schedules.set(schedule.id, { ...schedule });
+  }
+
+  async getSchedule(id: string): Promise<ScheduleRecord | undefined> {
+    const s = this.schedules.get(id);
+    return s ? { ...s } : undefined;
+  }
+
+  async updateSchedule(id: string, patch: Partial<ScheduleRecord>): Promise<void> {
+    const s = this.schedules.get(id);
+    if (!s) return;
+    // `id`/`createdAt` are immutable; everything else is patchable.
+    const { id: _id, createdAt: _createdAt, ...rest } = patch;
+    void _id; void _createdAt;
+    this.schedules.set(id, { ...s, ...rest, updatedAt: new Date().toISOString() });
+  }
+
+  async deleteSchedule(id: string): Promise<void> {
+    this.schedules.delete(id);
+  }
+
+  async listSchedules(): Promise<ScheduleRecord[]> {
+    return [...this.schedules.values()]
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .map((s) => ({ ...s }));
+  }
+
+  async listEnabled(): Promise<ScheduleRecord[]> {
+    return [...this.schedules.values()].filter((s) => s.enabled).map((s) => ({ ...s }));
   }
 
   // --- OAuthStore (plaintext in-memory; encryption is a Postgres at-rest concern) ---
