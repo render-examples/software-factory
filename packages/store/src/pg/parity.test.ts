@@ -25,6 +25,14 @@ async function emit(
   await store.events.append(buildEventRecord(runId, event, { agentName: AGENT, ...meta }));
 }
 
+/** Drop the store-local, wall-clock-derived `latencyMs` for cross-store compare. */
+function stripLatency(attrs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!attrs) return attrs;
+  const { latencyMs: _omit, ...rest } = attrs as Record<string, unknown>;
+  void _omit;
+  return rest;
+}
+
 describeWithPg("PgRunStore / MemoryRunStore parity", () => {
   let pgStore: PgRunStore;
   let memStore: ReturnType<typeof createMemoryStore>;
@@ -104,11 +112,16 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
   it("folds the span tree identically", async () => {
     const runId = `parity-spans-${Date.now()}`;
 
+    // Span ids are the global `spans.id` PK, so scope them to this run to avoid
+    // cross-test collisions (production ids are UUID / idempotencyKey-derived).
+    const A = `${runId}-agent`, L1 = `${runId}-llm1`, L2 = `${runId}-llm2`, T = `${runId}-tool`;
     const events: Array<{ event: RunEvent; meta?: { agentName?: string; spanId?: string; parentSpanId?: string } }> = [
-      { event: { type: "run.started", input: "x" }, meta: { spanId: "agent-1" } },
-      { event: { type: "tool.called", toolCallId: `t-${runId}`, name: "search", input: { q: "a" } }, meta: { spanId: "tool-1", parentSpanId: "agent-1" } },
-      { event: { type: "tool.result", toolCallId: `t-${runId}`, name: "search", result: { content: "found" } }, meta: { spanId: "tool-1", parentSpanId: "agent-1" } },
-      { event: { type: "run.completed", result: "done" }, meta: { spanId: "agent-1" } },
+      { event: { type: "run.started", input: "x", agentVersion: "v1", model: "claude-sonnet-4-6" }, meta: { agentName: "security", spanId: A } },
+      { event: { type: "llm.call", model: "claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 }, costUsd: 0.01, stopReason: "tool_use", latencyMs: 42 }, meta: { spanId: L1, parentSpanId: A } },
+      { event: { type: "tool.called", toolCallId: `t-${runId}`, name: "search", input: { q: "a" } }, meta: { spanId: T, parentSpanId: A } },
+      { event: { type: "tool.result", toolCallId: `t-${runId}`, name: "search", result: { content: "found" } }, meta: { spanId: T, parentSpanId: A } },
+      { event: { type: "llm.call", model: "claude-sonnet-4-6", usage: { inputTokens: 8, outputTokens: 3 }, costUsd: 0.02, stopReason: "end_turn", latencyMs: 20 }, meta: { spanId: L2, parentSpanId: A } },
+      { event: { type: "run.completed", result: "done" }, meta: { spanId: A } },
     ];
 
     for (const { event, meta } of events) {
@@ -125,7 +138,53 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
       expect(pgSpans[i]!.kind).toBe(memSpans[i]!.kind);
       expect(pgSpans[i]!.status).toBe(memSpans[i]!.status);
       expect(pgSpans[i]!.parentId).toBe(memSpans[i]!.parentId);
+      // Span attributes fold identically across stores — except `latencyMs`,
+      // which is derived from each store's own append timestamp (the test emits
+      // a fresh record per store), so it is store-local rather than a fold of
+      // the shared log. Compare it for type, the rest byte-for-byte.
+      expect(stripLatency(pgSpans[i]!.attributes)).toEqual(stripLatency(memSpans[i]!.attributes));
     }
+    // Tool span latency is present and numeric in both stores.
+    expect(typeof (memSpans.find((s) => s.id === T)!.attributes as { latencyMs?: number }).latencyMs).toBe("number");
+    expect(typeof (pgSpans.find((s) => s.id === T)!.attributes as { latencyMs?: number }).latencyMs).toBe("number");
+
+    // Agent span carries the spec's required attributes, accumulated from llm.call.
+    const memAgent = memSpans.find((s) => s.id === A)!;
+    expect(memAgent.kind).toBe("agent");
+    expect(memAgent.attributes).toMatchObject({
+      agentName: "security",
+      agentVersion: "v1",
+      model: "claude-sonnet-4-6",
+      iterations: 2,
+      usage: { inputTokens: 18, outputTokens: 8 },
+    });
+    // LLM span carries gen_ai.* aliases; tool span carries latency + ok.
+    expect(memSpans.find((s) => s.id === L1)!.attributes).toMatchObject({
+      "gen_ai.request.model": "claude-sonnet-4-6",
+      "gen_ai.usage.input_tokens": 10,
+      "gen_ai.response.finish_reasons": ["tool_use"],
+    });
+    expect(memSpans.find((s) => s.id === T)!.attributes).toMatchObject({ toolName: "search", ok: true });
+  });
+
+  it("folds a workflow root span as kind 'workflow'", async () => {
+    const runId = `parity-wf-${Date.now()}`;
+    const events: Array<{ event: RunEvent; meta?: { agentName?: string; spanId?: string } }> = [
+      { event: { type: "run.started", input: {}, trigger: "api", spanKind: "workflow" }, meta: { agentName: "code-review", spanId: runId } },
+      { event: { type: "step.started", name: "prepare" }, meta: { agentName: "code-review", spanId: `${runId}-step` } },
+      { event: { type: "step.completed", name: "prepare", result: 1 }, meta: { agentName: "code-review", spanId: `${runId}-step` } },
+      { event: { type: "run.completed", result: "ok" }, meta: { agentName: "code-review", spanId: runId } },
+    ];
+    for (const { event, meta } of events) {
+      await emit(pgStore, runId, event, meta);
+      await emit(memStore, runId, event, meta);
+    }
+    const pgRoot = (await pgStore.listSpans(runId)).find((s) => s.id === runId)!;
+    const memRoot = (await memStore.listSpans(runId)).find((s) => s.id === runId)!;
+    expect(memRoot.kind).toBe("workflow");
+    expect(pgRoot.kind).toBe("workflow");
+    expect(pgRoot.attributes).toEqual(memRoot.attributes);
+    expect(memRoot.status).toBe("ok");
   });
 
   it("records tool results for idempotency lookup", async () => {

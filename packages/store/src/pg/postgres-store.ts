@@ -286,14 +286,20 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
 
     switch (p.type) {
-      case "run.started":
+      case "run.started": {
+        const isWorkflow = (p.spanKind ?? "agent") === "workflow";
+        const kind = isWorkflow ? "workflow" : "agent";
+        const attributes = isWorkflow
+          ? { workflow: rec.agentName, trigger: p.trigger }
+          : { agentName: rec.agentName, agentVersion: p.agentVersion, model: p.model, iterations: 0, usage: { inputTokens: 0, outputTokens: 0 } };
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'agent', 'running', $6, $7)
+          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", p.input !== undefined ? JSON.stringify(p.input) : null, rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", kind, p.input !== undefined ? JSON.stringify(p.input) : null, JSON.stringify(attributes), rec.ts],
         );
         break;
+      }
 
       case "run.completed":
         await client.query(
@@ -318,33 +324,44 @@ export class PgEventLogStore implements EventLogStore {
 
       case "tool.called":
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'tool', 'running', $6, $7)
+          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, 'tool', 'running', $6, $7, $8)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? JSON.stringify(p.input) : null, rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? JSON.stringify(p.input) : null, JSON.stringify({ toolName: p.name }), rec.ts],
         );
         break;
 
       case "tool.result":
-        if (p.result.isError) {
-          await client.query(
-            `UPDATE spans SET status = 'error', error = $2, finished_at = $3 WHERE id = $1`,
-            [spanId, p.result.content, rec.ts],
-          );
-        } else {
-          await client.query(
-            `UPDATE spans SET status = 'ok', output = $2, finished_at = $3 WHERE id = $1`,
-            [spanId, JSON.stringify(p.result.content), rec.ts],
-          );
-        }
+        // Set status + close, and fold the spec's tool-span attributes
+        // (toolName, ok, latencyMs computed from the span's start).
+        await client.query(
+          `UPDATE spans SET
+             status = $2,
+             ${p.result.isError ? "error = $3" : "output = $3"},
+             finished_at = $4,
+             attributes = coalesce(attributes, '{}'::jsonb) || jsonb_build_object(
+               'toolName', $5::text,
+               'ok', $6::boolean,
+               'latencyMs', round(extract(epoch from ($4::timestamptz - started_at)) * 1000)
+             )
+           WHERE id = $1`,
+          [
+            spanId,
+            p.result.isError ? "error" : "ok",
+            p.result.isError ? p.result.content : JSON.stringify(p.result.content),
+            rec.ts,
+            p.name,
+            !p.result.isError,
+          ],
+        );
         break;
 
       case "step.started":
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'step', 'running', $6)
+          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, 'step', 'running', $6, $7)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, JSON.stringify({ step: p.name }), rec.ts],
         );
         break;
 
@@ -362,10 +379,35 @@ export class PgEventLogStore implements EventLogStore {
            ON CONFLICT (id) DO NOTHING`,
           [
             spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.model,
-            JSON.stringify({ usage: p.usage, costUsd: p.costUsd, stopReason: p.stopReason, latencyMs: p.latencyMs }),
+            JSON.stringify({
+              usage: p.usage,
+              costUsd: p.costUsd,
+              stopReason: p.stopReason,
+              latencyMs: p.latencyMs,
+              "gen_ai.request.model": p.model,
+              "gen_ai.usage.input_tokens": p.usage.inputTokens,
+              "gen_ai.usage.output_tokens": p.usage.outputTokens,
+              "gen_ai.response.finish_reasons": [p.stopReason],
+            }),
             rec.ts,
           ],
         );
+        // Accumulate model / iteration count / token usage onto the parent
+        // agent span (mirrors the memory fold) so it carries the required attrs.
+        if (rec.parentSpanId) {
+          await client.query(
+            `UPDATE spans SET attributes = coalesce(attributes, '{}'::jsonb) || jsonb_build_object(
+               'model', coalesce(attributes->>'model', $2::text),
+               'iterations', coalesce((attributes->>'iterations')::int, 0) + 1,
+               'usage', jsonb_build_object(
+                 'inputTokens',  coalesce((attributes#>>'{usage,inputTokens}')::int, 0) + $3::int,
+                 'outputTokens', coalesce((attributes#>>'{usage,outputTokens}')::int, 0) + $4::int
+               )
+             )
+             WHERE id = $1 AND kind = 'agent'`,
+            [rec.parentSpanId, p.model, p.usage.inputTokens, p.usage.outputTokens],
+          );
+        }
         break;
     }
   }

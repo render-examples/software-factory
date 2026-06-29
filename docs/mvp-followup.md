@@ -32,15 +32,26 @@ Items the spec **intentionally defers post-MVP** (token-level `text.delta` strea
 
 ## Findings
 
-| # | Severity | Area | Finding |
-|---|---|---|---|
-| F1 | **P1 — drift** | Authoring spec | `interactive` agent frontmatter field is implemented but undocumented in the spec. |
-| F2 | **P1 — drift** | Type reference | `AgentRuntime` / `CreateRuntimeOptions` expose members not in the spec (`threadStore`, `oauthStore`, `oauthRefreshers`, `agentDefinitions`, `toolSources`, `extraRunners`). |
-| F3 | **P2 — partial** | Observability | Span projections omit required span attributes; LLM spans don't use the `gen_ai.*` OTel namespace; no distinct `workflow`-kind span for in-process runs. |
-| F4 | **P2 — toolchain** | Build/CI | `create-render-agent` fails `tsc` in this tree (deps not installed); default `vitest` pool crashes under Node 26. |
-| F5 | **P3 — deferred** | Streaming | Token-level `text.delta` streaming (`ModelClient.stream`) is unimplemented — deferred per spec; SSE emits `message.assistant`. |
-| F6 | **P3 — deferred** | Schedules | Runtime-managed `ScheduleStore` API/reconciliation is unimplemented — deferred per spec; MVP uses Render Cron → `/admin/retention` + `/workflows/:name`. |
-| F7 | **P3 — deferred** | Operator UI | The full operator-UI SPA (L6) is deferred; `/ui` ships the read-only dev trace viewer only — matches the plan. |
+| # | Severity | Area | Finding | Status |
+|---|---|---|---|---|
+| F1 | **P1 — drift** | Authoring spec | `interactive` agent frontmatter field is implemented but undocumented in the spec. | ✅ Resolved |
+| F2 | **P1 — drift** | Type reference | `AgentRuntime` / `CreateRuntimeOptions` expose members not in the spec (`threadStore`, `oauthStore`, `oauthRefreshers`, `agentDefinitions`, `toolSources`, `extraRunners`). | ✅ Resolved |
+| F3 | **P2 — partial** | Observability | Span projections omit required span attributes; LLM spans don't use the `gen_ai.*` OTel namespace; no distinct `workflow`-kind span. | ✅ Resolved |
+| F4 | **P2 — toolchain** | Build/CI | `create-render-agent` fails `tsc` in this tree (deps not installed); default `vitest` pool crashes under Node 26. | ✅ Resolved |
+| F5 | **P3 — deferred** | Streaming | Token-level `text.delta` streaming (`ModelClient.stream`) is unimplemented — deferred per spec; SSE emits `message.assistant`. | ⏳ Backlog |
+| F6 | **P3 — deferred** | Schedules | Runtime-managed `ScheduleStore` API/reconciliation is unimplemented — deferred per spec; MVP uses Render Cron → `/admin/retention` + `/workflows/:name`. | ⏳ Backlog |
+| F7 | **P3 — deferred** | Operator UI | The full operator-UI SPA (L6) is deferred; `/ui` ships the read-only dev trace viewer only — matches the plan. | ⏳ Backlog |
+
+---
+
+## Resolution (this PR)
+
+P1 + P2 are closed; F5–F7 remain the tracked post-MVP backlog (Phase 3).
+
+- **F1** — `interactive` documented in `01-authoring.md` (frontmatter table + fail-fast list) and `05-type-reference.md` (`AgentDefinition`).
+- **F2** — `AgentRuntime` / `CreateRuntimeOptions` in `05-type-reference.md` updated to the shipped surface, with a note that `threadStore`/`oauthStore` default to (and are a facade over) `store`. **Decision: document, not refactor** — zero code risk.
+- **F3** — span attribute folding implemented in **both** stores (memory `projections.ts` + Postgres SQL `postgres-store.ts`): `agent` spans accumulate `model`/`iterations`/`usage` from `llm.call`; `llm` spans gain `gen_ai.*` aliases; `tool` spans gain `toolName`/`ok`/`latencyMs`. **A distinct `workflow`-kind root span** was added (`run.started.spanKind`), and the workflow handler's `emit` was fixed to carry span correlation so the root span actually closes and `ctx.step`s appear as nested `step` spans (previously neither happened). Parity + memory tests extended and **verified green against a real Postgres 16**.
+- **F4** — `.nvmrc` pins Node 26; CI matrix adds 26 (`[20, 22, 26]`); root `vitest.config.ts` switches to `pool: "forks"` (the threads pool crashed under Node 24+); a CI step now fails loudly if a package's declared deps aren't materialized. Full gate (`build`/`typecheck`/`lint`/`test`/`check:bundle-size`) verified green on Node 26.
 
 ---
 

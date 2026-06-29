@@ -104,6 +104,10 @@ export function workflow(
           trigger,
           threadId: dispatchOpts?.threadId,
           userId: dispatchOpts?.userId,
+          // The root of a workflow run is a `workflow`-kind span, not an agent:
+          // the handler orchestrates (steps + agent dispatches) and is not itself
+          // an agent invocation. Agent runs it dispatches nest under this span.
+          spanKind: "workflow",
         }, { agentName: boundName, spanId: runId }),
       );
 
@@ -188,9 +192,27 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
     }
   }
 
+  // Span correlation so the trace tree is a faithful projection: the workflow
+  // root span (opened on run.started, spanId = runId) is closed by the terminal
+  // lifecycle event, and each `ctx.step` becomes a `step`-kind span nested under
+  // it. Step span ids are deterministic per name so handler replay reuses them.
+  const spanFor = (event: RunEvent): { spanId?: string; parentSpanId?: string } => {
+    switch (event.type) {
+      case "run.completed":
+      case "run.failed":
+      case "run.cancelled":
+        return { spanId: runId };
+      case "step.started":
+      case "step.completed":
+        return { spanId: idempotencyKey(runId, `step-span:${event.name}`), parentSpanId: runId };
+      default:
+        return {};
+    }
+  };
+
   const emit = async (event: RunEvent): Promise<void> => {
     await store.events.append(
-      buildEventRecord(runId, event, { agentName: workflowName }),
+      buildEventRecord(runId, event, { agentName: workflowName, ...spanFor(event) }),
     );
   };
 

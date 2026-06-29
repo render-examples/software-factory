@@ -27,7 +27,7 @@ export interface TokenUsage {
 
 export type RunEvent =
   // lifecycle
-  | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; threadId?: string; userId?: string }
+  | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; threadId?: string; userId?: string; model?: string; spanKind?: "agent" | "workflow" }
   | { type: "run.completed"; result?: unknown }
   | { type: "run.failed"; error: string }
   | { type: "run.paused"; reason: "approval" | "input"; pendingApprovalIds?: string[] }

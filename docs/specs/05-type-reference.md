@@ -38,6 +38,13 @@ interface AgentDefinition {
   context?: ContextConfig;
   plan?: RenderPlan;
   runner?: string;
+  /**
+   * Conversational agent. When true, the runner parks on `ctx.awaitInput()` after
+   * a terminal turn (emitting `run.paused { reason: "input" }`) instead of
+   * completing, so the run awaits the next user message — the agent-level basis
+   * for an interactive thread. Default false (autonomous: drives to completion).
+   */
+  interactive?: boolean;
 }
 ```
 
@@ -562,7 +569,7 @@ The single, unified event taxonomy. One vocabulary serves persistence, the trace
 ```ts
 type RunEvent =
   // lifecycle
-  | { type: "run.started"; trigger?: string; input?: unknown }
+  | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; model?: string; threadId?: string; userId?: string; spanKind?: "agent" | "workflow" }
   | { type: "run.completed"; result?: unknown }
   | { type: "run.failed"; error: string }
   | { type: "run.paused"; reason: "approval" | "input"; pendingApprovalIds?: string[] }
@@ -593,6 +600,8 @@ type RunEvent =
 > **User turns are events.** `message.user` records a user/external turn delivered into a run — the initial input *and* every subsequent turn delivered via [`/runs/:id/input`](03-platform.md#gateway). Because it is in the log, it folds into `ctx.messages()` (so a resumed/revived run sees the new turn), streams over SSE, and rehydrates across a [thread's](03-platform.md#threads) runs. (`run.started.input` carries the dispatch payload; `message.user` is the conversational turn.)
 >
 > **`run.paused` carries a `reason`.** `"approval"` (a gated tool is awaiting resolution; `pendingApprovalIds` is set) vs `"input"` (an interactive run is awaiting the next user message). Both resolve via the same pause/resume-by-replay path, but the gateway uses the reason to route `/runs/:id/input` (deliver a `message.user` for `"input"`; expect an `approval.resolved` for `"approval"`). The run's [`RunStatus`](#runstatus) is `"paused"` in both cases.
+>
+> **`run.started` seeds the run's root span.** `spanKind` selects the root [`SpanKind`](#spankind): a `workflow()` dispatch emits `spanKind: "workflow"` (the handler orchestrates; it is not itself an agent), while an agent invocation defaults to `"agent"`. `model`/`agentVersion` seed the agent span's required [observability attributes](03-platform.md#observability) (token usage and iteration count then accumulate from the run's `llm.call` events).
 
 ### RunEventRecord
 A persisted event in the append-only log — the source of truth all projections fold from. History is immutable; `version` carries the event-schema version.
@@ -854,9 +863,17 @@ interface CancelStore {
 ### AgentRuntime
 The composition root binding model, store, tracer, runners, and dispatcher.
 
+> The `store` owns the persistence vocabulary, but for ergonomics the runtime also surfaces the operational stores (`threadStore`, `oauthStore`) and the cross-run wiring (`agentDefinitions`, `toolSources`, `cancelStore`, `oauthRefreshers`) that the gateway and dispatcher need without reaching through `store`. `threadStore`/`oauthStore` **default to the run store** when it implements those interfaces (it does), so this is a convenience facade over the same persistence layer, not a second source of truth.
+
 ```ts
 interface AgentRuntime {
   readonly store: RunStore;
+  /** Thread metadata + transcript store. Defaults to the run store when it implements ThreadStore. */
+  readonly threadStore: ThreadStore;
+  /** OAuth connection store (per-user tokens). Defaults to the run store when it implements OAuthStore. */
+  readonly oauthStore: OAuthStore;
+  /** Per-provider token refreshers, populated by the gateway from provider configs. */
+  readonly oauthRefreshers: Map<string, OAuthRefresher>;
   readonly tracer: Tracer;
   readonly model: ModelClient;
   readonly runners: RunnerRegistry;
@@ -866,6 +883,14 @@ interface AgentRuntime {
   readonly contextManager: ContextManager;
   /** Dispatches agents as Render Workflow tasks. Absent when no workflow server is detected (local fallback to in-process run). */
   readonly dispatcher?: TaskDispatcher;
+  /** Cooperative cancellation store, shared across in-process runs/dispatch. */
+  readonly cancelStore: CancelStore;
+  /** Loaded agent definitions keyed by name. Populated by `loadAgents`; used by the dispatcher and subagent delegation. */
+  readonly agentDefinitions: Map<string, AgentDefinition>;
+  /** Subagent delegation limits (depth/fanout), if overridden. */
+  readonly delegation?: Partial<DelegationLimits>;
+  /** Resolved tool sources from the `tools/` directory, keyed by source id. */
+  readonly toolSources: Map<string, ToolSource>;
 }
 ```
 
@@ -932,14 +957,22 @@ interface CreateRuntimeOptions {
   /** Override the default ModelClient retry policy. Also configurable via env. */
   retry?: Partial<RetryPolicy>;
   runners?: RunnerRegistry;
+  /** Custom runners discovered from `runners/` (keyed by name); merged with the built-in `default`. */
+  extraRunners?: Map<string, AgentRunner>;
   /** Override the auto-wired Render Workflows dispatcher. */
   dispatcher?: TaskDispatcher;
+  /** Cooperative cancellation store. Defaults to a Postgres-backed flag (or in-memory). */
+  cancelStore?: CancelStore;
   /** Subagent delegation limits. Also configurable via env. */
   delegation?: Partial<DelegationLimits>;
   /** Additional hooks, merged with those discovered from `hooks/`. */
   hooks?: Hook[];
   /** Override the default context manager / compaction strategy. */
   contextManager?: ContextManager;
+  /** Pre-resolved tool sources (e.g. from the loader), keyed by source id, so agents can mount tools at run time. */
+  toolSources?: Map<string, ToolSource>;
+  /** Per-provider OAuth token refreshers (token-endpoint exchange), keyed by provider. */
+  oauthRefreshers?: Map<string, OAuthRefresher>;
 }
 ```
 

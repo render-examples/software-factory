@@ -188,7 +188,7 @@ export class Projections {
     this.spans.set(rec.runId, runSpans);
     const p = rec.payload;
 
-    const open = (kind: SpanRecord["kind"], name: string, input: unknown) => {
+    const open = (kind: SpanRecord["kind"], name: string, input: unknown, attributes?: Record<string, unknown>) => {
       runSpans.set(spanId, {
         id: spanId,
         runId: rec.runId,
@@ -198,6 +198,7 @@ export class Projections {
         kind,
         status: "running",
         input,
+        attributes,
         startedAt: rec.ts,
       });
     };
@@ -216,7 +217,20 @@ export class Projections {
 
     switch (p.type) {
       case "run.started":
-        open("agent", rec.agentName ?? "run", p.input);
+        if ((p.spanKind ?? "agent") === "workflow") {
+          // Workflow root span: orchestration, not an agent invocation.
+          open("workflow", rec.agentName ?? "run", p.input, { workflow: rec.agentName, trigger: p.trigger });
+        } else {
+          // Agent root span. `model`/`usage`/`iterations` accumulate from the
+          // run's `llm.call` events (see below) for the spec's required attrs.
+          open("agent", rec.agentName ?? "run", p.input, {
+            agentName: rec.agentName,
+            agentVersion: p.agentVersion,
+            model: p.model,
+            iterations: 0,
+            usage: { inputTokens: 0, outputTokens: 0 },
+          });
+        }
         break;
       case "run.completed":
         close({ ok: true, output: p.result });
@@ -228,18 +242,28 @@ export class Projections {
         close({ ok: false, error: "cancelled" });
         break;
       case "tool.called":
-        open("tool", p.name, p.input);
+        open("tool", p.name, p.input, { toolName: p.name });
         break;
-      case "tool.result":
+      case "tool.result": {
+        const s = runSpans.get(spanId);
+        if (s) {
+          s.attributes = {
+            ...s.attributes,
+            toolName: p.name,
+            ok: !p.result.isError,
+            latencyMs: s.startedAt ? Date.parse(rec.ts) - Date.parse(s.startedAt) : 0,
+          };
+        }
         close(p.result.isError ? { ok: false, error: p.result.content } : { ok: true, output: p.result.content });
         break;
+      }
       case "step.started":
-        open("step", p.name, undefined);
+        open("step", p.name, undefined, { step: p.name });
         break;
       case "step.completed":
         close({ ok: true, output: p.result });
         break;
-      case "llm.call":
+      case "llm.call": {
         runSpans.set(spanId, {
           id: spanId,
           runId: rec.runId,
@@ -250,9 +274,36 @@ export class Projections {
           status: "ok",
           startedAt: rec.ts,
           finishedAt: rec.ts,
-          attributes: { usage: p.usage, costUsd: p.costUsd, stopReason: p.stopReason, latencyMs: p.latencyMs },
+          attributes: {
+            usage: p.usage,
+            costUsd: p.costUsd,
+            stopReason: p.stopReason,
+            latencyMs: p.latencyMs,
+            // OTel gen_ai semantic-convention aliases for exporters.
+            "gen_ai.request.model": p.model,
+            "gen_ai.usage.input_tokens": p.usage.inputTokens,
+            "gen_ai.usage.output_tokens": p.usage.outputTokens,
+            "gen_ai.response.finish_reasons": [p.stopReason],
+          },
         });
+        // Accumulate model / iteration count / token usage onto the parent
+        // agent span so it carries the spec's required agent-span attributes.
+        const parent = rec.parentSpanId ? runSpans.get(rec.parentSpanId) : undefined;
+        if (parent && parent.kind === "agent") {
+          const a = (parent.attributes ?? {}) as Record<string, unknown>;
+          const prevUsage = (a.usage as { inputTokens: number; outputTokens: number } | undefined) ?? { inputTokens: 0, outputTokens: 0 };
+          parent.attributes = {
+            ...a,
+            model: a.model ?? p.model,
+            iterations: ((a.iterations as number | undefined) ?? 0) + 1,
+            usage: {
+              inputTokens: prevUsage.inputTokens + p.usage.inputTokens,
+              outputTokens: prevUsage.outputTokens + p.usage.outputTokens,
+            },
+          };
+        }
         break;
+      }
     }
   }
 

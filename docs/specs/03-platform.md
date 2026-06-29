@@ -397,7 +397,14 @@ agent: planner (task)
 | LLM call | `llm` | model, input tokens, output tokens, stop reason, latency ms |
 | Tool call | `tool` | tool name, latency ms, success/error |
 
-The built-in `load_skill` tool appears as an ordinary `tool` span — tool name `load_skill`, with the loaded skill `id` in attributes — so skill usage is visible in the trace without a dedicated span kind. Attributes follow OTel semantic conventions where applicable (`gen_ai.*` namespace for LLM spans). Postgres is the source of truth; export to external collectors (Datadog, Honeycomb, Grafana) is via an optional OTel exporter — not required for full visibility.
+The built-in `load_skill` tool appears as an ordinary `tool` span — tool name `load_skill`, with the loaded skill `id` in attributes — so skill usage is visible in the trace without a dedicated span kind. Postgres is the source of truth; export to external collectors (Datadog, Honeycomb, Grafana) is via an optional OTel exporter — not required for full visibility.
+
+**Attribute folding.** Span attributes are folded from the event log, identically across the in-memory and Postgres stores (enforced by the parity suite):
+
+- The **`workflow` root span** is folded from a `run.started` carrying `spanKind: "workflow"` (a `workflow()` dispatch); an agent invocation's `run.started` defaults to an `agent` root span.
+- An **`agent` span**'s `model` / `iterations` / `usage` accumulate from the run's `llm.call` events (`agentVersion`/`model` seeded by `run.started`), so the span reports final token usage and turn count when it closes.
+- **`llm` spans** carry both the native attribute keys (`usage`, `costUsd`, `stopReason`, `latencyMs`) and OTel `gen_ai.*` semantic-convention aliases (`gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`) for exporters.
+- **`tool` spans** carry `toolName`, a boolean `ok`, and a `latencyMs` derived from the span's own start/finish (store-local, not a cross-store fold invariant).
 
 **Cost attribution.** Each LLM span carries `inputTokens`, `outputTokens`. Cost is computed from the model's pricing table and accumulated in the agent span. The workflow run's total cost is the sum of its agent spans.
 
