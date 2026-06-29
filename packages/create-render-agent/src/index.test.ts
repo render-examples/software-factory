@@ -47,6 +47,20 @@ describe("buildFileMap", () => {
     expect(pkg.scripts.start).toBeTruthy();
   });
 
+  it("runs from source (tsx) so markdown convention dirs resolve in production", () => {
+    const pkg = JSON.parse(files.get("package.json")!);
+    // Production runs via tsx — not `node dist/...` — because agents/skills are
+    // markdown (uncompiled); running from source keeps the project root as the
+    // discovery root. (Regression guard for the dist/runtime mismatch.)
+    expect(pkg.scripts.start).toBe("tsx src/server.ts");
+    expect(pkg.scripts.worker).toBe("tsx src/worker.ts");
+    expect(pkg.scripts.build).toBe("tsc --noEmit");
+    expect(pkg.dependencies.tsx).toBeTruthy(); // tsx is a runtime dep, not just dev
+    expect(files.get("src/server.ts")).toContain('new URL("..", import.meta.url)');
+    expect(files.get(".gitignore")).not.toContain("dist");
+    expect(files.get("render.yaml")).toContain("npm run start");
+  });
+
   it("emits valid agent frontmatter and a json-schema judge output", () => {
     expect(files.get("agents/security.md")).toContain("requireApproval: [github]");
     expect(files.get("agents/judge.md")).toContain("enum: [approve, request_changes]");
