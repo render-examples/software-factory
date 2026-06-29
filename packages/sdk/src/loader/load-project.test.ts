@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadWorkflows, loadWebhooks, loadToolSources } from "./load-project.js";
+import { loadWorkflows, loadWebhooks, loadToolSources, loadHooks, loadRunners } from "./load-project.js";
 import { createTestRuntime, mockModel } from "../testing.js";
 
 let dir: string;
@@ -29,6 +29,20 @@ beforeAll(async () => {
   await writeFile(
     join(dir, "tools", "greeter", "index.ts"),
     `export default { name: "greeter", description: "greets", inputSchema: {}, invoke: async () => "hi" };\n`,
+  );
+
+  // hooks/audit.ts
+  await mkdir(join(dir, "hooks"), { recursive: true });
+  await writeFile(
+    join(dir, "hooks", "audit.ts"),
+    `export default { name: "audit", on: ["tool.called"], handle: async () => ({ action: "continue" }) };\n`,
+  );
+
+  // runners/echo.ts
+  await mkdir(join(dir, "runners"), { recursive: true });
+  await writeFile(
+    join(dir, "runners", "echo.ts"),
+    `export default { run: async (_agent, input, ctx) => { await ctx.emit({ type: "run.completed", result: input }); return { text: String(input), usage: { inputTokens: 0, outputTokens: 0 } }; } };\n`,
   );
 });
 
@@ -63,5 +77,20 @@ describe("project discovery loaders", () => {
     expect([...sources.keys()]).toEqual(["greeter"]);
     const resolved = await sources.get("greeter")!.resolve({} as never);
     expect(resolved.tools[0].name).toBe("greeter");
+  });
+
+  it("loadHooks discovers hooks with the { name, on, handle } shape", async () => {
+    const hooks = await loadHooks(dir);
+    expect(hooks.map((h) => h.name)).toEqual(["audit"]);
+    expect(hooks[0].on).toContain("tool.called");
+  });
+
+  it("loadRunners discovers + registers custom runners by name", async () => {
+    const runners = await loadRunners(dir);
+    expect([...runners.keys()]).toEqual(["echo"]);
+    // The custom runner is invocable via the runtime registry.
+    const runtime = await createTestRuntime({ model: mockModel(() => ({ content: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: "end_turn" })), extraRunners: runners });
+    expect(runtime.runners.has("echo")).toBe(true);
+    expect(runtime.runners.get("echo")).toBe(runners.get("echo"));
   });
 });

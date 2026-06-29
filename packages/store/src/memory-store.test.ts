@@ -6,6 +6,7 @@ import {
   buildEventRecord,
   EventRejectedError,
 } from "./memory-store.js";
+import { aggregateRunCost } from "./aggregate.js";
 
 const AGENT = "judge";
 
@@ -43,6 +44,29 @@ describe("approvals read-surface", () => {
 
     const all = await store.listApprovals();
     expect(all).toHaveLength(2);
+  });
+});
+
+describe("aggregateRunCost — cross-run subagent cost", () => {
+  const llm = (cost: number): RunEvent => ({ type: "llm.call", model: "m", usage: { inputTokens: 1, outputTokens: 1 }, costUsd: cost, stopReason: "end_turn", latencyMs: 1 });
+
+  it("sums the run plus its subagent descendants (cycle-guarded)", async () => {
+    const store = createMemoryStore();
+    // parent (0.01) → child A (0.02) → grandchild (0.04); parent → child B (0.03)
+    await store.events.append(buildEventRecord("parent", { type: "run.started" }, { agentName: "p", spanId: "p" }));
+    await store.events.append(buildEventRecord("parent", llm(0.01), { agentName: "p", spanId: "l", parentSpanId: "p" }));
+    await store.events.append(buildEventRecord("parent", { type: "subagent.spawned", agentName: "a", childRunId: "childA", toolCallId: "t1" }, { agentName: "p" }));
+    await store.events.append(buildEventRecord("parent", { type: "subagent.spawned", agentName: "b", childRunId: "childB", toolCallId: "t2" }, { agentName: "p" }));
+
+    await store.events.append(buildEventRecord("childA", { type: "run.started" }, { agentName: "a", spanId: "a" }));
+    await store.events.append(buildEventRecord("childA", llm(0.02), { agentName: "a", spanId: "la", parentSpanId: "a" }));
+    await store.events.append(buildEventRecord("childA", { type: "subagent.spawned", agentName: "g", childRunId: "grandchild", toolCallId: "t3" }, { agentName: "a" }));
+
+    await store.events.append(buildEventRecord("childB", llm(0.03), { agentName: "b", spanId: "lb" }));
+    await store.events.append(buildEventRecord("grandchild", llm(0.04), { agentName: "g", spanId: "lg" }));
+
+    expect(await aggregateRunCost(store, "parent")).toBeCloseTo(0.10, 10);
+    expect(await aggregateRunCost(store, "childA")).toBeCloseTo(0.06, 10);
   });
 });
 

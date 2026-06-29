@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ToolSource, DefineToolSpec } from "@render-agents/engine";
+import type { ToolSource, DefineToolSpec, Hook, AgentRunner } from "@render-agents/engine";
 import { defineTool, defineToolSource } from "@render-agents/engine";
 import type { AgentRuntime } from "../runtime.js";
 import type { WorkflowDefinition, WebhookAdapter } from "../workflow.js";
@@ -136,6 +136,53 @@ export async function loadToolSources(dir: string): Promise<Map<string, ToolSour
     if (!entry) continue;
     const exported = await importDefault(entry);
     out.set(name, coerceToolSource(name, exported));
+  }
+  return out;
+}
+
+function isHook(v: unknown): v is Hook {
+  return typeof v === "object" && v !== null
+    && typeof (v as Hook).name === "string"
+    && Array.isArray((v as Hook).on)
+    && typeof (v as Hook).handle === "function";
+}
+
+function isAgentRunner(v: unknown): v is AgentRunner {
+  return typeof v === "object" && v !== null && typeof (v as AgentRunner).run === "function";
+}
+
+/**
+ * Discover event hooks from `hooks/*.{js,ts}`. Each default-exported `Hook`
+ * (`{ name, on, handle }`) is auto-applied to every run via `createRuntime({ hooks })`.
+ */
+export async function loadHooks(dir: string): Promise<Hook[]> {
+  const root = join(dir, "hooks");
+  const hooks: Hook[] = [];
+  for (const { key, path } of await listModuleFiles(root)) {
+    const exported = await importDefault(path);
+    if (!isHook(exported)) {
+      throw new Error(`hooks/${key}: default export is not a Hook ({ name, on, handle })`);
+    }
+    hooks.push(exported);
+  }
+  return hooks;
+}
+
+/**
+ * Discover custom agent runners from `runners/*.{js,ts}`. The key (filename) is
+ * the runner name agents reference via frontmatter `runner:`; each default
+ * export must implement `AgentRunner`. Pass the result to
+ * `createRuntime({ runners })` so `runner: <name>` resolves at run time.
+ */
+export async function loadRunners(dir: string): Promise<Map<string, AgentRunner>> {
+  const root = join(dir, "runners");
+  const out = new Map<string, AgentRunner>();
+  for (const { key, path } of await listModuleFiles(root)) {
+    const exported = await importDefault(path);
+    if (!isAgentRunner(exported)) {
+      throw new Error(`runners/${key}: default export is not an AgentRunner ({ run })`);
+    }
+    out.set(key, exported);
   }
   return out;
 }
