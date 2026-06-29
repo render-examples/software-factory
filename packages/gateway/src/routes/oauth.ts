@@ -123,10 +123,18 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
   return app;
 }
 
+/** Bound provider HTTP calls so a hung endpoint can't stall a run (or, for
+ * refresh, hold the `SELECT … FOR UPDATE` row lock) indefinitely. */
+const TOKEN_HTTP_TIMEOUT_MS = 10_000;
+
 /**
  * Build a token refresher for a provider config: exchanges the stored refresh
  * token for fresh tokens at the provider's token endpoint. Registered into
  * `runtime.oauthRefreshers` so the loop can refresh expired tokens mid-run.
+ *
+ * Single-flight coordination is the store's job (`OAuthStore.refreshConnection`
+ * uses `SELECT … FOR UPDATE`, holding the row lock across this call). The timeout
+ * bounds how long that lock is held if the provider is slow/unresponsive.
  */
 export function buildRefresher(config: OAuthProviderConfig, fetchImpl: typeof fetch = fetch) {
   return async (conn: OAuthConnection) => {
@@ -141,6 +149,7 @@ export function buildRefresher(config: OAuthProviderConfig, fetchImpl: typeof fe
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: body.toString(),
+      signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`refresh failed: ${res.status}`);
     const tokens = (await res.json()) as TokenResponse;
@@ -169,6 +178,7 @@ async function exchangeCode(
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: body.toString(),
+    signal: AbortSignal.timeout(TOKEN_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`token endpoint returned ${res.status}`);
   const json = (await res.json()) as TokenResponse;
