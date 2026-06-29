@@ -45,6 +45,7 @@ export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
   set("agents/security.md", securityAgent());
   set("agents/performance.md", performanceAgent());
   set("agents/judge.md", judgeAgent());
+  set("agents/assistant.md", assistantAgent());
 
   // tools/
   set("tools/github/index.ts", githubTool());
@@ -213,6 +214,18 @@ function judgeAgent(): string {
     "",
     "You are the lead reviewer. Given the security and performance reviews,",
     "decide whether to approve or request changes. Respond as JSON.",
+  ].join("\n");
+}
+
+function assistantAgent(): string {
+  return [
+    "---",
+    "description: Conversational assistant for interactive threads",
+    "interactive: true",
+    "---",
+    "",
+    "You are a helpful conversational assistant. Hold a multi-turn conversation,",
+    "remembering earlier turns in the thread, and answer the user's questions.",
   ].join("\n");
 }
 

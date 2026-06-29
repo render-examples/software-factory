@@ -148,6 +148,7 @@ export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
       context: frontmatter.context,
       plan,
       runner: frontmatter.runner,
+      interactive: frontmatter.interactive,
     };
 
     definitions.push(definition);

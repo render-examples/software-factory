@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { writeProject } from "./write.js";
 // The generated project imports "@render-agents/sdk"; resolved via the workspace
 // because the scaffold target lives inside the monorepo. (devDependency only.)
-import { createRuntime, loadAgents, loadWorkflows, loadToolSources } from "@render-agents/sdk";
+import { createRuntime, loadAgents, loadWorkflows, loadToolSources, loadHooks } from "@render-agents/sdk";
 import { mockModel } from "@render-agents/sdk/testing";
 
 // Scaffold inside the package dir so generated modules resolve @render-agents/sdk
@@ -41,10 +41,15 @@ describe("scaffolded project — end-to-end", () => {
     const toolSources = await loadToolSources(projectDir);
     expect([...toolSources.keys()].sort()).toEqual(["github", "linear"]);
 
-    const runtime = await createRuntime({ model, toolSources });
+    // The generated hooks/ are discoverable with the real { name, on, handle } shape.
+    const hooks = await loadHooks(projectDir);
+    expect(hooks.map((h) => h.name)).toContain("audit");
+
+    const runtime = await createRuntime({ model, toolSources, hooks });
     const agents = await loadAgents(projectDir, runtime);
     expect(agents.has("security")).toBe(true);
     expect(agents.has("judge")).toBe(true);
+    expect(agents.get("assistant").definition.interactive).toBe(true); // conversational agent
 
     const workflows = await loadWorkflows(projectDir, runtime);
     expect(workflows.has("code-review")).toBe(true);
