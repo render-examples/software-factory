@@ -75,8 +75,8 @@ describe("gateway OAuth — connect / persist / revoke", () => {
   });
 });
 
-describe("dev trace viewer (/ui)", () => {
-  it("serves the SPA shell without auth and the compiled helpers module", async () => {
+describe("operator UI (/ui)", () => {
+  it("serves the SPA shell + hashed assets without auth", async () => {
     const { createGatewayApp } = await import("../src/index.js");
     const { createMemoryStore, MemoryCancelStore } = await import("@render-agents/store");
     const store = createMemoryStore();
@@ -98,12 +98,19 @@ describe("dev trace viewer (/ui)", () => {
     const shell = await app.request("/ui");
     expect(shell.status).toBe(200);
     expect(shell.headers.get("content-type")).toContain("text/html");
-    expect(await shell.text()).toContain("trace viewer");
+    const html = await shell.text();
+    expect(html).toContain('id="root"');
 
-    const js = await app.request("/ui/trace.js");
-    expect(js.status).toBe(200);
-    expect(js.headers.get("content-type")).toContain("javascript");
-    expect(await js.text()).toContain("buildSpanTree");
+    // The shell references hashed JS/CSS assets under /ui/assets/ — fetch one and
+    // confirm it serves with the right content type, unauthenticated.
+    const assetMatch = html.match(/\/ui\/assets\/[\w.-]+\.js/);
+    expect(assetMatch).not.toBeNull();
+    const asset = await app.request(assetMatch![0]);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toContain("javascript");
+
+    // Path-traversal guard on the asset route.
+    expect((await app.request("/ui/assets/..%2f..%2fpackage.json")).status).toBe(404);
 
     // SPA fallback for client routes.
     expect((await app.request("/ui/runs/abc")).status).toBe(200);

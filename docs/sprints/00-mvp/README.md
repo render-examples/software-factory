@@ -102,14 +102,14 @@ Three principles drive the ordering:
 
 | # | Sprint |
 |---|---|
-| [21](complete/21-scaffolder.md) | Scaffolder (`create-render-agent`) + default example project |
+| [21](complete/21-scaffolder.md) | Scaffolder (`create-render-agents`) + default example project |
 | [22](complete/22-dev-trace-viewer.md) | Dev-mode trace viewer (`/ui`) |
 | [23](complete/23-deployment-retention.md) | Deployment (`render.yaml`), configuration, retention cleanup |
 | [24](complete/24-hardening-release.md) | NFR hardening, docs, release/publish |
 
 **Status:** ✅ Complete — all Wave 4 sprints implemented.
 
-**Wave exit:** `npm create render-agent` scaffolds a working project that deploys to Render with one `render.yaml`; packages publish to npm; NFR targets are met.
+**Wave exit:** `npm create render-agents` scaffolds a working project that deploys to Render with one `render.yaml`; packages publish to npm; NFR targets are met.
 
 > The full operator-UI SPA described in [L6](../specs/06-operator-ui.md) is **deferred post-MVP** (per the [Porting Map](../specs/porting-map.md#3-not-ported-intentionally-dropped)). Sprint 22 ships the template's existing trace viewer as a read-only dev-mode stopgap.
 

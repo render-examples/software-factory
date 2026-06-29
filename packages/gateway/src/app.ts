@@ -42,7 +42,7 @@ export interface GatewayOptions {
    * full run; tests set true for deterministic assertions.
    */
   awaitResume?: boolean;
-  /** Serve the dev-mode trace viewer at `/ui` (default true). */
+  /** Serve the operator UI SPA at `/ui` (default true). */
   serveUI?: boolean;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
@@ -68,8 +68,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Health check (no auth)
   app.get("/health", (c) => c.json({ status: "ok" }));
 
-  // Dev trace viewer shell (no auth on the static shell; data fetches carry the
-  // API key). Registered before the auth middleware so it stays unauthenticated.
+  // Operator UI shell (no auth on the static shell + assets; data fetches carry
+  // the API key). Registered before the auth middleware so it stays unauthenticated.
   if (opts.serveUI !== false) {
     app.route("/", uiRoutes());
   }

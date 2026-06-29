@@ -34,7 +34,7 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
   - Zero external deps for observability (Postgres sufficient).
 - **Edge-case test suite** (port the harness's "must not lose" cases — [Porting principle 5](../specs/porting-map.md#4-porting-principles)): concurrent thread turns, mid-loop crash + resume, OAuth token-refresh races, SSRF via DNS rebinding, budget overflow on the last turn. Plus the memory↔Postgres parity suite (Sprint 05) and the determinism/replay suite (Sprints 12/13).
 - **Documentation:** README per package, a top-level getting-started (scaffold → run → deploy), the public API reference (generated from the Type Reference / TSDoc), and a "porting/architecture" overview linking the specs.
-- **Release pipeline:** independent npm publish per `packages/*` (sdk/engine/store/gateway + `create-render-agent`), versioning/changesets, provenance, CI release workflow; bundle-size check in CI.
+- **Release pipeline:** independent npm publish per `packages/*` (sdk/engine/store/gateway + `create-render-agents`), versioning/changesets, provenance, CI release workflow; bundle-size check in CI.
 - **Examples polish:** the scaffolder's default project doubles as the canonical example; ensure it's documented and tested.
 
 **Out:**
@@ -73,7 +73,7 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
 
 - Every NFR target has a passing automated check (load < 500ms/20 agents, append < 5ms, SSE < 100ms, loop overhead < 10ms/turn, sdk < 100KB, ESM-only, strict TS).
 - The five harness edge-case scenarios pass against the new implementation; the memory↔Postgres parity and determinism/replay suites are green.
-- `npm create render-agent` → build → run → deploy is documented and works end-to-end (getting-started validated).
+- `npm create render-agents` → build → run → deploy is documented and works end-to-end (getting-started validated).
 - All five packages publish to npm (dry-run in CI, real publish on tag) with declarations + provenance; bundle-size gate passes.
 - API reference + package READMEs + architecture overview are published.
 

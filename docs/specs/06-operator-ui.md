@@ -1,201 +1,295 @@
 # Operator UI
 
-**Status:** DRAFT
-**Date:** 2026-06-25
+**Status:** IMPLEMENTED (React + Vite SPA served from the gateway at `/ui`)
+**Date:** 2026-06-29
 
 **Layer:** L6 — *what you see.* Part of the [render-agents specification](00-foundations.md) ([Document Map](00-foundations.md#document-map)).
 
-A lightweight operator UI for visibility into runs, traces, costs, approvals, and threads. It is a React + Vite SPA served from the gateway — a read layer over existing API routes and Postgres projections. No new backend routes, no new stores, no new packages.
+A focused operator console for the team running an agent system. It is a React + Vite SPA served from the gateway at `/ui`, and a thin read/act layer over the existing gateway routes and Postgres projections. It does three jobs, in priority order:
 
-Each section follows the same shape: **Purpose** (what & why), **Data source** (which gateway route), **Model** (what it shows), and **Interactions** where applicable.
+1. **Observe & understand** — see what runs exist, what each one did, what it cost, and what it's doing right now.
+2. **Debug** — drop from the trace tree down to the raw event log, tool I/O, errors, context compaction, and resume state to answer "why did this happen?"
+3. **Act** — resolve human-in-the-loop approvals (approve / deny / comment) and drive interactive agents from a chat console.
 
----
+Everything the UI shows is a [projection of the event log](00-foundations.md#d10--the-append-only-event-log-is-the-single-source-of-truth) ([D10](00-foundations.md#d10--the-append-only-event-log-is-the-single-source-of-truth)). The UI introduces **no new store and no new stateful concept** — it reads projections and tails the log. The only new backend surface it requires is small and explicitly enumerated in [Backend additions](#backend-additions-required).
 
-## Purpose
-
-The operator UI answers two questions: "what is happening?" and "what needs my attention?" It is for the team operating the agent system — not for end users interacting with agents.
-
-Concretely:
-
-- Inspect any run's full execution trace with cost and token attribution.
-- Watch a running agent in real time via the SSE event stream.
-- Act on pending HITL approvals without leaving the browser.
-- Browse thread history to understand multi-turn behavior.
-- See aggregate cost at a glance.
-
-The UI is read-only except for approval resolution. It does not edit agent definitions, configure workflows, or serve as an end-user chat interface.
+Each section follows the same shape: **Purpose** (what & why), **Data source** (which gateway route), **Model** (what it shows), and **Interactions** (what you can do).
 
 ---
 
-## Run list
+## Design principles
 
-**Purpose** — The primary landing view. Shows all workflow runs with status, cost, and timing so an operator can quickly find runs that need attention.
+- **The event log is the model.** Every view is a fold or a tail of `run_events`. The trace tree, the chat transcript, the cost numbers, and the approval queue are all the same data viewed at different grains. The UI never invents state the log doesn't have.
+- **One run, many lenses.** A single run is observable as a span tree (structure), an event stream (chronology), a message history (what the model saw), and tool I/O (what it did). Debugging is moving fluidly between these lenses without losing your place.
+- **Clean, dense, monospace-friendly.** This is an operator tool, not a marketing surface. High information density, fast filtering, keyboard-navigable, no chrome that doesn't carry data. A light/dark theme that follows the OS, and nothing else.
+- **Live by default, static when terminal.** Running and paused runs auto-follow the SSE tail; terminal runs render once from projections. The same component renders both — live is just "the same tree, updated by events."
+- **Act in context.** Approvals and chat are not separate apps bolted on; they open against the run/thread you're already looking at, so an operator approving a gated tool can see the trace that led there.
 
-**Data source** — `GET /runs` (keyset pagination via `before` cursor).
+---
+
+## Information architecture
+
+A single-pane app with a persistent left rail and a context-aware main area. No nested navigation deeper than two levels.
+
+```
+┌───────────┬──────────────────────────────────────────────────────────┐
+│           │  ┌────────────────────────────────────────────────────┐  │
+│  Runs     │  │  context header: run/thread id · status · cost · ⏱  │  │
+│  Approvals│  ├────────────────────────────────────────────────────┤  │
+│  Chat     │  │                                                      │  │
+│  Threads  │  │   main view (trace / events / chat / approvals)      │  │
+│  Schedules│  │                                                      │  │
+│           │  │                                                      │  │
+│  ─────────│  │                                                      │  │
+│  ● 3 live │  └────────────────────────────────────────────────────┘  │
+│  ⚠ 2 wait │                                                            │
+└───────────┴──────────────────────────────────────────────────────────┘
+```
+
+- **Left rail** — the five surfaces (Runs, Approvals, Chat, Threads, Schedules) plus a live status footer: count of active (running/paused) runs and pending approvals, each a link, kept current by the global [`GET /events/stream`](#backend-additions-required) tail. The Approvals item shows a badge when the pending count is > 0.
+- **Context header** — whenever a run or thread is selected, a sticky header shows identity, status badge, all-in cost, duration, trigger, and quick actions (cancel, copy id, open raw events).
+- **Command palette** (`⌘K`) — jump to a run by id, filter by status/workflow, or open a view. Operator tools live or die on "paste an id, land on the trace."
+
+---
+
+## Runs — the observe landing
+
+**Purpose** — The default view. A scannable table of runs so an operator can find what needs attention: failures, paused runs, expensive runs, long-running runs.
+
+**Data source** — `GET /runs` (keyset pagination via `before`; filters `workflow`, `status`, `limit`).
 
 **Model:**
 
 | Column | Source field | Notes |
 |---|---|---|
 | Status | `status` | Badge: pending / running / paused / completed / failed / cancelled |
-| Workflow | `workflow` | Workflow name |
-| Trigger | `trigger` | How the run was initiated (webhook, cron, API, thread) |
-| Cost | `totalCostUsd` | USD, two decimal places |
-| Duration | `finishedAt - startedAt` | Human-readable; "running" if not finished |
-| Started | `startedAt` | Relative time ("2m ago") with absolute tooltip |
+| Workflow | `workflow` | Workflow or agent name |
+| Trigger | `trigger` | webhook / cron / api / thread_message |
+| Cost | `totalCostUsd` | This run's cost (USD). Detail view shows the all-in aggregate. |
+| Duration | `finishedAt − startedAt` | Human-readable; live ticker if running |
+| Started | `startedAt` | Relative ("2m ago") with absolute tooltip |
 
 **Interactions:**
 
-- Filter by workflow name and status.
-- Click a row to navigate to [run detail](#run-detail--span-tree).
-- Paused runs show a visual indicator linking to the [approvals view](#pending-approvals).
-
-**Cost summary header** — displayed above the run list: total cost, run count, and average cost per run for the currently filtered/visible set. Derived client-side from the loaded `runs` page. This is not a server-side aggregation endpoint.
+- Filter by workflow and status; free-text filter by run id.
+- A **status rail** of quick filters: `needs attention` (failed + paused), `live` (running + paused), `all`. `needs attention` is the operator's morning view.
+- Click a row → [Run detail](#run-detail--the-trace). Paused-for-approval rows show a ⚠ that deep-links straight to the [approval](#approvals--approve--deny--comment).
+- **Cost summary strip** above the table: total / count / avg cost for the loaded page. Client-derived from the page — not a server aggregation (none exists, and we don't add one).
 
 ---
 
-## Run detail / span tree
+## Run detail — the trace
 
-**Purpose** — The single highest-value view. Shows the full execution trace of one run as a collapsible tree, answering "what happened and what did it cost" at every level.
+**Purpose** — The single highest-value view: the full execution of one run as a collapsible span tree, answering "what happened, in what order, and what did it cost" at every level. This is where observing becomes debugging.
 
-**Data source** — `GET /runs/:id` (run summary) + `GET /runs/:id/spans` (span tree) + `GET /runs/:id/tool-calls` (tool call input/output, loaded on expand).
+**Data source** — `GET /runs/:id` (summary + `aggregateCostUsd`, the all-in cost incl. subagent descendants) + `GET /runs/:id/spans` (tree) + `GET /runs/:id/tool-calls` (tool I/O, lazy on expand).
 
-**Model** — A collapsible tree mirroring the execution hierarchy. The tree structure follows `SpanRecord.parentId`:
+**Model** — A tree built from `SpanRecord.parentId`, ordered by `seq`:
 
 ```
 workflow run
 ├── step: prepareDiff
 ├── agent: security
-│   ├── llm: turn 0
-│   │   └── tool: github__get_file
+│   ├── llm: turn 0           model · in/out tokens · stopReason · cost · latency
+│   │   └── tool: github__get_file   input/output (lazy) · ok/error · latency
 │   ├── llm: turn 1
 │   └── llm: turn 2 (final)
 ├── agent: performance (parallel)
-│   └── ...
-├── agent: judge
-│   └── llm: turn 0 (final)
+│   └── …
 └── step: postReview
 ```
 
-Each node displays:
+Per node:
 
 | Field | Shown on | Source |
 |---|---|---|
-| Kind badge | All spans | `kind` (workflow / agent / llm / tool / step) |
-| Name | All spans | `name` |
-| Status | All spans | `status` (running / ok / error) |
-| Duration | All spans | `finishedAt - startedAt` |
-| Error | Failed spans | `error` |
-| Cost | Agent spans | Sum of child LLM span costs |
-| Model | LLM spans | `attributes.model` |
-| Input / output tokens | LLM spans | `attributes.inputTokens` / `attributes.outputTokens` |
-| Stop reason | LLM spans | `attributes.stopReason` |
-| Latency | LLM + tool spans | `attributes.latencyMs` |
-| Success / error | Tool spans | `attributes` |
+| Kind badge | all | `kind` (workflow / agent / llm / tool / step) |
+| Name | all | `name` |
+| Status | all | `status` (running / ok / error) |
+| Duration | all | `finishedAt − startedAt` |
+| Error | failed spans | `error` (inline, expandable) |
+| Cost | agent spans | sum of descendant `llm` span `attributes.costUsd` |
+| Model · tokens · stop reason · latency | llm spans | `attributes` (incl. `gen_ai.*` aliases) |
+| Tool I/O · ok/error · latency | tool spans | `attributes` + `/tool-calls` payloads |
+
+**Cross-run delegation.** A delegating run's children (`agent.task()` / subagents) own their own spans under their own `runId`. The tree stitches them in by following `subagent.spawned.childRunId` — expanding a `subagent` node lazily fetches the child run's spans and grafts its subtree, so the operator sees one continuous tree across run boundaries. The all-in cost in the header is `aggregateCostUsd` (the server already walks this).
 
 **Interactions:**
 
-- Expand/collapse subtrees. Agent and workflow nodes start expanded; LLM and tool nodes start collapsed.
-- Expanding a tool span loads its input/output from the tool-calls endpoint.
-- Run header shows: run ID, workflow, status, trigger, total cost, total duration, user ID (if present).
-- Per-agent cost breakdown below the header: agent name, model, iteration count, token usage, cost.
+- Expand/collapse; agent + workflow nodes start expanded, llm + tool nodes collapsed.
+- Expanding a tool node loads its `tool.called` input and `tool.result` output (pretty-printed, copyable, error-highlighted).
+- Header: run id, workflow, status, trigger, all-in cost, duration, user/thread id (each a link), and a **per-agent cost breakdown** (agent · model · iterations · tokens · cost).
+- **Lens switcher** in the header: `Trace` (this view) · `Events` ([log inspector](#event-log-inspector--debug)) · `Messages` ([model view](#message-history--what-the-model-saw)) · `Chat` (if the run serves a thread). Same run, different lens, shared selection.
+- **Cancel** (running/paused) via `POST /runs/:id/cancel`, with a confirm.
 
 ---
 
 ## Live trace stream
 
-**Purpose** — Real-time visibility into a running agent. The same span tree as run detail, but built incrementally from the SSE event stream so spans appear and update as the run executes.
+**Purpose** — The trace, but built incrementally as a run executes. Same component as Run detail; events drive the updates.
 
-**Data source** — `GET /runs/:id/stream` (SSE). Events arrive in the [`RunEvent`](05-type-reference.md#runevent) taxonomy.
-
-**Model** — The view renders the same tree layout as run detail. Events drive updates:
+**Data source** — `GET /runs/:id/stream` (SSE). Events arrive in the [`RunEvent`](05-type-reference.md#runevent) taxonomy, tagged by [`EventCategory`](05-type-reference.md#eventcategory) (`lifecycle` / `message` / `tool` / `step` / `model` / `approval` / `delegation` / `context`), `id` = `seq`.
 
 | Event | UI effect |
 |---|---|
-| `run.started` | Initialize the run header |
-| `step.started` / `step.completed` | Add/complete step nodes |
-| `llm.call` | Add LLM node with token counts and cost |
-| `tool.called` / `tool.result` | Add tool node; update with result on completion |
-| `message.assistant` | Display assistant message content |
-| `text.delta` | Append streaming text to the current assistant message |
-| `approval.requested` | Show approval-pending indicator with link to approvals view |
-| `subagent.spawned` | Add nested agent subtree |
-| `context.compacted` | Show compaction indicator (before/after token counts) |
-| `run.completed` / `run.failed` / `run.paused` / `run.cancelled` | Update run header status; stop the stream on terminal states |
+| `run.started` | seed header + root span (`spanKind` → workflow/agent root) |
+| `step.started` / `step.completed` | add / close step nodes |
+| `llm.call` | add llm node with tokens, cost, stop reason, latency |
+| `tool.called` / `tool.result` | add tool node; fill result on completion |
+| `message.assistant` | render assistant message content |
+| `text.delta` | append streaming text to the live assistant message (when token streaming lands; today the stream emits whole `message.assistant`) |
+| `approval.requested` | mark the run paused-for-approval; surface an inline **approve/deny/comment** affordance |
+| `approval.resolved` | clear the pending marker, show the decision + comment |
+| `subagent.spawned` | add a `subagent` node ready to expand into the child run |
+| `context.compacted` | show a compaction marker (before→after tokens, strategy) |
+| `run.completed` / `failed` / `paused` / `cancelled` | update header; stop the tail on terminal states |
 
 **Interactions:**
 
-- Automatic reconnect from last `seq` on disconnect (the gateway SSE contract already supports this).
-- Toggle between live stream and static span tree (fetched via `GET /runs/:id/spans`) for completed runs.
-- Scroll-to-bottom auto-follow while streaming; pauses on manual scroll-up.
+- Resumable: on disconnect, reconnect from the last `seq` (the SSE contract honors `Last-Event-ID` / `?seq=`); no gaps, no dupes.
+- Toggle live-tail vs static `GET /runs/:id/spans` for completed runs.
+- Auto-follow newest while streaming; pause-follow on manual scroll-up.
 
 ---
 
-## Pending approvals
+## Event log inspector — debug
 
-**Purpose** — The operator's action queue. Shows HITL approval requests that are blocking paused runs, with approve/deny actions.
+**Purpose** — The raw truth. When the trace tree abstracts away too much, the operator drops to the ordered event log: every `RunEvent`, by `seq`, with category, type, agent, span correlation, and full payload. This is the primary debugging surface — it's the source of truth every other view folds from.
 
-**Data source** — `GET /approvals` (filtered to `status: pending`). This is the only view with write actions.
+**Data source** — `GET /runs/:id/stream` replays the full log from `seq 0` on connect (catch-up before tailing), so the inspector reconstructs the complete log without a new route. (An explicit `GET /runs/:id/events` is a small, optional convenience — see [Backend additions](#backend-additions-required).)
+
+**Model** — A virtualized, chronological list. Each row: `seq` · `ts` · category chip · `type` · `agentName` · one-line payload summary; expand for the full pretty-printed `RunEvent` payload and `spanId`/`parentSpanId`.
+
+**Interactions:**
+
+- Filter by category and by `type`; free-text search across payloads.
+- "Jump to span" from an event → highlights the node in the Trace lens (and back).
+- Copy any event as JSON; copy the whole log for a bug report.
+- Visual markers for the load-bearing debug moments: pauses, approval request/resolve, compaction, errors, cancellations, resume boundaries (the first replayed event after a `run.paused`).
+
+---
+
+## Message history — what the model saw
+
+**Purpose** — Debug prompt/context issues by viewing the exact model-visible history per agent, after context management/compaction — distinct from the human-facing transcript.
+
+**Data source** — folded client-side from the `message`/`tool` events already streamed for the run (no extra route). Per-agent grouping via `agentName` on the events; mirrors `getMessages(runId, agentName)`.
+
+**Model** — Per agent, the ordered `Message[]`: user / assistant / tool turns with `ContentBlock`s rendered (text, `tool_use` with input, `tool_result` with output/`isError`). `context.compacted` events render as a divider showing what was summarized (before→after tokens).
+
+**Interactions:** pick the agent (for multi-agent runs); toggle "show tool_result bodies"; copy a turn.
+
+---
+
+## Approvals — approve / deny / comment
+
+**Purpose** — The operator's action queue. HITL approval requests that are blocking paused runs, resolved in context with a decision and a comment.
+
+**Data source** — `GET /approvals` (pending) for the queue; `POST /approvals/:id/resolve` for the decision; the global/run SSE stream (`approval` category) to keep it live.
 
 **Model:**
 
-| Column | Source field | Notes |
+| Field | Source | Notes |
 |---|---|---|
-| Tool | `toolName` | The gated tool awaiting approval |
-| Agent | `agentName` | Which agent requested it |
-| Input | `toolInput` | Truncated summary; expandable |
-| Requested | `requestedAt` | Relative time |
-| Run | `runId` | Link to run detail |
+| Tool | `toolName` | the gated tool awaiting approval |
+| Agent | `agentName` | which agent requested it |
+| Input | `input` | truncated summary; expandable to full tool input |
+| Requested | `requestedAt` | relative time |
+| Run | `runId` | link to the trace at the requesting node |
+
+**The approve / deny / comment interaction.** Each pending item is a card with three affordances:
+
+- **Approve** — `POST /approvals/:id/resolve` `{ approved: true, resolvedBy, reason? }`. The paused run is re-driven (resume-by-replay) and continues. `resolvedBy` is the operator identity (see [Auth](#auth)).
+- **Deny** — `POST /approvals/:id/resolve` `{ approved: false, resolvedBy, reason? }`. The denial flows back to the loop as an error `tool_result`; the agent proceeds with the denial in context.
+- **Comment** — a free-text note attached to the decision via the resolve `reason` field, persisted on the `approval.resolved` event and folded onto the `ApprovalRequest` projection — so an approve-with-note and a deny-with-reason are both first-class and show in the audit trail. "Comment" always means "the note you attach when you approve or deny"; there is no standalone annotate-without-resolving, and so no backend change is needed (see [Resolved decisions](#resolved-decisions)).
+
+**Context-first resolution.** Opening an approval shows the requesting run's trace inline (the path down to the gated `tool.called`) so the operator decides with full context, not from a bare tool name + JSON blob.
 
 **Interactions:**
 
-- **Approve** — `POST /approvals/:id/resolve` with `{ approved: true }`. The paused run resumes.
-- **Deny** — `POST /approvals/:id/resolve` with `{ approved: false, reason }`. Optional reason text field.
-- Auto-refresh on a short interval or via SSE (listening for `approval.requested` / `approval.resolved` events on a global stream).
-- Resolved approvals drop from the pending list; a separate "resolved" tab shows recent history.
+- Live updates via the global [`GET /events/stream`](#backend-additions-required) tail (`approval` category): requests appear and resolved items drop out without a refresh, and the left-rail badge stays current across all runs.
+- A **Resolved** tab: recent decisions with who/when/decision/comment, read from `GET /approvals` history (any status).
+- Bulk-safe: each resolve is idempotent; a second resolve of an already-resolved approval is a no-op `409` the UI surfaces gracefully.
 
 ---
 
-## Thread browser
+## Chat — drive an interactive agent
 
-**Purpose** — Inspect multi-turn interactions. Shows how users interact with agents over time, with linked runs for each turn.
+**Purpose** — A first-class chat console for interactive agents (the `interactive` frontmatter flag → the agent parks on `awaitInput()` between turns). Lets an operator converse with an agent, watch it work turn-by-turn, and resolve approvals mid-conversation — the human side of multi-turn, human-in-the-loop work.
 
-**Data source** — `GET /threads` (thread list, optional `?userId=`) + `GET /threads/:id/stream` (live thread SSE stream).
+**Data source** — threads:
 
-**Model:**
+- `POST /threads` — start a conversation (optional `userId`, `title`, `metadata`).
+- `POST /threads/:id/messages` — send a turn. The gateway routes it: a new turn dispatches the `defaultAgent` (interactive) or `defaultWorkflow`; a turn delivered to an `input`-paused run resumes it with a `message.user` event.
+- `GET /threads/:id` — thread metadata + transcript (`ThreadMessage[]`).
+- `GET /threads/:id/stream` — live SSE spanning the thread's runs (stays open across a revival under a new run).
 
-**Thread list:**
-
-| Column | Source field |
-|---|---|
-| Thread ID | `id` |
-| User | `userId` (if present) |
-| Title | `title` |
-| Status | `status` |
-| Last active | `updatedAt` |
-
-**Thread view:**
-
-- User and assistant turns rendered as a message thread.
-- Each assistant turn links to the `runId` that produced it (click-through to run detail). A thread spans a sequence of runs, so consecutive turns may point to different runs after a revival.
-- Active threads show a live tail via the thread SSE stream (spans the thread's runs; stays open across a revival under a new run).
+**Model** — A chat transcript: user and assistant turns (each assistant turn links to the `runId` that produced it; a thread spans a sequence of runs). A status line reflects the active run: `idle` · `thinking` (running) · `waiting for you` (paused: input) · `needs approval` (paused: approval) · `failed`.
 
 **Interactions:**
 
-- Search/filter threads by user ID.
-- Click a thread to view its messages.
-- Live indicator on threads with an active (running/paused) run.
+- Type a message → `POST /threads/:id/messages`. The composer disables while a turn is mid-flight (`running`/`pending` → `409 thread_busy` is prevented client-side, enforced server-side).
+- **Tool/thinking transparency** — assistant turns expand inline to reveal the tool calls and llm steps of their run (the same span data as the trace), so chat isn't a black box. "Open full trace" jumps to [Run detail](#run-detail--the-trace) for that turn's run.
+- **Approval inside chat** — when a turn pauses for approval (status `needs approval`), the approve/deny/comment card appears inline in the transcript; resolving it (via the approvals API) resumes the conversation in place.
+- **Input pause** — when the agent parks awaiting input, the composer re-enables; the next message resumes the same run (`message.user` → re-drive).
+- Live tail via `GET /threads/:id/stream`, resumable from `seq`.
+
+> **Scope note.** This is an *operator-facing* console for exercising, observing, and steering agents — not a packaged end-user chat product. It deliberately exposes the machinery (runs, tools, traces, approvals) an end-user UI would hide.
 
 ---
 
-## Technology
+## Threads — multi-turn history
 
-The operator UI is a React + Vite SPA, built as part of `@render-agents/gateway`:
+**Purpose** — Browse and inspect conversations over time, independent of the live Chat console.
 
-- **Served at** `/ui` (and `/ui/*` for client-side routing). The gateway serves the built SPA assets; all data comes from the existing gateway API routes.
-- **Build** — Vite produces a static bundle embedded in the gateway package. No separate deployment.
-- **Dependencies** — React, a lightweight tree/table component. No heavy UI framework.
-- **SSE** — native `EventSource` (or a reconnecting wrapper) against the existing gateway stream endpoints.
+**Data source** — `GET /threads` (optional `?userId=`) + `GET /threads/:id` + `GET /threads/:id/stream`.
+
+**Model** — Thread list (id · user · title · status · last active) and a thread view (transcript with each assistant turn linking to its `runId`; live tail for active threads).
+
+**Interactions:** filter by `userId`; click into a thread (read-only history, or hand off to the Chat console if active); a live indicator on threads with a running/paused run.
+
+---
+
+## Schedules — operability (optional, low priority)
+
+**Purpose** — Visibility into runtime-managed cron schedules and their last runs. Included because it's a pure read over an existing store and rounds out "what is this system doing."
+
+**Data source** — schedules CRUD routes (`GET /schedules`, etc., backed by `ScheduleStore`).
+
+**Model** — id · workflow · cron expression · enabled · last run (link to the run) · last run at.
+
+**Interactions:** enable/disable a schedule; trigger its workflow ad-hoc via `POST /workflows/:name`. CRUD beyond enable/disable is optional and can be deferred.
+
+---
+
+## Cross-cutting
+
+### SSE handling
+
+- Native `EventSource` (or a small reconnecting wrapper). The API key rides as `?key=` for `EventSource` (which can't set headers) — matching the existing dev viewer — or via a fetch-based SSE reader with `Authorization`.
+- Resume from `seq` on every reconnect (`Last-Event-ID` / `?seq=`). Catch-up replay then live tail; the UI de-dupes by `seq`.
+- One stream per open run/thread, plus a single app-wide global tail ([`GET /events/stream`](#backend-additions-required)) that lives for the session and feeds the rail counters. Per-run/thread streams close on terminal states and on view change. A debounced re-render coalesces event bursts.
+
+### Performance
+
+- Virtualize the run table, the event log, and large span trees.
+- Lazy-load tool I/O and child (subagent) span subtrees on expand only.
+- Client-side keyset pagination for `GET /runs` via `before`.
+
+### Technology
+
+- React + Vite SPA, built as part of `@render-agents/gateway`, served at `/ui` (+ `/ui/*` for client routing). Vite emits a static bundle embedded in the gateway package; no separate deploy.
+- Lightweight deps only: React, a virtualization helper, a tree/table primitive. No heavy UI framework, no state-management library beyond React + a tiny store. Keep the bundle small (it ships inside the gateway).
+- The pure, browser-safe trace helpers already shipped for the dev viewer (`buildSpanTree`, `flattenTree`, `perAgentCost`, `formatCost`, `formatDuration`) are reused as the tree/cost core, so the logic stays unit-testable outside the DOM.
+
+---
+
+## Auth
+
+Same gate as the gateway API — **API key bearer auth**, no separate auth system:
+
+- The SPA shell loads unauthenticated; the operator enters the key on first load (stored in memory / `sessionStorage`, or passed via `?key=` in dev). All fetch/SSE requests carry `Authorization: Bearer <key>` (SSE via `?key=`).
+- **Operator identity for the audit trail.** `resolve`/`input` accept a `resolvedBy`. Since the only gate is a shared API key, the UI prompts once for an operator name/handle and sends it as `resolvedBy` on every decision, so approvals carry *who* decided, not just *that* it was decided. This is a display/audit convenience, not an access-control boundary — RBAC beyond the API key is out of scope.
 
 ---
 
@@ -203,18 +297,36 @@ The operator UI is a React + Vite SPA, built as part of `@render-agents/gateway`
 
 | In scope | Out of scope |
 |---|---|
-| Run list with filters and pagination | Dashboards, charts, or timeseries analytics |
-| Span tree (static + live SSE) | Agent definition editing or workflow configuration |
-| Pending approvals with approve/deny | End-user chat UI |
-| Cost summary (per-run, per-agent) | Custom theming or white-labeling |
-| Thread browser | OAuth connection management UI |
-| API key bearer auth (same as gateway) | Role-based access control beyond API key |
+| Run list with filters, "needs attention", cost strip | Server-side dashboards, charts, timeseries analytics |
+| Trace tree (static + live), per-agent cost, cross-run stitching | Agent definition editing / workflow configuration |
+| Event log inspector + message-history (model view) lenses | An end-user (white-labeled) chat product |
+| Approvals queue with approve / deny / comment, in context | Role-based access control beyond the API key |
+| Interactive **chat** console (threads), tool/trace transparency | OAuth connection management UI (links out at most) |
+| Thread history browser | Editing/replaying past events (the log is append-only) |
+| Schedules read + enable/disable (optional) | Multi-tenant org/team management |
+| API-key bearer auth + `resolvedBy` operator handle | Cookies / user accounts / SSO |
 
 ---
 
-## Auth
+## Backend additions required
 
-The UI uses the same authentication as the gateway API:
+The UI is overwhelmingly a read/act layer over **existing** routes. Three small, additive, event-log-consistent changes were made to the gateway (no new store, all backward-compatible):
 
-- **API key bearer auth** — the SPA stores the key in memory (entered on first load or passed via query param for dev). All fetch/SSE requests include `Authorization: Bearer <key>`.
-- No separate auth flow, no cookies, no user accounts in the UI itself. The API key is the sole gate.
+1. **`GET /events/stream`** *(new route).* A **global** SSE tail of the event log — the same `EventLogStore.tail` mechanism the per-run/per-thread streams already use, but unfiltered (`tail({}, signal)`). It backs the live approvals badge and the cross-run "live" footer, which need a system-wide tail rather than one stream per run. Emits the same `EventCategory`-tagged events; unlike the per-run stream, `data` carries the full record (incl. `runId`) so events can be attributed to a run. The UI subscribes once and folds `approval.*` and `run.*` events into the rail counters (debounced re-fetch).
+
+2. **`GET /runs/:id/events`** *(new route, convenience).* A direct read of the ordered event log for the [Event log inspector](#event-log-inspector--debug) and the [Messages lens](#message-history--what-the-model-saw). Reconstructable from the per-run SSE replay otherwise, so it's an ergonomic shortcut, not a capability gap.
+
+3. **`GET /approvals?status=`** *(extended route).* The approvals route now accepts `?status=pending|approved|denied|all` (default `pending`, unchanged) and returns the resolution fields (`status`, `resolvedBy`, `resolvedAt`, `reason`). This powers the [Resolved tab](#approvals--approve--deny--comment). Backed by the store's existing `listApprovals({ status })`.
+
+Everything else — runs, spans, tool-calls, per-run/thread streams, threads, schedules, cancel, resolve — is served by the gateway as-is. **Comments need no backend change**: an approval comment is the resolve `reason`, persisted on the `approval.resolved` event and folded onto the `ApprovalRequest` projection.
+
+**Build & serving.** The SPA lives in `packages/gateway/ui/` (React + Vite), builds to `packages/gateway/dist/ui-app/` via `vite build` (wired into the package `build` script ahead of the server `tsc`), and is served by `src/routes/ui.ts` — the shell + hashed assets unauthenticated under `/ui`, with an SPA fallback for client routes. It ships inside the published gateway package (`files: ["dist"]`); no separate deployment.
+
+---
+
+## Resolved decisions
+
+- **Global live updates → `GET /events/stream`.** The live footer/approvals badge use a single global event tail (above), not polling.
+- **Comment = note on approve/deny.** "Comment" is the `reason` attached to a resolution; there is no standalone "annotate without resolving." No `operator.note` event is added.
+- **Per-operator auth is later.** v1 ships a self-entered operator handle sent as `resolvedBy` for the audit trail; real per-operator identity/RBAC is deferred.
+- **Per-message assistant text is acceptable.** The UI renders whole `message.assistant` turns; token-level `text.delta` streaming is a transparent future upgrade, not a v1 requirement.

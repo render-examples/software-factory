@@ -1,4 +1,4 @@
-# Sprint 21 — Scaffolder (`create-render-agent`) + Default Example
+# Sprint 21 — Scaffolder (`create-render-agents`) + Default Example
 
 **Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Build the `npm create render-agent` scaffolder: an interactive wizard that emits a working project in the spec's layout — agents, tools, a default workflow (code-review), `render.yaml`, `compose.yaml`, `package.json`, `tsconfig.json`, `.env` — so a new user goes from zero to a runnable, deployable agent system in one command.
+Build the `npm create render-agents` scaffolder: an interactive wizard that emits a working project in the spec's layout — agents, tools, a default workflow (code-review), `render.yaml`, `compose.yaml`, `package.json`, `tsconfig.json`, `.env` — so a new user goes from zero to a runnable, deployable agent system in one command.
 
 ---
 
@@ -44,7 +44,7 @@ Build the `npm create render-agent` scaffolder: an interactive wizard that emits
 
 ## Deliverables
 
-`create-render-agent`:
+`create-render-agents`:
 - Wizard (`@clack/prompts`), `buildFileMap`, blueprint emission adapted to the spec layout.
 - The default code-review example project (agents + tools + workflow + skill).
 - Generated `package.json`/`tsconfig.json`/`.env.example`/`compose.yaml`/`render.yaml`.
@@ -71,7 +71,7 @@ Build the `npm create render-agent` scaffolder: an interactive wizard that emits
 
 ## Exit criteria / acceptance
 
-- `npm create render-agent@latest my-app` runs the wizard and emits a project in the spec layout.
+- `npm create render-agents@latest my-app` runs the wizard and emits a project in the spec layout.
 - The generated project: `pnpm install` + `build` succeed; `loadAgents()` discovers the agents/tools/skills/workflow without errors; the code-review workflow runs against a mock model (and a real model with keys).
 - Generated `render.yaml`/`compose.yaml`/`.env.example` are present and coherent with Sprint 23.
 - The scaffolder package has no runtime dependencies on `@render-agents/*`.
