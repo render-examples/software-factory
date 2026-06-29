@@ -79,8 +79,7 @@ export function perAgentCost(spans: SpanLike[]): Record<string, number> {
     const cost = Number((s.attributes as { costUsd?: number } | undefined)?.costUsd ?? 0);
     if (!cost) continue;
     const agent = agentNameOf(s);
-    totals[agent] = round(totals[agent] ?? 0) + cost;
-    totals[agent] = round(totals[agent]);
+    totals[agent] = round((totals[agent] ?? 0) + cost);
   }
   return totals;
 }
