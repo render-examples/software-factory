@@ -115,21 +115,24 @@ export async function resumeRun<T = unknown>(
   const run = await runtime.store.getRun(runId);
   if (!run) throw new Error(`resumeRun: run "${runId}" not found`);
   if (run.status !== "paused") {
-    // Nothing to resume — report the current terminal/active state.
+    // Only paused runs are resumable. A completed run is returned as-is; any
+    // other state (running/failed/cancelled) is a caller error.
     if (run.status === "completed") {
       return { status: "completed", text: "", data: run.result as T, usage: { inputTokens: 0, outputTokens: 0 } };
     }
-    return { status: "paused", reason: "input" } as AgentResult<T>;
+    throw new Error(`resumeRun: run "${runId}" is not resumable (status: ${run.status})`);
   }
 
   // The agent name is the run's workflow label (set from the run.started event's
-  // agentName when an agent run is started).
+  // agentName when an *agent* run is started). HITL pauses happen inside agent
+  // runs, so this resolves to a loaded agent; a paused workflow-root (not part of
+  // the in-process model) would fail here with a clear error.
   const agentName = run.workflow;
   const definition = runtime.agentDefinitions.get(agentName);
   if (!definition) {
     throw new Error(
-      `resumeRun: agent "${agentName}" for run "${runId}" not found in the runtime. ` +
-      `Ensure agents are loaded via loadAgents() before resuming.`,
+      `resumeRun: no agent named "${agentName}" for run "${runId}" in the runtime ` +
+      `(only agent runs are resumable). Ensure agents are loaded via loadAgents() before resuming.`,
     );
   }
 
