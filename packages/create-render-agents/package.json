@@ -1,5 +1,5 @@
 {
-  "name": "create-render-agent",
+  "name": "create-render-agents",
   "version": "0.1.0",
   "type": "module",
   "publishConfig": {
@@ -7,7 +7,7 @@
     "provenance": true
   },
   "bin": {
-    "create-render-agent": "./dist/index.js"
+    "create-render-agents": "./dist/index.js"
   },
   "exports": {
     ".": {

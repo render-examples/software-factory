@@ -5,7 +5,7 @@ Scaffold → run → deploy a render-agents project.
 ## 1. Scaffold
 
 ```sh
-npm create render-agent@latest my-agents
+npm create render-agents@latest my-agents
 cd my-agents
 npm install
 ```
@@ -30,8 +30,10 @@ curl -X POST localhost:3000/workflows/code-review \
   -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts\n+ const x = 1"}}'
 ```
 
-Open `http://localhost:3000/ui` (enter your API key) to see the run list, span tree,
-and per-agent cost. For the durable path, start Postgres with `docker compose up -d`
+Open `http://localhost:3000/ui` (enter your API key) for the operator UI: the run
+list, span tree (live-streamed while running), raw event-log and message lenses for
+debugging, per-agent cost, the approve/deny/comment queue, and a chat console for
+interactive agents. For the durable path, start Postgres with `docker compose up -d`
 and set `DATABASE_URL`.
 
 ## 3. Author

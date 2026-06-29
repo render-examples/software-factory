@@ -102,7 +102,7 @@ The SDK is a pnpm + Turborepo monorepo of four runtime packages plus a scaffolde
 | `@render-agents/engine` | Default runner + LLM loop, model clients, model tiers, environment/tool mounting, skill loading, context management/compaction, hooks |
 | `@render-agents/store` | Persistence: the append-only event log + maintained projections (Postgres + in-memory), span/projection tracer |
 | `@render-agents/gateway` | Web service: routes, threads, HITL, OAuth, SSE streaming, webhook dispatch |
-| `create-render-agent` | `npm create` scaffolder (no runtime deps) |
+| `create-render-agents` | `npm create` scaffolder (no runtime deps) |
 
 **Dependency graph:**
 

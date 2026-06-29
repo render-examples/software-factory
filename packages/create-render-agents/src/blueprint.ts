@@ -40,6 +40,13 @@ export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
   set("render.yaml", renderYaml(opts));
   if (opts.withPostgres) set("compose.yaml", composeYaml());
 
+  // "Everything in Docker" path: a Dockerfile for the app + a full-stack compose
+  // (Postgres + gateway, optional worker). Always emitted — it bundles its own
+  // Postgres, independent of the host-dev `compose.yaml` above.
+  set("Dockerfile", dockerfile());
+  set(".dockerignore", dockerignore());
+  set("docker-compose.yaml", dockerComposeYaml(opts));
+
   // agents/
   set("agents/_shared.md", sharedAgent(opts));
   set("agents/security.md", securityAgent());
@@ -479,7 +486,9 @@ function renderYaml(opts: ScaffoldOptions): string {
 
 function composeYaml(): string {
   return [
-    "# Local Postgres for the durable path. `docker compose up -d`.",
+    "# Local Postgres for the durable path while you run the app on the host",
+    "# (`docker compose up -d` then `npm run dev`). For an all-in-Docker stack",
+    "# (Postgres + gateway), use `docker compose -f docker-compose.yaml up --build`.",
     "services:",
     "  postgres:",
     "    image: postgres:16",
@@ -496,6 +505,92 @@ function composeYaml(): string {
   ].join("\n");
 }
 
+function dockerfile(): string {
+  return [
+    "# App image: runs the gateway from source via tsx (agents/skills are markdown,",
+    "# so the project root stays the discovery root — same as production on Render).",
+    "FROM node:20-slim",
+    "WORKDIR /app",
+    "",
+    "# Install deps first for layer caching (supports npm/pnpm/yarn lockfiles).",
+    "COPY package.json ./",
+    "COPY package-lock.json* pnpm-lock.yaml* yarn.lock* ./",
+    "RUN npm install",
+    "",
+    "COPY . .",
+    "ENV PORT=3000",
+    "EXPOSE 3000",
+    'CMD ["npm", "run", "start"]',
+  ].join("\n");
+}
+
+function dockerignore(): string {
+  return ["node_modules", ".env", "*.tsbuildinfo", ".git", "dist", ".smoke"].join("\n");
+}
+
+function dockerComposeYaml(opts: ScaffoldOptions): string {
+  const key = opts.apiKeyEnv;
+  return [
+    "# Full local stack, everything in Docker: Postgres + gateway (which runs the",
+    "# agent loop in-process). Usage:",
+    "#",
+    `#   ${key}=... docker compose -f docker-compose.yaml up --build`,
+    "#   open http://localhost:3000/ui   (API key: $RENDER_AGENTS_API_KEY, default dev-key)",
+    "#",
+    "# The bare `docker compose up` (compose.yaml) runs ONLY Postgres for host-side dev.",
+    "services:",
+    "  postgres:",
+    "    image: postgres:16",
+    "    environment:",
+    "      POSTGRES_USER: postgres",
+    "      POSTGRES_PASSWORD: postgres",
+    "      POSTGRES_DB: agents",
+    "    ports:",
+    '      - "5432:5432"',
+    "    volumes:",
+    "      - pgdata:/var/lib/postgresql/data",
+    "    healthcheck:",
+    '      test: ["CMD-SHELL", "pg_isready -U postgres"]',
+    "      interval: 3s",
+    "      timeout: 3s",
+    "      retries: 10",
+    "",
+    "  gateway:",
+    "    build: .",
+    '    command: ["npm", "run", "start"]',
+    "    ports:",
+    '      - "3000:3000"',
+    "    depends_on:",
+    "      postgres:",
+    "        condition: service_healthy",
+    "    environment:",
+    '      PORT: "3000"',
+    "      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agents",
+    "      RENDER_AGENTS_API_KEY: ${RENDER_AGENTS_API_KEY:-dev-key}",
+    "      RENDER_AGENTS_ENCRYPTION_KEY: ${RENDER_AGENTS_ENCRYPTION_KEY:-dev-only-change-me-0000000000000000}",
+    "      RENDER_AGENTS_STRICT_APPROVAL: ${RENDER_AGENTS_STRICT_APPROVAL:-}",
+    `      ${key}: \${${key}:-}`,
+    "",
+    "  # Optional: the Render Workflows service. Locally, agent.task() falls back to",
+    "  # in-process execution in the gateway, so this is only needed to mirror the",
+    "  # production split. Enable with:",
+    "  #   docker compose -f docker-compose.yaml --profile worker up --build",
+    "  worker:",
+    "    build: .",
+    '    command: ["npm", "run", "worker"]',
+    '    profiles: ["worker"]',
+    "    depends_on:",
+    "      postgres:",
+    "        condition: service_healthy",
+    "    environment:",
+    "      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agents",
+    `      ${key}: \${${key}:-}`,
+    "",
+    "volumes:",
+    "  pgdata:",
+  ].join("\n");
+}
+
 function readme(opts: ScaffoldOptions): string {
   const pm = opts.packageManager;
   const install = pm === "npm" ? "npm install" : `${pm} install`;
@@ -503,7 +598,7 @@ function readme(opts: ScaffoldOptions): string {
   return [
     `# ${opts.name}`,
     "",
-    "A render-agents project scaffolded with `create-render-agent`. The default",
+    "A render-agents project scaffolded with `create-render-agents`. The default",
     "example is a **code-review** pipeline (security + performance reviewers → judge).",
     "",
     "## Run locally",
@@ -514,7 +609,8 @@ function readme(opts: ScaffoldOptions): string {
     dev,
     "```",
     "",
-    "Then dispatch a run:",
+    "Then open the operator UI at `http://localhost:3000/ui` (enter your",
+    "`RENDER_AGENTS_API_KEY`) and dispatch a run:",
     "",
     "```sh",
     `curl -X POST localhost:3000/workflows/code-review \\`,
@@ -522,6 +618,21 @@ function readme(opts: ScaffoldOptions): string {
     `  -H "Content-Type: application/json" \\`,
     `  -d '{"input":{"diff":"--- a/app.ts\\n+++ b/app.ts"}}'`,
     "```",
+    "",
+    "## Run everything in Docker",
+    "",
+    "An all-in-Docker stack (Postgres + gateway, which runs the agent loop",
+    "in-process — no separate worker needed locally):",
+    "",
+    "```sh",
+    `${opts.apiKeyEnv}=sk-... docker compose -f docker-compose.yaml up --build`,
+    "# operator UI at http://localhost:3000/ui (API key: RENDER_AGENTS_API_KEY, default dev-key)",
+    "```",
+    "",
+    ...(opts.withPostgres
+      ? ["The lightweight `compose.yaml` (`docker compose up -d`) runs only Postgres if",
+         "you'd rather run the app on the host with `" + dev + "`."]
+      : ["Prefer host-side dev? Run a Postgres container and `" + dev + "` with `DATABASE_URL` set."]),
     "",
     "## Deploy to Render",
     "",

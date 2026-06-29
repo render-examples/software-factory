@@ -1,7 +1,7 @@
 # Deployment, configuration & retention
 
 How a render-agents project runs in production. The canonical manifest is the
-`render.yaml` emitted by `create-render-agent` (Sprint 21); this document is the
+`render.yaml` emitted by `create-render-agents` (Sprint 21); this document is the
 operator reference for it. See the normative [Operations](specs/04-operations.md) spec.
 
 ## Topology

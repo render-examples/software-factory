@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildFileMap, parseArgs, optionsFromArgs, SCAFFOLDER_VERSION } from "./index.js";
 
-describe("create-render-agent", () => {
+describe("create-render-agents", () => {
   it("exports SCAFFOLDER_VERSION", () => {
     expect(SCAFFOLDER_VERSION).toBe("0.0.1");
   });
@@ -27,6 +27,7 @@ describe("buildFileMap", () => {
   it("emits the full spec-layout project", () => {
     for (const expected of [
       "package.json", "tsconfig.json", ".env.example", "render.yaml", "compose.yaml", "README.md",
+      "Dockerfile", ".dockerignore", "docker-compose.yaml",
       "agents/_shared.md", "agents/security.md", "agents/performance.md", "agents/judge.md", "agents/assistant.md",
       "tools/github/index.ts", "tools/linear/index.ts",
       "skills/security-patterns/SKILL.md",
@@ -36,6 +37,21 @@ describe("buildFileMap", () => {
     ]) {
       expect(files.has(expected), `missing ${expected}`).toBe(true);
     }
+  });
+
+  it("ships an all-in-Docker stack (Dockerfile + full-stack compose with optional worker)", () => {
+    expect(files.get("Dockerfile")).toContain('CMD ["npm", "run", "start"]');
+    const compose = files.get("docker-compose.yaml")!;
+    expect(compose).toContain("postgres:");
+    expect(compose).toContain("gateway:");
+    expect(compose).toContain("DATABASE_URL: postgres://postgres:postgres@postgres:5432/agents");
+    expect(compose).toContain("ANTHROPIC_API_KEY"); // the project's provider key var
+    expect(compose).toContain('profiles: ["worker"]'); // worker is opt-in
+    // The Docker stack ships regardless of the host-dev Postgres choice.
+    const noPg = buildFileMap({ name: "x", packageManager: "npm", provider: "openai", apiKeyEnv: "OPENAI_API_KEY", withPostgres: false });
+    expect(noPg.has("docker-compose.yaml")).toBe(true);
+    expect(noPg.has("Dockerfile")).toBe(true);
+    expect(noPg.get("docker-compose.yaml")).toContain("OPENAI_API_KEY");
   });
 
   it("emits a coherent, valid package.json with the @render-agents deps", () => {

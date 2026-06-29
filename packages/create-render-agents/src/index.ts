@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * create-render-agent
+ * create-render-agents
  *
- * `npm create render-agent` scaffolder. Interactive wizard (or `--yes` for CI)
+ * `npm create render-agents` scaffolder. Interactive wizard (or `--yes` for CI)
  * that emits a runnable, deployable code-review project in the spec layout.
  *
  * No `@render-agents/*` runtime dependencies — it only prompts + writes files.
@@ -62,7 +62,7 @@ export function optionsFromArgs(args: CliArgs): ScaffoldOptions {
 }
 
 async function runWizard(args: CliArgs): Promise<ScaffoldOptions> {
-  p.intro("create-render-agent");
+  p.intro("create-render-agents");
 
   const name = args.name ?? (await p.text({
     message: "Project name",

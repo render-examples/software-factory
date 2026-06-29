@@ -89,6 +89,20 @@ export function runRoutes(deps: {
     return c.json({ toolCalls });
   });
 
+  // GET /runs/:id/events — the ordered raw event log for a run (debug lens).
+  // Convenience read for the operator UI's event-log inspector; the same data is
+  // otherwise reconstructable from the SSE stream's catch-up replay.
+  app.get("/runs/:id/events", async (c) => {
+    const id = c.req.param("id");
+    const run = await store.getRun(id);
+    if (!run) {
+      return c.json({ error: `Run "${id}" not found` }, 404);
+    }
+    const fromSeq = c.req.query("seq") ? Number(c.req.query("seq")) : undefined;
+    const events = await store.events.read(id, fromSeq);
+    return c.json({ events });
+  });
+
   // POST /runs/:id/cancel — cancel a running or paused run
   app.post("/runs/:id/cancel", async (c) => {
     const id = c.req.param("id");

@@ -1,13 +1,13 @@
-# create-render-agent
+# create-render-agents
 
 Scaffolder for [render-agents](../../README.md). Generates a runnable, deployable
 project in the spec layout — the **code-review** example (security + performance
 reviewers → judge) — in one command.
 
 ```sh
-npm create render-agent@latest my-agents
+npm create render-agents@latest my-agents
 # or non-interactive (CI):
-npm create render-agent@latest my-agents -- --yes --pm pnpm --provider anthropic
+npm create render-agents@latest my-agents -- --yes --pm pnpm --provider anthropic
 ```
 
 Emits: `agents/` (markdown), `tools/` (local + MCP), `skills/`, `workflows/code-review/`,

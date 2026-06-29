@@ -15,7 +15,7 @@ The remaining gaps are **not missing features** — they are concentrated in thr
 
 1. **Spec/implementation drift** — the `interactive` agent field and the broadened `AgentRuntime`/`CreateRuntimeOptions` surface (both introduced by the recent threads work) ship in code but are undocumented in the normative spec.
 2. **Observability completeness** — span projections omit several attributes the spec's observability table requires (agent version/model/iteration-count/final-usage on `agent` spans; `gen_ai.*` OTel naming on `llm` spans; explicit `latencyMs`/outcome on `tool` spans).
-3. **Toolchain / workspace state** — the local tree fails the README build gate (`create-render-agent` deps not materialized) and the default `vitest` thread pool crashes under the installed Node 26.
+3. **Toolchain / workspace state** — the local tree fails the README build gate (`create-render-agents` deps not materialized) and the default `vitest` thread pool crashes under the installed Node 26.
 
 Items the spec **intentionally defers post-MVP** (token-level `text.delta` streaming, the runtime `ScheduleStore` API, the full operator-UI SPA) are confirmed absent-by-design and are tracked below as future milestones, not regressions.
 
@@ -24,8 +24,8 @@ Items the spec **intentionally defers post-MVP** (token-level `text.delta` strea
 ## Audit method
 
 - Read the full normative spec: `00-foundations` (D1–D11), `01-authoring`, `02-execution`, `03-platform`, `04-operations`, `05-type-reference`, plus `porting-map.md`.
-- Surveyed every source file in `packages/{sdk,engine,store,gateway,create-render-agent}/src`.
-- Read the load-bearing implementations directly: `default-runner.ts`, `run-context.ts`, `context-manager-impl.ts`, `subagent-source.ts`, `projections.ts`, `retention.ts`, `gateway/app.ts`, `create-render-agent/blueprint.ts`, loader (`frontmatter.ts`/`validate.ts`/`load-agents.ts`), `runtime.ts`.
+- Surveyed every source file in `packages/{sdk,engine,store,gateway,create-render-agents}/src`.
+- Read the load-bearing implementations directly: `default-runner.ts`, `run-context.ts`, `context-manager-impl.ts`, `subagent-source.ts`, `projections.ts`, `retention.ts`, `gateway/app.ts`, `create-render-agents/blueprint.ts`, loader (`frontmatter.ts`/`validate.ts`/`load-agents.ts`), `runtime.ts`.
 - Ran the build/test gates and inspected failures to separate code defects from environment state.
 
 ---
@@ -37,7 +37,7 @@ Items the spec **intentionally defers post-MVP** (token-level `text.delta` strea
 | F1 | **P1 — drift** | Authoring spec | `interactive` agent frontmatter field is implemented but undocumented in the spec. | ✅ Resolved |
 | F2 | **P1 — drift** | Type reference | `AgentRuntime` / `CreateRuntimeOptions` expose members not in the spec (`threadStore`, `oauthStore`, `oauthRefreshers`, `agentDefinitions`, `toolSources`, `extraRunners`). | ✅ Resolved |
 | F3 | **P2 — partial** | Observability | Span projections omit required span attributes; LLM spans don't use the `gen_ai.*` OTel namespace; no distinct `workflow`-kind span. | ✅ Resolved |
-| F4 | **P2 — toolchain** | Build/CI | `create-render-agent` fails `tsc` in this tree (deps not installed); default `vitest` pool crashes under Node 26. | ✅ Resolved |
+| F4 | **P2 — toolchain** | Build/CI | `create-render-agents` fails `tsc` in this tree (deps not installed); default `vitest` pool crashes under Node 26. | ✅ Resolved |
 | F5 | **P3 — deferred** | Streaming | Token-level `text.delta` streaming (`ModelClient.stream`) is unimplemented — deferred per spec; SSE emits `message.assistant`. | ⏳ Backlog |
 | F6 | **P3 — deferred** | Schedules | Runtime-managed `ScheduleStore` API/reconciliation is unimplemented — deferred per spec; MVP uses Render Cron → `/admin/retention` + `/workflows/:name`. | ✅ Resolved |
 | F7 | **P3 — deferred** | Operator UI | The full operator-UI SPA (L6) is deferred; `/ui` ships the read-only dev trace viewer only — matches the plan. | ⏳ Backlog |
@@ -66,7 +66,7 @@ The recent multi-turn-threads work (commit `21562dd`) added a first-class `inter
 - `packages/sdk/src/loader/frontmatter.ts:8,40` — present in `KNOWN_FIELDS` and the Zod schema.
 - `packages/sdk/src/loader/load-agents.ts:151` — threaded into the resolved definition.
 - `packages/engine/src/default-runner.ts:149,158` — drives the `awaitInput()` park behavior.
-- `packages/create-render-agent/src/blueprint.ts:224` — emitted in the scaffolded `assistant.md`.
+- `packages/create-render-agents/src/blueprint.ts:224` — emitted in the scaffolded `assistant.md`.
 
 But the spec does not mention it:
 
@@ -104,7 +104,7 @@ These are reasonable composition-root conveniences, but they're undocumented, so
 
 `pnpm build && pnpm typecheck && pnpm lint && pnpm test` (README dev gate) does not pass as-is here:
 
-- **`create-render-agent` build fails** — `tsc` errors with `TS2307` (`node:path`, `node:fs/promises`, `@clack/prompts`) and `TS2580` (`process`). Root cause is **workspace install state, not source**: `packages/create-render-agent/node_modules` contains only `typescript` + `vitest`; `@clack/prompts` is in `pnpm-lock.yaml` (lines 41, 225) but was never materialized into the pnpm store (`node_modules/.pnpm/@clack*` is absent). The fix is a clean `pnpm install`; but until then the build gate and any publish are blocked, and there's no CI assertion catching the "deps not materialized" state.
+- **`create-render-agents` build fails** — `tsc` errors with `TS2307` (`node:path`, `node:fs/promises`, `@clack/prompts`) and `TS2580` (`process`). Root cause is **workspace install state, not source**: `packages/create-render-agents/node_modules` contains only `typescript` + `vitest`; `@clack/prompts` is in `pnpm-lock.yaml` (lines 41, 225) but was never materialized into the pnpm store (`node_modules/.pnpm/@clack*` is absent). The fix is a clean `pnpm install`; but until then the build gate and any publish are blocked, and there's no CI assertion catching the "deps not materialized" state.
 - **Default `vitest` pool crashes under Node 26** — the threads pool worker exits unexpectedly ("Worker exited unexpectedly", Node v26.0.0) during `@render-agents/sdk:test`. Running the same suite with `--pool=forks` passes 50/50. The spec NFR pins **Node 20+**; the local runtime is Node 26 and the installed `@types/node` resolved to `26.0.1` (not the declared `^22`). The harness isn't resilient to / pinned against the running Node.
 
 **Impact:** a contributor following the README can't get a green gate without reinstalling and/or switching Node; CI green depends on the (presumably Node-20) CI image, masking the local-tree fragility.
@@ -145,7 +145,7 @@ Goal: the normative spec describes exactly what ships.
    - Extend `pg/parity.test.ts` + a memory-store test to assert the new attributes survive replay byte-for-byte.
 2. **Harden the build/test gate** (F4):
    - Add `engines.node` / an `.nvmrc` (or `packageManager` + a CI matrix) pinning the supported Node, and set vitest `pool: "forks"` in `vitest.config.ts` so the suite is resilient to the Node-26 threads-pool crash. Align `@types/node` with the supported major.
-   - Add a CI step (or `preinstall`/`postinstall` check) that fails loudly when a workspace package's declared deps aren't materialized, so the `create-render-agent` "deps missing" state can't pass silently.
+   - Add a CI step (or `preinstall`/`postinstall` check) that fails loudly when a workspace package's declared deps aren't materialized, so the `create-render-agents` "deps missing" state can't pass silently.
    - Re-run `pnpm install && pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm check:bundle-size` to a clean green and record it in the PR.
 3. **Acceptance:** observability attributes match the spec table (asserted in tests); the full README gate passes locally on the pinned Node.
 
