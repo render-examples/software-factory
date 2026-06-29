@@ -872,6 +872,8 @@ interface AgentRuntime {
   readonly threadStore: ThreadStore;
   /** OAuth connection store (per-user tokens). Defaults to the run store when it implements OAuthStore. */
   readonly oauthStore: OAuthStore;
+  /** Runtime-managed schedule store. Defaults to the run store when it implements ScheduleStore. */
+  readonly scheduleStore: ScheduleStore;
   /** Per-provider token refreshers, populated by the gateway from provider configs. */
   readonly oauthRefreshers: Map<string, OAuthRefresher>;
   readonly tracer: Tracer;

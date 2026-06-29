@@ -11,6 +11,7 @@ import { threadRoutes } from "./routes/threads.js";
 import { hitlRoutes } from "./routes/hitl.js";
 import { oauthRoutes, buildRefresher, type OAuthProviderConfig } from "./routes/oauth.js";
 import { webhookRoutes, type WebhookAdapter } from "./routes/webhooks.js";
+import { scheduleRoutes } from "./routes/schedules.js";
 import { uiRoutes } from "./routes/ui.js";
 import type { ConnectorSpec } from "./connector.js";
 
@@ -92,6 +93,9 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   // Core run routes
   app.route("/", runRoutes({ store, cancelStore: cancel, workflows: wf }));
+
+  // Runtime-managed schedules (CRUD + /admin/schedules/tick reconciler).
+  app.route("/", scheduleRoutes({ scheduleStore: runtime.scheduleStore, workflows: wf }));
 
   // SSE streaming routes
   app.route("/", streamRoutes({ store }));

@@ -303,7 +303,12 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 
 **Purpose** — Workflows can run on a cron schedule, either via Render Cron config or via a runtime-managed schedule store.
 
-**Model** — A `ScheduleRecord` pairs a `workflow` with a `cronExpression`, optional `input`, an `enabled` flag, and last-run bookkeeping. **MVP:** scheduled triggers use Render Cron directly in `render.yaml` — a cron job hits `POST /workflows/:name` on a schedule, with no schedules table, runtime API, or reconciliation needed. The `ScheduleStore` interface and `schedules` table are the contract for runtime-managed schedules in a future sprint.
+**Model** — A `ScheduleRecord` pairs a `workflow` with a `cronExpression`, optional `input`, an `enabled` flag, and last-run bookkeeping. Two complementary paths:
+
+- **Static (still supported):** a cron entry in `render.yaml` hits `POST /workflows/:name` directly — no schedules table involved. Best for a fixed, deploy-time schedule.
+- **Runtime-managed (the `ScheduleStore`):** schedules are CRUD records created at runtime against the `schedules` table, dispatched by a **reconciler**. The reconciler is driven by a single per-minute **tick** — `POST /admin/schedules/tick` (authed; wired to a per-minute Render Cron, the same operational pattern as `/admin/retention`) — so no in-process timer is needed. On each tick the reconciler loads enabled schedules, selects those whose 5-field cron matches the current minute and that have not already fired this minute (`lastRunAt`-based dedupe, so retried/overlapping ticks are idempotent), dispatches each workflow (trigger `"cron"`), and stamps `lastRunId`/`lastRunAt`. Cron resolution is minute-granular and evaluated in UTC. Schedules are operational data and are never auto-expired (see [Operations → Retention](04-operations.md#retention)); `last_run_id` is `ON DELETE SET NULL` so a schedule survives the trimming of the run it last triggered.
+
+**Routes** — `POST /schedules` (create), `GET /schedules` (list), `GET /schedules/:id`, `PATCH /schedules/:id` (cron / input / enabled), `DELETE /schedules/:id`, and `POST /admin/schedules/tick` (reconcile).
 
 **Contract** — [`ScheduleRecord`](05-type-reference.md#schedulerecord), [`ScheduleStore`](05-type-reference.md#schedulestore).
 
@@ -333,6 +338,12 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 | `POST` | `/approvals/:id/resolve` | Approve or deny a tool call |
 | `POST` | `/webhooks/:name` | Inbound webhook dispatch (user-authored) |
 | `POST` | `/connectors/:key` | Inbound webhook dispatch (package-contributed) |
+| `POST` | `/schedules` | Create a runtime-managed schedule |
+| `GET` | `/schedules` | List schedules |
+| `GET` | `/schedules/:id` | Schedule details |
+| `PATCH` | `/schedules/:id` | Update cron / input / enabled |
+| `DELETE` | `/schedules/:id` | Delete a schedule |
+| `POST` | `/admin/schedules/tick` | Reconcile + fire due schedules (per-minute cron) |
 | `GET` | `/oauth/:provider/authorize` | OAuth initiation |
 | `GET` | `/oauth/:provider/callback` | OAuth callback |
 | `DELETE` | `/oauth/:provider` | Revoke + delete OAuth connection |
