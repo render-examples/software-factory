@@ -10,6 +10,7 @@ export interface ThreadRouteDeps {
   workflows: Map<string, WorkflowDefinition>;
   defaultWorkflow?: string;
   resume?: (runId: string) => Promise<unknown>;
+  awaitResume?: boolean;
 }
 
 /** Postgres unique-violation (one active run per thread) → treat as thread-busy. */
@@ -24,7 +25,23 @@ function isUniqueViolation(err: unknown): boolean {
  */
 export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
-  const { store, threadStore, workflows, defaultWorkflow, resume } = deps;
+  const { store, threadStore, workflows, defaultWorkflow, resume, awaitResume } = deps;
+
+  const driveResume = (runId: string): Promise<void> => {
+    if (!resume) return Promise.resolve();
+    const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
+    return awaitResume ? p : Promise.resolve();
+  };
+
+  /** The reason of a run's most recent `run.paused`, if any. */
+  const lastPauseReason = async (runId: string): Promise<"approval" | "input" | undefined> => {
+    const events = await store.events.read(runId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const p = events[i].payload;
+      if (p.type === "run.paused") return p.reason;
+    }
+    return undefined;
+  };
 
   // POST /threads — create + persist a thread
   app.post("/threads", async (c) => {
@@ -95,16 +112,23 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       if (active.status === "running" || active.status === "pending") {
         return c.json({ error: "Thread is busy (active run mid-turn)", runId: active.id }, 409);
       }
-      // Paused awaiting input → deliver the message and re-drive the run.
+      // Paused: only an input-pause accepts a user message. An approval-pause
+      // must be resolved via the approvals API — delivering a message there would
+      // just replay and re-pause.
+      const reason = await lastPauseReason(active.id);
+      if (reason === "approval") {
+        return c.json({
+          error: "Run is paused awaiting approval; resolve it via POST /approvals/:id/resolve",
+          runId: active.id,
+        }, 409);
+      }
       await store.events.append(
         buildEventRecord(active.id, {
           type: "message.user",
           content: [{ type: "text", text: body.content }],
         }),
       );
-      if (resume) {
-        try { await resume(active.id); } catch (err) { console.error(`resume(${active.id}) failed`, err); }
-      }
+      await driveResume(active.id);
       return c.json({ runId: active.id, delivered: true }, 200);
     }
 

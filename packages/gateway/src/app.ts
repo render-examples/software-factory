@@ -29,6 +29,12 @@ export interface GatewayOptions {
    * the provided runtime. Injectable for tests / a workflow-service dispatch.
    */
   resume?: (runId: string) => Promise<unknown>;
+  /**
+   * Await the resume driver before responding to resolve/input requests. Default
+   * false (fire-and-forget) so an operator's HTTP call isn't blocked for the
+   * full run; tests set true for deterministic assertions.
+   */
+  awaitResume?: boolean;
   /** Serve the dev-mode trace viewer at `/ui` (default true). */
   serveUI?: boolean;
   /** Disable auth for local dev (NOT for production). */
@@ -84,11 +90,13 @@ export function createGatewayApp(opts: GatewayOptions) {
   // SSE streaming routes
   app.route("/", streamRoutes({ store }));
 
+  const awaitResume = opts.awaitResume ?? false;
+
   // Thread routes
-  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume }));
+  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, resume, awaitResume }));
 
   // HITL routes (approvals + resume)
-  app.route("/", hitlRoutes({ store, resume }));
+  app.route("/", hitlRoutes({ store, resume, awaitResume }));
 
   // OAuth routes
   if (opts.oauthProviders && opts.oauthProviders.size > 0) {

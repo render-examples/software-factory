@@ -11,17 +11,17 @@ import { buildEventRecord } from "@render-agents/store";
  * the post-resume state; errors are isolated so a resume failure doesn't mask
  * the (durably recorded) resolution.
  */
-export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => Promise<unknown> }) {
+export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => Promise<unknown>; awaitResume?: boolean }) {
   const app = new Hono();
-  const { store, resume } = deps;
+  const { store, resume, awaitResume } = deps;
 
-  const driveResume = async (runId: string): Promise<void> => {
-    if (!resume) return;
-    try {
-      await resume(runId);
-    } catch (err) {
-      console.error(`resume(${runId}) failed`, err);
-    }
+  // Fire-and-forget by default (don't block the operator's HTTP call for the
+  // full run); awaited only when `awaitResume` is set (tests). Errors are always
+  // isolated so a resume failure never masks the durably-recorded resolution.
+  const driveResume = (runId: string): Promise<void> => {
+    if (!resume) return Promise.resolve();
+    const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
+    return awaitResume ? p : Promise.resolve();
   };
 
   // GET /approvals — list pending approvals (read directly from the projection)

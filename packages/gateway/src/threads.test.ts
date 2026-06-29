@@ -96,4 +96,26 @@ describe("gateway threads — end-to-end", () => {
     });
     expect(res.status).toBe(409);
   });
+
+  it("rejects message delivery to an approval-paused run (must use the approvals API)", async () => {
+    const { app, runtime } = await buildApp();
+    const createRes = await app.request("/threads", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+    });
+    const thread = await createRes.json();
+
+    // A run paused for *approval* (not input) tied to this thread.
+    await runtime.store.events.append(
+      buildEventRecord("appr-run", { type: "run.started", threadId: thread.id, input: "x" }, { agentName: "chat" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord("appr-run", { type: "run.paused", reason: "approval", pendingApprovalIds: ["a1"] }, { agentName: "chat" }),
+    );
+
+    const res = await app.request(`/threads/${thread.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "hi" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("approval");
+  });
 });
