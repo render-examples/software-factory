@@ -32,10 +32,19 @@ export function decrypt(ciphertext: string, key: Buffer): string {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
 }
 
+let warnedDevKey = false;
+
 /** The encryption key from the environment, with a clearly-flagged dev fallback. */
 export function encryptionKeyFromEnv(): Buffer {
   const secret = process.env.RENDER_AGENTS_ENCRYPTION_KEY;
   if (!secret) {
+    if (!warnedDevKey) {
+      warnedDevKey = true;
+      console.warn(
+        "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; using an INSECURE dev key " +
+          "for OAuth token encryption. Set a strong 32+ char secret in production.",
+      );
+    }
     return deriveKey("render-agents-insecure-dev-key");
   }
   return deriveKey(secret);
