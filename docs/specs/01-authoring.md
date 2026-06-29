@@ -115,8 +115,11 @@ You are a security reviewer. Given a set of file patches, analyze each for...
 | `plan` | `RenderPlan` (Render instance-type slug) | `standard` | Load time (must be a known plan; `pro_plus`/`pro_max`/`pro_ultra` need workspace access) |
 | `sampling.temperature` / `topP` / `maxOutputTokens` | `number` | (provider default) | Load time |
 | `runner` | `string` | `"default"` | Load time (resolved against `runners/`) |
+| `interactive` | `boolean` | `false` | Load time (must be a boolean) |
 
 Unknown fields are hard errors at load time.
+
+**`interactive`** — marks a *conversational* agent. When `true`, after a terminal turn the runner parks on [`ctx.awaitInput()`](02-execution.md#hitl-pause--resume) (emitting `run.paused { reason: "input" }`) instead of completing, so the run awaits the next user message and accrues multi-turn memory in a single run. This is the agent-level basis for an interactive [thread](03-platform.md#threads); a gateway's `defaultAgent` is typically an `interactive: true` agent. Autonomous agents (the default) drive to completion and never await input.
 
 **Model tiers** — tier aliases resolve to concrete models; raw model strings pass through (provider inferred from the name if not set):
 
@@ -333,4 +336,5 @@ Hard errors raised at `loadAgents()` time. Other layers reference this list rath
 - Runner name not found in `runners/` or not `"default"`
 - `requireApproval` references a name not in the agent's expanded tool set
 - Budget values non-positive (except `maxCostUsd`, which accepts `null`/`0` to disable the cost ceiling)
+- `interactive` is not a boolean
 - Empty system prompt body

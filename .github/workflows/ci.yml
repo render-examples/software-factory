@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20, 22]
+        # 20 = floor (NFR), 22 = active LTS, 26 = the pinned dev line (.nvmrc).
+        node-version: [20, 22, 26]
 
     services:
       postgres:
@@ -40,6 +41,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify declared dependencies are materialized
+        # Guards against a partial/stale store where a package's declared deps
+        # (e.g. create-render-agent's @clack/prompts) never get linked, which
+        # otherwise surfaces only as a confusing tsc TS2307 at build time.
+        run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
 
       - name: Build
         run: pnpm turbo run build
