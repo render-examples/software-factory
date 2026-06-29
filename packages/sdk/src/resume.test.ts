@@ -76,10 +76,15 @@ describe("resumeRun — HITL resume driver (M1)", () => {
     expect(types).toContain("tool.result");
   });
 
-  it("is a no-op for a run that is not paused", async () => {
+  it("throws clearly for unknown or non-resumable runs", async () => {
     const runtime = await createTestRuntime({ model: deployModel() });
     runtime.agentDefinitions.set("deployer", deployerDef());
     // Unknown run → clear error.
     await expect(resumeRun("missing", runtime)).rejects.toThrow(/not found/);
+    // A running (non-paused, non-terminal) run is not resumable.
+    await runtime.store.events.append(
+      buildEventRecord("running-run", { type: "run.started", input: "x" }, { agentName: "deployer" }),
+    );
+    await expect(resumeRun("running-run", runtime)).rejects.toThrow(/not resumable/);
   });
 });
