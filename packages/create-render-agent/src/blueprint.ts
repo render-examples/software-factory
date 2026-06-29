@@ -78,18 +78,21 @@ function packageJson(opts: ScaffoldOptions, v: string): string {
       type: "module",
       engines: { node: ">=20" },
       scripts: {
-        build: "tsc",
+        // `build` typechecks; agents/skills are markdown (not compiled), so the
+        // app runs from source via tsx in both dev and production — the project
+        // root then holds every convention dir (agents/, tools/, workflows/, …).
+        build: "tsc --noEmit",
         dev: "tsx watch src/server.ts",
-        start: "node dist/server.js",
-        worker: "node dist/worker.js",
+        start: "tsx src/server.ts",
+        worker: "tsx src/worker.ts",
       },
       dependencies: {
         "@render-agents/sdk": v,
         "@render-agents/gateway": v,
+        tsx: "^4.0.0",
       },
       devDependencies: {
         "@types/node": "^22.0.0",
-        tsx: "^4.0.0",
         typescript: "^5.5.0",
       },
     },
@@ -108,13 +111,11 @@ function tsconfig(): string {
         strict: true,
         esModuleInterop: true,
         skipLibCheck: true,
-        outDir: "dist",
-        rootDir: ".",
-        declaration: false,
+        noEmit: true,
         resolveJsonModule: true,
       },
       include: ["src", "workflows", "tools", "webhooks", "hooks"],
-      exclude: ["node_modules", "dist"],
+      exclude: ["node_modules"],
     },
     null,
     2,
@@ -122,7 +123,7 @@ function tsconfig(): string {
 }
 
 function gitignore(): string {
-  return ["node_modules", "dist", ".env", "*.tsbuildinfo"].join("\n");
+  return ["node_modules", ".env", "*.tsbuildinfo"].join("\n");
 }
 
 function envExample(opts: ScaffoldOptions): string {
