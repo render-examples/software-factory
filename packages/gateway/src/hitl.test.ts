@@ -45,7 +45,7 @@ describe("gateway HITL — resolve resumes the paused run", () => {
       runtime.dispatcher!.dispatch("deployer", "go", { runId, idempotencyKey: runId }),
     ).rejects.toBeInstanceOf(RunPaused);
 
-    const app = createGatewayApp({ runtime, disableAuth: true });
+    const app = createGatewayApp({ runtime, disableAuth: true, awaitResume: true });
 
     // List the pending approval through the gateway.
     const listRes = await app.request("/approvals");
