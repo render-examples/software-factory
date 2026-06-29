@@ -3,7 +3,7 @@ dist
 *.tsbuildinfo
 .turbo
 .smoke
-.pnpm-store
+.pnpm-store/*
 
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
