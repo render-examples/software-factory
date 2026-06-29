@@ -119,14 +119,22 @@ async function loadRuns() {
   } catch (e) { $("msg").textContent = String(e.message || e); }
 }
 
-let es;
+let es, refreshTimer;
 async function openRun(id) {
   if (es) { es.close(); es = undefined; }
+  await refreshDetail(id);
+}
+// Re-fetch + re-render the span tree from the authoritative projections. Called
+// once on open and (debounced) on every live event, so the view updates
+// incrementally as the run progresses.
+async function refreshDetail(id) {
   const detail = $("detail");
   try {
     const [{ spans }, run] = await Promise.all([api("/runs/" + id + "/spans"), api("/runs/" + id)]);
     render(detail, run, spans);
-    if (run.status === "running" || run.status === "paused") live(id, detail, run);
+    const terminal = ["completed", "failed", "cancelled"].includes(run.status);
+    if (!es && !terminal) live(id);
+    if (es && terminal) { es.close(); es = undefined; }
   } catch (e) { detail.innerHTML = '<p class="err">' + esc(String(e.message||e)) + '</p>'; }
 }
 
@@ -144,7 +152,8 @@ function render(detail, run, spans) {
       if (el.dataset.loaded) return; el.dataset.loaded = "1";
       try {
         const { toolCalls } = await api("/runs/" + run.id + "/tool-calls");
-        const mine = toolCalls.filter((t) => JSON.stringify(t.payload).includes(el.dataset.tool));
+        const name = el.dataset.tool;
+        const mine = toolCalls.filter((t) => t.payload && t.payload.name === name);
         el.insertAdjacentHTML("beforeend", '<div class="muted">' + esc(JSON.stringify(mine, null, 1).slice(0, 2000)) + '</div>');
       } catch {}
     };
@@ -159,16 +168,16 @@ function nodeHtml(n) {
   return \`<div class="node \${cls}"\${toolAttr}>\${pad}<span class="kind muted">\${n.kind}</span> \${esc(n.name)} <span class="muted">\${dur}</span></div>\`;
 }
 
-function live(id, detail, run) {
+function live(id) {
   const k = $("key").value.trim();
   es = new EventSource("/runs/" + id + "/stream?key=" + encodeURIComponent(k));
-  let lastSeq = 0;
-  es.onmessage = (ev) => { lastSeq = Number(ev.lastEventId) || lastSeq; };
-  es.addEventListener("lifecycle", async (ev) => {
-    // On terminal lifecycle events, refresh the tree once.
-    try { const p = JSON.parse(ev.data); if (["run.completed","run.failed","run.cancelled"].includes(p.type)) { es.close(); openRun(id); } } catch {}
-  });
-  es.onerror = () => { /* browser auto-reconnects from Last-Event-ID */ void lastSeq; };
+  // Debounce: many events can arrive in a burst; coalesce into one refetch.
+  const schedule = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refreshDetail(id), 150); };
+  es.onmessage = schedule;
+  for (const ev of ["lifecycle", "message", "tool", "model", "step", "approval", "context", "delegation"]) {
+    es.addEventListener(ev, schedule);
+  }
+  es.onerror = () => { /* EventSource auto-reconnects via Last-Event-ID */ };
 }
 
 function esc(s){ return String(s).replace(/[&<>"]/g, (c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
