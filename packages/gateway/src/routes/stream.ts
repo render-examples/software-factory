@@ -64,6 +64,42 @@ export function streamRoutes(deps: { store: RunStore }) {
     });
   });
 
+  // GET /events/stream — global live tail of the event log across ALL runs.
+  // Backs the operator UI's live rail counters (active runs, pending approvals)
+  // and any cross-run live view. Live-only (no cross-run catch-up replay exists);
+  // consumers seed counts from REST and fold deltas from here. Unlike the per-run
+  // stream, `data` is the full RunEventRecord so events can be attributed to a run.
+  app.get("/events/stream", async (c) => {
+    return streamSSE(c, async (stream) => {
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      c.req.raw.signal.addEventListener("abort", onClose);
+
+      try {
+        const tail = store.events.tail({}, controller.signal);
+        for await (const event of tail) {
+          await stream.writeSSE({
+            id: String(event.seq),
+            event: event.category,
+            data: JSON.stringify({
+              runId: event.runId,
+              seq: event.seq,
+              ts: event.ts,
+              category: event.category,
+              type: event.type,
+              agentName: event.agentName,
+              spanId: event.spanId,
+              parentSpanId: event.parentSpanId,
+              payload: event.payload,
+            }),
+          });
+        }
+      } finally {
+        c.req.raw.signal.removeEventListener("abort", onClose);
+      }
+    });
+  });
+
   // GET /threads/:id/stream — thread stream spanning all runs
   app.get("/threads/:id/stream", async (c) => {
     const threadId = c.req.param("id");

@@ -24,16 +24,25 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return awaitResume ? p : Promise.resolve();
   };
 
-  // GET /approvals — list pending approvals (read directly from the projection)
+  // GET /approvals — list approvals (read directly from the projection). Defaults
+  // to pending (the operator action queue); `?status=approved|denied` powers the
+  // UI's resolved-history tab, and `?status=all` returns every approval.
   app.get("/approvals", async (c) => {
-    const records = await store.listApprovals({ status: "pending" });
+    const q = c.req.query("status");
+    const opts =
+      !q ? { status: "pending" as const } : q === "all" ? undefined : { status: q as "pending" | "approved" | "denied" };
+    const records = await store.listApprovals(opts);
     const approvals = records.map((a) => ({
       id: a.approvalRequestId,
       runId: a.runId,
       toolName: a.toolName,
       input: a.input,
       agentName: a.agentName,
+      status: a.status,
       requestedAt: a.requestedAt,
+      resolvedAt: a.resolvedAt,
+      resolvedBy: a.resolvedBy,
+      reason: a.reason,
     }));
     return c.json({ approvals });
   });

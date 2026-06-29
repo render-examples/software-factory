@@ -6,12 +6,12 @@ as a gateway + workflow service + Postgres — with the same code path for both.
 - **Markdown is the agent.** Agents are `agents/*.md` files; behavior is the prompt, config is frontmatter.
 - **Event-log-first.** An append-only `run_events` log is the single source of truth; runs, spans, messages, approvals, costs, and the SSE stream are all projections of it.
 - **One execution model.** `agent.run()` (in-process) and `agent.task()` (durable, isolated via Render Workflows) are the same definition — just a different call site.
-- **Observable by default.** Every unit is a span; Postgres is sufficient (no external collector). A built-in dev trace viewer ships at `/ui`.
+- **Observable by default.** Every unit is a span; Postgres is sufficient (no external collector). A built-in operator UI (runs, traces, live event stream, approvals, chat) ships at `/ui`.
 
 ## Quick start
 
 ```sh
-npm create render-agent@latest my-agents
+npm create render-agents@latest my-agents
 cd my-agents
 npm install
 cp .env.example .env      # add your ANTHROPIC_API_KEY / OPENAI_API_KEY + RENDER_AGENTS_API_KEY
@@ -27,7 +27,7 @@ curl -X POST localhost:3000/workflows/code-review \
   -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts"}}'
 ```
 
-Open the trace viewer at `http://localhost:3000/ui`.
+Open the operator UI at `http://localhost:3000/ui`.
 
 ## Packages
 
@@ -37,7 +37,7 @@ Open the trace viewer at `http://localhost:3000/ui`.
 | [`@render-agents/engine`](packages/engine) | The agent loop, tools, model clients, context management |
 | [`@render-agents/store`](packages/store) | Event log + projections (in-memory + Postgres), threads, OAuth, retention |
 | [`@render-agents/gateway`](packages/gateway) | Hono web service: runs, SSE, HITL, OAuth, webhooks, `/ui` |
-| [`create-render-agent`](packages/create-render-agent) | `npm create render-agent` scaffolder |
+| [`create-render-agents`](packages/create-render-agents) | `npm create render-agents` scaffolder |
 
 ## Documentation
 

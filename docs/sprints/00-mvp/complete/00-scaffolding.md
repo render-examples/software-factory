@@ -29,7 +29,7 @@ Stand up the pnpm + Turborepo monorepo with the four runtime packages and the sc
   - `@render-agents/engine`
   - `@render-agents/store`
   - `@render-agents/gateway`
-  - `create-render-agent`
+  - `create-render-agents`
 - The package dependency graph wired exactly as specified (sdk → engine + store; engine → store; gateway → sdk + store; scaffolder has no runtime deps). `store` is the bottom layer with zero internal deps.
 - Linting/formatting, a `build`/`typecheck`/`test`/`lint` task graph in Turborepo, and a CI workflow running them.
 - A placeholder entrypoint + `index.ts` per package so each compiles and emits declarations.
@@ -61,7 +61,7 @@ render-agents/                 # (this repo; specs already live in docs/)
 │   ├── engine/                 # @render-agents/engine
 │   ├── store/                  # @render-agents/store
 │   ├── gateway/                # @render-agents/gateway
-│   └── create-render-agent/    # create-render-agent
+│   └── create-render-agents/   # create-render-agents
 ```
 
 **Per-package `package.json` contract:**
@@ -107,4 +107,4 @@ No logic is ported in this sprint. Use as structural reference only:
 
 - **Builder choice:** plain `tsc`
 - **Package manager pinning:** pin the pnpm version via `packageManager` in root `package.json` to keep CI reproducible.
-- **`create-render-agent` naming:** confirm the unscoped npm name is available/desired vs a scoped alias.
+- **`create-render-agents` naming:** confirm the unscoped npm name is available/desired vs a scoped alias.

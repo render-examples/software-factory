@@ -44,7 +44,7 @@ jobs:
 
       - name: Verify declared dependencies are materialized
         # Guards against a partial/stale store where a package's declared deps
-        # (e.g. create-render-agent's @clack/prompts) never get linked, which
+        # (e.g. create-render-agents' @clack/prompts) never get linked, which
         # otherwise surfaces only as a confusing tsc TS2307 at build time.
         run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
 
