@@ -79,6 +79,8 @@ export interface CreateRuntimeOptions {
   pricing?: Record<string, ModelPricing>;
   retry?: Partial<RetryPolicy>;
   runners?: RunnerRegistry;
+  /** Custom runners discovered from `runners/` (keyed by name); merged with the built-in `default`. */
+  extraRunners?: Map<string, AgentRunner>;
   dispatcher?: TaskDispatcher;
   cancelStore?: CancelStore;
   delegation?: Partial<DelegationLimits>;
@@ -132,14 +134,20 @@ function buildHookRegistry(hooks: Hook[]): HookRegistry {
   };
 }
 
-function buildRunnerRegistry(model: ModelClient, pricing?: Record<string, ModelPricing>): RunnerRegistry {
+function buildRunnerRegistry(
+  model: ModelClient,
+  pricing?: Record<string, ModelPricing>,
+  extra?: Map<string, AgentRunner>,
+): RunnerRegistry {
   const defaultRunner = new DefaultRunner(model, { pricing });
   return {
     get(name: string): AgentRunner {
       if (name === "default") return defaultRunner;
+      const custom = extra?.get(name);
+      if (custom) return custom;
       throw new Error(`Runner "${name}" not found`);
     },
-    has: (name: string) => name === "default",
+    has: (name: string) => name === "default" || !!extra?.has(name),
   };
 }
 
@@ -171,7 +179,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       : passThroughContextManager
   );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
-  const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing);
+  const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing, opts?.extraRunners);
   const cancelStore = opts?.cancelStore ?? new MemoryCancelStore();
   const agentDefinitions = new Map<string, AgentDefinition>();
   const toolSources = opts?.toolSources ?? new Map();

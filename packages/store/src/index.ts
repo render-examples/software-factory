@@ -5,6 +5,7 @@ export type { SpanKind, SpanInfo, SpanOutcome, Tracer, SpanStatus } from "./trac
 export type { RunStatus, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, RunStore } from "./run-store.js";
 export { TERMINAL_STATUSES } from "./run-store.js";
 export { runRetention } from "./retention.js";
+export { aggregateRunCost } from "./aggregate.js";
 export type { CancelStore } from "./cancel-store.js";
 export type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";
 export type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";

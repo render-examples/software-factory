@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { RunStore, CancelStore } from "@render-agents/store";
+import { aggregateRunCost } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
 
 /**
@@ -48,14 +49,15 @@ export function runRoutes(deps: {
     return c.json({ runs });
   });
 
-  // GET /runs/:id — run details
+  // GET /runs/:id — run details (+ all-in cost incl. subagent descendants)
   app.get("/runs/:id", async (c) => {
     const id = c.req.param("id");
     const run = await store.getRun(id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
-    return c.json(run);
+    const aggregateCostUsd = await aggregateRunCost(store, id);
+    return c.json({ ...run, aggregateCostUsd });
   });
 
   // GET /runs/:id/spans — span tree for a run
