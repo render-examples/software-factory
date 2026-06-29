@@ -61,7 +61,7 @@ export class DefaultRunner implements AgentRunner {
     // Resume support (D7): a run already in the log is being re-executed; do not
     // re-emit its opening events (that would duplicate the user turn).
     if (!(await ctx.hasStarted())) {
-      await ctx.emit({ type: "run.started", input, agentVersion: agent.version });
+      await ctx.emit({ type: "run.started", input, agentVersion: agent.version, model: agent.model.model });
       await ctx.emit({ type: "message.user", content: inputToContent(input) });
     }
 

@@ -197,6 +197,35 @@ describe("projections", () => {
     expect(tool?.output).toBe("found");
   });
 
+  it("folds the spec's span attributes (agent/llm/tool) and workflow root kind", async () => {
+    const store = createMemoryStore();
+    // Workflow root span.
+    await emit(store, "wf", { type: "run.started", input: {}, trigger: "api", spanKind: "workflow" }, { spanId: "wf" });
+    await emit(store, "wf", { type: "run.completed", result: "ok" }, { spanId: "wf" });
+    const wfRoot = (await store.listSpans("wf")).find(s => s.id === "wf");
+    expect(wfRoot?.kind).toBe("workflow");
+    expect(wfRoot?.attributes).toMatchObject({ workflow: AGENT, trigger: "api" });
+
+    // Agent run: attributes accumulate from llm.call; tool span gets latency/ok.
+    await emit(store, "ar", { type: "run.started", input: "x", agentVersion: "v2", model: "claude-sonnet-4-6" }, { spanId: "a1" });
+    await emit(store, "ar", { type: "llm.call", model: "claude-sonnet-4-6", usage: { inputTokens: 7, outputTokens: 2 }, costUsd: 0.01, stopReason: "tool_use", latencyMs: 11 }, { spanId: "l1", parentSpanId: "a1" });
+    await emit(store, "ar", { type: "tool.called", toolCallId: "t1", name: "search", input: {} }, { spanId: "to1", parentSpanId: "a1" });
+    await emit(store, "ar", { type: "tool.result", toolCallId: "t1", name: "search", result: { content: "ok" } }, { spanId: "to1", parentSpanId: "a1" });
+    await emit(store, "ar", { type: "run.completed", result: "done" }, { spanId: "a1" });
+
+    const spans = await store.listSpans("ar");
+    expect(spans.find(s => s.id === "a1")?.attributes).toMatchObject({
+      agentName: AGENT, agentVersion: "v2", model: "claude-sonnet-4-6",
+      iterations: 1, usage: { inputTokens: 7, outputTokens: 2 },
+    });
+    expect(spans.find(s => s.id === "l1")?.attributes).toMatchObject({
+      "gen_ai.request.model": "claude-sonnet-4-6", "gen_ai.usage.output_tokens": 2,
+    });
+    const toolSpan = spans.find(s => s.id === "to1");
+    expect(toolSpan?.attributes).toMatchObject({ toolName: "search", ok: true });
+    expect(typeof (toolSpan?.attributes as { latencyMs?: number }).latencyMs).toBe("number");
+  });
+
   it("idempotency index records canonical tool.result, not provider placeholders", async () => {
     const store = createMemoryStore();
     await emit(store, "r1", { type: "tool.called", toolCallId: "t1", name: "search", input: {} }, { spanId: "tool-1" });
