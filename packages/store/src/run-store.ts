@@ -73,6 +73,14 @@ export interface RunStore {
   getRun(id: string): Promise<RunRecord | undefined>;
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
   getMessages(runId: string, agentName: string): Promise<Message[]>;
+  /**
+   * Model-visible history folded across *every run sharing a thread* (ordered by
+   * run start, then seq), for the chat lane's new-run-per-turn model: a chat turn
+   * is its own run, but multi-turn memory comes from the thread transcript rather
+   * than one ever-growing parked run. Optional — stores that don't implement it
+   * fall back to run-scoped `getMessages` (single-turn memory).
+   */
+  getThreadAgentMessages?(threadId: string, agentName: string): Promise<Message[]>;
   listSpans(runId: string): Promise<SpanRecord[]>;
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
   getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;

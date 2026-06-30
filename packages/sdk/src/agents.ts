@@ -144,7 +144,15 @@ export async function resumeRun<T = unknown>(
     started?.payload.type === "run.started" ? ((started.payload.input as AgentInput) ?? "") : "";
 
   try {
-    const output = await runInProcess<T>(definition, input, runtime, { runId, signal: opts?.signal });
+    // A chat-agent resume continues a turn within a thread: keep thread-scoped
+    // memory so the resumed turn still sees prior turns. Non-chat resume stays
+    // run-scoped (unchanged).
+    const output = await runInProcess<T>(definition, input, runtime, {
+      runId,
+      signal: opts?.signal,
+      threadId: run.threadId,
+      threadScopedHistory: !!run.threadId && !!definition.interactive,
+    });
     return { status: "completed", ...output };
   } catch (err) {
     if (err instanceof RunPaused) {
@@ -154,11 +162,48 @@ export async function resumeRun<T = unknown>(
   }
 }
 
+/** Internal run options: public `RunOptions` plus chat-lane history scoping. */
+interface InternalRunOptions extends RunOptions {
+  threadId?: string;
+  threadScopedHistory?: boolean;
+}
+
+/**
+ * Drive a single chat-lane agent turn in-process (Lane B, warm worker). The
+ * gateway has already recorded the opening turn (`run.started` + `message.user`)
+ * before enqueue, so the runner's `hasStarted()` guard skips re-emitting them.
+ * History is thread-scoped (multi-turn memory) and `agent.task()` children still
+ * go through `runtime.dispatcher` (offloaded to Render when present). Throws
+ * `RunPaused` if HITL within the turn parks it — the caller settles the job.
+ */
+export async function driveAgentTurn(
+  runtime: AgentRuntime,
+  runId: string,
+  opts?: { signal?: AbortSignal },
+): Promise<AgentOutput> {
+  const run = await runtime.store.getRun(runId);
+  if (!run) throw new Error(`driveAgentTurn: run "${runId}" not found`);
+  const agentName = run.workflow;
+  const definition = runtime.agentDefinitions.get(agentName);
+  if (!definition) {
+    throw new Error(
+      `driveAgentTurn: no agent named "${agentName}" for run "${runId}" in the runtime. ` +
+      `Ensure agents are loaded via loadAgents() before driving chat turns.`,
+    );
+  }
+  return runInProcess(definition, (run.input as AgentInput) ?? "", runtime, {
+    runId,
+    threadId: run.threadId,
+    threadScopedHistory: true,
+    signal: opts?.signal,
+  });
+}
+
 function runInProcess<T>(
   definition: AgentDefinition,
   input: AgentInput,
   runtime: AgentRuntime,
-  opts?: RunOptions,
+  opts?: InternalRunOptions,
 ): Promise<AgentOutput<T>> {
   return runAgentInProcess<T>(definition, input, {
     store: runtime.store,
@@ -175,6 +220,8 @@ function runInProcess<T>(
   }, {
     runId: opts?.runId,
     parentSpanId: opts?.parentSpanId,
+    threadId: opts?.threadId,
+    threadScopedHistory: opts?.threadScopedHistory,
     signal: opts?.signal,
     approvedToolCallIds: opts?.approvedToolCallIds,
   });

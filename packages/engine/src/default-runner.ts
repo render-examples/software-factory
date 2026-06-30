@@ -146,21 +146,15 @@ export class DefaultRunner implements AgentRunner {
               agent, systemPrompt, history, result.content, ctx, budget,
               { iterations, tokensUsed, costUsed, runStartedAt, usage },
             );
-            if (agent.interactive) {
-              // Conversational agent: park for the next turn instead of completing.
-              // The assistant reply is already in the log; awaitInput pauses (input).
-              await ctx.awaitInput();
-            }
+            // Two-lane model (D12): a chat turn is one *run per message*; turn-end
+            // completes the run (it is NOT a pause). Multi-turn memory comes from
+            // the thread transcript (thread-scoped history), not a parked run.
+            // Only HITL *within* a turn pauses. `interactive` now just marks the
+            // agent as a chat surface; the runner treats it like any other agent.
             await ctx.emit({ type: "run.completed", result: structured.data });
             return structured;
           }
           const text = extractText(result.content);
-          if (agent.interactive) {
-            // Park awaiting the next user message (emits run.paused{input} + throws
-            // RunPaused). On resume the new message is in history and the loop
-            // continues, so multi-turn memory accrues in this one run.
-            await ctx.awaitInput();
-          }
           await ctx.emit({ type: "run.completed", result: text });
           return { text, usage };
         }

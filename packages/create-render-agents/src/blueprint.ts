@@ -68,9 +68,13 @@ export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
   set("webhooks/github.ts", githubWebhook());
   set("hooks/audit.ts", auditHook());
 
-  // entrypoints
+  // entrypoints — one per service in the two-lane topology:
+  //   server.ts    → gateway (web): front door + SSE stream multiplexer
+  //   worker.ts    → chat worker: drains run_jobs, drives interactive turns warm
+  //   workflows.ts → workflows host: Render Workflows task handlers (durable lane)
   set("src/server.ts", serverEntry());
-  set("src/worker.ts", workerEntry());
+  set("src/worker.ts", chatWorkerEntry());
+  set("src/workflows.ts", workflowsHostEntry());
 
   return files;
 }
@@ -92,7 +96,10 @@ function packageJson(opts: ScaffoldOptions, v: string): string {
         build: "tsc --noEmit",
         dev: "tsx watch src/server.ts",
         start: "tsx src/server.ts",
+        // Chat worker (Lane B): drains the Postgres run_jobs queue.
         worker: "tsx src/worker.ts",
+        // Workflows host (Lane A): Render Workflows task handlers.
+        workflows: "tsx src/workflows.ts",
       },
       dependencies: {
         "@render-agents/sdk": v,
@@ -391,11 +398,13 @@ function serverEntry(): string {
   ].join("\n");
 }
 
-function workerEntry(): string {
+function chatWorkerEntry(): string {
   return [
-    "// Workflow service entrypoint (Render Workflows). Registers the same",
-    "// runtime + agents + workflows; task handlers run here in production.",
-    `import { createRuntime, loadAgents, loadWorkflows, loadToolSources, loadHooks, loadRunners } from "@render-agents/sdk";`,
+    "// Chat worker (Lane B). A long-lived, warm process that drains the Postgres",
+    "// `run_jobs` queue and drives interactive agent turns + HITL resumes IN-PROCESS",
+    "// for low latency (no per-message container cold start). Shares the database",
+    "// with the gateway; scale horizontally by running more instances.",
+    `import { createRuntime, loadAgents, loadToolSources, loadHooks, loadRunners, runWorker } from "@render-agents/sdk";`,
     "",
     `const root = new URL("..", import.meta.url).pathname;`,
     "const toolSources = await loadToolSources(root);",
@@ -403,8 +412,45 @@ function workerEntry(): string {
     "const hooks = await loadHooks(root);",
     "const runtime = await createRuntime({ toolSources, extraRunners, hooks });",
     "await loadAgents(root, runtime);",
-    "await loadWorkflows(root, runtime);",
-    "console.log(`workflow service ready (${runtime.agentDefinitions.size} agents)`);",
+    "",
+    "const worker = runWorker(runtime);",
+    "console.log(`chat worker started (draining run_jobs, ${runtime.agentDefinitions.size} agents)`);",
+    "",
+    "// Graceful shutdown: finish in-flight turns before exiting.",
+    "const shutdown = async () => { await worker.stop(); process.exit(0); };",
+    `process.on("SIGTERM", shutdown);`,
+    `process.on("SIGINT", shutdown);`,
+  ].join("\n");
+}
+
+function workflowsHostEntry(): string {
+  return [
+    "// Workflows host (Lane A). Runs inside Render Workflows: provisions an",
+    "// isolated, scale-to-zero container per run. It registers the plan-tiered task",
+    "// handlers — `workflow@<plan>` (workflow roots) and `agent@<plan>` (isolated",
+    "// `agent.task()` children) — backed by the deployed agents/workflows. Handlers",
+    "// resolve definitions by NAME; only JSON crosses task boundaries (no closures).",
+    `import { createRuntime, loadAgents, loadWorkflows, loadToolSources, loadHooks, loadRunners, workflowTaskHandler, agentTaskHandler } from "@render-agents/sdk";`,
+    "",
+    `const root = new URL("..", import.meta.url).pathname;`,
+    "const toolSources = await loadToolSources(root);",
+    "const extraRunners = await loadRunners(root);",
+    "const hooks = await loadHooks(root);",
+    "const runtime = await createRuntime({ toolSources, extraRunners, hooks });",
+    "await loadAgents(root, runtime);",
+    "const workflows = await loadWorkflows(root, runtime);",
+    "",
+    "// Render Workflows task registration (beta). When the @renderinc/sdk task host",
+    "// is wired in, register one task per plan tier you use, e.g.:",
+    "//",
+    "//   import { registerTask, serve } from \"@renderinc/sdk\";",
+    "//   registerTask(\"workflow@standard\", (args) => workflowTaskHandler(args, workflows));",
+    "//   registerTask(\"agent@standard\", (args) => agentTaskHandler(args, runtime, (n) => runtime.agentDefinitions.get(n)));",
+    "//   await serve();",
+    "//",
+    "// Until then, this process validates the image loads cleanly.",
+    "void workflowTaskHandler; void agentTaskHandler;",
+    "console.log(`workflows host ready (${runtime.agentDefinitions.size} agents, ${workflows.size} workflows)`);",
   ].join("\n");
 }
 
@@ -412,8 +458,11 @@ function workerEntry(): string {
 
 function renderYaml(opts: ScaffoldOptions): string {
   return [
-    "# Canonical render-agents deployment: gateway (web) + workflow service +",
-    "# Postgres. See the @render-agents docs for details.",
+    "# Canonical render-agents deployment (two-lane model):",
+    "#   gateway (web)      — front door + SSE stream multiplexer; triggers both lanes",
+    "#   chat-worker (worker) — warm; drains run_jobs, drives interactive chat turns",
+    "#   workflows (worker)   — Render Workflows host for durable pipelines (Lane A)",
+    "# plus Postgres + retention/schedule crons. See the @render-agents docs.",
     "databases:",
     `  - name: ${opts.name}-db`,
     "    plan: basic-256mb",
@@ -438,12 +487,31 @@ function renderYaml(opts: ScaffoldOptions): string {
     `      - key: ${opts.apiKeyEnv}`,
     "        sync: false",
     "",
+    "  # Chat lane (Lane B): a warm, long-lived worker that drains the Postgres",
+    "  # run_jobs queue and drives interactive turns in-process. Scale via numInstances.",
+    "  - type: worker",
+    `    name: ${opts.name}-chat-worker`,
+    "    runtime: node",
+    "    plan: starter",
+    "    buildCommand: npm install && npm run build",
+    "    startCommand: npm run worker",
+    "    envVars:",
+    "      - key: DATABASE_URL",
+    "        fromDatabase:",
+    `          name: ${opts.name}-db`,
+    "          property: connectionString",
+    `      - key: ${opts.apiKeyEnv}`,
+    "        sync: false",
+    "",
+    "  # Workflow lane (Lane A): the Render Workflows host. Registers the",
+    "  # workflow@<plan> + agent@<plan> task handlers; Render provisions isolated,",
+    "  # scale-to-zero containers per run and acts as the durable queue.",
     "  - type: worker",
     `    name: ${opts.name}-workflows`,
     "    runtime: node",
     "    plan: starter",
     "    buildCommand: npm install && npm run build",
-    "    startCommand: npm run worker",
+    "    startCommand: npm run workflows",
     "    envVars:",
     "      - key: DATABASE_URL",
     "        fromDatabase:",
@@ -571,9 +639,8 @@ function dockerComposeYaml(opts: ScaffoldOptions): string {
     "      RENDER_AGENTS_STRICT_APPROVAL: ${RENDER_AGENTS_STRICT_APPROVAL:-}",
     `      ${key}: \${${key}:-}`,
     "",
-    "  # Optional: the Render Workflows service. Locally, agent.task() falls back to",
-    "  # in-process execution in the gateway, so this is only needed to mirror the",
-    "  # production split. Enable with:",
+    "  # Optional: the warm chat worker (Lane B). Locally the gateway drives chat",
+    "  # turns in-process, so this only mirrors the production queue split. Enable:",
     "  #   docker compose -f docker-compose.yaml --profile worker up --build",
     "  worker:",
     "    build: .",
@@ -636,7 +703,10 @@ function readme(opts: ScaffoldOptions): string {
     "",
     "## Deploy to Render",
     "",
-    "Commit and create a Blueprint from `render.yaml` (gateway + workflow service + Postgres).",
+    "Commit and create a Blueprint from `render.yaml`. It provisions the two-lane",
+    "topology: a **gateway** (web front door + SSE), a warm **chat-worker** (drains",
+    "the Postgres queue, drives interactive turns), a **workflows** host (Render",
+    "Workflows for durable pipelines), and Postgres + retention/schedule crons.",
     "",
     "## Layout",
     "",
@@ -645,6 +715,8 @@ function readme(opts: ScaffoldOptions): string {
     "- `skills/` — progressive-disclosure skill docs",
     "- `workflows/` — orchestration (`code-review`)",
     "- `webhooks/`, `hooks/` — triggers + event middleware",
-    "- `src/server.ts` — gateway entrypoint",
+    "- `src/server.ts` — gateway (web) entrypoint",
+    "- `src/worker.ts` — chat worker (drains the run queue, drives interactive turns)",
+    "- `src/workflows.ts` — Render Workflows host (durable pipelines)",
   ].join("\n");
 }

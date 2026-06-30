@@ -46,19 +46,23 @@ describe("gateway threads — conversational (interactive agent) memory", () => 
     return { app, runtime };
   }
 
-  it("dispatches a chat agent, parks, and remembers across turns via the thread", async () => {
+  it("opens a new run per turn and remembers across turns via the thread (D12)", async () => {
     const { app } = await buildChatApp();
     const thread = await (await app.request("/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
 
-    // Turn 1
+    // Turn 1 — its own run; completes (turn-end is NOT a pause).
     const r1 = await app.request(`/threads/${thread.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "hello" }) });
     expect(r1.status).toBe(202);
-    expect((await r1.json()).agent).toBe("assistant");
+    const b1 = await r1.json();
+    expect(b1.agent).toBe("assistant");
 
-    // Turn 2 — delivered into the same parked run (not a new dispatch).
+    // Turn 2 — a NEW run in the same thread (new-run-per-turn), not delivered into
+    // a parked run. A different runId proves it.
     const r2 = await app.request(`/threads/${thread.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "again" }) });
-    expect(r2.status).toBe(200);
-    expect((await r2.json()).delivered).toBe(true);
+    expect(r2.status).toBe(202);
+    const b2 = await r2.json();
+    expect(b2.agent).toBe("assistant");
+    expect(b2.runId).not.toBe(b1.runId);
 
     // Transcript shows the conversation with memory (users=1 then users=2).
     const { messages } = await (await app.request(`/threads/${thread.id}`)).json();

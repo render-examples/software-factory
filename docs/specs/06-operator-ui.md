@@ -215,12 +215,12 @@ Per node:
 
 ## Chat — drive an interactive agent
 
-**Purpose** — A first-class chat console for interactive agents (the `interactive` frontmatter flag → the agent parks on `awaitInput()` between turns). Lets an operator converse with an agent, watch it work turn-by-turn, and resolve approvals mid-conversation — the human side of multi-turn, human-in-the-loop work.
+**Purpose** — A first-class chat console for interactive agents (the `interactive` frontmatter flag → a chat surface the warm worker drives one run per turn, [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). Lets an operator converse with an agent, watch it work turn-by-turn, and resolve approvals mid-conversation — the human side of multi-turn, human-in-the-loop work.
 
 **Data source** — threads:
 
 - `POST /threads` — start a conversation (optional `userId`, `title`, `metadata`).
-- `POST /threads/:id/messages` — send a turn. The gateway routes it: a new turn dispatches the `defaultAgent` (interactive) or `defaultWorkflow`; a turn delivered to an `input`-paused run resumes it with a `message.user` event.
+- `POST /threads/:id/messages` — send a turn. The gateway opens a **new run per turn** for the `defaultAgent` (chat lane) or dispatches the `defaultWorkflow` root; multi-turn memory comes from thread-scoped history. A turn delivered while one is generating gets `409 thread_busy`.
 - `GET /threads/:id` — thread metadata + transcript (`ThreadMessage[]`).
 - `GET /threads/:id/stream` — live SSE spanning the thread's runs (stays open across a revival under a new run).
 
@@ -231,7 +231,7 @@ Per node:
 - Type a message → `POST /threads/:id/messages`. The composer disables while a turn is mid-flight (`running`/`pending` → `409 thread_busy` is prevented client-side, enforced server-side).
 - **Tool/thinking transparency** — assistant turns expand inline to reveal the tool calls and llm steps of their run (the same span data as the trace), so chat isn't a black box. "Open full trace" jumps to [Run detail](#run-detail--the-trace) for that turn's run.
 - **Approval inside chat** — when a turn pauses for approval (status `needs approval`), the approve/deny/comment card appears inline in the transcript; resolving it (via the approvals API) resumes the conversation in place.
-- **Input pause** — when the agent parks awaiting input, the composer re-enables; the next message resumes the same run (`message.user` → re-drive).
+- **Input pause** — when a tool pauses *mid-turn* for human input (status `waiting for you`), the composer re-enables; the next message resumes that run (`message.user` → re-drive). (Ordinary turn-taking is not a pause — each new turn is its own run.)
 - Live tail via `GET /threads/:id/stream`, resumable from `seq`.
 
 > **Scope note.** This is an *operator-facing* console for exercising, observing, and steering agents — not a packaged end-user chat product. It deliberately exposes the machinery (runs, tools, traces, approvals) an end-user UI would hide.

@@ -9,7 +9,8 @@ import type {
   ScheduleStore,
   ScheduleRecord,
 } from "@render-agents/store";
-import { createStore, MemoryCancelStore } from "@render-agents/store";
+import type { JobQueue } from "@render-agents/store";
+import { createStore, createJobQueue, MemoryCancelStore } from "@render-agents/store";
 import type {
   ModelClient,
   CompleteArgs,
@@ -28,7 +29,8 @@ import type {
   OAuthRefresher,
 } from "@render-agents/engine";
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
-import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment } from "./dispatch.js";
+import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment, isRootTriggerEnvironment } from "./dispatch.js";
+import type { WorkflowDefinition } from "./workflow.js";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -46,9 +48,44 @@ export interface DispatchOptions {
   signal?: AbortSignal;
 }
 
-export interface TaskDispatcher {
-  dispatch(agentName: string, input: AgentInput, opts: DispatchOptions): Promise<AgentOutput>;
+/**
+ * A root-run trigger: hand the workflow lane (Lane A) a run that already exists
+ * in the event log (the gateway emitted `run.started`). `dispatchRoot` is
+ * fire-and-forget — it returns once the run is *triggered*, not once it
+ * finishes. The dispatcher decides where the root executes:
+ * - `InProcessDispatcher` drives `wf.drive(runId)` in-process (dev/test).
+ * - `RenderWorkflowsDispatcher` calls `startTask("<slug>/workflow@<plan>", …)`.
+ */
+export interface RootDispatchJob {
+  workflow: string;
+  runId: string;
+  plan?: RenderPlan;
 }
+
+export interface TaskDispatcher {
+  /** Dispatch a child agent run (`agent.task()`): isolated, awaited result. */
+  dispatch(agentName: string, input: AgentInput, opts: DispatchOptions): Promise<AgentOutput>;
+  /**
+   * Trigger a workflow *root* (Lane A). Optional so narrower dispatchers (e.g.
+   * subagent-only) need not implement it; `workflow.dispatch()` falls back to an
+   * in-process drive when it is absent.
+   */
+  dispatchRoot?(job: RootDispatchJob): Promise<void>;
+}
+
+/**
+ * How root runs + resumes execute relative to their trigger:
+ * - `inline` — the trigger runs the handler/agent/resume to a resting state in
+ *   the calling process (today's behavior; no runner needed). Used by tests and
+ *   the no-Postgres dev path.
+ * - `queue` — the trigger records the opening event(s) and enqueues a durable
+ *   job, returning immediately; a `runWorker` claims and drives it. Decouples
+ *   ingestion from execution (webhook/cron latency, crash recovery, backpressure).
+ *
+ * `agent.task()` child dispatch is unaffected either way — it always goes through
+ * `runtime.dispatcher`.
+ */
+export type ExecutionMode = "inline" | "queue";
 
 export interface AgentRuntime {
   readonly store: RunStore;
@@ -66,10 +103,20 @@ export interface AgentRuntime {
   readonly hooks: HookRegistry;
   readonly contextManager: ContextManager;
   readonly dispatcher?: TaskDispatcher;
+  /** Durable job queue (control plane) for root-run + resume dispatch. Backed by Postgres when available, else in-memory. */
+  readonly jobQueue: JobQueue;
+  /** Whether root runs/resumes execute inline at the trigger or are enqueued for a runner. Default `inline`. */
+  readonly executionMode: ExecutionMode;
   /** Cooperative cancellation store, shared across in-process runs/dispatch. */
   readonly cancelStore: CancelStore;
   /** Loaded agent definitions keyed by name. Populated by `loadAgents`; used by the dispatcher and subagent delegation. */
   readonly agentDefinitions: Map<string, AgentDefinition>;
+  /**
+   * Loaded workflow definitions keyed by name. Populated by `bindWorkflow` /
+   * `loadWorkflows`; used by the in-process root dispatcher (`dispatchRoot`) and
+   * the gateway's HITL resume routing to classify a paused root as a workflow.
+   */
+  readonly workflows: Map<string, WorkflowDefinition>;
   /** Optional delegation limits (depth/fanout) for subagents. */
   readonly delegation?: Partial<DelegationLimits>;
   /** Resolved tool sources from the tools/ directory, keyed by source id. */
@@ -86,6 +133,9 @@ export interface CreateRuntimeOptions {
   /** Custom runners discovered from `runners/` (keyed by name); merged with the built-in `default`. */
   extraRunners?: Map<string, AgentRunner>;
   dispatcher?: TaskDispatcher;
+  jobQueue?: JobQueue;
+  /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
+  executionMode?: ExecutionMode;
   cancelStore?: CancelStore;
   delegation?: Partial<DelegationLimits>;
   hooks?: Hook[];
@@ -156,11 +206,19 @@ function buildRunnerRegistry(
 }
 
 /**
- * Detect whether a Render Workflows dispatcher should be used.
- * Returns a dispatcher for production, undefined for local dev/test.
+ * Detect whether a Render Workflows dispatcher should be used. Returns a
+ * dispatcher for production, undefined for local dev/test.
+ *
+ * Two distinct Render signals select it (sprint 01-Q, open question #2):
+ * - `isWorkflowsEnvironment()` — an in-container socket for child `agent.task()`
+ *   chaining (`runTask`).
+ * - `isRootTriggerEnvironment()` — the REST client config (`RENDER_API_KEY` +
+ *   `RENDER_WORKFLOW_SLUG`) used by the gateway to *trigger roots* (`startTask`),
+ *   even though the gateway is not itself a Workflows container.
+ * Either one means "drive the workflow lane through Render, not in-process".
  */
 function detectDispatcher(): TaskDispatcher | undefined {
-  if (!isWorkflowsEnvironment()) return undefined;
+  if (!isWorkflowsEnvironment() && !isRootTriggerEnvironment()) return undefined;
   const slug = process.env.RENDER_WORKFLOW_SLUG ?? "default";
   return new RenderWorkflowsDispatcher({ workflowSlug: slug });
 }
@@ -185,7 +243,16 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing, opts?.extraRunners);
   const cancelStore = opts?.cancelStore ?? new MemoryCancelStore();
+  // Durable control-plane queue: shares the run store's pool in Postgres mode,
+  // in-memory otherwise. Consumed by the runner (Phase 2) and gateway enqueue.
+  const jobQueue = opts?.jobQueue ?? createJobQueue({ store });
+  const executionMode: ExecutionMode =
+    opts?.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
   const agentDefinitions = new Map<string, AgentDefinition>();
+  // Populated later by bindWorkflow/loadWorkflows; the in-process root dispatcher
+  // closes over this reference so a workflow registered after createRuntime is
+  // still resolvable at dispatchRoot time.
+  const workflows = new Map<string, WorkflowDefinition>();
   const toolSources = opts?.toolSources ?? new Map();
   // Shared instances so the dispatcher and any later registrations (e.g. the
   // gateway populating refreshers from provider configs) see the same objects.
@@ -207,6 +274,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       toolSources,
       delegation: opts?.delegation,
       getDefinition: (name) => agentDefinitions.get(name),
+      getWorkflow: (name) => workflows.get(name),
       oauthStore,
       oauthRefreshers,
     });
@@ -230,8 +298,11 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     hooks,
     contextManager,
     dispatcher,
+    jobQueue,
+    executionMode,
     cancelStore,
     agentDefinitions,
+    workflows,
     delegation: opts?.delegation,
     toolSources,
   };

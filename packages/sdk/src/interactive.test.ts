@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { buildEventRecord } from "@render-agents/store";
-import { RunPaused, type AgentDefinition } from "@render-agents/engine";
+import type { AgentDefinition } from "@render-agents/engine";
 import { createTestRuntime, mockModel } from "./testing.js";
-import { resumeRun } from "./agents.js";
+import { driveAgentTurn } from "./agents.js";
 
 function assistantDef(): AgentDefinition {
   return {
@@ -22,44 +22,38 @@ function countingModel() {
   });
 }
 
-describe("interactive agents — multi-turn conversational memory (D-threads)", () => {
-  it("parks on awaitInput after each turn and remembers prior turns on resume", async () => {
+/** Record an opening chat turn (run.started + message.user) as the gateway would. */
+async function seedTurn(runtime: Awaited<ReturnType<typeof createTestRuntime>>, runId: string, threadId: string, text: string) {
+  await runtime.store.events.append(
+    buildEventRecord(runId, { type: "run.started", input: text, trigger: "thread_message", threadId }, { agentName: "assistant", spanId: runId }),
+  );
+  await runtime.store.events.append(
+    buildEventRecord(runId, { type: "message.user", content: [{ type: "text", text }] }, { agentName: "assistant" }),
+  );
+}
+
+describe("interactive agents — new run per turn, thread-scoped memory (D12)", () => {
+  it("a turn completes (not paused) and later turns remember prior turns via the thread", async () => {
     const runtime = await createTestRuntime({ model: countingModel() });
     runtime.agentDefinitions.set("assistant", assistantDef());
-    const runId = "chat-1";
 
-    // Turn 1: the agent replies, then parks awaiting input (RunPaused).
-    await expect(
-      runtime.dispatcher!.dispatch("assistant", "hello", { runId, idempotencyKey: runId, threadId: "t1" }),
-    ).rejects.toBeInstanceOf(RunPaused);
+    // Turn 1: its own run; completes (turn-end is NOT a pause under the two-lane model).
+    await seedTurn(runtime, "chat-1", "t1", "hello");
+    await driveAgentTurn(runtime, "chat-1");
+    let run = await runtime.store.getRun("chat-1");
+    expect(run?.status).toBe("completed");
+    expect(run?.result).toBe("users=1");
 
-    let run = await runtime.store.getRun(runId);
-    expect(run?.status).toBe("paused");
-    let replies = (await runtime.store.getMessages(runId, "assistant")).filter((m) => m.role === "assistant");
-    expect(replies).toHaveLength(1);
-    expect(replies[0].content[0]).toMatchObject({ type: "text", text: "users=1" });
+    // Turn 2: a NEW run in the same thread; the model sees BOTH user turns (memory
+    // comes from the thread transcript, not a parked run).
+    await seedTurn(runtime, "chat-2", "t1", "again");
+    await driveAgentTurn(runtime, "chat-2");
+    run = await runtime.store.getRun("chat-2");
+    expect(run?.status).toBe("completed");
+    expect(run?.result).toBe("users=2");
 
-    // The reply folded into the thread transcript.
-    let transcript = await runtime.threadStore.getThreadMessages("t1");
-    expect(transcript.map((m) => [m.role, m.content])).toEqual([["user", "hello"], ["assistant", "users=1"]]);
-
-    // Turn 2: deliver the next user message and resume — the agent now sees BOTH
-    // user turns (memory), replies, and parks again.
-    await runtime.store.events.append(
-      buildEventRecord(runId, { type: "message.user", content: [{ type: "text", text: "again" }] }, { agentName: "assistant" }),
-    );
-    const res = await resumeRun(runId, runtime);
-    expect(res.status).toBe("paused");
-
-    replies = (await runtime.store.getMessages(runId, "assistant")).filter((m) => m.role === "assistant");
-    expect(replies).toHaveLength(2);
-    expect(replies[1].content[0]).toMatchObject({ type: "text", text: "users=2" }); // saw 2 user turns → memory
-
-    // Run never completes (it's a conversation) — still paused awaiting input.
-    run = await runtime.store.getRun(runId);
-    expect(run?.status).toBe("paused");
-
-    transcript = await runtime.threadStore.getThreadMessages("t1");
+    // The thread transcript folds both turns' assistant replies.
+    const transcript = await runtime.threadStore.getThreadMessages("t1");
     expect(transcript.filter((m) => m.role === "assistant").map((m) => m.content)).toEqual(["users=1", "users=2"]);
   });
 });
