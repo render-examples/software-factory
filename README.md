@@ -1,11 +1,12 @@
 # render-agents
 
 Markdown-authored, event-sourced AI agents that run locally and deploy to Render
-as a gateway + workflow service + Postgres — with the same code path for both.
+as a gateway + chat worker + Workflows host + Postgres — with the same code path everywhere.
 
 - **Markdown is the agent.** Agents are `agents/*.md` files; behavior is the prompt, config is frontmatter.
 - **Event-log-first.** An append-only `run_events` log is the single source of truth; runs, spans, messages, approvals, costs, and the SSE stream are all projections of it.
 - **One execution model.** `agent.run()` (in-process) and `agent.task()` (durable, isolated via Render Workflows) are the same definition — just a different call site.
+- **Two execution lanes.** Durable pipelines run on Render Workflows (queued, isolated, scale-to-zero); interactive chat runs one short run per turn on a warm worker fed by a Postgres `run_jobs` queue. The gateway only triggers and streams — it never runs an agent loop in production.
 - **Observable by default.** Every unit is a span; Postgres is sufficient (no external collector). A built-in operator UI (runs, traces, live event stream, approvals, chat) ships at `/ui`.
 
 ## Quick start
@@ -41,7 +42,7 @@ Open the operator UI at `http://localhost:3000/ui`.
 
 ## Documentation
 
-- [Specification](docs/specs/00-foundations.md) — the layered technical contract (D1–D11).
+- [Specification](docs/specs/00-foundations.md) — the layered technical contract (D1–D12).
 - [Architecture](docs/architecture.md) — how the event-log-first design fits together.
 - [Deployment, configuration & retention](docs/deployment.md).
 - [Getting started](docs/getting-started.md) — scaffold → run → deploy.

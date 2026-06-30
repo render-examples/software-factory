@@ -10,12 +10,18 @@ A deployment is a small set of Render primitives wired by one `render.yaml`:
 
 | Service | Type | Role |
 |---|---|---|
-| `<app>-gateway` | `web` (Hono) | Webhook/HTTP/chat ingress, SSE, HITL, OAuth, `/ui` |
-| `<app>-workflows` | `worker` | Workflow service: registers `agent@<plan>` tasks + workflow roots |
-| `<app>-db` | `database` | Postgres — the event log + all projections |
+| `<app>-gateway` | `web` (Hono) | Webhook/HTTP/chat ingress, SSE, HITL, OAuth, `/ui`; triggers both lanes |
+| `<app>-chat-worker` | `worker` | **Lane B (chat):** warm, long-lived; drains the Postgres `run_jobs` queue and drives interactive turns + HITL resumes in-process |
+| `<app>-workflows` | `worker` | **Lane A (durable):** Render Workflows host — registers `workflow@<plan>` + `agent@<plan>` task handlers; Render provisions isolated, scale-to-zero containers per run and is the durable queue |
+| `<app>-db` | `database` | Postgres — the event log + all projections + the chat `run_jobs` queue |
 | `<app>-retention` | `cron` | Daily `POST /admin/retention` cleanup |
 
-Both services call `createRuntime()` identically (one composition root) and
+Two execution lanes (D12), one trigger surface. The gateway records `run.started`
+then routes: durable pipelines fan out to Render Workflows (`dispatchRoot` →
+`startTask`, fire-and-forget), while interactive chat turns are enqueued as
+`agent` jobs that the warm chat worker drives. HITL resume mirrors the lanes —
+a workflow root re-triggers + replays; a chat turn enqueues a durable `resume`
+job. All services call `createRuntime()` identically (one composition root) and
 `RunStore.init()` on boot (advisory-locked migrations — safe under concurrent start).
 
 ## Configuration contract (environment variables)
@@ -31,8 +37,9 @@ config in markdown frontmatter, project metadata in `package.json`, deploy in
 | `RENDER_AGENTS_API_KEY` | Gateway bearer auth (constant-time) | `apiKeyAuth` |
 | `RENDER_AGENTS_STRICT_APPROVAL` | Require human approval for gated tools | run context |
 | `RENDER_AGENTS_ENCRYPTION_KEY` | AES-256-GCM key for OAuth tokens at rest + HMAC state | store crypto / OAuth routes |
-| `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` | Select the Render Workflows dispatcher vs in-process fallback | `isWorkflowsEnvironment` |
-| `RENDER_WORKFLOW_SLUG` | Workflow slug for task dispatch | runtime |
+| `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` | In-container signal: child `agent.task()` chaining via `runTask` | `isWorkflowsEnvironment` |
+| `RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG` | Gateway root-trigger signal: select the Render dispatcher to `startTask` workflow roots (Lane A), even outside a Workflows container | `isRootTriggerEnvironment` |
+| `RENDER_WORKFLOW_SLUG` | Workflow slug for task dispatch (`<slug>/workflow@<plan>`) | runtime / dispatcher |
 | `RENDER_AGENTS_EVENT_RETENTION_DAYS` | Event-detail horizon (default 30) | `runRetention` |
 | `RENDER_AGENTS_RUN_RETENTION_DAYS` | Run-summary horizon (default 90) | `runRetention` |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Provider credentials | model clients |

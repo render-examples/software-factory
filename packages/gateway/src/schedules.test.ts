@@ -15,6 +15,7 @@ function stubWorkflow(name: string, calls: Array<{ input: unknown; trigger?: str
       calls.push({ input, trigger });
       return { id: `${name}-run-${n++}`, workflow: name, status: "completed", totalCostUsd: 0, startedAt: new Date().toISOString() } as never;
     },
+    async drive() { /* unused by the schedule reconciler */ },
   };
 }
 

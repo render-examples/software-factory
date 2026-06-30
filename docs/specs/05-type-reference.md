@@ -39,10 +39,12 @@ interface AgentDefinition {
   plan?: RenderPlan;
   runner?: string;
   /**
-   * Conversational agent. When true, the runner parks on `ctx.awaitInput()` after
-   * a terminal turn (emitting `run.paused { reason: "input" }`) instead of
-   * completing, so the run awaits the next user message — the agent-level basis
-   * for an interactive thread. Default false (autonomous: drives to completion).
+   * Marks the agent as a *chat surface* (two-lane model, D12): the gateway exposes
+   * it for interactive threads and the warm chat worker drives one run per message
+   * turn. It does NOT change the agent loop — a turn completes normally (turn-end is
+   * not a pause); multi-turn memory comes from thread-scoped history across the
+   * thread's runs, and only within-turn HITL pauses. Default false (autonomous:
+   * a workflow root that drives to completion).
    */
   interactive?: boolean;
 }
@@ -499,12 +501,14 @@ interface RunContext {
   requestApproval(toolName: string, input: unknown): Promise<ApprovalResult>;
 
   /**
-   * Conversational pause (sibling of `requestApproval`). An interactive run calls
-   * this when it has finished a turn and wants the next user message instead of
-   * completing. Production (gateway) emits `run.paused { reason: "input" }` and
-   * unwinds via `RunPaused`; the run resumes when `/runs/:id/input` delivers the
-   * next turn (appended as a `message.user` event) — on resume this returns that
-   * turn's content. Autonomous runs never call it; they drive to completion.
+   * Within-turn input pause (sibling of `requestApproval`). A tool calls this when
+   * the current turn needs a typed human reply before it can continue. Production
+   * emits `run.paused { reason: "input" }` and unwinds via `RunPaused`; the run
+   * resumes when `/runs/:id/input` delivers the reply (appended as a `message.user`
+   * event), and on resume this returns that content. NOTE (D12): this is NOT how
+   * chat turn-taking works — under the two-lane model each chat message is its own
+   * short run that completes, so turn boundaries are not pauses. `awaitInput()` is
+   * only for mid-turn human input.
    */
   awaitInput(): Promise<ContentBlock[]>;
 
@@ -599,7 +603,7 @@ type RunEvent =
 
 > **User turns are events.** `message.user` records a user/external turn delivered into a run — the initial input *and* every subsequent turn delivered via [`/runs/:id/input`](03-platform.md#gateway). Because it is in the log, it folds into `ctx.messages()` (so a resumed/revived run sees the new turn), streams over SSE, and rehydrates across a [thread's](03-platform.md#threads) runs. (`run.started.input` carries the dispatch payload; `message.user` is the conversational turn.)
 >
-> **`run.paused` carries a `reason`.** `"approval"` (a gated tool is awaiting resolution; `pendingApprovalIds` is set) vs `"input"` (an interactive run is awaiting the next user message). Both resolve via the same pause/resume-by-replay path, but the gateway uses the reason to route `/runs/:id/input` (deliver a `message.user` for `"input"`; expect an `approval.resolved` for `"approval"`). The run's [`RunStatus`](#runstatus) is `"paused"` in both cases.
+> **`run.paused` carries a `reason`.** `"approval"` (a gated tool is awaiting resolution; `pendingApprovalIds` is set) vs `"input"` (a tool is awaiting mid-turn human input via `awaitInput()`). Both resolve via the same pause/resume-by-replay path, but the gateway uses the reason to route `/runs/:id/input` (deliver a `message.user` for `"input"`; expect an `approval.resolved` for `"approval"`). The run's [`RunStatus`](#runstatus) is `"paused"` in both cases. (Chat *turn-taking* is not a pause — under D12 each turn is its own run; see [`Agent.interactive`](#agent).)
 >
 > **`run.started` seeds the run's root span.** `spanKind` selects the root [`SpanKind`](#spankind): a `workflow()` dispatch emits `spanKind: "workflow"` (the handler orchestrates; it is not itself an agent), while an agent invocation defaults to `"agent"`. `model`/`agentVersion` seed the agent span's required [observability attributes](03-platform.md#observability) (token usage and iteration count then accumulate from the run's `llm.call` events).
 
@@ -861,7 +865,7 @@ interface CancelStore {
 ```
 
 ### AgentRuntime
-The composition root binding model, store, tracer, runners, and dispatcher.
+The composition root binding model, store, tracer, runners, job queue, workflow registry, and dispatcher.
 
 > The `store` owns the persistence vocabulary, but for ergonomics the runtime also surfaces the operational stores (`threadStore`, `oauthStore`) and the cross-run wiring (`agentDefinitions`, `toolSources`, `cancelStore`, `oauthRefreshers`) that the gateway and dispatcher need without reaching through `store`. `threadStore`/`oauthStore` **default to the run store** when it implements those interfaces (it does), so this is a convenience facade over the same persistence layer, not a second source of truth.
 
@@ -883,12 +887,18 @@ interface AgentRuntime {
   readonly hooks: HookRegistry;
   /** Context manager for compaction. Defaults to the auto strategy. */
   readonly contextManager: ContextManager;
-  /** Dispatches agents as Render Workflow tasks. Absent when no workflow server is detected (local fallback to in-process run). */
+  /** Dispatches agents as Render Workflow tasks (and workflow roots via `dispatchRoot`). Absent when no workflow server/root-trigger config is detected (local fallback to in-process run). */
   readonly dispatcher?: TaskDispatcher;
+  /** Chat-lane (Lane B) durable job queue (`run_jobs`) for `agent`/`resume` jobs. Backed by Postgres when available, else in-memory. */
+  readonly jobQueue: JobQueue;
+  /** Whether chat-lane runs/resumes execute inline at the trigger or are enqueued for the warm worker. Default `inline`. */
+  readonly executionMode: ExecutionMode;
   /** Cooperative cancellation store, shared across in-process runs/dispatch. */
   readonly cancelStore: CancelStore;
   /** Loaded agent definitions keyed by name. Populated by `loadAgents`; used by the dispatcher and subagent delegation. */
   readonly agentDefinitions: Map<string, AgentDefinition>;
+  /** Loaded workflow definitions keyed by name. Populated by `bindWorkflow`/`loadWorkflows`; used by `dispatchRoot` (Lane A) and by the gateway to classify a paused root as a workflow for HITL resume routing. */
+  readonly workflows: Map<string, WorkflowDefinition>;
   /** Subagent delegation limits (depth/fanout), if overridden. */
   readonly delegation?: Partial<DelegationLimits>;
   /** Resolved tool sources from the `tools/` directory, keyed by source id. */
@@ -907,12 +917,28 @@ interface RunnerRegistry {
 ```
 
 ### TaskDispatcher
-Dispatches an agent run as a Render Workflow task.
+Dispatches runs onto Render Workflows. Two seams: `dispatch` for *child* `agent.task()` calls (blocking, returns the child's output), and the optional `dispatchRoot` for *root* workflows (fire-and-forget, D12 Lane A). The in-process fallback implements both inline; the Render dispatcher maps `dispatch` to a blocking task and `dispatchRoot` to a non-blocking `startTask`.
 
 ```ts
 interface TaskDispatcher {
-  /** Dispatch an agent run as a Render task on the plan-tier matching `plan`. */
+  /** Dispatch a child agent run as a Render task on the plan-tier matching `plan`; resolves with the child's output. */
   dispatch(agentName: string, input: AgentInput, opts: DispatchOptions): Promise<AgentOutput>;
+  /** Trigger a workflow root (fire-and-forget): Render via `startTask("<slug>/workflow@<plan>")`, or driven inline in local dev. */
+  dispatchRoot?(job: RootDispatchJob): Promise<void>;
+}
+```
+
+### RootDispatchJob
+The payload for triggering a workflow root via [`TaskDispatcher.dispatchRoot`](#taskdispatcher). Carries only by-name identity (never a closure) so the generic `workflowTaskHandler` on the Workflows host can resolve and drive the workflow from the deployed image (see [Execution → Run vs task dispatch](02-execution.md#run-vs-task-dispatch)).
+
+```ts
+interface RootDispatchJob {
+  /** Registered workflow name to resolve and drive. */
+  workflow: string;
+  /** The pre-created root run's id (its `run.started` event already exists). */
+  runId: string;
+  /** Plan tier selecting the `workflow@<plan>` task; defaults to `standard`. */
+  plan?: RenderPlan;
 }
 ```
 
@@ -1255,6 +1281,8 @@ interface RunStore {
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
   /** Model-visible message history for an agent, folded from `message.*`/`tool.*` events. */
   getMessages(runId: string, agentName: string): Promise<Message[]>;
+  /** Thread-scoped model history: the same fold across *every run* in a thread, ordered by run start then seq. Backs chat-lane multi-turn memory (D12); optional — a store without it falls back to run-scoped `getMessages`. */
+  getThreadAgentMessages?(threadId: string, agentName: string): Promise<Message[]>;
   /** The span/trace tree for a single run, folded from its span-producing events.
    *  Child `agent.task()`/subagent runs own their spans under their own `runId`; the cross-run
    *  delegation tree is assembled by following `subagent.spawned.childRunId` (read-layer concern). */
@@ -1314,10 +1342,73 @@ interface ScheduleStore {
 }
 ```
 
+### JobKind
+What a claimed [`run_jobs`](03-platform.md#store--postgres-schema) job tells the warm chat worker (Lane B) to drive. Durable workflows (Lane A) use Render as their queue, so there is **no** `workflow` kind.
+
+```ts
+type JobKind =
+  | "agent"   // one interactive chat turn (new run per message, thread-scoped memory)
+  | "resume"; // re-drive a chat run paused for within-turn HITL
+```
+
+### JobStatus
+```ts
+type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
+```
+
+### JobRecord
+A row in the chat-lane queue — a **pointer to a run** plus the `kind` of work, never run state (that lives in the event log, D10).
+
+```ts
+interface JobRecord {
+  id: string;
+  runId: string;
+  kind: JobKind;
+  status: JobStatus;
+  /** Lower runs sooner. Default 100; `resume` enqueues at 50 to preempt fresh turns. */
+  priority: number;
+  /** Forward-flex pointer payload: target name, plan, identity. */
+  payload?: Record<string, unknown>;
+  attempts: number;
+  /** Delivery/crash-loop budget; exhausted claims dead-letter. */
+  maxAttempts: number;
+  /** ISO timestamp; claimable only once `availableAt <= now`. */
+  availableAt: string;
+  lockedAt?: string;
+  lockedBy?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+### JobQueue
+The chat-lane durable queue (control plane). The gateway `enqueue`s; the warm worker `claim`s atomically (`SELECT … FOR UPDATE SKIP LOCKED` on Postgres, an in-process critical section in memory) and drives the run, then `complete`s or `fail`s it. `maxAttempts` is a *delivery* budget (crash-loop guard), not the D3 logic-retry count — on a terminal run the worker always `complete`s (never requeues a genuinely failed handler); only an interrupted run (no terminal event) is re-driven, which resume-by-replay makes idempotent.
+
+```ts
+interface JobQueue {
+  /** Enqueue a job. Idempotent per run: an existing active (queued/running) job is returned rather than duplicated. */
+  enqueue(opts: EnqueueOptions): Promise<JobRecord>;
+  /** Atomically claim the next available job (lowest `priority`, then oldest `availableAt`), marking it `running`. */
+  claim(workerId: string): Promise<JobRecord | undefined>;
+  /** Mark a claimed job `done`. */
+  complete(id: string): Promise<void>;
+  /** Report failure: requeue with backoff (if `requeue` + budget remain) else `failed`/`dead`. */
+  fail(id: string, opts?: FailOptions): Promise<void>;
+  /** Reclaim jobs stuck `running` past `staleMs` (crashed worker); returns count transitioned. */
+  reap(staleMs: number): Promise<number>;
+  get(id: string): Promise<JobRecord | undefined>;
+  /** Count jobs by status (queue-depth metric; backs `GET /admin/jobs`). */
+  countByStatus(): Promise<Record<JobStatus, number>>;
+  /** Yield a tick on enqueue (LISTEN/NOTIFY or in-process signal) so an idle worker claims without polling. Pair with a poll fallback. */
+  tail(signal: AbortSignal): AsyncIterable<void>;
+}
+```
+
 > The thread/approval/OAuth **persistence interfaces and their record types below are physically defined in `@render-agents/store`** (it owns persistence), even though their *routes* and request/response handling live in `@render-agents/gateway`. `gateway` imports these down the graph; `store` never imports from `gateway`.
 
 ### Thread
-A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (its run(s) drive to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#threadstore)); `currentRunId` is the active run, if any. A thread is the **top-level unit of work** — it carries its own `userId` (owner, from auth) and `metadata`; there is no separate session grouping (filter threads by `userId` for "everything this user is doing").
+A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (a workflow root that drives to completion with no external input — Lane A) or **interactive** (a chat surface where **each user turn is its own short run** driven by the warm worker — Lane B; see [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#threadstore) for the human transcript and [`getThreadAgentMessages`](#runstore) for the model-visible thread-scoped history a new turn folds in); `currentRunId` is the active run, if any. A thread is the **top-level unit of work** — it carries its own `userId` (owner, from auth) and `metadata`; there is no separate session grouping (filter threads by `userId` for "everything this user is doing").
 
 ```ts
 interface Thread {

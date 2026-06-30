@@ -384,6 +384,30 @@ export class Projections {
       .map(e => e.message);
   }
 
+  /**
+   * Model-visible history folded across every run sharing `threadId` (chat lane,
+   * new-run-per-turn): ordered by run start time (then run id, then seq) so the
+   * current turn's run — most recently started — sorts last, preserving the
+   * runner's resume/pending-tool invariants while giving multi-turn memory.
+   */
+  getThreadAgentMessages(threadId: string, agentName: string): Message[] {
+    const runs = [...this.runs.values()]
+      .filter(r => r.threadId === threadId)
+      .sort((a, b) =>
+        a.startedAt !== b.startedAt
+          ? (a.startedAt < b.startedAt ? -1 : 1)
+          : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      );
+    const out: Message[] = [];
+    for (const run of runs) {
+      const arr = [...(this.messages.get(run.id) ?? [])].sort((a, b) => a.seq - b.seq);
+      for (const e of arr) {
+        if (e.agentName === undefined || e.agentName === agentName) out.push(e.message);
+      }
+    }
+    return out;
+  }
+
   listSpans(runId: string): SpanRecord[] {
     const runSpans = this.spans.get(runId);
     if (!runSpans) return [];
@@ -403,11 +427,22 @@ export class Projections {
     return [...(this.approvals.get(runId)?.values() ?? [])].map(a => ({ ...a }));
   }
 
-  /** The human-facing transcript for a thread, ordered by (runId, seq). */
+  /**
+   * The human-facing transcript for a thread, ordered chronologically by
+   * (createdAt, runId, seq). With new-run-per-turn (chat lane) a thread spans
+   * many runs whose ids are random UUIDs, so ordering must key on the event
+   * timestamp — not the run id — to keep turns in conversational order.
+   */
   getThreadMessages(threadId: string): ThreadMessage[] {
     const arr = this.threadMessages.get(threadId) ?? [];
     return [...arr]
-      .sort((a, b) => (a.runId === b.runId ? a.seq - b.seq : a.runId < b.runId ? -1 : 1))
+      .sort((a, b) =>
+        a.createdAt !== b.createdAt
+          ? (a.createdAt < b.createdAt ? -1 : 1)
+          : a.runId !== b.runId
+            ? (a.runId < b.runId ? -1 : 1)
+            : a.seq - b.seq,
+      )
       .map(m => ({ ...m }));
   }
 

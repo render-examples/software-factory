@@ -119,7 +119,7 @@ You are a security reviewer. Given a set of file patches, analyze each for...
 
 Unknown fields are hard errors at load time.
 
-**`interactive`** — marks a *conversational* agent. When `true`, after a terminal turn the runner parks on [`ctx.awaitInput()`](02-execution.md#hitl-pause--resume) (emitting `run.paused { reason: "input" }`) instead of completing, so the run awaits the next user message and accrues multi-turn memory in a single run. This is the agent-level basis for an interactive [thread](03-platform.md#threads); a gateway's `defaultAgent` is typically an `interactive: true` agent. Autonomous agents (the default) drive to completion and never await input.
+**`interactive`** — marks a *chat surface* (two-lane model, [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). When `true`, the gateway exposes the agent for interactive [threads](03-platform.md#threads) and the warm chat worker drives **one run per message turn**; multi-turn memory comes from the thread transcript across those runs, not from a single long-lived run. It does **not** change the agent loop — a turn completes normally (turn-end is not a pause), and only HITL *within* a turn pauses. A gateway's `defaultAgent` is typically an `interactive: true` agent. Autonomous agents (the default) drive a workflow root to completion.
 
 **Model tiers** — tier aliases resolve to concrete models; raw model strings pass through (provider inferred from the name if not set):
 

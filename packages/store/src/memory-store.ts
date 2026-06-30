@@ -41,6 +41,8 @@ interface Subscriber {
  */
 export class MemoryEventLogStore implements EventLogStore {
   private byRun = new Map<string, RunEventRecord[]>();
+  /** runId → threadId, learned from `run.started`, so thread-scoped tails (chat) work in dev. */
+  private runThread = new Map<string, string>();
   private subscribers = new Set<Subscriber>();
   private interceptor?: EventInterceptor;
 
@@ -80,6 +82,10 @@ export class MemoryEventLogStore implements EventLogStore {
     };
     events.push(stored);
     this.byRun.set(record.runId, events);
+    // Learn the run's thread from its opening event so thread-scoped tails match.
+    if (stored.payload.type === "run.started" && stored.payload.threadId) {
+      this.runThread.set(stored.runId, stored.payload.threadId);
+    }
     this.projections.apply(stored);
     this.publish(stored);
   }
@@ -130,16 +136,19 @@ export class MemoryEventLogStore implements EventLogStore {
   /** Drop all stored events for a run (retention event-detail trim). */
   deleteRun(runId: string): void {
     this.byRun.delete(runId);
+    this.runThread.delete(runId);
   }
 
   private publish(rec: RunEventRecord): void {
     const copy = { ...rec, payload: { ...rec.payload } };
     for (const sub of this.subscribers) {
       if (sub.filter.runId && sub.filter.runId !== rec.runId) continue;
-      // The in-memory store has no thread→run mapping (threads are Postgres-only
-      // for now). A threadId-only filter therefore matches nothing here rather
-      // than incorrectly leaking every run's events.
-      if (sub.filter.threadId && !sub.filter.runId) continue;
+      // Thread-scoped tail (chat lane, D12): match events of any run in the thread.
+      // The run→thread mapping is learned from `run.started`, so a thread stream
+      // opened before a turn starts still picks up that turn's run.
+      if (sub.filter.threadId && !sub.filter.runId) {
+        if (this.runThread.get(rec.runId) !== sub.filter.threadId) continue;
+      }
       sub.queue.push(copy);
       sub.wake?.();
     }
@@ -184,6 +193,10 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
 
   async getMessages(runId: string, agentName: string): Promise<Message[]> {
     return this.projections.getMessages(runId, agentName);
+  }
+
+  async getThreadAgentMessages(threadId: string, agentName: string): Promise<Message[]> {
+    return this.projections.getThreadAgentMessages(threadId, agentName);
   }
 
   async listSpans(runId: string): Promise<SpanRecord[]> {

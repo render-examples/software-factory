@@ -13,14 +13,14 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Store & Postgres schema
 
-**Purpose** — The append-only event log is the single source of truth. `run_events` is the canonical store; `runs`, `spans`, `run_messages`, `messages`, `tool_calls`, `workflow_steps`, and `approval_requests` are **maintained projections** folded from it on append — kept as tables (not views) so existing indexes and query patterns stay fast. Threads, OAuth, and schedules are independent operational tables.
+**Purpose** — The append-only event log is the single source of truth. `run_events` is the canonical store; `runs`, `spans`, `run_messages`, `messages`, `tool_calls`, `workflow_steps`, and `approval_requests` are **maintained projections** folded from it on append — kept as tables (not views) so existing indexes and query patterns stay fast. Threads, OAuth, schedules, and the chat-lane `run_jobs` queue are independent operational tables.
 
 **Model** — Writes go through `RunStore.events.append`, which (atomically) inserts the event, updates the affected projections, and `NOTIFY`s the stream. Migrations are applied by `RunStore.init()` under a Postgres advisory lock, in a single canonical **dependency order** so all foreign keys resolve:
 
 1. `threads` (no FKs — the top-level operational record)
 2. `runs` (FK → `threads`)
 3. `run_events` (FK → `runs`) — the canonical log
-4. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules` (FK → `runs`) — projections + ops
+4. `spans`, `tool_calls`, `run_messages`, `workflow_steps`, `approval_requests`, `schedules`, `run_jobs` (FK → `runs`) — projections + ops
 5. `messages` (FK → `threads`; `run_id` is a non-FK provenance column)
 6. `oauth_connections` (no FKs)
 
@@ -237,23 +237,50 @@ CREATE TABLE workflow_steps (
 );
 ```
 
-**Contract** — [`EventLogStore`](05-type-reference.md#eventlogstore), [`RunEvent`](05-type-reference.md#runevent) / [`RunEventRecord`](05-type-reference.md#runeventrecord), [`RunStore`](05-type-reference.md#runstore), [`RunRecord`](05-type-reference.md#runrecord), [`SpanRecord`](05-type-reference.md#spanrecord).
+**`run_jobs`** — the **chat-lane (Lane B) durable queue** (operational, not a projection). A job is a **pointer, not state**: the run's identity/input/trigger already live in the `run.started` event (D10); a row only references the run plus what to do with it (`kind`). The warm worker claims jobs via `SELECT … FOR UPDATE SKIP LOCKED` and drives them in-process (see [Threads](#threads) and [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). Only the chat lane uses this — durable **workflows are queued by Render**, so there is no `workflow` kind. `kind` is `'agent'` (one chat turn) or `'resume'` (re-drive a turn paused for within-turn HITL); `priority` orders claims (lower first — `resume` preempts fresh `agent` turns to unblock waiting humans). `ON DELETE CASCADE` lets retention drop a run's jobs with it.
+
+```sql
+CREATE TABLE run_jobs (
+  id            TEXT PRIMARY KEY,
+  run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,                  -- 'agent' | 'resume' (chat lane only)
+  status        TEXT NOT NULL DEFAULT 'queued', -- queued | running | done | failed | dead
+  priority      INT  NOT NULL DEFAULT 100,      -- lower runs sooner (resume < agent)
+  payload       JSONB,                          -- target name, plan, identity (forward-flex)
+  attempts      INT  NOT NULL DEFAULT 0,        -- claim count (delivery/crash-loop budget)
+  max_attempts  INT  NOT NULL DEFAULT 5,        -- delivery budget; D3 logic-retry is the runner's job
+  available_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  locked_at     TIMESTAMPTZ,
+  locked_by     TEXT,
+  last_error    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_run_jobs_claim ON run_jobs(status, priority, available_at);
+CREATE INDEX idx_run_jobs_locked ON run_jobs(locked_at) WHERE status = 'running';
+-- At most one active (queued/running) job per run — idempotent enqueue under
+-- duplicate triggers; prevents two workers double-driving one run.
+CREATE UNIQUE INDEX idx_run_jobs_run_active ON run_jobs(run_id) WHERE status IN ('queued', 'running');
+```
+
+**Contract** — [`EventLogStore`](05-type-reference.md#eventlogstore), [`RunEvent`](05-type-reference.md#runevent) / [`RunEventRecord`](05-type-reference.md#runeventrecord), [`RunStore`](05-type-reference.md#runstore), [`RunRecord`](05-type-reference.md#runrecord), [`SpanRecord`](05-type-reference.md#spanrecord), [`JobQueue`](05-type-reference.md#jobqueue), [`JobRecord`](05-type-reference.md#jobrecord).
 
 ---
 
 ## Threads
 
-**Purpose** — The gateway tracks multi-turn work as **threads**. A **thread** is the top-level unit of work: a durable, ordered line of work — a sequence of messages — owned by a `userId` and carrying arbitrary `metadata`. It may be **autonomous** (its run drives to completion with no external input) or **interactive** (it awaits external messages between turns — chat). The two are the same primitive: they differ only in whether the next message comes from the model or from an external actor, and a thread can switch between the two mid-flight (an autonomous thread that hits a HITL gate momentarily awaits input, then continues). There is no separate "session" grouping — "everything a user is doing" is just the threads with that `userId`.
+**Purpose** — The gateway tracks multi-turn work as **threads**. A **thread** is the top-level unit of work: a durable, ordered line of work — a sequence of messages — owned by a `userId` and carrying arbitrary `metadata`. It may be **autonomous** (a workflow root that drives to completion with no external input — Lane A) or **interactive** (a chat surface that takes one user turn at a time — Lane B). Per [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat) these are *different lanes*, not the same long-lived run: a chat thread accrues turns as a series of short runs, while a workflow thread is one durable run. There is no separate "session" grouping — "everything a user is doing" is just the threads with that `userId`.
 
-**Model** — A **thread spans a *sequence* of runs** over its lifetime, with **at most one active run at a time** (the partial unique index). The thread is the stable identity and message history; a run is the execution (a workflow task container) that serves it for a stretch. The thread's full turn history lives in the event log across its runs (`messages`/`run_messages` keyed by `threadId`), so it survives any single run.
+**Model** — A **thread spans a *sequence* of runs** over its lifetime, with **at most one active run at a time** (the partial unique index). The thread is the stable identity and message history; for a chat thread, **each user turn is its own short run**. The thread's full turn history lives in the event log across its runs (`messages`/`run_messages` keyed by `threadId`), so it survives — and outlives — any single run.
 
-**How threads relate to execution — the gateway never runs an agent loop.** The gateway is a thin web service: it proxies, it does not execute. On thread creation it **dispatches one workflow run for the thread** (a Render Workflows task — its own container in the workflow service) and then simply **attaches**: it relays user messages *in* and tails the event log *out* over SSE.
+**How threads relate to execution — the gateway never runs an agent loop.** The gateway is a thin web service: it proxies, it does not execute. For a chat thread it **opens a new run per message turn**, enqueues an `agent` job to the [`run_jobs` queue](#store--postgres-schema), and returns `202`; the **warm chat worker** (Lane B) claims the job and drives that one turn to completion in-process. The gateway then **attaches**: it tails the event log *out* over SSE (the stream spans every run in the thread, filtered by `threadId`).
 
-That **active run is the thing you converse with.** The task container hosts the agent loop and handles turns for as long as it's alive — each user message (`POST /threads/:id/messages`) is delivered into the **existing** run as its next input via the *awaiting-input* path (see [HITL pause & resume](#hitl-pause--resume) / [`/runs/:id/input`](#gateway)), **not** as a new run. Concretely: the loop parks in [`awaitInput()`](05-type-reference.md#runcontext) (status `paused`, `reason: "input"`); the gateway appends a [`message.user`](05-type-reference.md#runevent) event and resumes the run, which picks the turn up from its folded history. This is the cheap path: no per-message dispatch, low latency. (The gateway uses the pause *reason* to route `/runs/:id/input` — a `message.user` for an input pause, an `approval.resolved` for an approval pause.)
+**Turn-end completes the run; memory comes from the transcript.** A chat turn is *not* a parked run — when the model's turn finishes, the run reaches a terminal state. Conversational memory is reconstructed per turn from **thread-scoped history**: a new turn's run assembles its model-visible messages from *every run in the thread* (`getThreadAgentMessages`, ordered by run start then sequence), so context accrues across runs without any run staying alive. Because that transcript is kept beyond the event horizon (unlike `run_events`), a thread stays continuable even after old runs' detail has been trimmed. The single-active-run index serializes turns; while a turn is still generating, an incoming message returns `409 thread_busy`.
 
-**Threads outlive runs.** Between turns the active run awaits input. If the platform deprovisions the idle container (idle eviction, max-lifetime, crash), the thread persists. The next message **dispatches a *new* run for the thread**, which **rehydrates the prior context from the thread's `messages` transcript** (`getThreadMessages`, cross-run history) and continues — so a new run happens on *revival*, not per turn. Because the transcript is kept beyond the event horizon (unlike `run_events`), a thread stays continuable even after its old runs' detail has been trimmed: revival reads the durable transcript, it does not replay trimmed logs. The single-active-run index keeps revival races from producing two live runs; while a run is mid-turn (generating, not awaiting input) an incoming message returns `409 thread_busy`.
+**Within-turn HITL is the only pause.** If a tool inside a turn needs a human (`requestApproval` or `awaitInput`), *that turn's run* pauses (`reason: "approval"` / `"input"`) and resumes via a durable `resume` job that the warm worker re-drives (see [HITL pause & resume](02-execution.md#hitl-pause--resume) / [`/runs/:id/input`](#gateway)). This is distinct from turn-taking: the gateway routes `/runs/:id/input` by the pause reason, and a chat container is never pinned merely waiting for the *next* turn.
 
-The thread's workflow is chosen **once, at thread creation** (an explicit `workflow` on the thread, else the project's default conversational workflow) — not per message and not per revival. Multi-turn *memory* lives in the thread's event log (keyed by `threadId`), not in gateway memory; every run serving the thread reads that history and treats each delivered message as "continue this thread."
+The thread's agent/workflow is chosen **once, at thread creation** (an explicit `workflow` on the thread, else the project's default conversational agent) — not per message. Multi-turn *memory* lives in the thread's event log (keyed by `threadId`), not in gateway memory; every turn's run reads that history and treats the new message as "continue this thread."
 
 **Contract** — [`Thread`](05-type-reference.md#thread), [`ThreadMessage`](05-type-reference.md#threadmessage), [`ThreadStore`](05-type-reference.md#threadstore).
 
@@ -332,7 +359,7 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 | `POST` | `/runs/:id/input` | HITL resume (approval or user input) |
 | `POST` | `/threads` | Create a thread (optional `userId`, `metadata`, `workflow`) |
 | `GET` | `/threads` | List threads (optional `?userId=`) |
-| `POST` | `/threads/:id/messages` | Send a message (dispatches the thread run on first message/revival, else delivers into the active run) |
+| `POST` | `/threads/:id/messages` | Send a message — opens a new run for the turn and enqueues it (chat lane); `409 thread_busy` if a turn is still generating |
 | `GET` | `/threads/:id/stream` | SSE stream for a thread (spans the thread's runs, stays open) |
 | `GET` | `/approvals` | List pending approvals |
 | `POST` | `/approvals/:id/resolve` | Approve or deny a tool call |
@@ -344,6 +371,7 @@ The thread's workflow is chosen **once, at thread creation** (an explicit `workf
 | `PATCH` | `/schedules/:id` | Update cron / input / enabled |
 | `DELETE` | `/schedules/:id` | Delete a schedule |
 | `POST` | `/admin/schedules/tick` | Reconcile + fire due schedules (per-minute cron) |
+| `GET` | `/admin/jobs` | Chat-lane queue depth (`run_jobs` counts by status + backlog) |
 | `GET` | `/oauth/:provider/authorize` | OAuth initiation |
 | `GET` | `/oauth/:provider/callback` | OAuth callback |
 | `DELETE` | `/oauth/:provider` | Revoke + delete OAuth connection |

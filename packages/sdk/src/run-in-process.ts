@@ -44,6 +44,8 @@ export interface RunInProcessOptions {
   depth?: number;
   signal?: AbortSignal;
   approvedToolCallIds?: ReadonlySet<string>;
+  /** Chat lane: assemble history from the whole thread, not just this run (memory across turns). */
+  threadScopedHistory?: boolean;
 }
 
 /**
@@ -86,6 +88,7 @@ export function runAgentInProcess<T = unknown>(
     toolSources,
     cancelStore: deps.cancelStore,
     approvedToolCallIds: opts?.approvedToolCallIds,
+    threadScopedHistory: opts?.threadScopedHistory,
     oauthStore: deps.oauthStore,
     oauthRefreshers: deps.oauthRefreshers,
   });

@@ -61,6 +61,13 @@ export interface InProcessRunContextOptions {
   cancelStore?: import("@render-agents/store").CancelStore;
   /** Pre-approved tool call IDs for resume after approval (bypass approval gate). */
   approvedToolCallIds?: ReadonlySet<string>;
+  /**
+   * Assemble model history from the whole thread (every run sharing `threadId`)
+   * rather than just this run. Set for chat-lane turns (new-run-per-turn): the
+   * turn is its own run, but memory comes from the thread transcript. Requires
+   * `threadId` and a store implementing `getThreadAgentMessages`.
+   */
+  threadScopedHistory?: boolean;
   /** OAuth store for resolving `ToolContext.connection()`; tokens are per-user. */
   oauthStore?: OAuthStore;
   /** Per-provider token refreshers (token-endpoint exchange), keyed by provider. */
@@ -94,6 +101,7 @@ export class InProcessRunContext implements RunContext {
   private readonly isCancelledFn: () => boolean | Promise<boolean>;
   private toolEnv?: ToolEnvironment;
   private readonly approvedToolCallIds: ReadonlySet<string>;
+  private readonly threadScopedHistory: boolean;
   private readonly oauthStore?: OAuthStore;
   private readonly oauthRefreshers: Map<string, OAuthRefresher>;
 
@@ -121,6 +129,7 @@ export class InProcessRunContext implements RunContext {
     this.tools = opts.tools ?? new Map();
     this.toolSources = opts.toolSources ?? new Map();
     this.approvedToolCallIds = opts.approvedToolCallIds ?? new Set();
+    this.threadScopedHistory = opts.threadScopedHistory ?? false;
     this.oauthStore = opts.oauthStore;
     this.oauthRefreshers = opts.oauthRefreshers ?? new Map();
     this.agentSpanId = idempotencyKey(opts.runId, `agent-span:${opts.agentName}`);
@@ -236,7 +245,13 @@ export class InProcessRunContext implements RunContext {
   }
 
   async messages(agentName: string): Promise<Message[]> {
-    const history = await this.store.getMessages(this.runId, agentName);
+    // Chat lane: assemble memory from the whole thread (every run sharing the
+    // thread), not just this turn's run. Falls back to run-scoped history if the
+    // store predates `getThreadAgentMessages` or no thread is set.
+    const history =
+      this.threadScopedHistory && this.threadId && this.store.getThreadAgentMessages
+        ? await this.store.getThreadAgentMessages(this.threadId, agentName)
+        : await this.store.getMessages(this.runId, agentName);
     return this.contextManager.prepare(history, {
       model: this.model,
       agentName,

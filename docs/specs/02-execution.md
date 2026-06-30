@@ -13,16 +13,17 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 ## Runtime & composition
 
-**Purpose** — Agents returned by `loadAgents()` are inert definitions until bound to a **runtime** — the composition root that supplies the model client, store, tracer, runner registry, and (in production) the task dispatcher. Both the gateway and the workflow service construct the *same* `AgentRuntime` via `createRuntime()`, so wiring is identical across services.
+**Purpose** — Agents returned by `loadAgents()` are inert definitions until bound to a **runtime** — the composition root that supplies the model client, store, tracer, runner registry, job queue, and (in production) the task dispatcher. All three production services — the **gateway** (web), the **chat worker**, and the **Workflows host** (see [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat) and [Operations → Deployment](04-operations.md#deployment-model)) — construct the *same* `AgentRuntime` via `createRuntime()`, so wiring is identical across services.
 
 **Model** — `createRuntime()` builds the runtime, auto-detecting each dependency from the environment:
 
 | Dependency | Default resolution |
 |---|---|
 | Store | Postgres if `DATABASE_URL` set, else in-memory |
+| Job queue | Postgres `run_jobs` queue if `DATABASE_URL` set, else in-memory (chat lane only) |
 | Model client | Provider inferred from the agent's `model` (or its `apiKeyEnv`) |
 | Runner registry | `default` → `DefaultRunner`, plus adapters in `runners/` |
-| Dispatcher | Render Workflows dispatcher when `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` present; otherwise in-process fallback (`.task()` runs as `.run()`) |
+| Dispatcher | Render Workflows dispatcher when **either** an in-container socket (`RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV`, for child `agent.task()` chaining) **or** the gateway root-trigger config (`RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG`, for triggering workflow *roots* via `startTask`) is present; otherwise the in-process fallback (`.task()` runs as `.run()`, and a workflow root is driven in-process) |
 
 **Binding.** `loadAgents(dir?, runtime?)` accepts an optional runtime. When omitted, the loader lazily builds one with `createRuntime()` (env-driven defaults). Every `Agent` produced by the set closes over this runtime, so `agent.run()` / `agent.task()` already know which model, store, tracer, runner, and dispatcher to use — there is no global singleton and no per-call dependency wiring. `loadAgents()` itself:
 
@@ -37,7 +38,7 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 9. Binds every `Agent` to the `runtime` (model, store, tracer, runner registry, dispatcher).
 10. Returns an `AgentSet` with `.get()`, `.has()`, `.all()`.
 
-**`loadAgents` is bootstrapping, not in-handler API.** The gateway and workflow service call `loadAgents()` once at startup to build the project AgentSet; the workflow runtime then exposes a run-scoped view of that same set as `ctx.agents` for each run. **Inside a workflow handler, always use `ctx.agents`** — it carries the current run's id, tracer, and parent span so spans nest and dispatch/idempotency keys are correct. Use a module-level `loadAgents()` closure only *outside* a handler (scripts, tests, gateway dispatch); a closure used inside a handler is not run-scoped and will mis-correlate traces. There is exactly one in-handler path (`ctx.agents`).
+**`loadAgents` is bootstrapping, not in-handler API.** Each service (gateway, chat worker, Workflows host) calls `loadAgents()` once at startup to build the project AgentSet; the workflow runtime then exposes a run-scoped view of that same set as `ctx.agents` for each run. **Inside a workflow handler, always use `ctx.agents`** — it carries the current run's id, tracer, and parent span so spans nest and dispatch/idempotency keys are correct. Use a module-level `loadAgents()` closure only *outside* a handler (scripts, tests, gateway dispatch); a closure used inside a handler is not run-scoped and will mis-correlate traces. There is exactly one in-handler path (`ctx.agents`).
 
 **Contract** — [`AgentRuntime`](05-type-reference.md#agentruntime), [`CreateRuntimeOptions`](05-type-reference.md#createruntimeoptions), [`RunnerRegistry`](05-type-reference.md#runnerregistry), [`TaskDispatcher`](05-type-reference.md#taskdispatcher), [`DispatchOptions`](05-type-reference.md#dispatchoptions), [`DelegationLimits`](05-type-reference.md#delegationlimits).
 
@@ -181,7 +182,16 @@ Each `agentTaskHandler(agentName, input, dispatchMeta)` reloads the agent from t
 
 **Render Workflows is a hard production requirement.** The in-process fallback is a **local-dev convenience only** (and the basis for the testing runtime) — not a production degraded mode. Task input and output must be JSON-serializable; non-serializable input throws at dispatch time. Each dispatch carries a deterministic key `SHA-256(runId + agentName + callSeq)`; on handler re-execution, re-dispatch returns the existing child run's result instead of starting a new one. The `callSeq` is the per-handler dispatch ordinal, so control flow must be deterministic (see [Determinism & replay](#determinism--replay)).
 
-**Contract** — [`Agent`](05-type-reference.md#agent), [`TaskOptions`](05-type-reference.md#taskoptions), [`TaskDispatcher`](05-type-reference.md#taskdispatcher).
+**Workflow *roots* use a sibling seam (D12).** Everything above is about `agent.task()` — *child* runs dispatched from inside a handler. A workflow *root* (`workflow().dispatch()`, triggered by HTTP/webhook/cron) is triggered through `TaskDispatcher.dispatchRoot`, which is **fire-and-forget**: the gateway records `run.started` then returns, and the dispatcher chooses where the root executes. In production the Workflows host registers a parallel plan-tiered task — `workflow@<plan>`, bound to the generic `workflowTaskHandler` — and `dispatchRoot` calls the non-blocking `workflows.startTask("<slug>/workflow@<plan>", { workflow, runId })`; Render durably queues it, provisions an isolated container, and scales to zero (Render *is* the durable queue for this lane — there is no `run_jobs` row for workflows). The handler resolves the workflow by name from the deployed image and drives it (`agent.run()` in-process in that container, `agent.task()` as further chained tasks). In local dev the in-process dispatcher drives `wf.drive(runId)` directly. Note the symmetry: `agentTaskHandler` ↔ `agent@<plan>` (child agents), `workflowTaskHandler` ↔ `workflow@<plan>` (roots); both resolve by name and never ship closures.
+
+```ts
+// Registered by the Workflows host, not the user — one per referenced plan:
+//   agent@standard, workflow@standard, ...
+task({ name: `agent@${plan}`,    plan, retry, timeoutSeconds }, agentTaskHandler);
+task({ name: `workflow@${plan}`, plan, retry, timeoutSeconds }, workflowTaskHandler);
+```
+
+**Contract** — [`Agent`](05-type-reference.md#agent), [`TaskOptions`](05-type-reference.md#taskoptions), [`TaskDispatcher`](05-type-reference.md#taskdispatcher), [`RootDispatchJob`](05-type-reference.md#rootdispatchjob).
 
 **Example:**
 
@@ -282,9 +292,11 @@ Providers may require a matching `tool_result` block in wire-format history to r
 
 This keeps local iteration fast by default while making the bypass visible, and lets you exercise real approval gates locally with one env var. The production (gateway) path is unaffected — it always enforces via `ApprovalRequest` + pause.
 
-**Awaiting external input (thread turns).** The same pause-and-resume-by-replay mechanism backs **conversational turn-taking**, not just approvals. An interactive [thread](03-platform.md#threads) is a run that, instead of driving to completion, **awaits the next external message** between turns. The primitive is [`ctx.awaitInput()`](05-type-reference.md#runcontext) (sibling of `requestApproval`): the loop calls it when a turn is done, which emits `run.paused { reason: "input" }` and unwinds via `RunPaused` (no pinned compute). The gateway delivers the user's next message via [`/runs/:id/input`](03-platform.md#gateway), which **appends a `message.user` event** and resumes the run by replay; because the new turn is in the log, the resumed loop's folded `ctx.messages()` includes it and `awaitInput()` returns it. This is why autonomous and chat runs are the *same* primitive — "chat" is simply a run that calls `awaitInput()` at the points an autonomous run would continue on its own.
+**Chat turns are runs, not pauses (D12).** Under the two-lane model, conversational turn-taking is **not** a pause: an [interactive thread](03-platform.md#threads) runs **one short run per user message** (the chat lane, Lane B), and turn-end **completes** the run rather than parking it. Multi-turn memory comes from the thread transcript — each turn's run assembles its model-visible history from *every run in the thread* (`getThreadAgentMessages`, thread-scoped history), so the conversation accrues across runs without any single run staying alive. A new message that arrives while a turn is still generating gets `409 thread_busy` (the soft sequential-turn guard); otherwise it opens a new run. `interactive: true` therefore just marks an agent as a chat surface — it no longer changes the agent loop.
 
-The only thing that distinguishes the two pause reasons is routing: a run paused for `"approval"` is resolved by an `approval.resolved`; a run paused for `"input"` is resolved by a delivered `message.user`. If the awaiting run's container is deprovisioned, resume re-dispatches a fresh run for the thread that rehydrates context from the log — the `message.user` history is what makes that rehydration faithful (see [Threads](03-platform.md#threads)).
+**`ctx.awaitInput()` is for within-turn input HITL only.** The primitive still exists (sibling of `requestApproval`): a tool may park a turn awaiting a human's typed input, emitting `run.paused { reason: "input" }` and unwinding via `RunPaused`. It is **not** used at turn boundaries any more. Both pause reasons resolve by replay and differ only in routing: `"approval"` is resolved by an `approval.resolved`, `"input"` by a delivered `message.user` (via [`/runs/:id/input`](03-platform.md#gateway)).
+
+**HITL resume routing follows the lane.** When a paused root resumes, the gateway classifies it by registry lookup: a **workflow** root re-triggers + replays through `dispatchRoot` (Lane A — Render re-provisions a container and completed `ctx.step`s / `agent.task()`s replay from the log); a **chat/agent** turn enqueues a durable `resume` job that the warm worker drives (Lane B — survives a gateway restart). A chat turn's container is never pinned waiting on a human.
 
 **Contract** — [`ApprovalResult`](05-type-reference.md#approvalresult), [`RunPaused`](05-type-reference.md#runpaused), [`PausedResult`](05-type-reference.md#pausedresult).
 

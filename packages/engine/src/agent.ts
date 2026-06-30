@@ -64,9 +64,11 @@ export interface AgentDefinition {
   plan?: RenderPlan;
   runner?: string;
   /**
-   * Conversational agent. When true, the runner parks on `ctx.awaitInput()`
-   * after a terminal turn (emitting `run.paused { reason: "input" }`) instead of
-   * completing, so the run awaits the next user message — the basis for threads.
+   * Marks the agent as a *chat surface* (two-lane model, D12): the gateway
+   * exposes it for interactive threads and the warm chat worker drives one run
+   * per message turn. It does NOT change the agent loop — a turn completes
+   * normally (turn-end is not a pause); multi-turn memory comes from the thread
+   * transcript, and only HITL within a turn pauses.
    */
   interactive?: boolean;
 }

@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { CancelStore } from "@render-agents/store";
-import { runRetention } from "@render-agents/store";
+import { runRetention, buildEventRecord } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
-import { resumeRun, RunPaused } from "@render-agents/sdk";
+import { resumeRun, submitRootRun, driveAgentTurn, RunPaused } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
@@ -82,13 +82,43 @@ export function createGatewayApp(opts: GatewayOptions) {
   const store = runtime.store;
   const cancel = cancelStore ?? { requestCancel: async () => {}, isCancelled: async () => false, clearCancel: async () => {} };
   const wf = workflows ?? new Map();
-  // Resolving an approval / delivering input must re-drive the paused run.
-  const resume = opts.resume ?? ((runId: string) => resumeRun(runId, runtime));
+  // HITL resume routing (two lanes). Classify the paused run by registry lookup:
+  // - a **workflow** root → Lane A: re-trigger + replay (`dispatchRoot` →
+  //   `startTask` on Render, or an in-process drive in dev). A container that
+  //   deprovisioned between pause and resume reconnects via the event log.
+  // - an **agent/chat** turn → Lane B: a durable `resume` job (queue, survives a
+  //   gateway restart) or an inline `resumeRun` (inline mode). Same call site,
+  //   mode chosen by `submitRootRun`.
+  const resume =
+    opts.resume ??
+    (async (runId: string) => {
+      const run = await store.getRun(runId);
+      if (run && runtime.workflows.has(run.workflow)) {
+        const def = runtime.workflows.get(run.workflow);
+        const dispatcher = runtime.dispatcher;
+        if (dispatcher?.dispatchRoot) {
+          await dispatcher.dispatchRoot({ workflow: run.workflow, runId, plan: def?.options.plan });
+        } else {
+          await def?.drive(runId);
+        }
+        return;
+      }
+      await submitRootRun(runtime, { runId, kind: "resume", driveInline: async () => { await resumeRun(runId, runtime); } });
+    });
 
   // Admin: retention cleanup (authed) — wired to a daily Render Cron.
   app.post("/admin/retention", async (c) => {
     const result = await runRetention(store);
     return c.json(result);
+  });
+
+  // Admin: chat-queue depth (Lane B observability). Returns job counts by status
+  // so operators can watch backlog/dead-letters and size the chat worker. The
+  // workflow lane (Lane A) is queued by Render, not here.
+  app.get("/admin/jobs", async (c) => {
+    const counts = await runtime.jobQueue.countByStatus();
+    const backlog = counts.queued + counts.running;
+    return c.json({ counts, backlog });
   });
 
   // Core run routes
@@ -102,18 +132,41 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   const awaitResume = opts.awaitResume ?? false;
 
-  // Start an interactive chat agent run for a thread's first message. The agent
-  // parks on awaitInput after replying (throws RunPaused) — expected, not an error.
+  // Open a new chat turn for a thread (Lane B): each user message is its own
+  // short run, joined to the thread by `threadId`; multi-turn memory comes from
+  // the thread transcript (not a parked run). A turn completes normally — only
+  // HITL *within* the turn parks (RunPaused), which is expected, not an error.
   const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string }): Promise<void> => {
-    if (!runtime.dispatcher) throw new Error("No dispatcher configured for conversational threads");
-    try {
-      await runtime.dispatcher.dispatch(agentName, input, {
-        runId: o.runId, threadId: o.threadId, userId: o.userId,
-        idempotencyKey: o.runId, plan: runtime.agentDefinitions.get(agentName)?.plan,
-      });
-    } catch (err) {
-      if (!(err instanceof RunPaused)) throw err;
-    }
+    // Record the opening turn in the log up front (both modes): the run row is
+    // the job's FK target and carries input/identity, and the runner's
+    // hasStarted() guard then drives without duplicating these events. This keeps
+    // inline and queue identical except for where the drive happens.
+    const def = runtime.agentDefinitions.get(agentName);
+    await store.events.append(
+      buildEventRecord(
+        o.runId,
+        { type: "run.started", input, trigger: "thread_message", threadId: o.threadId, userId: o.userId, agentVersion: def?.version, model: def?.model.model },
+        { agentName, spanId: o.runId },
+      ),
+    );
+    await store.events.append(
+      buildEventRecord(o.runId, { type: "message.user", content: [{ type: "text", text: input }] }, { agentName }),
+    );
+
+    await submitRootRun(runtime, {
+      runId: o.runId,
+      kind: "agent",
+      payload: { agent: agentName },
+      // Inline (no worker): drive the turn warm in-process now. Queue: a chat
+      // worker claims the `agent` job and calls the same `driveAgentTurn`.
+      driveInline: async () => {
+        try {
+          await driveAgentTurn(runtime, o.runId);
+        } catch (err) {
+          if (!(err instanceof RunPaused)) throw err;
+        }
+      },
+    });
   };
 
   // Thread routes
@@ -159,6 +212,9 @@ export async function startGateway(opts: GatewayOptions): Promise<{ port: number
 
   const server = serve({ fetch: app.fetch, port });
 
+  // The gateway is a front door only. In `queue` mode a separate `runWorker`
+  // service drives execution (see the scaffolded runner entrypoint); the gateway
+  // never runs the loop itself, keeping ingestion decoupled from compute.
   return {
     port,
     close: () => {

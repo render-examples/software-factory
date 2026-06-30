@@ -15,43 +15,44 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 
 **Purpose** — A production deployment is a small set of Render primitives wired together: the same agent definitions run locally and in production with one config file.
 
-**Model** — Target architecture:
+**Model** — Target architecture. The gateway only *triggers* and *observes*; execution splits across the two lanes of [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat) — durable **workflows** on Render Workflows (Lane A), interactive **chat turns** on a warm worker fed by the `run_jobs` queue (Lane B):
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Trigger surfaces                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐   │
-│  │ Webhooks │  │   Cron   │  │  HTTP/Chat requests  │   │
-│  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘   │
-│       │              │                   │              │
-│       ▼              ▼                   ▼              │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │              Web Gateway (Hono)                   │  │
-│  │  Threads, HITL, OAuth, SSE, webhook dispatch     │   │
-│  └──────────────────────┬───────────────────────────┘   │
-│                         │                               │
-│                         ▼                               │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │          Render Workflows (orchestration)        │   │
-│  │  ┌────────┐  ┌────────┐  ┌────────┐  ┌───────┐   │   │
-│  │  │security│  │  perf  │  │   ux   │  │ judge │   │   │
-│  │  │ (task) │  │ (task) │  │ (task) │  │ (run) │   │   │
-│  │  └────────┘  └────────┘  └────────┘  └───────┘   │   │
-│  └──────────────────────┬───────────────────────────┘   │
-│                         │                               │
-│                         ▼                               │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │   Postgres: run_events log → projections          │  │
-│  │   (runs, spans, messages, approvals) + OAuth      │   │
-│  └──────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                          Trigger surfaces                          │
+│   ┌──────────┐   ┌──────────┐   ┌──────────────────────┐           │
+│   │ Webhooks │   │   Cron   │   │  HTTP/Chat requests  │           │
+│   └────┬─────┘   └────┬─────┘   └──────────┬───────────┘           │
+│        ▼              ▼                     ▼                       │
+│   ┌──────────────────────────────────────────────────┐            │
+│   │              Web Gateway (Hono)                   │            │
+│   │  Threads, HITL, OAuth, SSE, webhook dispatch     │            │
+│   │  triggers roots (never runs an agent loop)        │            │
+│   └──────┬──────────────────────────────┬────────────┘            │
+│  Lane A  │ dispatchRoot (startTask)      │ enqueue run_jobs  Lane B │
+│          ▼                               ▼                          │
+│   ┌──────────────────────┐     ┌──────────────────────────┐        │
+│   │  Workflows host       │     │   Chat worker (warm)     │        │
+│   │  workflow@<plan> +    │     │   claims agent/resume    │        │
+│   │  agent@<plan> tasks   │     │   jobs, drives one turn  │        │
+│   │  (container per run)  │     │   in-process             │        │
+│   └──────────┬───────────┘     └────────────┬─────────────┘        │
+│              └──────────────┬───────────────┘                      │
+│                             ▼                                       │
+│   ┌────────────────────────────────────────────────────┐          │
+│   │   Postgres: run_events log → projections            │          │
+│   │   (runs, spans, messages, approvals) + run_jobs +   │          │
+│   │   threads + schedules + OAuth                       │          │
+│   └────────────────────────────────────────────────────┘          │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 **`render.yaml`** — a production deployment consists of:
 
-- **Web service** — the gateway (Hono), webhook ingress, SSE, HITL.
-- **Workflow service** — workflow definitions + agent tasks.
-- **Postgres** — all durable state.
+- **Web service** — the gateway (Hono): webhook/cron/chat ingress, SSE, HITL. Triggers workflow roots via `startTask` and enqueues chat turns; it never executes an agent loop.
+- **Workflows host** (Lane A) — registers `workflow@<plan>` + `agent@<plan>` tasks; Render queues, provisions a container per run, and scales to zero.
+- **Chat worker** (Lane B) — a long-lived background worker that claims `agent`/`resume` jobs from `run_jobs` and drives interactive turns in-process (warm, low-latency).
+- **Postgres** — all durable state, including the `run_jobs` queue.
 - **Cron** (optional) — scheduled workflow triggers.
 - **Private services** (optional) — MCP servers, custom tool backends.
 
@@ -74,9 +75,9 @@ Each section follows the same shape: **Purpose** (what & why), **Model** (how it
 - **OAuth token encryption** → `RENDER_AGENTS_ENCRYPTION_KEY` env var (see [OAuth & multi-tenancy](03-platform.md#oauth--multi-tenancy))
 - **Local strict approvals** → `RENDER_AGENTS_STRICT_APPROVAL` env var (see [Execution → HITL pause & resume](02-execution.md#hitl-pause--resume))
 
-**Naming convention.** SDK-owned settings use the `RENDER_AGENTS_` prefix. Platform- and ecosystem-standard names keep their conventional form: `DATABASE_URL`, `PORT`, the Render-provided `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV`, and provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or an agent's declared `apiKeyEnv`).
+**Naming convention.** SDK-owned settings use the `RENDER_AGENTS_` prefix. Platform- and ecosystem-standard names keep their conventional form: `DATABASE_URL`, `PORT`, the Render-provided `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV`, the root-trigger pair `RENDER_API_KEY` / `RENDER_WORKFLOW_SLUG`, and provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or an agent's declared `apiKeyEnv`).
 
-Store and dispatcher selection is also env-driven: `DATABASE_URL` selects Postgres vs in-memory, and `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` select the Render Workflows dispatcher vs the in-process fallback (see [Execution → Runtime & composition](02-execution.md#runtime--composition)).
+Store, queue, and dispatcher selection are env-driven: `DATABASE_URL` selects Postgres vs in-memory (for both the store and the `run_jobs` queue). The Render Workflows dispatcher is selected when **either** an in-container socket (`RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV`, for child `agent.task()` chaining inside the Workflows host) **or** the gateway root-trigger config (`RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG`, for triggering workflow *roots* via `startTask`) is present; otherwise the in-process fallback runs (see [Execution → Runtime & composition](02-execution.md#runtime--composition)).
 
 ---
 
