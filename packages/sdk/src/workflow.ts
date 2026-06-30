@@ -13,6 +13,7 @@ import type {
   AgentOutput,
   RunOptions,
 } from "@render-agents/engine";
+import { RunPaused } from "@render-agents/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
@@ -45,6 +46,15 @@ export interface WorkflowDefinition {
   readonly name: string;
   readonly options: WorkflowOptions;
   dispatch(input: unknown, trigger?: string, opts?: WorkflowDispatchOptions): Promise<RunRecord>;
+  /**
+   * Drive (or re-drive) the handler for an *already-started* run, recovering
+   * input/trigger/identity from the run record. Unlike `dispatch`, this does not
+   * emit `run.started` or generate a run id — the runner uses it to execute a
+   * claimed `workflow` job and to re-drive a crashed run (idempotent via
+   * `ctx.step` memoization + deterministic child dispatch keys). Throws
+   * `RunPaused` if a child run parks the handler.
+   */
+  drive(runId: string, opts?: { signal?: AbortSignal }): Promise<void>;
 }
 
 type WorkflowHandler = (ctx: WorkflowContext) => Promise<unknown>;
@@ -111,28 +121,29 @@ export function workflow(
         }, { agentName: boundName, spanId: runId }),
       );
 
-      // Run the handler to completion in-process. (In production the workflow
-      // service registers this as a root task with its own durability; locally
-      // we await so the returned RunRecord reflects the terminal state instead
-      // of racing the handler and swallowing its errors.)
-      try {
-        await executeHandler(handler, {
-          runId,
-          trigger: trigger ?? "api",
-          input,
-          runtime: boundRuntime,
-          workflowName: boundName,
-          signal: new AbortController().signal,
-          threadId: dispatchOpts?.threadId,
-          userId: dispatchOpts?.userId,
-        });
-      } catch {
-        // Terminal state (run.failed) is recorded in executeHandler; surface it
-        // via the returned RunRecord rather than throwing from dispatch.
+      // `run.started` above created the run row and recorded input/trigger/
+      // identity (D10). Now trigger Lane A (the workflow lane) via the
+      // dispatcher's root seam — fire-and-forget. The dispatcher decides where
+      // the root executes (sprint 01-Q): `RenderWorkflowsDispatcher` triggers a
+      // durable `startTask` and returns immediately (the run stays `running`);
+      // `InProcessDispatcher` drives `wf.drive(runId)` in-process to a resting
+      // state (dev/test). There is no `run_jobs` row for workflows — Render is
+      // the durable queue.
+      const dispatcher = boundRuntime.dispatcher;
+      if (dispatcher?.dispatchRoot) {
+        await dispatcher.dispatchRoot({ workflow: boundName, runId, plan: resolvedOpts.plan });
+      } else {
+        // No root-capable dispatcher (a narrow/custom dispatcher): drive in-proc.
+        // Terminal/paused state is recorded by executeHandler; never throw out of
+        // dispatch (the outcome is read from the returned RunRecord).
+        try {
+          await definition.drive(runId);
+        } catch {
+          /* terminal/paused recorded on the run */
+        }
       }
 
-      const run = await store.getRun(runId);
-      return run ?? {
+      return (await store.getRun(runId)) ?? {
         id: runId,
         workflow: boundName,
         status: "running",
@@ -141,6 +152,32 @@ export function workflow(
         input,
         trigger,
       };
+    },
+
+    async drive(runId: string, driveOpts?: { signal?: AbortSignal }): Promise<void> {
+      if (!boundRuntime) {
+        throw new Error(
+          `Workflow "${boundName}" is not bound to a runtime. ` +
+          `Call bindWorkflow(definition, runtime) before drive.`,
+        );
+      }
+      // The run already exists (the gateway emitted `run.started` at enqueue);
+      // recover the orchestration inputs from it. The handler is replay-safe, so
+      // a re-drive after a crash resumes from memoized steps.
+      const run = await boundRuntime.store.getRun(runId);
+      if (!run) {
+        throw new Error(`Workflow "${boundName}" drive: run "${runId}" not found`);
+      }
+      await executeHandler(handler, {
+        runId,
+        trigger: run.trigger ?? "api",
+        input: run.input,
+        runtime: boundRuntime,
+        workflowName: boundName,
+        signal: driveOpts?.signal ?? new AbortController().signal,
+        threadId: run.threadId,
+        userId: run.userId,
+      });
     },
   };
 
@@ -163,6 +200,9 @@ export interface WorkflowDefinitionInternal extends WorkflowDefinition {
  */
 export function bindWorkflow(def: WorkflowDefinition, name: string, runtime: AgentRuntime): void {
   (def as WorkflowDefinitionInternal).__bind(name, runtime);
+  // Register in the runtime's workflow registry so the in-process root
+  // dispatcher (`dispatchRoot`) and HITL resume routing can resolve it by name.
+  runtime.workflows.set(name, def);
 }
 
 // --- Handler execution with WorkflowContext ---
@@ -178,7 +218,7 @@ interface ExecuteOpts {
   threadId?: string;
 }
 
-async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Promise<void> {
+export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Promise<void> {
   const { runId, runtime, workflowName } = opts;
   const store = runtime.store;
   const completedSteps = new Map<string, unknown>();
@@ -201,6 +241,7 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
       case "run.completed":
       case "run.failed":
       case "run.cancelled":
+      case "run.paused":
         return { spanId: runId };
       case "step.started":
       case "step.completed":
@@ -257,6 +298,9 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
         completedSteps.set(name, result);
         return result;
       } catch (err) {
+        // A child run parking the handler (HITL) unwinds through the step but is
+        // not a step failure — let it propagate so the root parks as paused.
+        if (err instanceof RunPaused) throw err;
         await emit({
           type: "run.failed",
           error: `Step "${name}" failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -270,6 +314,14 @@ async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts): Prom
     const result = await handler(ctx);
     await emit({ type: "run.completed", result });
   } catch (err) {
+    if (err instanceof RunPaused) {
+      // A child run paused (awaiting approval/input). The workflow root parks as
+      // `paused` — resumable by replay — rather than failing. Record run.paused
+      // on the root so projections and the queue see a settled (non-crashed)
+      // state, then rethrow so the runner marks the job done (not requeued).
+      await emit({ type: "run.paused", reason: err.reason, pendingApprovalIds: err.pendingApprovalIds });
+      throw err;
+    }
     // Only emit run.failed if it hasn't been emitted already (e.g. by a step failure)
     const events = await store.events.read(runId);
     const alreadyFailed = events.some(e => e.payload.type === "run.failed");

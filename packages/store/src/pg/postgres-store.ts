@@ -536,7 +536,8 @@ export class PgEventLogStore implements EventLogStore {
 // --- Postgres RunStore implementation ---
 
 export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleStore {
-  private readonly pool: Pool;
+  /** Exposed so a `PgJobQueue` can share the store's connection pool. */
+  readonly pool: Pool;
   readonly events: PgEventLogStore;
 
   constructor(config: PoolConfig) {
@@ -611,6 +612,24 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
        WHERE run_id = $1 AND (agent_name = $2 OR agent_name = '')
        ORDER BY seq`,
       [runId, agentName],
+    );
+    return res.rows.map((row) => ({
+      role: row.role as Message["role"],
+      content: coerceJson(row.content) as Message["content"],
+    }));
+  }
+
+  async getThreadAgentMessages(threadId: string, agentName: string): Promise<Message[]> {
+    // Fold model-visible history across every run in the thread, ordered by run
+    // start (then seq) so the current turn's messages sort last — the chat lane's
+    // new-run-per-turn memory.
+    const res = await this.pool.query<{ role: string; content: unknown }>(
+      `SELECT rm.role, rm.content
+       FROM run_messages rm
+       JOIN runs r ON r.id = rm.run_id
+       WHERE r.thread_id = $1 AND (rm.agent_name = $2 OR rm.agent_name = '')
+       ORDER BY r.started_at, r.id, rm.seq`,
+      [threadId, agentName],
     );
     return res.rows.map((row) => ({
       role: row.role as Message["role"],
@@ -733,7 +752,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     const res = await this.pool.query<PgMessageRow>(
       `SELECT run_id, seq, thread_id, role, content, created_at
-       FROM messages WHERE thread_id = $1 ORDER BY run_id, seq`,
+       FROM messages WHERE thread_id = $1 ORDER BY created_at, run_id, seq`,
       [threadId],
     );
     return res.rows.map(mapMessageRow);

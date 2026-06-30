@@ -135,9 +135,11 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       return c.json({ runId: active.id, delivered: true }, 200);
     }
 
-    // No active run — start a new turn for this thread. A conversational
-    // `defaultAgent` (interactive) is preferred: it parks awaiting the next
-    // message, so memory accrues in one run; subsequent messages resume it.
+    // No active run — open a NEW run for this turn (Lane B, new-run-per-turn). A
+    // conversational `defaultAgent` (interactive) is preferred: each message is
+    // its own short run joined to the thread by `threadId`, and multi-turn memory
+    // comes from the thread transcript (not a parked run). The warm chat worker
+    // (queue) or the gateway itself (inline) drives the turn.
     if (defaultAgent && startAgentRun) {
       const runId = randomUUID();
       await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: body.userId ?? thread.userId });

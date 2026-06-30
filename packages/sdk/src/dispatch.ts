@@ -12,7 +12,8 @@ import type {
   ToolSource,
 } from "@render-agents/engine";
 import { noopTracer } from "@render-agents/engine";
-import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry } from "./runtime.js";
+import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry, RootDispatchJob } from "./runtime.js";
+import type { WorkflowDefinition } from "./workflow.js";
 import { runAgentInProcess } from "./run-in-process.js";
 
 /** Reserved step name used to memoize a task's output for idempotent re-dispatch. */
@@ -56,6 +57,8 @@ export interface InProcessDispatcherOptions {
   cancelStore: CancelStore;
   toolSources: Map<string, ToolSource>;
   getDefinition: (name: string) => AgentDefinition | undefined;
+  /** Resolve a workflow definition by name for the in-process root drive (`dispatchRoot`). */
+  getWorkflow?: (name: string) => WorkflowDefinition | undefined;
   tracer?: Tracer;
   delegation?: Partial<DelegationLimits>;
   oauthStore?: import("@render-agents/store").OAuthStore;
@@ -127,6 +130,28 @@ export class InProcessDispatcher implements TaskDispatcher {
   }
 
   /**
+   * Trigger a workflow root in-process (Lane A, dev/test). Drives the handler to
+   * a resting state via `wf.drive(runId)`. A `RunPaused` (HITL) or a handler
+   * failure is swallowed here — the terminal/paused state is already recorded on
+   * the run by `executeHandler`, and `dispatchRoot` is fire-and-forget, so the
+   * caller reads the outcome from the run record, not a thrown error.
+   */
+  async dispatchRoot(job: RootDispatchJob): Promise<void> {
+    const wf = this.opts.getWorkflow?.(job.workflow);
+    if (!wf) {
+      throw new Error(
+        `InProcessDispatcher.dispatchRoot: no workflow "${job.workflow}" registered. ` +
+        `Ensure it was loaded via loadWorkflows() / bindWorkflow() before dispatch.`,
+      );
+    }
+    try {
+      await wf.drive(job.runId);
+    } catch {
+      // Terminal (run.failed) / paused (run.paused) is recorded by executeHandler.
+    }
+  }
+
+  /**
    * Return the memoized output of a prior completed dispatch for this runId, if
    * any. The output is persisted as a reserved `step.completed` event, so a
    * re-dispatch (handler replay after crash/pause) short-circuits to the same
@@ -190,9 +215,35 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
 
     return result as AgentOutput;
   }
+
+  /**
+   * Trigger a workflow root on Render (Lane A, production). Uses the *non-blocking*
+   * `startTask` (returns a `taskRunId` immediately) against the plan-tiered
+   * `workflow@<plan>` task — Render durably queues it, provisions an isolated
+   * container, and scales to zero. Fire-and-forget: the gateway records
+   * `run.started` first, then triggers, then returns `202`. JSON only — the
+   * container resolves the workflow by name (no closures cross the wire).
+   */
+  async dispatchRoot(job: RootDispatchJob): Promise<void> {
+    const plan = job.plan ?? "standard";
+    const taskSlug = `${this.workflowSlug}/workflow@${plan}`;
+    const taskInput = { workflow: job.workflow, runId: job.runId };
+    assertSerializable(taskInput, `Serialized root payload for workflow "${job.workflow}"`);
+
+    const { Render } = await importRenderSdk();
+    const client = Render();
+    await client.workflows.startTask(taskSlug, [taskInput]);
+  }
 }
 
-async function importRenderSdk(): Promise<{ Render: () => { workflows: { runTask: (slug: string, args: unknown[]) => Promise<unknown> } } }> {
+async function importRenderSdk(): Promise<{
+  Render: () => {
+    workflows: {
+      runTask: (slug: string, args: unknown[]) => Promise<unknown>;
+      startTask: (slug: string, args: unknown[]) => Promise<unknown>;
+    };
+  };
+}> {
   try {
     // Dynamic import with variable to prevent TypeScript from resolving the module at build time
     const moduleName = "@renderinc/sdk";
@@ -263,6 +314,32 @@ function throwNoDispatcher(): never {
   throw new Error("agentTaskHandler: runtime has no dispatcher configured for subagent delegation");
 }
 
+/**
+ * The generic workflow-root handler that runs INSIDE a Render Workflows
+ * container (bound to the `workflow@<plan>` task). It resolves the user's
+ * workflow by name from the deployed image (definitions are never serialized
+ * across `runTask`/`startTask` — JSON only) and drives it.
+ *
+ * `wf.drive(runId)` runs `executeHandler` here: `agent.run()` is in-process in
+ * this container; `agent.task()` spawns an isolated child task. A child parking
+ * the handler throws `RunPaused`, which `executeHandler` records as `run.paused`
+ * on the root before rethrowing — Render marks the task done (resume = re-trigger
+ * + replay). This mirrors `agentTaskHandler`'s resolve-by-name pattern.
+ */
+export async function workflowTaskHandler(
+  args: { workflow: string; runId: string },
+  workflows: Map<string, WorkflowDefinition>,
+): Promise<void> {
+  const wf = workflows.get(args.workflow);
+  if (!wf) {
+    throw new Error(
+      `workflowTaskHandler: no workflow "${args.workflow}" in the deployed image. ` +
+      `Ensure workflows/${args.workflow}/index.ts exists and is loaded via loadWorkflows().`,
+    );
+  }
+  await wf.drive(args.runId);
+}
+
 // --- Plan registration helpers ---
 
 const VALID_PLANS: RenderPlan[] = ["starter", "standard", "pro", "pro_plus", "pro_max", "pro_ultra"];
@@ -297,4 +374,15 @@ export function computeRequiredPlans(definitions: AgentDefinition[]): RenderPlan
  */
 export function isWorkflowsEnvironment(): boolean {
   return !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);
+}
+
+/**
+ * Detect whether the gateway can *trigger* workflow roots on Render via the REST
+ * client — i.e. `startTask` from a process that is NOT itself a Workflows
+ * container. This is the root-trigger counterpart to `isWorkflowsEnvironment()`
+ * (in-container child chaining): the gateway holds only `RENDER_API_KEY` +
+ * `RENDER_WORKFLOW_SLUG`, no socket. Sprint 01-Q open question #2.
+ */
+export function isRootTriggerEnvironment(): boolean {
+  return !!(process.env.RENDER_API_KEY && process.env.RENDER_WORKFLOW_SLUG);
 }

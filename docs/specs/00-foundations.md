@@ -57,7 +57,7 @@ The decisions below are load-bearing: each imposes a constraint that many downst
 
 ### D5 — Injectable runtime / composition root
 **Decision:** A single `AgentRuntime` (model, store, tracer, runners, dispatcher), built by `createRuntime()` and bound via `loadAgents(dir, runtime)`. No global singleton. Agents acquire all dependencies from the runtime they're bound to; nothing is wired per call.
-**Why:** Same wiring across gateway and workflow service; makes local dev and testing trivial (swap the model/store).
+**Why:** Same wiring across all three services — gateway, chat worker, and Workflows host ([D12](#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)); makes local dev and testing trivial (swap the model/store).
 **Blast radius:** `createRuntime`/`AgentRuntime`, `loadAgents`, `ctx.agents`, testing utilities, dispatcher fallback.
 
 ### D6 — Tools are declared per-agent; `tools[]` is the sole allowlist; MCP at the boundary
@@ -89,6 +89,11 @@ The decisions below are load-bearing: each imposes a constraint that many downst
 **Decision:** The model-visible window is a managed projection, not an ever-growing append. The runtime compacts context (summarize older turns, preserve decisions/unresolved items, drop redundant tool output, JIT-retrieve files) while the full history stays in the event log. Compaction is observable (`context.compacted` event) and the full history remains recoverable from the log.
 **Why:** "Context rot" degrades model quality well before a token budget trips; for coding agents (large file reads, test logs) unmanaged context is a primary failure mode. Budgets bound cost; compaction protects quality.
 **Blast radius:** The agent loop, `ContextManager`/compaction contract, prompt assembly, event log.
+
+### D12 — Two execution lanes: durable workflows vs interactive chat
+**Decision:** Root execution is split by **workload shape** into two lanes. **Pipelines** (`workflow()`, triggered by HTTP/webhook/cron) execute on **Render Workflows**: the gateway records `run.started` and fires a non-blocking `startTask`, and Render durably queues it, isolates each run in its own container, and scales to zero. **Interactive chat** (an `interactive` agent bound to a thread) executes on a **long-lived warm worker** that drives **one run per message turn** in-process for low latency, while the gateway holds a persistent SSE stream that spans turns. Render Workflows is the queue + worker pool for the durable lane; a Postgres `run_jobs` queue feeds the chat lane. The gateway is a front door + stream multiplexer only; it never executes a root itself in production. This is **orthogonal to D2** (`run` vs `task` *inside* a workflow) — D12 is about how a *root* is executed.
+**Why:** Durable pipelines and interactive chat have opposing requirements. Re-triggering a workflow per chat message would pay container cold-start *plus* replay of the whole growing conversation (untenable for interactive latency); conversely, holding one always-on process per pipeline forfeits Render's isolation, durability, and scale-to-zero. No single substrate serves both well — so agent compute legitimately runs in two places: isolated on Render Workflows for pipelines/`agent.task()`, and warm in the worker for chat turns.
+**Blast radius:** `workflow.dispatch()` (→ a `dispatchRoot`/`startTask` seam), the `TaskDispatcher` root seam, the `workflow@<plan>` task + `workflowTaskHandler`, `run_jobs` (chat-only) + `runWorker`, gateway lane routing + SSE, threads as run-per-turn, HITL resume routing (workflow → re-trigger/replay; chat → durable resume job), and deploy topology (gateway / chat worker / Workflows host). See [Sprint 01-Q](../sprints/01-queue.md).
 
 ---
 

@@ -29,4 +29,16 @@ export { PgEventLogStore, PgRunStore, createPgStore } from "./pg/postgres-store.
 export { getPool, createPool, closeSharedPool, applyMigrations } from "./pg/index.js";
 export { PgCancelStore, MemoryCancelStore } from "./pg/cancel-store.js";
 export type { PoolConfig } from "./pg/index.js";
-export { createStore } from "./create-store.js";
+export { createStore, createJobQueue } from "./create-store.js";
+export type { CreateStoreOptions, CreateJobQueueOptions } from "./create-store.js";
+export type {
+  JobQueue,
+  JobRecord,
+  JobKind,
+  JobStatus,
+  EnqueueOptions,
+  FailOptions,
+} from "./job-queue.js";
+export { emptyStatusCounts } from "./job-queue.js";
+export { MemoryJobQueue } from "./memory-job-queue.js";
+export { PgJobQueue } from "./pg/job-queue.js";

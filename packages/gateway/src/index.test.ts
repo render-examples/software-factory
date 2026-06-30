@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ConnectorSpec, ConnectorContext, WebhookMatch } from "../src/index.js";
 import { createGatewayApp } from "../src/index.js";
 import type { GatewayOptions } from "../src/index.js";
-import { createMemoryStore, MemoryCancelStore, buildEventRecord, type RunStore } from "@render-agents/store";
+import { createMemoryStore, MemoryCancelStore, MemoryJobQueue, buildEventRecord, type RunStore } from "@render-agents/store";
 
 /**
  * Build a minimal `AgentRuntime` satisfying the full interface for route tests.
@@ -18,7 +18,10 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     hooks: { get: () => { throw new Error("no hook"); }, has: () => false, ids: () => [] },
     contextManager: { prepare: async (m) => m },
     cancelStore: new MemoryCancelStore(),
+    jobQueue: new MemoryJobQueue(),
+    executionMode: "inline",
     agentDefinitions: new Map(),
+    workflows: new Map(),
     toolSources: new Map(),
     threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
     oauthStore: store as unknown as GatewayOptions["runtime"]["oauthStore"],

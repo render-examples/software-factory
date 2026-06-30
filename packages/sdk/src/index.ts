@@ -34,8 +34,15 @@ export type {
   ApprovalStore,
   OAuthConnection,
   OAuthStore,
+  JobQueue,
+  JobRecord,
+  JobKind,
+  JobStatus,
+  EnqueueOptions,
+  FailOptions,
 } from "@render-agents/store";
-export { idempotencyKey } from "@render-agents/store";
+export { idempotencyKey, TERMINAL_STATUSES } from "@render-agents/store";
+export { MemoryJobQueue, PgJobQueue, createJobQueue } from "@render-agents/store";
 
 // --- Engine (runtime vocabulary) ---
 export type {
@@ -95,13 +102,15 @@ export type {
   RunnerRegistry,
   DispatchOptions,
   TaskDispatcher,
+  RootDispatchJob,
   AgentRuntime,
   CreateRuntimeOptions,
+  ExecutionMode,
 } from "./runtime.js";
 export { createRuntime } from "./runtime.js";
 
 export type { AgentSet, Agent } from "./agents.js";
-export { loadAgents, resumeRun } from "./agents.js";
+export { loadAgents, resumeRun, driveAgentTurn } from "./agents.js";
 export { loadWorkflows, loadWebhooks, loadToolSources, loadHooks, loadRunners } from "./loader/load-project.js";
 
 export type {
@@ -118,10 +127,18 @@ export {
   InProcessDispatcher,
   RenderWorkflowsDispatcher,
   agentTaskHandler,
+  workflowTaskHandler,
   computeDispatchKey,
   computeRequiredPlans,
   isWorkflowsEnvironment,
+  isRootTriggerEnvironment,
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
 
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
+
+export { runWorker, runWorkerLoop, buildJobProcessor } from "./worker.js";
+export type { RunWorkerOptions, WorkerHandle, JobProcessor } from "./worker.js";
+
+export { submitRootRun } from "./submit.js";
+export type { SubmitRootRunOptions } from "./submit.js";

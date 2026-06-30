@@ -1,7 +1,11 @@
+import type { Pool } from "pg";
 import type { RunStore } from "./run-store.js";
 import { createMemoryStore } from "./memory-store.js";
-import { createPgStore } from "./pg/postgres-store.js";
-import type { PoolConfig } from "./pg/db.js";
+import { createPgStore, PgRunStore } from "./pg/postgres-store.js";
+import { getPool, type PoolConfig } from "./pg/db.js";
+import type { JobQueue } from "./job-queue.js";
+import { MemoryJobQueue } from "./memory-job-queue.js";
+import { PgJobQueue } from "./pg/job-queue.js";
 
 export interface CreateStoreOptions extends PoolConfig {
   /**
@@ -23,4 +27,38 @@ export function createStore(opts?: CreateStoreOptions): RunStore {
     return createPgStore(opts);
   }
   return createMemoryStore();
+}
+
+export interface CreateJobQueueOptions extends PoolConfig {
+  /** Force a queue type. Defaults to postgres when a pool/`DATABASE_URL` is available, else memory. */
+  type?: "memory" | "postgres";
+  /** Share an existing pool (e.g. the run store's) instead of opening another. */
+  pool?: Pool;
+}
+
+/**
+ * Auto-detecting job-queue factory, mirroring `createStore`. The queue and the
+ * run store MUST share one database (jobs reference runs), so the backend is
+ * derived from the provided store: a `PgRunStore` yields a Postgres queue
+ * sharing the store's pool; any other store yields an in-memory queue. Pass an
+ * explicit `pool`/`type` to override, or omit the store to fall back to
+ * `DATABASE_URL` env detection.
+ */
+export function createJobQueue(opts?: CreateJobQueueOptions & { store?: RunStore }): JobQueue {
+  if (opts?.pool) return new PgJobQueue(opts.pool);
+
+  if (opts?.type === "memory") return new MemoryJobQueue();
+  if (opts?.type === "postgres") {
+    return new PgJobQueue(opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts));
+  }
+
+  // No explicit override: mirror the store's backend so both share one database.
+  if (opts?.store) {
+    return opts.store instanceof PgRunStore
+      ? new PgJobQueue(opts.store.pool)
+      : new MemoryJobQueue();
+  }
+
+  // No store given: env detection.
+  return process.env.DATABASE_URL ? new PgJobQueue(getPool(opts)) : new MemoryJobQueue();
 }
