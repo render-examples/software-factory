@@ -59,6 +59,15 @@ export interface InProcessRunContextOptions {
   isCancelledFn?: () => boolean | Promise<boolean>;
   /** CancelStore for cooperative cancellation. Overrides isCancelledFn when provided. */
   cancelStore?: import("@render-agents/store").CancelStore;
+  /**
+   * Cancel scope this run belongs to — the id of the cancellable unit (the
+   * workflow/agent root). Cancelling that root cascades to every descendant that
+   * shares the scope (E3): the cancel check returns true when *either* this run
+   * or its scope is cancelled. Defaults to the run's own id (root). Works across
+   * Lane A task containers because the check reads the scope's status from the
+   * shared store.
+   */
+  cancelScopeId?: string;
   /** Pre-approved tool call IDs for resume after approval (bypass approval gate). */
   approvedToolCallIds?: ReadonlySet<string>;
   /**
@@ -137,7 +146,12 @@ export class InProcessRunContext implements RunContext {
     if (opts.cancelStore) {
       const cancelStore = opts.cancelStore;
       const runId = opts.runId;
-      this.isCancelledFn = () => cancelStore.isCancelled(runId);
+      // Cancel cascade (E3): a run is cancelled if its own id OR its enclosing
+      // cancel scope (the root) is cancelled, so cancelling a workflow root
+      // halts the descendant agent runs it dispatched.
+      const scopeId = opts.cancelScopeId && opts.cancelScopeId !== runId ? opts.cancelScopeId : undefined;
+      this.isCancelledFn = async () =>
+        (await cancelStore.isCancelled(runId)) || (scopeId ? cancelStore.isCancelled(scopeId) : false);
     } else {
       this.isCancelledFn = opts.isCancelledFn ?? (() => false);
     }

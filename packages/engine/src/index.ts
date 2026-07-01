@@ -15,7 +15,7 @@ export type {
   RunOptions,
   TaskOptions,
 } from "./agent.js";
-export { RunPaused } from "./agent.js";
+export { RunPaused, RunCancelled } from "./agent.js";
 
 export type {
   OAuthTokens,

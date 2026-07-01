@@ -46,6 +46,12 @@ export interface RunInProcessOptions {
   approvedToolCallIds?: ReadonlySet<string>;
   /** Chat lane: assemble history from the whole thread, not just this run (memory across turns). */
   threadScopedHistory?: boolean;
+  /**
+   * Cancel scope (root run id) this run shares with its ancestors (E3). When the
+   * scope is cancelled, this run's cancel check trips even though its own id was
+   * not directly cancelled. Defaults (in the context) to the run's own id.
+   */
+  cancelScopeId?: string;
 }
 
 /**
@@ -87,11 +93,16 @@ export function runAgentInProcess<T = unknown>(
     maxContextTokens: definition.context?.maxContextTokens,
     toolSources,
     cancelStore: deps.cancelStore,
+    cancelScopeId: opts?.cancelScopeId,
     approvedToolCallIds: opts?.approvedToolCallIds,
     threadScopedHistory: opts?.threadScopedHistory,
     oauthStore: deps.oauthStore,
     oauthRefreshers: deps.oauthRefreshers,
   });
+
+  // The scope descendants inherit: the enclosing scope if set, otherwise this
+  // run becomes the scope root for the subtree it spawns.
+  const childCancelScopeId = opts?.cancelScopeId ?? runId;
 
   if (definition.subagents && definition.subagents.length > 0) {
     let fanout = 0;
@@ -128,6 +139,7 @@ export function runAgentInProcess<T = unknown>(
               idempotencyKey: childRunId,
               plan: deps.getDefinition(agentName)?.plan,
               signal: opts?.signal,
+              cancelScopeId: childCancelScopeId,
             });
           },
         },

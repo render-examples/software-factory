@@ -13,7 +13,7 @@ import type {
   AgentOutput,
   RunOptions,
 } from "@render-agents/engine";
-import { RunPaused } from "@render-agents/engine";
+import { RunPaused, RunCancelled } from "@render-agents/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
@@ -131,7 +131,33 @@ export function workflow(
       // the durable queue.
       const dispatcher = boundRuntime.dispatcher;
       if (dispatcher?.dispatchRoot) {
-        await dispatcher.dispatchRoot({ workflow: boundName, runId, plan: resolvedOpts.plan });
+        // Fail-fast (E6, mode 1): the root run row is already `running`. If the
+        // hand-off to Lane A throws synchronously (e.g. the workflows host /
+        // task server is down → connection refused), the run would otherwise be
+        // stranded `running` forever. Record `run.failed` so the run is terminal
+        // and the caller sees the failure instead of a stuck run. (Mode 2 — the
+        // host accepts the trigger but never completes it — is caught by the
+        // run reaper, `reapStaleRuns`.)
+        try {
+          await dispatcher.dispatchRoot({ workflow: boundName, runId, plan: resolvedOpts.plan });
+        } catch (err) {
+          await store.events.append(
+            buildEventRecord(
+              runId,
+              { type: "run.failed", error: `failed to dispatch root to workflows host: ${err instanceof Error ? err.message : String(err)}` },
+              { agentName: boundName, spanId: runId },
+            ),
+          );
+          return (await store.getRun(runId)) ?? {
+            id: runId,
+            workflow: boundName,
+            status: "failed",
+            totalCostUsd: 0,
+            startedAt: new Date().toISOString(),
+            input,
+            trigger,
+          };
+        }
       } else {
         // No root-capable dispatcher (a narrow/custom dispatcher): drive in-proc.
         // Terminal/paused state is recorded by executeHandler; never throw out of
@@ -257,6 +283,21 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     );
   };
 
+  // Cooperative cancellation (E3): cancelling the workflow root flips its status
+  // via the cancel store. Poll it at orchestration boundaries so the handler
+  // stops launching/awaiting work and records a terminal `run.cancelled` instead
+  // of running to completion and overwriting the cancelled status.
+  const throwIfCancelled = async (): Promise<void> => {
+    if (await runtime.cancelStore.isCancelled(runId)) throw new RunCancelled(runId);
+  };
+  const emitCancelledOnce = async (): Promise<void> => {
+    const events = await store.events.read(runId);
+    const terminal = events.some(
+      (e) => e.payload.type === "run.completed" || e.payload.type === "run.failed" || e.payload.type === "run.cancelled",
+    );
+    if (!terminal) await emit({ type: "run.cancelled" });
+  };
+
   // Per-agent call ordinals make child run ids deterministic so a handler
   // replay (after crash/pause) re-dispatches to the same child run and reuses
   // its memoized result instead of duplicating work.
@@ -291,6 +332,9 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
         return completedSteps.get(name) as T;
       }
 
+      // Don't start new work if the root was cancelled.
+      await throwIfCancelled();
+
       await emit({ type: "step.started", name });
       try {
         const result = await fn();
@@ -311,9 +355,23 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
   };
 
   try {
+    await throwIfCancelled();
     const result = await handler(ctx);
+    // Honor a cancel that landed while the handler was finishing: prefer the
+    // terminal `run.cancelled` over `run.completed` so cancellation isn't lost.
+    if (await runtime.cancelStore.isCancelled(runId)) {
+      await emitCancelledOnce();
+      return;
+    }
     await emit({ type: "run.completed", result });
   } catch (err) {
+    if (err instanceof RunCancelled) {
+      // The handler unwound because the root (or its scope) was cancelled.
+      // Record the terminal `run.cancelled` and rethrow so the task layer
+      // settles it as cancelled (not failed), mirroring the RunPaused contract.
+      await emitCancelledOnce();
+      throw err;
+    }
     if (err instanceof RunPaused) {
       // A child run paused (awaiting approval/input). The workflow root parks as
       // `paused` — resumable by replay — rather than failing. Record run.paused
@@ -394,7 +452,10 @@ function createRunScopedAgent(
     async run<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       const def = resolveScopedDefinition(name, runtime);
       const childRunId = opts?.runId ?? idempotencyKey(parentRunId, `run:${name}:${nextOrdinal(name)}`);
-      return runAgentInProcess<T>(def, input, {
+      // Cancel cascade (E3): don't launch (or, on return, don't keep driving) a
+      // child once the workflow root is cancelled — unwind the handler instead.
+      if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(childRunId, parentRunId);
+      const out = await runAgentInProcess<T>(def, input, {
         store: runtime.store,
         tracer: runtime.tracer,
         runners: runtime.runners,
@@ -412,13 +473,17 @@ function createRunScopedAgent(
         userId: identity.userId,
         threadId: identity.threadId,
         signal: opts?.signal,
+        cancelScopeId: parentRunId,
       });
+      if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(childRunId, parentRunId);
+      return out;
     },
     async task<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       resolveScopedDefinition(name, runtime);
       const dispatcher = runtime.dispatcher ?? inlineWorkflowDispatcher(runtime);
       const runId = opts?.runId ?? idempotencyKey(parentRunId, `task:${name}:${nextOrdinal(name)}`);
-      return dispatcher.dispatch(name, input, {
+      if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(runId, parentRunId);
+      const out = await dispatcher.dispatch(name, input, {
         runId,
         parentSpanId: parentRunId,
         userId: identity.userId,
@@ -426,7 +491,10 @@ function createRunScopedAgent(
         idempotencyKey: runId,
         plan: runtime.agentDefinitions.get(name)?.plan,
         signal: opts?.signal,
-      }) as Promise<AgentOutput<T>>;
+        cancelScopeId: parentRunId,
+      }) as AgentOutput<T>;
+      if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(runId, parentRunId);
+      return out;
     },
   };
 }

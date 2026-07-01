@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+dist
+**/dist
+*.tsbuildinfo
+.turbo
+**/.turbo
+.git
+.smoke
+.pgtest
+.pnpm-store
+.humanlayer
+.env
+**/.env

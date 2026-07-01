@@ -2,9 +2,9 @@ export type { EventCategory, ContentBlock, ToolResult, TokenUsage, RunEvent, Run
 export type { MessageRole, Message } from "./messages.js";
 export type { Logger } from "./logger.js";
 export type { SpanKind, SpanInfo, SpanOutcome, Tracer, SpanStatus } from "./tracer.js";
-export type { RunStatus, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, RunStore } from "./run-store.js";
+export type { RunStatus, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, RunStore } from "./run-store.js";
 export { TERMINAL_STATUSES } from "./run-store.js";
-export { runRetention } from "./retention.js";
+export { runRetention, reapRuns } from "./retention.js";
 export { aggregateRunCost } from "./aggregate.js";
 export type { CancelStore } from "./cancel-store.js";
 export type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";

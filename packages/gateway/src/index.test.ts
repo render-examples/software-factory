@@ -84,6 +84,43 @@ describe("@render-agents/gateway", () => {
     expect(res.status).toBe(404);
   });
 
+  it("POST /admin/runs/reap fails stranded Lane A roots and returns the count (E6)", async () => {
+    const store = createMemoryStore();
+    await store.init();
+    // A stranded root: started long ago, no progress since (host accepted the
+    // trigger but never ran the task) → still `running`.
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    await store.events.append(buildEventRecord("stranded", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "stranded", ts: old }));
+    expect((await store.getRun("stranded"))?.status).toBe("running");
+
+    const app = createGatewayApp({ runtime: makeTestRuntime(store), disableAuth: true });
+    const res = await app.request("/admin/runs/reap", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reaped: number; runIds: string[] };
+    expect(body.reaped).toBe(1);
+    expect(body.runIds).toContain("stranded");
+    expect((await store.getRun("stranded"))?.status).toBe("failed");
+  });
+
+  it("admin endpoints are authed: POST /admin/runs/reap without a key → 401", async () => {
+    const store = createMemoryStore();
+    await store.init();
+    const prev = process.env.RENDER_AGENTS_API_KEY;
+    process.env.RENDER_AGENTS_API_KEY = "secret-key";
+    try {
+      const app = createGatewayApp({ runtime: makeTestRuntime(store) }); // auth ON
+      // No Authorization header → rejected before the handler runs.
+      const denied = await app.request("/admin/runs/reap", { method: "POST" });
+      expect(denied.status).toBe(401);
+      // With the bearer key → allowed.
+      const ok = await app.request("/admin/runs/reap", { method: "POST", headers: { authorization: "Bearer secret-key" } });
+      expect(ok.status).toBe(200);
+    } finally {
+      if (prev === undefined) delete process.env.RENDER_AGENTS_API_KEY;
+      else process.env.RENDER_AGENTS_API_KEY = prev;
+    }
+  });
+
   it("POST /admin/retention runs the cleanup and returns counts", async () => {
     const store = createMemoryStore();
     await store.init();

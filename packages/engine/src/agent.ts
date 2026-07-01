@@ -105,6 +105,25 @@ export class RunPaused extends Error {
   }
 }
 
+/**
+ * Thrown to unwind a workflow handler when its run (or an ancestor it shares a
+ * cancel scope with) has been cancelled (E3). Mirrors `RunPaused`: the handler
+ * stops cooperatively at the next dispatch/step boundary rather than running to
+ * completion and overwriting the cancelled status. `scopeId` is the cancelled
+ * run that triggered the unwind (the root, when a descendant observes it).
+ */
+export class RunCancelled extends Error {
+  readonly runId: string;
+  readonly scopeId: string;
+
+  constructor(runId: string, scopeId?: string) {
+    super(`Run ${runId} cancelled`);
+    this.name = "RunCancelled";
+    this.runId = runId;
+    this.scopeId = scopeId ?? runId;
+  }
+}
+
 export interface RunOptions {
   signal?: AbortSignal;
   runId?: string;
