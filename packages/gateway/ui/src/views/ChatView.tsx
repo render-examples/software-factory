@@ -2,19 +2,88 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { client, ApiError } from "../api/client";
 import { openSSE } from "../api/sse";
 import { navigate, type Route } from "../state/router";
+import { useApp } from "../state/app";
+import { useAsync } from "../hooks/useAsync";
+import { relativeTime } from "../lib/format";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { ErrorBanner, CopyButton } from "../components/ui";
+import { ErrorBanner, CopyButton, Empty, Spinner, StatusBadge } from "../components/ui";
 import { Markdown } from "../components/Markdown";
 import { useToast } from "../components/Toaster";
-import { ThreadsView } from "./ThreadsView";
 import type { Approval, RunStatus, Thread, ThreadMessage } from "../api/types";
 
 type ChatStatus = "idle" | "thinking" | "waiting" | "needs-approval" | "failed";
 
+// Chat is the app's primary object. The former standalone Threads view now lives
+// here as a conversation-picker pane (left), with the selected conversation on
+// the right — one surface instead of two overlapping doors to the same data.
 export function ChatView({ route }: { route: Route }) {
   const threadId = route.segments[1];
-  if (!threadId) return <ThreadsView />;
-  return <Conversation key={threadId} threadId={threadId} />;
+  return (
+    <div className={`chat-layout${threadId ? " has-active" : ""}`}>
+      <ConversationList activeId={threadId} />
+      <div className="convo-main">
+        {threadId
+          ? <Conversation key={threadId} threadId={threadId} />
+          : <Empty>Pick a conversation on the left, or start a new one.</Empty>}
+      </div>
+    </div>
+  );
+}
+
+function ConversationList({ activeId }: { activeId?: string }) {
+  const { lastEvent } = useApp();
+  const [userId, setUserId] = useState("");
+  const [creating, setCreating] = useState(false);
+  const { data, loading, error, reload } = useAsync(() => client.listThreads(userId || undefined), [userId]);
+
+  // Reflect new turns / new threads as they happen.
+  useEffect(() => {
+    if (lastEvent?.category === "lifecycle") {
+      const t = setTimeout(reload, 400);
+      return () => clearTimeout(t);
+    }
+  }, [lastEvent, reload]);
+
+  async function newThread() {
+    setCreating(true);
+    try {
+      const t = await client.createThread({ title: "New conversation", userId: userId || undefined });
+      navigate(`chat/${t.id}`);
+      reload();
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <aside className="convo-list" aria-label="Conversations">
+      <div className="convo-list-head">
+        <button className="primary" disabled={creating} onClick={newThread}>{creating ? <Spinner /> : "+ New"}</button>
+        <input placeholder="filter by user id" value={userId} onChange={(e) => setUserId(e.target.value)} />
+        <button className="ghost" aria-label="Reload" onClick={reload}>{loading ? <Spinner /> : "↻"}</button>
+      </div>
+      <ErrorBanner error={error} />
+      <div className="convo-scroll">
+        {(data?.threads.length ?? 0) === 0 && !loading ? (
+          <Empty>No conversations yet.</Empty>
+        ) : (
+          data?.threads.map((t) => (
+            <button
+              key={t.id}
+              className={`convo-item${t.id === activeId ? " active" : ""}`}
+              onClick={() => navigate(`chat/${t.id}`)}
+            >
+              <span className="convo-title">{t.title || <span className="faint mono">{t.id.slice(0, 12)}…</span>}</span>
+              <span className="convo-meta">
+                <StatusBadge status={t.status} />
+                <span className="muted">{relativeTime(t.updatedAt)}</span>
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </aside>
+  );
 }
 
 function Conversation({ threadId }: { threadId: string }) {
@@ -44,17 +113,33 @@ function Conversation({ threadId }: { threadId: string }) {
       const { thread: t, messages: m } = await client.getThread(threadId);
       setThread(t);
       setMessages(m);
-      if (!activeRunId.current && t.currentRunId) activeRunId.current = t.currentRunId;
+      // Derive the thread's active run client-side (rather than the data model
+      // carrying a UI-shaped `currentRunId`): the thread's turns are root runs,
+      // and at most one is non-terminal at a time (enforced by the store's
+      // partial unique index). Only seed when we don't already have one — an
+      // in-session turn sets `activeRunId` when it starts.
+      if (!activeRunId.current) {
+        const { runs } = await client.listRuns({ threadId, limit: 20 });
+        const active = runs.find(
+          (r) => r.status === "pending" || r.status === "running" || r.status === "paused",
+        );
+        if (active) activeRunId.current = active.id;
+      }
 
       // Pending approvals for this thread, scoped server-side (one request).
       const mine = (await client.listApprovals("pending", threadId)).approvals;
       setApprovals(mine);
 
       let runStatus: RunStatus | undefined;
+      let pauseReason: "approval" | "input" | undefined;
       if (activeRunId.current) {
-        try { runStatus = (await client.getRun(activeRunId.current)).status; } catch { /* */ }
+        try {
+          const run = await client.getRun(activeRunId.current);
+          runStatus = run.status;
+          pauseReason = run.pauseReason;
+        } catch { /* */ }
       }
-      const next = deriveStatus(t, runStatus, mine.length > 0);
+      const next = deriveStatus(t, runStatus, pauseReason, mine.length > 0);
       setStatus(next);
       if (next !== "thinking") setLiveTool(null);
       // Drop the transient stream buffer only when a *new* canonical assistant
@@ -67,6 +152,12 @@ function Conversation({ threadId }: { threadId: string }) {
       if (latestAssistant && latestAssistant.id !== lastAssistantId.current) {
         lastAssistantId.current = latestAssistant.id;
         setStreamingText("");
+      }
+      // Once the active turn reaches a terminal state, forget it so the next
+      // refresh re-resolves the thread's active run — otherwise Stop and SSE
+      // scoping keep targeting a completed run (CR-20).
+      if (runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled") {
+        activeRunId.current = undefined;
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setErr("Thread not found.");
@@ -146,6 +237,11 @@ function Conversation({ threadId }: { threadId: string }) {
   }
 
   const busy = status === "thinking";
+  // The composer is blocked while the turn is mid-flight (`thinking`) and while
+  // an approval is pending (`needs-approval`) — the server 409s a message during
+  // an approval pause (BUG-11), so prevent it in the UI. An input pause
+  // (`waiting`) intentionally keeps the composer open: the reply resumes the run.
+  const inputBlocked = status === "thinking" || status === "needs-approval";
   const runId = activeRunId.current;
 
   return (
@@ -180,9 +276,15 @@ function Conversation({ threadId }: { threadId: string }) {
 
       <div className="composer">
         <textarea
-          placeholder={status === "needs-approval" ? "Resolve the approval above to continue…" : "Message the agent…  (Enter to send, Shift+Enter for newline)"}
+          placeholder={
+            status === "needs-approval"
+              ? "Resolve the approval above to continue…"
+              : status === "waiting"
+                ? "The agent is waiting for your reply…"
+                : "Message the agent…  (Enter to send, Shift+Enter for newline)"
+          }
           value={draft}
-          disabled={busy}
+          disabled={inputBlocked}
           aria-label="Message"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -192,7 +294,7 @@ function Conversation({ threadId }: { threadId: string }) {
         {busy ? (
           <button className="danger" onClick={stop} title="Stop the current turn">Stop</button>
         ) : (
-          <button className="primary" disabled={!draft.trim()} onClick={send}>Send</button>
+          <button className="primary" disabled={!draft.trim() || inputBlocked} onClick={send}>Send</button>
         )}
       </div>
     </div>
@@ -247,10 +349,21 @@ function StatusLine({ status }: { status: ChatStatus }) {
   return <span className={`live-tag ${s.cls}`} style={{ border: "none" }}>{s.label}</span>;
 }
 
-function deriveStatus(thread: Thread, runStatus: RunStatus | undefined, hasApproval: boolean): ChatStatus {
+function deriveStatus(
+  thread: Thread,
+  runStatus: RunStatus | undefined,
+  pauseReason: "approval" | "input" | undefined,
+  hasApproval: boolean,
+): ChatStatus {
   if (hasApproval) return "needs-approval";
   if (runStatus === "running" || runStatus === "pending") return "thinking";
-  if (runStatus === "paused") return "waiting";
+  if (runStatus === "paused") {
+    // Distinguish the pause reason from the authoritative `run.paused` event
+    // rather than inferring solely from the approval list (BUG-12): an approval
+    // pause is `needs-approval` even in the brief window before the approval row
+    // is fetched; only an input pause is `waiting` (the user should reply).
+    return pauseReason === "approval" ? "needs-approval" : "waiting";
+  }
   if (runStatus === "failed" || thread.status === "failed") return "failed";
   return "idle";
 }

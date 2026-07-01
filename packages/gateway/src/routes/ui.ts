@@ -27,10 +27,12 @@ const CONTENT_TYPES: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-async function readFromUiDirs(relative: string): Promise<string | null> {
+async function readFromUiDirs(relative: string): Promise<Buffer | null> {
   for (const dir of UI_DIRS) {
     try {
-      return await readFile(join(dir, relative), "utf8");
+      // Read as a Buffer (no encoding) so binary assets (fonts, images) aren't
+      // corrupted by a UTF-8 round-trip (CR-23).
+      return await readFile(join(dir, relative));
     } catch {
       /* try next */
     }
@@ -60,13 +62,17 @@ export function uiRoutes() {
     const body = await readFromUiDirs(join("assets", file));
     if (body === null) return c.text("not found", 404);
     const type = CONTENT_TYPES[extname(file)] ?? "application/octet-stream";
-    return c.body(body, 200, { "Content-Type": type, "Cache-Control": "public, max-age=31536000, immutable" });
+    // Copy into a standalone Uint8Array view for Hono's body type (binary-safe).
+    return c.body(new Uint8Array(body), 200, {
+      "Content-Type": type,
+      "Cache-Control": "public, max-age=31536000, immutable",
+    });
   });
 
   // Shell + SPA client-side routing fallback.
   const serveShell = async (c: Context) => {
     const html = await readFromUiDirs("index.html");
-    return c.html(html ?? NOT_BUILT_HTML);
+    return c.html(html ? html.toString("utf8") : NOT_BUILT_HTML);
   };
   app.get("/ui", serveShell);
   app.get("/ui/*", serveShell);

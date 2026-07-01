@@ -177,6 +177,8 @@ code, pre, .mono { font-family: var(--mono); }
 .rail .brand { padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); }
 .rail .brand b { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; }
 .rail nav { padding: 0.5rem; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.rail .nav-group { display: flex; flex-direction: column; gap: 2px; }
+.rail .nav-group + .nav-group { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
 .rail nav a {
   color: var(--fg-dim);
   padding: 0.42rem 0.65rem;
@@ -204,18 +206,26 @@ code, pre, .mono { font-family: var(--mono); }
   font: inherit; text-align: left; width: 100%;
 }
 .rail .footer .stat:hover { color: var(--fg); background: var(--bg-hover); }
+.rail .footer .footer-controls {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.rail .footer .footer-controls input { width: 100%; }
+.rail .footer .footer-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.live { background: var(--run); box-shadow: 0 0 0 0 var(--run); animation: pulse 1.8s infinite; }
 .dot.wait { background: var(--pause); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 #60a5fa66; } 70% { box-shadow: 0 0 0 6px #60a5fa00; } 100% { box-shadow: 0 0 0 0 #60a5fa00; } }
 
 .main { display: flex; flex-direction: column; overflow: hidden; height: 100%; }
+.content { flex: 1; overflow: auto; }
+/* Local header bar for panes (e.g. the chat conversation view). The global app
+   top bar was removed; its controls now live in the left rail footer. */
 .topbar {
   display: flex; align-items: center; gap: 0.6rem;
   padding: 0.5rem 1rem; border-bottom: 1px solid var(--border);
   background: var(--bg-1); min-height: 46px;
 }
-.content { flex: 1; overflow: auto; }
 
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }
@@ -284,7 +294,45 @@ pre.json {
 .cat-delegation { color: #f472b6; } .cat-context { color: var(--fg-dim); }
 
 /* ---- Chat ---- */
-.chat { display: flex; flex-direction: column; height: 100%; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.6rem; }
+.stat-tile { border: 1px solid var(--border); background: var(--bg-1); padding: 0.7rem 0.85rem; }
+.stat-tile .stat-num { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.stat-tile .stat-label { color: var(--fg-dim); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.form-card {
+  border: 1px solid var(--border); background: var(--bg-1);
+  padding: 0.85rem 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.6rem;
+}
+.form-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.form-row > label { width: 110px; flex: 0 0 110px; color: var(--fg-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.form-row > input:not([type="checkbox"]), .form-row > textarea { flex: 1; min-width: 180px; }
+.form-row > textarea { width: 100%; }
+
+.chat-layout { display: flex; height: 100%; min-height: 0; }
+.chat-layout .convo-list {
+  width: 260px; flex: 0 0 260px; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); min-height: 0; background: var(--bg-1);
+}
+.chat-layout .convo-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.convo-list-head { display: flex; gap: 0.4rem; padding: 0.6rem; border-bottom: 1px solid var(--border); }
+.convo-list-head input { flex: 1; min-width: 0; }
+.convo-scroll { flex: 1; overflow: auto; padding: 0.4rem; display: flex; flex-direction: column; gap: 2px; }
+.convo-item {
+  display: flex; flex-direction: column; gap: 4px; align-items: stretch; text-align: left;
+  padding: 0.5rem 0.6rem; background: transparent; border: 1px solid transparent; cursor: pointer;
+}
+.convo-item:hover { background: var(--bg-hover); }
+.convo-item.active { background: var(--bg-2); border-color: var(--border); }
+.convo-title { font-size: 0.82rem; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-meta { display: flex; align-items: center; gap: 0.5rem; font-size: 11px; }
+/* On narrow screens, collapse to a single pane: show the list, or the active convo. */
+@media (max-width: 720px) {
+  .chat-layout .convo-list { width: 100%; flex-basis: 100%; }
+  .chat-layout.has-active .convo-list { display: none; }
+  .chat-layout .convo-main { display: none; }
+  .chat-layout.has-active .convo-main { display: flex; }
+}
+.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .chat .scroll { flex: 1; overflow: auto; padding: 1rem 1.25rem; }
 .msg { margin-bottom: 0.9rem; max-width: 760px; }
 .msg.user { margin-left: auto; }
@@ -369,7 +417,12 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
     box-shadow: 0 0 40px #0006;
   }
   .app.nav-open .rail { transform: translateX(0); }
-  .nav-toggle { display: inline-flex; }
+  /* Floating toggle (no top bar): sits above the content, top-left. */
+  .nav-toggle {
+    display: inline-flex; position: fixed; top: 10px; left: 10px; z-index: 45;
+    background: var(--bg-1); border: 1px solid var(--border);
+  }
+  .main { padding-top: 3rem; }
   .app.nav-open .scrim {
     display: block; position: fixed; inset: 0; background: #0007; z-index: 30;
   }

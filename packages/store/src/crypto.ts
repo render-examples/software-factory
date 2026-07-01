@@ -27,6 +27,10 @@ export function decrypt(ciphertext: string, key: Buffer): string {
   const iv = Buffer.from(parts[0], "hex");
   const tag = Buffer.from(parts[1], "hex");
   const encrypted = Buffer.from(parts[2], "hex");
+  // Validate lengths up front so malformed input yields a stable error rather
+  // than an opaque low-level crypto exception (CR-03).
+  if (iv.length !== 12) throw new Error("Invalid encrypted token: IV must be 12 bytes");
+  if (tag.length !== 16) throw new Error("Invalid encrypted token: auth tag must be 16 bytes");
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
@@ -34,18 +38,28 @@ export function decrypt(ciphertext: string, key: Buffer): string {
 
 let warnedDevKey = false;
 
-/** The encryption key from the environment, with a clearly-flagged dev fallback. */
+/**
+ * The encryption key from the environment. In production a missing key is fatal
+ * (fail closed — never silently encrypt secrets with a public constant, CR-03);
+ * in dev/test it falls back to a clearly-flagged insecure key with one warning.
+ */
 export function encryptionKeyFromEnv(): Buffer {
   const secret = process.env.RENDER_AGENTS_ENCRYPTION_KEY;
-  if (!secret) {
-    if (!warnedDevKey) {
-      warnedDevKey = true;
-      console.warn(
-        "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; using an INSECURE dev key " +
-          "for OAuth token encryption. Set a strong 32+ char secret in production.",
-      );
-    }
-    return deriveKey("render-agents-insecure-dev-key");
+  if (secret) return deriveKey(secret);
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "RENDER_AGENTS_ENCRYPTION_KEY is required in production. It encrypts OAuth " +
+        "tokens at rest and signs OAuth state; set a strong 32+ char secret.",
+    );
   }
-  return deriveKey(secret);
+
+  if (!warnedDevKey) {
+    warnedDevKey = true;
+    console.warn(
+      "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; using an INSECURE dev key " +
+        "for OAuth token encryption. Set a strong 32+ char secret in production.",
+    );
+  }
+  return deriveKey("render-agents-insecure-dev-key");
 }

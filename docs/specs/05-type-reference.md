@@ -124,8 +124,8 @@ An agent invocation inspected at a runtime boundary (completed or paused).
  * On HITL pause, the runner throws `RunPaused` (control-flow signal); the
  * runtime catch boundary can surface a `PausedResult` for callers that inspect.
  */
-type AgentResult =
-  | ({ status: "completed" } & AgentOutput)
+type AgentResult<T = unknown> =
+  | ({ status: "completed" } & AgentOutput<T>)
   | PausedResult;
 ```
 
@@ -187,6 +187,8 @@ interface RunOptions {
   signal?: AbortSignal;
   runId?: string;
   parentSpanId?: string;
+  /** Tool-call ids to treat as pre-approved when resuming a paused run, bypassing the approval gate. Approvals already in the log are honored automatically. */
+  approvedToolCallIds?: ReadonlySet<string>;
 }
 ```
 
@@ -238,6 +240,8 @@ Input/output token counts for a model call.
 interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 ```
 
@@ -311,6 +315,8 @@ interface ToolContext {
   env(name: string): string | undefined;
   readonly signal: AbortSignal;
   readonly logger: Logger;
+  /** The model-assigned id of the tool call being executed (for correlation). */
+  readonly toolCallId?: string;
   /**
    * Per-user OAuth connection for the given provider, resolved via the run's
    * `userId` against the OAuthStore. Returns undefined when there is no user
@@ -491,14 +497,21 @@ interface RunContext {
   readonly depth: number;
   env(name: string): string | undefined;
 
+  /**
+   * Resolve the current user's OAuth tokens for a provider (decrypted, and
+   * refreshed if expired). Returns undefined when no store/user/connection is
+   * available. Surfaced to tools via `ToolContext.connection()`.
+   */
+  connection(provider: string): Promise<OAuthTokens | undefined>;
+
   mountTools(toolIds: string[]): Promise<MountedTools>;
 
   /**
    * HITL gate. Production (gateway) records an `approval.requested` event and
    * returns `{ status: "pending" }`; in-process behavior follows the approval
-   * mode. It does NOT block.
+   * mode. It does NOT block. `toolCallId` correlates the gate with the tool call.
    */
-  requestApproval(toolName: string, input: unknown): Promise<ApprovalResult>;
+  requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
 
   /**
    * Within-turn input pause (sibling of `requestApproval`). A tool calls this when
@@ -548,6 +561,13 @@ interface RunContext {
 
   /** Cooperative cancellation: check if this run has been cancelled. */
   isCancelled(): Promise<boolean>;
+
+  /**
+   * True when this run already has a `run.started` event in the log — i.e. this
+   * is a resume/replay execution, not a fresh start. The runner uses this to
+   * avoid re-emitting the initial `run.started`/`message.user` on resume.
+   */
+  hasStarted(): Promise<boolean>;
 }
 ```
 
@@ -749,7 +769,8 @@ A named context-compaction strategy. The default "auto" summarizes older turns w
 interface CompactionStrategy {
   readonly name: string;
   shouldCompact(messages: Message[], usedTokens: number, maxTokens: number): boolean;
-  compact(messages: Message[]): Promise<{ messages: Message[]; summary: string }>;
+  /** `modelSpec` selects the provider/model used for summarization (defaults to a small tier). */
+  compact(messages: Message[], modelSpec?: ModelSpec): Promise<{ messages: Message[]; summary: string }>;
 }
 ```
 
@@ -774,6 +795,8 @@ Optional configuration for a workflow root task.
 
 ```ts
 interface WorkflowOptions {
+  /** Explicit workflow name; otherwise inferred from the `workflows/<dir>` directory at discovery. */
+  name?: string;
   /** Root task timeout in seconds. */
   timeout?: number;
   /**
@@ -825,7 +848,26 @@ interface WorkflowDefinition {
   /** Set at discovery time from `workflows/<dir>` directory name. */
   readonly name: string;
   readonly options: WorkflowOptions;
-  dispatch(input: unknown, trigger?: string): Promise<RunRecord>;
+  dispatch(input: unknown, trigger?: string, opts?: WorkflowDispatchOptions): Promise<RunRecord>;
+  /**
+   * Drive (or re-drive) the handler for an *already-started* run, recovering
+   * input/trigger/identity from the run record. Unlike `dispatch`, it does not
+   * emit `run.started` or generate a run id — the runner uses it to execute a
+   * claimed `workflow` job and to re-drive a crashed run (idempotent via
+   * `ctx.step` memoization + deterministic child dispatch keys). Throws
+   * `RunPaused` if a child run parks the handler.
+   */
+  drive(runId: string, opts?: { signal?: AbortSignal }): Promise<void>;
+}
+```
+
+### WorkflowDispatchOptions
+Optional identity carried into a workflow dispatch so a thread spans the runs it triggers.
+
+```ts
+interface WorkflowDispatchOptions {
+  threadId?: string;
+  userId?: string;
 }
 ```
 
@@ -962,12 +1004,16 @@ interface DispatchOptions {
   parentSpanId?: string;
   /** Propagated to the child run so it shares the caller's user/OAuth identity. */
   userId?: string;
+  /** Propagated to the child run so a thread spans every run it triggers. */
+  threadId?: string;
   /** Delegation depth for the child run (parent depth + 1 when spawned as a subagent). */
   depth?: number;
   /** Deterministic key — SHA-256(runId + agentName + callSeq) — for idempotent re-dispatch. */
   idempotencyKey: string;
   plan?: RenderPlan;
   signal?: AbortSignal;
+  /** Cancel scope (the root run id) this child belongs to (E3); cancelling the root cascades to descendants that share the scope. */
+  cancelScopeId?: string;
 }
 ```
 
@@ -1000,6 +1046,14 @@ interface CreateRuntimeOptions {
   extraRunners?: Map<string, AgentRunner>;
   /** Override the auto-wired Render Workflows dispatcher. */
   dispatcher?: TaskDispatcher;
+  /** Auto-detect a Render Workflows dispatcher from ambient env. Default true; set false to force the in-process dispatcher (tests use this to stay hermetic). */
+  autoDetectDispatcher?: boolean;
+  /** Override the durable chat-lane job queue. Defaults to Postgres when available, else in-memory. */
+  jobQueue?: JobQueue;
+  /** Override the transient token-delta bus (D13). Defaults to Postgres NOTIFY when available, else in-memory. */
+  deltaBus?: DeltaBus;
+  /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
+  executionMode?: ExecutionMode;
   /** Cooperative cancellation store. Defaults to a Postgres-backed flag (or in-memory). */
   cancelStore?: CancelStore;
   /** Subagent delegation limits. Also configurable via env. */
@@ -1044,11 +1098,185 @@ function mockModel(
 ```
 
 ### createTestRuntime
-Testing helper: an in-memory runtime with a mock/provided model and no dispatcher.
+Testing helper: an in-memory runtime with a mock/provided model, hermetic from ambient Render env.
 
 ```ts
-/** In-memory runtime for tests: memory store, provided/mock model, no dispatcher (so `.task()` falls back to `.run()`). */
+/**
+ * In-memory runtime for tests: memory store + provided/mock model. Calls
+ * `createRuntime({ autoDetectDispatcher: false })` so it ignores ambient Render
+ * env (e.g. inside a `render workflows dev` shell). No Render Workflows
+ * dispatcher is detected, but an `InProcessDispatcher` is still installed — so
+ * `.task()` runs in-process *via the dispatcher* (identical observable behavior),
+ * not as a `.run()` fallback. Callers can still pass an explicit dispatcher.
+ */
 function createTestRuntime(opts?: Partial<CreateRuntimeOptions>): Promise<AgentRuntime>;
+```
+
+### ExecutionMode
+How root runs + resumes execute relative to their trigger: `inline` drives the handler/agent/resume in the calling process; `queue` records the opening event(s) and enqueues a durable job for a `runWorker` to claim. `agent.task()` child dispatch is unaffected (always via `runtime.dispatcher`).
+
+```ts
+type ExecutionMode = "inline" | "queue";
+```
+
+### submitRootRun / SubmitRootRunOptions
+Submit a root run / resume for execution honoring the runtime's [`ExecutionMode`](#executionmode): `inline` → `driveInline()` now; `queue` → enqueue a durable job. The caller records the opening event(s) first, so the run is identical regardless of mode (the job is only a pointer, D10).
+
+```ts
+interface SubmitRootRunOptions {
+  runId: string;
+  kind: JobKind;
+  /** Forward-flex pointer payload (target name, plan, identity). */
+  payload?: Record<string, unknown>;
+  /** Override the kind-derived queue priority (lower = claimed first). */
+  priority?: number;
+  /** Drive the run to a resting state in the calling process (invoked only in `inline` mode). */
+  driveInline: () => Promise<void>;
+}
+
+function submitRootRun(runtime: AgentRuntime, opts: SubmitRootRunOptions): Promise<void>;
+```
+
+### resumeRun / driveAgentTurn
+`resumeRun` re-drives a paused run by replay (returning an [`AgentResult`](#agentresult) — completed or paused again); `driveAgentTurn` drives one chat-lane turn's run to completion, returning its [`AgentOutput`](#agentoutput).
+
+```ts
+function resumeRun<T = unknown>(runId: string, runtime: AgentRuntime, opts?: { signal?: AbortSignal }): Promise<AgentResult<T>>;
+function driveAgentTurn(runtime: AgentRuntime, runId: string, opts?: { signal?: AbortSignal }): Promise<AgentOutput>;
+```
+
+### runWorker / runWorkerLoop / buildJobProcessor
+The warm chat-lane worker (Lane B). `buildJobProcessor` turns a runtime into a [`JobProcessor`](#runworkeroptions--workerhandle--jobprocessor); `runWorkerLoop` drives a claim/process loop over a [`JobQueue`](#jobqueue); `runWorker` wires both against a runtime.
+
+```ts
+function buildJobProcessor(runtime: AgentRuntime): JobProcessor;
+function runWorker(runtime: AgentRuntime, opts?: RunWorkerOptions): WorkerHandle;
+function runWorkerLoop(queue: JobQueue, process: JobProcessor, opts: LoopOptions): WorkerHandle;
+```
+
+### RunWorkerOptions / WorkerHandle / JobProcessor
+Configuration + handle for the worker loop, and the per-job processing function.
+
+```ts
+type JobProcessor = (job: JobRecord) => Promise<void>;
+
+interface RunWorkerOptions {
+  /** Stable id for this runner; defaults to a random id. */
+  workerId?: string;
+  /** Max concurrently-driven jobs. Default 4. */
+  concurrency?: number;
+  /** Fallback poll interval (ms) covering delayed/backoff jobs + missed NOTIFYs. Default 1000. */
+  pollMs?: number;
+  /** Visibility timeout (ms): a claimed job idle this long is reclaimable. Default 60000. */
+  staleMs?: number;
+  /** Reaper sweep interval (ms). Default = `staleMs`. */
+  reapIntervalMs?: number;
+  /** External stop signal (in addition to `handle.stop()`). */
+  signal?: AbortSignal;
+  /** Observe processing/loop errors (never thrown out of the loop). */
+  onError?: (err: unknown, job?: JobRecord) => void;
+}
+
+interface WorkerHandle {
+  /** Stop claiming, drain in-flight jobs, release the tail client, and resolve. */
+  stop(): Promise<void>;
+  /** Resolves when the loop has fully stopped and drained. */
+  readonly done: Promise<void>;
+}
+```
+
+### AgentTaskInput
+The by-name payload handed to [`agentTaskHandler`](#agenttaskhandler--workflowtaskhandler) inside a Render Workflows task container (definitions are never serialized across the wire).
+
+```ts
+interface AgentTaskInput {
+  agentName: string;
+  input: AgentInput;
+  runId: string;
+  parentSpanId?: string;
+  userId?: string;
+  threadId?: string;
+  depth: number;
+  idempotencyKey: string;
+  /** Cancel scope (root run id) so cancellation cascades into this task container (E3). */
+  cancelScopeId?: string;
+}
+```
+
+### InProcessDispatcherOptions
+Construction options for [`InProcessDispatcher`](#inprocessdispatcher--renderworkflowsdispatcher).
+
+```ts
+interface InProcessDispatcherOptions {
+  store: RunStore;
+  runners: RunnerRegistry;
+  model: ModelClient;
+  contextManager: ContextManager;
+  cancelStore: CancelStore;
+  toolSources: Map<string, ToolSource>;
+  getDefinition: (name: string) => AgentDefinition | undefined;
+  /** Resolve a workflow by name for the in-process root drive (`dispatchRoot`). */
+  getWorkflow?: (name: string) => WorkflowDefinition | undefined;
+  tracer?: Tracer;
+  delegation?: Partial<DelegationLimits>;
+  oauthStore?: OAuthStore;
+  oauthRefreshers?: Map<string, OAuthRefresher>;
+  deltaBus?: DeltaBus;
+}
+```
+
+### InProcessDispatcher / RenderWorkflowsDispatcher
+The two [`TaskDispatcher`](#taskdispatcher) implementations: `InProcessDispatcher` runs children/roots in-process (dev/test, identical observable behavior minus isolation); `RenderWorkflowsDispatcher` maps `dispatch`→ blocking `runTask` and `dispatchRoot`→ non-blocking `startTask("<slug>/workflow@<plan>")`.
+
+```ts
+declare class InProcessDispatcher implements TaskDispatcher {
+  constructor(opts: InProcessDispatcherOptions);
+}
+declare class RenderWorkflowsDispatcher implements TaskDispatcher {
+  constructor(opts: { workflowSlug: string });
+}
+```
+
+### agentTaskHandler / workflowTaskHandler
+The generic host handlers executed inside a Render Workflows container: `agentTaskHandler` reloads an agent by name and runs it; `workflowTaskHandler` resolves a workflow by name and drives its root run.
+
+```ts
+function agentTaskHandler(
+  taskInput: AgentTaskInput,
+  runtime: AgentRuntime,
+  getDefinition: (name: string) => AgentDefinition | undefined,
+): Promise<AgentOutput>;
+function workflowTaskHandler(
+  args: { workflow: string; runId: string },
+  workflows: Map<string, WorkflowDefinition>,
+): Promise<{ runId: string; status: "completed" | "paused" | "cancelled" }>;
+```
+
+### computeDispatchKey / computeRequiredPlans
+`computeDispatchKey` derives the deterministic child-dispatch idempotency key `SHA-256(runId + agentName + callSeq)`; `computeRequiredPlans` collects the distinct [`RenderPlan`](#renderplan)s referenced by a set of agents (so one dispatch task is registered per plan; always includes `standard`).
+
+```ts
+function computeDispatchKey(runId: string, agentName: string, callSeq: number): string;
+function computeRequiredPlans(definitions: AgentDefinition[]): RenderPlan[];
+```
+
+### isWorkflowsEnvironment / isRootTriggerEnvironment
+Environment probes that select the Render dispatcher: `isWorkflowsEnvironment` detects an in-container socket (`RENDER_SDK_SOCKET_PATH`/`RENDER_USE_LOCAL_DEV`) for child task chaining; `isRootTriggerEnvironment` detects the REST config (`RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG`) used to trigger roots.
+
+```ts
+function isWorkflowsEnvironment(): boolean;
+function isRootTriggerEnvironment(): boolean;
+```
+
+### loadWorkflows / loadWebhooks / loadToolSources / loadHooks / loadRunners
+Project loaders that scan the convention directories and return the discovered definitions (validating each module's default export).
+
+```ts
+function loadWorkflows(dir: string, runtime: AgentRuntime): Promise<Map<string, WorkflowDefinition>>;
+function loadWebhooks(dir: string): Promise<Map<string, WebhookAdapter>>;
+function loadToolSources(dir: string): Promise<Map<string, ToolSource>>;
+function loadHooks(dir: string): Promise<Hook[]>;
+function loadRunners(dir: string): Promise<Map<string, AgentRunner>>;
 ```
 
 ---
@@ -1063,10 +1291,12 @@ interface ModelClient {
   complete(args: CompleteArgs): Promise<CompleteResult>;
   /**
    * Streaming variant. Yields incremental deltas and returns the final
-   * `CompleteResult`. The engine forwards `text_delta` events via
-   * `RunContext.emit` → SSE `text.delta`. Optional: implementations without
-   * native streaming omit it, and the engine falls back to `complete()`
-   * (one terminal text event). Token-level deltas are post-MVP.
+   * `CompleteResult`. The engine publishes coalesced `text_delta`s via
+   * `RunContext.streamDelta()` → the out-of-band `DeltaBus` (D13); the
+   * transient `text.delta` event is *never* appended to the log — the store's
+   * `append` path rejects it as a guard. Optional: implementations without
+   * native streaming omit it, and the engine falls back to `complete()`. The
+   * durable turn output stays the single `message.assistant`.
    */
   stream?(args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult>;
 }
@@ -1147,6 +1377,8 @@ Per-1M-token pricing for a model.
 interface ModelPricing {
   inputPer1M: number;
   outputPer1M: number;
+  cacheReadPer1M?: number;
+  cacheWritePer1M?: number;
 }
 ```
 
@@ -1162,8 +1394,138 @@ const MODEL_PRICING: Record<string, ModelPricing>;
 Estimates USD cost for a single LLM call.
 
 ```ts
-/** Estimate cost in USD for a single LLM call. */
-function estimateCost(model: string, usage: TokenUsage): number;
+/** Estimate cost in USD for a single LLM call. `pricing` defaults to the built-in `MODEL_PRICING` table (custom pricing layered via `createRuntime({ pricing })`). */
+function estimateCost(model: string, usage: TokenUsage, pricing?: Record<string, ModelPricing>): number;
+```
+
+### RunCancelled
+Control-flow signal thrown to unwind a workflow handler when its run (or an ancestor sharing its cancel scope) is cancelled (E3). Mirrors [`RunPaused`](#runpaused): the handler stops cooperatively at the next dispatch/step boundary. `scopeId` is the cancelled run that triggered the unwind.
+
+```ts
+declare class RunCancelled extends Error {
+  readonly runId: string;
+  readonly scopeId: string;
+}
+```
+
+### OAuthRefresher
+A per-provider token-endpoint exchange, keyed by provider in the runtime. Given the stored connection, returns freshly-exchanged tokens.
+
+```ts
+type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>;
+```
+
+### InProcessRunContext
+The in-process realization of [`RunContext`](#runcontext) (D2/D9): every persisting step is an `emit` to the event log. The loop talks only to the `RunContext` contract.
+
+```ts
+declare class InProcessRunContext implements RunContext { /* see RunContext */ }
+```
+
+### InProcessRunContextOptions
+Construction options for [`InProcessRunContext`](#inprocessruncontext).
+
+```ts
+interface InProcessRunContextOptions {
+  runId: string;
+  store: RunStore;
+  tracer: Tracer;
+  model: ModelSpec;
+  agentName: string;
+  contextManager: ContextManager;
+  signal: AbortSignal;
+  parentSpanId?: string;
+  userId?: string;
+  threadId?: string;
+  depth?: number;
+  maxContextTokens?: number;
+  logger?: Logger;
+  env?: (name: string) => string | undefined;
+  /** Flat tool map for tests / backward compat. */
+  tools?: Map<string, Tool>;
+  /** Tool sources registered from `tools/` — used by the ToolEnvironment at mount time. */
+  toolSources?: Map<string, ToolSource>;
+  /** Direct cancel check (legacy/tests). Prefer `cancelStore`. */
+  isCancelledFn?: () => boolean | Promise<boolean>;
+  cancelStore?: CancelStore;
+  /** Cancel scope (root id) this run belongs to; defaults to the run's own id (E3). */
+  cancelScopeId?: string;
+  /** Pre-approved tool-call ids for resume after approval (bypass the gate). */
+  approvedToolCallIds?: ReadonlySet<string>;
+  /** Assemble model history across the whole thread (chat-lane, new-run-per-turn). */
+  threadScopedHistory?: boolean;
+  oauthStore?: OAuthStore;
+  oauthRefreshers?: Map<string, OAuthRefresher>;
+  deltaBus?: DeltaBus;
+}
+```
+
+### DefaultRunnerOptions
+Options for the built-in `DefaultRunner` agent loop.
+
+```ts
+interface DefaultRunnerOptions {
+  /** Custom/unlisted model pricing, merged over the built-in table for cost estimation. */
+  pricing?: Record<string, ModelPricing>;
+}
+```
+
+### SubagentDispatcher
+The dispatch seam used by `subagents__<name>` tools to spawn a child run.
+
+```ts
+interface SubagentDispatcher {
+  dispatch(agentName: string, input: unknown, opts: {
+    parentSpanId: string;
+    userId?: string;
+    depth: number;
+    toolCallId: string;
+  }): Promise<AgentOutput>;
+}
+```
+
+### SubagentSourceOptions
+Options for building an agent's subagent tool source.
+
+```ts
+interface SubagentSourceOptions {
+  dispatcher: SubagentDispatcher;
+  limits?: Partial<DelegationLimits>;
+  currentDepth: number;
+  userId?: string;
+  parentSpanId: string;
+  logger: Logger;
+  getFanoutCount: () => Promise<number>;
+}
+```
+
+### TierEntry
+A concrete provider/model that a [`ModelTier`](#modeltier) alias resolves to.
+
+```ts
+interface TierEntry {
+  provider: "anthropic" | "openai";
+  model: string;
+}
+```
+
+### ResolveModelResult
+The output of resolving a model string/tier into a spec.
+
+```ts
+interface ResolveModelResult {
+  spec: ModelSpec;
+  warnings: string[];
+}
+```
+
+### ResolveClientOptions
+Options for resolving a [`ModelClient`](#modelclient) from a [`ModelSpec`](#modelspec).
+
+```ts
+interface ResolveClientOptions {
+  retry?: Partial<RetryPolicy>;
+}
 ```
 
 ---
@@ -1249,6 +1611,13 @@ interface RunRecord {
   userId?: string;
   /** Agent version, when this run corresponds to a single agent invocation (audit/repro). */
   agentVersion?: string;
+  /**
+   * Span this run hangs off in its parent run, when spawned by another run
+   * (workflow `.task()`/`.run()` fan-out, or an LLM subagent). Undefined for
+   * top-level roots. Lets the UI hide child runs from the top-level list and
+   * stitch them into the parent's trace.
+   */
+  parentSpanId?: string;
   startedAt: string;
   finishedAt?: string;
 }
@@ -1275,6 +1644,38 @@ interface SpanRecord {
 }
 ```
 
+### ApprovalProjectionRecord
+A folded approval record — the projection view of `approval.requested`/`approval.resolved` events (the operational write shape is [`ApprovalRequest`](#approvalrequest); the projection keys on `approvalRequestId` and uses `input`/optional `agentName`).
+
+```ts
+interface ApprovalProjectionRecord {
+  approvalRequestId: string;
+  runId: string;
+  toolName: string;
+  input: unknown;
+  agentName?: string;
+  status: "pending" | "approved" | "denied";
+  requestedAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  reason?: string;
+}
+```
+
+### ProjectionSnapshot
+A plain snapshot of every projection for a single run — used to prove replay is byte-identical to incremental folding.
+
+```ts
+interface ProjectionSnapshot {
+  run?: RunRecord;
+  messages: { seq: number; agentName?: string; message: Message }[];
+  spans: SpanRecord[];
+  toolResults: Record<string, ToolResult>;
+  steps: Record<string, unknown>;
+  approvals: ApprovalProjectionRecord[];
+}
+```
+
 ### RunStore
 The persistence interface. Writes go through the append-only [`EventLogStore`](#eventlogstore); everything else is a **read over maintained projections** folded from the log. There are no direct projection writers (no `createRun`/`startSpan`/`appendRunMessage`) — those are internal effects of `events.append`.
 
@@ -1290,6 +1691,8 @@ interface RunStore {
   // Projection reads (maintained tables, folded from events):
   getRun(id: string): Promise<RunRecord | undefined>;
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
+  /** Child runs spawned by `runId` (their `parentSpanId` points at a span within `runId`), oldest first — used to stitch the cross-run trace. */
+  listChildRuns(runId: string): Promise<RunRecord[]>;
   /** Model-visible message history for an agent, folded from `message.*`/`tool.*` events. */
   getMessages(runId: string, agentName: string): Promise<Message[]>;
   /** Thread-scoped model history: the same fold across *every run* in a thread, ordered by run start then seq. Backs chat-lane multi-turn memory (D12); optional — a store without it falls back to run-scoped `getMessages`. */
@@ -1302,6 +1705,14 @@ interface RunStore {
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
   /** Idempotency lookup: canonical terminal result for a tool-call id, from its `tool.result` event. */
   getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;
+  /** Folded approval requests for a single run. */
+  getApprovals(runId: string): Promise<ApprovalProjectionRecord[]>;
+  /** Folded approval requests across all runs, optionally filtered by status. */
+  listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]>;
+  /** Two-domain retention cleanup: trims event-detail for terminal runs past the event horizon and deletes run summaries past the run horizon. Never touches non-terminal runs, thread metadata/transcript, or schedules. */
+  cleanup(opts: RetentionOptions): Promise<RetentionResult>;
+  /** Fail Lane A roots stranded non-terminal (E6): `pending`/`running` runs with no active queue job whose most recent event is older than `staleMs`. Appends `run.failed`. Idempotent. */
+  reapStaleRuns(opts: ReapOptions): Promise<ReapResult>;
 
   close(): Promise<void>;
 }
@@ -1316,10 +1727,82 @@ Filter and pagination options for `listRuns`.
 interface ListRunsOptions {
   workflow?: string;
   status?: RunStatus;
+  /** Scope to a single thread's runs. */
+  threadId?: string;
   limit?: number;
   /** Keyset cursor: runs older than this ID. More efficient than offset for large sets. */
   before?: string;
+  /** When true, return only top-level roots (runs with no `parentSpanId`). */
+  roots?: boolean;
 }
+```
+
+### ListApprovalsOptions
+Filter/limit options for `RunStore.listApprovals`.
+
+```ts
+interface ListApprovalsOptions {
+  status?: "pending" | "approved" | "denied";
+  limit?: number;
+}
+```
+
+### RetentionOptions
+Two-domain retention horizons for `RunStore.cleanup` (see Operations → Retention).
+
+```ts
+interface RetentionOptions {
+  /** Event-detail horizon (run_events + detail projections). */
+  eventRetentionDays: number;
+  /** Run-summary horizon (the `runs` table). Should be >= eventRetentionDays. */
+  runRetentionDays: number;
+  /** Clock injection for tests. Defaults to now. */
+  now?: Date;
+}
+```
+
+### RetentionResult
+The outcome of a `cleanup` pass.
+
+```ts
+interface RetentionResult {
+  /** Terminal runs whose event-detail was trimmed. */
+  eventDetailTrimmed: number;
+  /** Terminal run summaries deleted. */
+  runsDeleted: number;
+}
+```
+
+### ReapOptions
+Options for the stranded-run reaper (`RunStore.reapStaleRuns`, E6).
+
+```ts
+interface ReapOptions {
+  /** A non-terminal run whose most recent event is older than this is considered stranded. */
+  staleMs: number;
+  /** Clock injection for tests. Defaults to now. */
+  now?: Date;
+}
+```
+
+### ReapResult
+The outcome of a reap pass.
+
+```ts
+interface ReapResult {
+  /** Number of stranded runs transitioned to `failed`. */
+  reaped: number;
+  /** The ids that were reaped. */
+  runIds: string[];
+}
+```
+
+### TERMINAL_STATUSES
+The terminal run statuses eligible for retention trimming.
+
+```ts
+/** Terminal run statuses — only these are eligible for retention trimming. */
+const TERMINAL_STATUSES: ReadonlySet<RunStatus>; // completed | failed | cancelled
 ```
 
 ### ScheduleRecord
@@ -1416,6 +1899,39 @@ interface JobQueue {
 }
 ```
 
+### EnqueueOptions
+The arguments to `JobQueue.enqueue`.
+
+```ts
+interface EnqueueOptions {
+  runId: string;
+  kind: JobKind;
+  /** Default 100. */
+  priority?: number;
+  payload?: Record<string, unknown>;
+  /** Delivery budget. Default 5. */
+  maxAttempts?: number;
+  /** Delay availability (e.g. scheduled wake). Default: now. */
+  availableAt?: string;
+  /** Explicit id (else generated). */
+  id?: string;
+}
+```
+
+### FailOptions
+The options to `JobQueue.fail`.
+
+```ts
+interface FailOptions {
+  /** Requeue for another attempt (subject to `maxAttempts`). Default false. */
+  requeue?: boolean;
+  /** Delay before a requeued job becomes available, in ms. Default 0. */
+  backoffMs?: number;
+  /** Error message recorded on the job for diagnostics. */
+  error?: string;
+}
+```
+
 ### StreamDelta / DeltaBus
 The transient token-streaming side channel (D13). A `DeltaBus` carries coalesced `text.delta`s **out-of-band** from the event log: `MemoryDeltaBus` fans out in-process (inline dev/tests); `PgDeltaBus` uses `pg_notify('run_deltas')` with a **single shared `LISTEN` connection per process**, demultiplexed to per-run/-thread subscribers. Deltas are never appended to `run_events`, never folded into a projection, and never retained — the append path *rejects* a transient event as a guard. `createDeltaBus({ store })` auto-selects the backend (Postgres when the store is Postgres-backed, else memory), mirroring `createJobQueue`.
 
@@ -1441,7 +1957,7 @@ interface DeltaBus {
 > The thread/approval/OAuth **persistence interfaces and their record types below are physically defined in `@render-agents/store`** (it owns persistence), even though their *routes* and request/response handling live in `@render-agents/gateway`. `gateway` imports these down the graph; `store` never imports from `gateway`.
 
 ### Thread
-A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (a workflow root that drives to completion with no external input — Lane A) or **interactive** (a chat surface where **each user turn is its own short run** driven by the warm worker — Lane B; see [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#threadstore) for the human transcript and [`getThreadAgentMessages`](#runstore) for the model-visible thread-scoped history a new turn folds in); `currentRunId` is the active run, if any. A thread is the **top-level unit of work** — it carries its own `userId` (owner, from auth) and `metadata`; there is no separate session grouping (filter threads by `userId` for "everything this user is doing").
+A durable, ordered line of work that **spans a sequence of runs** over its lifetime (at most one active at a time). The thread is the stable identity and message history; runs are the executions that serve it. A thread may be **autonomous** (a workflow root that drives to completion with no external input — Lane A) or **interactive** (a chat surface where **each user turn is its own short run** driven by the warm worker — Lane B; see [D12](00-foundations.md#d12--two-execution-lanes-durable-workflows-vs-interactive-chat)). The message history is the `message.*`/`tool.*` slice of the event log across all the thread's runs (see [`getThreadMessages`](#threadstore) for the human transcript and [`getThreadAgentMessages`](#runstore) for the model-visible thread-scoped history a new turn folds in). The thread does **not** carry an "active run" pointer: the active run is a projection of the `runs` table (the thread's one non-terminal root run, enforced by `idx_runs_thread_active`), so clients that need it derive it via `GET /runs?threadId=<id>` rather than reading it off the domain object. A thread is the **top-level unit of work** — it carries its own `userId` (owner, from auth) and `metadata`; there is no separate session grouping (filter threads by `userId` for "everything this user is doing").
 
 ```ts
 interface Thread {
@@ -1449,8 +1965,6 @@ interface Thread {
   /** Owner, from the gateway's auth. Undefined for system/unauthenticated threads. Filter by this for a user's threads. */
   userId?: string;
   metadata?: Record<string, unknown>;
-  /** The active run serving this thread right now, if one is live. */
-  currentRunId?: string;
   status: "active" | "idle" | "completed" | "failed" | "cancelled";
   title?: string;
   createdAt: string;
@@ -1538,6 +2052,17 @@ interface OAuthConnection {
 }
 ```
 
+### RefreshedTokens
+Freshly-exchanged token material returned by a provider refresh (fed back into the stored connection by `OAuthStore.refreshConnection`).
+
+```ts
+interface RefreshedTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string;
+}
+```
+
 ### OAuthStore
 The persistence interface for OAuth connections.
 
@@ -1547,6 +2072,72 @@ interface OAuthStore {
   upsertConnection(conn: OAuthConnection): Promise<void>;
   deleteConnection(userId: string, provider: string): Promise<void>;
   listConnections(userId: string): Promise<OAuthConnection[]>;
+  /**
+   * Single-flight token refresh. Acquires an exclusive lock on the connection
+   * (Postgres `SELECT ... FOR UPDATE`; in-process mutex for memory), re-checks
+   * freshness under the lock, and only then invokes `doRefresh` so concurrent
+   * callers coalesce into one provider refresh. Returns the current/refreshed connection.
+   */
+  refreshConnection(
+    userId: string,
+    provider: string,
+    isExpired: (conn: OAuthConnection) => boolean,
+    doRefresh: (conn: OAuthConnection) => Promise<RefreshedTokens>,
+  ): Promise<OAuthConnection | undefined>;
+}
+```
+
+### PoolConfig
+Postgres connection-pool configuration shared by the store/queue/bus factories.
+
+```ts
+interface PoolConfig {
+  connectionString?: string;
+  max?: number;
+  applicationName?: string;
+}
+```
+
+### CreateStoreOptions
+Options for `createStore` (auto-detecting `RunStore` factory).
+
+```ts
+interface CreateStoreOptions extends PoolConfig {
+  /** Force a store type. Auto-detects Postgres when `DATABASE_URL` is present, else memory. */
+  type?: "memory" | "postgres";
+}
+```
+
+### CreateJobQueueOptions
+Options for `createJobQueue` (auto-detecting `JobQueue` factory).
+
+```ts
+interface CreateJobQueueOptions extends PoolConfig {
+  /** Force a queue type. Defaults to postgres when a pool/`DATABASE_URL` is available, else memory. */
+  type?: "memory" | "postgres";
+  /** Share an existing pool (e.g. the run store's) instead of opening another. */
+  pool?: Pool;
+}
+```
+
+### CreateDeltaBusOptions
+Options for `createDeltaBus` (auto-detecting `DeltaBus` factory).
+
+```ts
+interface CreateDeltaBusOptions extends PoolConfig {
+  /** Force a bus type. Defaults to postgres when the store is Postgres-backed, else memory. */
+  type?: "memory" | "postgres";
+  /** Share an existing pool (e.g. the run store's) instead of opening another. */
+  pool?: Pool;
+}
+```
+
+### EventRejectedError
+Thrown by `events.append` when an [`EventInterceptor`](#eventinterceptor)/hook vetoes an event (or a transient `text.delta` reaches the append path).
+
+```ts
+declare class EventRejectedError extends Error {
+  readonly reason: string;
 }
 ```
 
@@ -1560,9 +2151,9 @@ A package-contributed inbound webhook endpoint.
 ```ts
 interface ConnectorSpec {
   /** Route key: mounted at `/connectors/:key`. */
-  key: string;
+  readonly key: string;
   /** Human-readable name. */
-  name: string;
+  readonly name: string;
   /** Handle the inbound webhook request. Returns a workflow dispatch. */
   handle(req: Request, ctx: ConnectorContext): Promise<WebhookMatch | null>;
 }
@@ -1575,5 +2166,88 @@ The context passed to a connector's `handle`.
 interface ConnectorContext {
   env(name: string): string | undefined;
   readonly logger: Logger;
+}
+```
+
+### GatewayOptions
+Configuration for `createGatewayApp`/`startGateway`.
+
+```ts
+interface GatewayOptions {
+  runtime: AgentRuntime;
+  workflows?: Map<string, WorkflowDefinition>;
+  cancelStore?: CancelStore;
+  port?: number;
+  defaultWorkflow?: string;
+  /** Conversational agent for threads; a thread's first message dispatches this (interactive) run, later messages resume it. Falls back to `defaultWorkflow` when unset. */
+  defaultAgent?: string;
+  baseUrl?: string;
+  oauthProviders?: Map<string, OAuthProviderConfig>;
+  webhooks?: Map<string, WebhookAdapter>;
+  connectors?: Map<string, ConnectorSpec>;
+  /** Resume driver for paused runs. Defaults to in-process `resumeRun`; injectable for tests / workflow-service dispatch. */
+  resume?: (runId: string) => Promise<unknown>;
+  /** Await the resume driver before responding to resolve/input requests. Default false (fire-and-forget). */
+  awaitResume?: boolean;
+  /** Serve the operator UI SPA at `/ui` (default true). */
+  serveUI?: boolean;
+  /** Disable auth for local dev (NOT for production). */
+  disableAuth?: boolean;
+}
+```
+
+### OAuthProviderConfig
+Per-provider OAuth app configuration used by the gateway's OAuth routes.
+
+```ts
+interface OAuthProviderConfig {
+  clientId: string;
+  clientSecret: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+}
+```
+
+### OAuthRouteDeps
+Dependencies injected into the gateway's OAuth authorize/callback/revoke routes.
+
+```ts
+interface OAuthRouteDeps {
+  providers: Map<string, OAuthProviderConfig>;
+  baseUrl: string;
+  oauthStore: OAuthStore;
+  /** Injectable fetch for tests (defaults to global fetch). */
+  fetchImpl?: typeof fetch;
+}
+```
+
+### SpanLike
+The minimal span shape the operator UI's trace-tree builder reads (a structural superset satisfied by [`SpanRecord`](#spanrecord)).
+
+```ts
+interface SpanLike {
+  id: string;
+  parentId?: string;
+  seq: number;
+  name: string;
+  kind: string;
+  status: string;
+  startedAt?: string;
+  finishedAt?: string;
+  attributes?: Record<string, unknown>;
+  runId?: string;
+  input?: unknown;
+  output?: unknown;
+}
+```
+
+### SpanNode
+A [`SpanLike`](#spanlike) node in the assembled collapsible trace tree, with its children and computed depth.
+
+```ts
+interface SpanNode extends SpanLike {
+  children: SpanNode[];
+  depth: number;
 }
 ```

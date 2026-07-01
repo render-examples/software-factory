@@ -3,6 +3,11 @@ import type { RunStore, CancelStore } from "@render-agents/store";
 import { aggregateRunCost } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
 
+/** Upper bound on a single `/runs` page (CR-22). */
+const MAX_LIST_LIMIT = 100;
+/** Valid `?status=` filter values (CR-22). */
+const RUN_STATUSES = new Set(["pending", "running", "paused", "completed", "failed", "cancelled"]);
+
 /**
  * Core run-facing routes: dispatch, list, inspect, cancel.
  * Reads are pure projection queries against the RunStore.
@@ -41,11 +46,46 @@ export function runRoutes(deps: {
   // GET /runs — list runs with keyset pagination
   app.get("/runs", async (c) => {
     const workflow = c.req.query("workflow");
-    const status = c.req.query("status") as import("@render-agents/store").RunStatus | undefined;
+    const statusRaw = c.req.query("status");
+    // Validate status against the known set so a typo returns 400 rather than
+    // silently yielding an empty list (CR-22).
+    if (statusRaw !== undefined && !RUN_STATUSES.has(statusRaw)) {
+      return c.json({ error: `invalid status "${statusRaw}"` }, 400);
+    }
+    const status = statusRaw as import("@render-agents/store").RunStatus | undefined;
+    const threadId = c.req.query("threadId");
     const before = c.req.query("before");
-    const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+    // Clamp limit to a sane maximum and reject non-finite/negative input so a
+    // caller can't request an unbounded/NaN page (CR-22).
+    const rawLimit = c.req.query("limit");
+    let limit: number | undefined;
+    if (rawLimit !== undefined) {
+      const n = Number(rawLimit);
+      if (!Number.isFinite(n) || n <= 0) {
+        return c.json({ error: "limit must be a positive number" }, 400);
+      }
+      limit = Math.min(Math.floor(n), MAX_LIST_LIMIT);
+    }
+    // Default to top-level roots so the list isn't cluttered with workflow
+    // fan-out / subagent child runs; pass roots=false to include them. A chat
+    // thread's turns are themselves roots, so `threadId` + roots-only lets the UI
+    // derive a thread's active run (the one non-terminal turn) without the data
+    // model carrying a UI-shaped `currentRunId`.
+    const roots = c.req.query("roots") !== "false";
 
-    const runs = await store.listRuns({ workflow, status, before, limit });
+    const runs = await store.listRuns({ workflow, status, threadId, before, limit, roots });
+    return c.json({ runs });
+  });
+
+  // GET /runs/:id/children — child runs spawned by this run (workflow fan-out
+  // or subagents), for cross-run trace stitching in the operator UI.
+  app.get("/runs/:id/children", async (c) => {
+    const id = c.req.param("id");
+    const run = await store.getRun(id);
+    if (!run) {
+      return c.json({ error: `Run "${id}" not found` }, 404);
+    }
+    const runs = await store.listChildRuns(id);
     return c.json({ runs });
   });
 
@@ -57,7 +97,18 @@ export function runRoutes(deps: {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
     const aggregateCostUsd = await aggregateRunCost(store, id);
-    return c.json({ ...run, aggregateCostUsd });
+    // Surface *why* a run is paused (approval vs input) so clients don't have to
+    // infer it from the approval list — the authoritative signal is the last
+    // `run.paused` event's reason (BUG-12). Only computed for a paused run.
+    let pauseReason: "approval" | "input" | undefined;
+    if (run.status === "paused") {
+      const events = await store.events.read(id);
+      for (let i = events.length - 1; i >= 0; i--) {
+        const p = events[i].payload;
+        if (p.type === "run.paused") { pauseReason = p.reason; break; }
+      }
+    }
+    return c.json({ ...run, aggregateCostUsd, pauseReason });
   });
 
   // GET /runs/:id/spans — span tree for a run

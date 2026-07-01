@@ -47,8 +47,13 @@ config in markdown frontmatter, project metadata in `package.json`, deploy in
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Provider credentials | model clients |
 
 > The gateway warns at startup if `RENDER_AGENTS_ENCRYPTION_KEY` is unset (OAuth
-> tokens would use an insecure dev key). `render.yaml` uses `generateValue: true`
-> for the API key + encryption key so they're provisioned automatically.
+> tokens would use an insecure dev key). In `render.yaml` the gateway provisions
+> both `RENDER_AGENTS_API_KEY` and `RENDER_AGENTS_ENCRYPTION_KEY` via
+> `generateValue: true`; the chat-worker and workflows services **must decrypt the
+> same tokens**, so they reference the gateway's encryption key with `fromService`
+> (`envVarKey`) rather than generating their own — all lanes share one Postgres and
+> therefore one key. The crons likewise pull `RENDER_AGENTS_API_KEY` from the
+> gateway. The only `sync: false` secret is the provider key.
 
 ## Retention
 

@@ -38,6 +38,8 @@ export async function reconcileDueSchedules(deps: ScheduleRoutesDeps, now: Date)
       result.skipped.push({ scheduleId: s.id, reason: `workflow "${s.workflow}" not found` });
       continue;
     }
+    // Snapshot the dedupe marker so a failed dispatch can be rolled back.
+    const previousLastRunAt = s.lastRunAt;
     try {
       // Stamp lastRunAt to the firing minute *before* dispatch so a concurrent
       // / retried tick in the same minute sees it as already fired (dedupe).
@@ -46,6 +48,12 @@ export async function reconcileDueSchedules(deps: ScheduleRoutesDeps, now: Date)
       await deps.scheduleStore.updateSchedule(s.id, { lastRunId: run.id, lastRunAt: now.toISOString() });
       result.fired.push({ scheduleId: s.id, workflow: s.workflow, runId: run.id });
     } catch (err) {
+      // Dispatch failed — roll the dedupe marker back to a pre-minute timestamp
+      // so the next matching tick retries instead of treating this minute as
+      // already fired (CR-11). (A defined value is used because `updateSchedule`
+      // treats `undefined` as "no change" on the Postgres store.)
+      const restore = previousLastRunAt ?? new Date(now.getTime() - 60_000).toISOString();
+      await deps.scheduleStore.updateSchedule(s.id, { lastRunAt: restore }).catch(() => {});
       result.skipped.push({ scheduleId: s.id, reason: err instanceof Error ? err.message : String(err) });
     }
   }

@@ -15,7 +15,9 @@ export interface StreamMessage {
 /**
  * Open an SSE stream against a gateway stream endpoint. The API key rides as a
  * `?key=` query param (EventSource can't set headers). EventSource auto-reconnects
- * and replays `Last-Event-ID`, so the server resumes from the last `seq`.
+ * and replays `Last-Event-ID`, so the server resumes from the last event id — a
+ * numeric `seq` for a single-run stream, or a composite `runId:seq` for the
+ * thread/global streams (per-run seq collides across a thread's runs).
  * Returns a close function.
  */
 export function openSSE(

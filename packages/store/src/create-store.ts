@@ -9,6 +9,8 @@ import { PgJobQueue } from "./pg/job-queue.js";
 import type { DeltaBus } from "./delta-bus.js";
 import { MemoryDeltaBus } from "./delta-bus.js";
 import { PgDeltaBus } from "./pg/delta-bus.js";
+import type { CancelStore } from "./cancel-store.js";
+import { MemoryCancelStore, PgCancelStore } from "./pg/cancel-store.js";
 
 export interface CreateStoreOptions extends PoolConfig {
   /**
@@ -94,4 +96,36 @@ export function createDeltaBus(opts?: CreateDeltaBusOptions & { store?: RunStore
   }
 
   return process.env.DATABASE_URL ? new PgDeltaBus(getPool(opts)) : new MemoryDeltaBus();
+}
+
+export interface CreateCancelStoreOptions extends PoolConfig {
+  /** Force a cancel-store type. Defaults to postgres when the store is Postgres-backed, else memory. */
+  type?: "memory" | "postgres";
+  /** Share an existing pool (e.g. the run store's) instead of opening another. */
+  pool?: Pool;
+}
+
+/**
+ * Auto-detecting cancel-store factory, mirroring `createJobQueue`. Cooperative
+ * cancellation only works when the writer (gateway cancel route) and the reader
+ * (the agent loop's per-iteration `isCancelled` poll) share one store, so the
+ * backend is derived from the run store: a `PgRunStore` yields a `PgCancelStore`
+ * sharing the store's pool (the request is a `runs.status = 'cancelled'` write
+ * the loop reads back); any other store yields an in-memory cancel store.
+ */
+export function createCancelStore(opts?: CreateCancelStoreOptions & { store?: RunStore }): CancelStore {
+  if (opts?.pool) return new PgCancelStore(opts.pool);
+
+  if (opts?.type === "memory") return new MemoryCancelStore();
+  if (opts?.type === "postgres") {
+    return new PgCancelStore(opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts));
+  }
+
+  if (opts?.store) {
+    return opts.store instanceof PgRunStore
+      ? new PgCancelStore(opts.store.pool)
+      : new MemoryCancelStore();
+  }
+
+  return process.env.DATABASE_URL ? new PgCancelStore(getPool(opts)) : new MemoryCancelStore();
 }

@@ -12,6 +12,8 @@ interface AppState {
   operator: string;
   setOperator: (name: string) => void;
   refreshCounts: () => void;
+  /** Runtime capabilities probed on boot (gates optional nav items). */
+  capabilities: { oauth: boolean };
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -21,6 +23,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [lastEvent, setLastEvent] = useState<GlobalEvent | null>(null);
   const [operator, setOperatorState] = useState(getOperator());
+  const [oauth, setOauth] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const refreshCounts = useCallback(() => {
@@ -41,6 +44,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refreshCounts();
+    // Probe OAuth support once: /connections is only registered when providers
+    // are configured, so a non-empty list gates the Connections nav item in.
+    client.listConnections()
+      .then((r) => setOauth((r.providers?.length ?? 0) > 0))
+      .catch(() => setOauth(false));
     const close = openSSE("/events/stream", (msg) => {
       const ev = msg.data as unknown as GlobalEvent;
       setLastEvent(ev);
@@ -55,7 +63,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ activeRuns, pendingApprovals, lastEvent, operator, setOperator, refreshCounts }}>
+    <Ctx.Provider value={{ activeRuns, pendingApprovals, lastEvent, operator, setOperator, refreshCounts, capabilities: { oauth } }}>
       {children}
     </Ctx.Provider>
   );

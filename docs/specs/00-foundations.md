@@ -149,6 +149,6 @@ The spec is split into layered files. Read top to bottom for the full picture; j
 | [`03-platform.md`](03-platform.md) | Platform | Event log + maintained projections, threads, OAuth, webhooks/connectors/schedules, gateway, observability |
 | [`04-operations.md`](04-operations.md) | Operations | Deployment, configuration, retention, non-functional requirements |
 | [`05-type-reference.md`](05-type-reference.md) | Reference | Every `interface`/`type` definition (pure catalog, linked from the layers above) |
-| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Run list, span/trace tree, live SSE stream, pending approvals, cost summary, thread browser |
+| [`06-operator-ui.md`](06-operator-ui.md) | Operator UI | Work/Monitor/Configure console: Chat, Workflows, Schedules, Runs + trace tree, Approvals, Connections, Ops; live SSE, cost summary |
 | [`porting-map.md`](porting-map.md) | Appendix | Code provenance / lift-and-shift map from the source repos |
 | [`future-considerations.md`](future-considerations.md) | Appendix | Sandboxes and other forward-looking extensions |

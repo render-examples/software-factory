@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../state/router";
+import { useApp } from "../state/app";
+import { NAV_ITEMS } from "../state/sections";
 
 interface Cmd { label: string; hint?: string; run: () => void }
 
@@ -9,6 +11,7 @@ export function CommandPalette() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const { capabilities } = useApp();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -38,20 +41,21 @@ export function CommandPalette() {
 
   const commands = useMemo<Cmd[]>(() => {
     const go = (path: string): (() => void) => () => { navigate(path); setOpen(false); };
+    // Nav entries come from the section registry so the palette stays in sync
+    // with the rail (and respects the same capability gating).
+    const nav = NAV_ITEMS
+      .filter((n) => !n.gate || (n.gate === "oauth" && capabilities.oauth))
+      .map<Cmd>((n) => ({ label: n.label, run: go(n.id) }));
     const base: Cmd[] = [
-      { label: "Runs", hint: "all runs", run: go("runs") },
+      ...nav,
       { label: "Needs attention", hint: "failed + paused", run: go("runs?filter=attention") },
-      { label: "Approvals", run: go("approvals") },
-      { label: "Chat", run: go("chat") },
-      { label: "Threads", run: go("threads") },
-      { label: "Schedules", run: go("schedules") },
     ];
     const trimmed = q.trim();
     if (trimmed && !base.some((c) => c.label.toLowerCase().includes(trimmed.toLowerCase()))) {
       base.unshift({ label: `Open run "${trimmed}"`, hint: "go to run id", run: () => { navigate(`runs/${trimmed}`); setOpen(false); } });
     }
     return base.filter((c) => c.label.toLowerCase().includes(trimmed.toLowerCase()) || trimmed === "" || c.label.startsWith("Open run"));
-  }, [q]);
+  }, [q, capabilities.oauth]);
 
   if (!open) return null;
 

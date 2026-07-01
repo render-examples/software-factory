@@ -30,13 +30,72 @@ const NOTIFY_CHANNEL = "run_events";
  * 3. Upserts affected projections (runs, spans, tool_calls, run_messages, etc.)
  * 4. NOTIFY's the stream with a pointer payload `{ runId, seq }`
  */
+/** One live `tail()` subscriber: a pointer queue fed by the shared listener. */
+interface EventTailSub {
+  queue: Array<{ runId: string; seq: number }>;
+  wake: (() => void) | null;
+}
+
 export class PgEventLogStore implements EventLogStore {
   private interceptor?: EventInterceptor;
+
+  // Shared LISTEN multiplexer (CR-07): a single `run_events` LISTEN connection
+  // per store instance fans out NOTIFY pointers to all `tail()` subscribers in
+  // memory, so N SSE clients add ONE DB connection — not N (pool exhaustion).
+  private tailListenClient: pg.PoolClient | null = null;
+  private tailListening: Promise<void> | null = null;
+  private readonly tailSubs = new Set<EventTailSub>();
 
   constructor(private readonly pool: Pool) {}
 
   setInterceptor(interceptor?: EventInterceptor): void {
     this.interceptor = interceptor;
+  }
+
+  private async ensureTailListening(): Promise<void> {
+    if (!this.tailListening) {
+      this.tailListening = this.connectTailListener().catch((err) => {
+        this.tailListening = null;
+        this.tailListenClient = null;
+        throw err;
+      });
+    }
+    return this.tailListening;
+  }
+
+  private async connectTailListener(): Promise<void> {
+    const client = await this.pool.connect();
+    this.tailListenClient = client;
+    client.on("notification", (msg: pg.Notification) => {
+      if (!msg.payload) return;
+      let pointer: { runId: string; seq: number };
+      try {
+        pointer = JSON.parse(msg.payload) as { runId: string; seq: number };
+      } catch {
+        return;
+      }
+      for (const sub of this.tailSubs) {
+        sub.queue.push(pointer);
+        sub.wake?.();
+      }
+    });
+    await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
+  }
+
+  private async stopTailListening(): Promise<void> {
+    // A subscriber may have arrived after the caller's size check; keep the
+    // shared connection alive if so.
+    if (this.tailSubs.size > 0) return;
+    const client = this.tailListenClient;
+    this.tailListenClient = null;
+    this.tailListening = null;
+    if (!client) return;
+    try {
+      await client.query(`UNLISTEN ${NOTIFY_CHANNEL}`);
+    } catch {
+      // ignore — releasing the client drops the LISTEN anyway
+    }
+    client.release();
   }
 
   async append(record: RunEventRecord): Promise<void> {
@@ -142,6 +201,18 @@ export class PgEventLogStore implements EventLogStore {
     return res.rows.map(mapEventRow);
   }
 
+  async readThread(threadId: string): Promise<RunEventRecord[]> {
+    const res = await this.pool.query<PgEventRow>(
+      `SELECT e.id, e.run_id, e.seq, e.ts, e.category, e.type, e.agent_name, e.span_id, e.parent_span_id, e.payload, e.version
+       FROM run_events e
+       JOIN runs r ON r.id = e.run_id
+       WHERE r.thread_id = $1
+       ORDER BY e.ts, e.run_id, e.seq`,
+      [threadId],
+    );
+    return res.rows.map(mapEventRow);
+  }
+
   tail(
     filter: { runId?: string; threadId?: string },
     signal: AbortSignal,
@@ -169,55 +240,38 @@ export class PgEventLogStore implements EventLogStore {
       return false;
     };
 
+    // Subscribe to the shared LISTEN multiplexer instead of opening a dedicated
+    // connection per tail (CR-07). Each subscriber gets its own pointer queue;
+    // filtering + event reads still happen per-subscriber below.
+    const sub: EventTailSub = { queue: [], wake: null };
+    const subs = this.tailSubs;
+    const ensureListening = () => this.ensureTailListening();
+    const stopListening = () => this.stopTailListening();
+
     async function* generator(): AsyncGenerator<RunEventRecord> {
-      // Dedicated client for LISTEN — must not be returned to pool until done
-      const listenClient = await pool.connect();
+      if (signal.aborted) return;
+      subs.add(sub);
+      const onAbort = () => { sub.wake?.(); };
+      signal.addEventListener("abort", onAbort);
       try {
-        await listenClient.query(`LISTEN ${NOTIFY_CHANNEL}`);
-
-        const queue: Array<{ runId: string; seq: number }> = [];
-        let resolve: (() => void) | null = null;
-
-        const onNotification = (msg: pg.Notification) => {
-          if (!msg.payload) return;
-          try {
-            const pointer = JSON.parse(msg.payload) as { runId: string; seq: number };
-            queue.push(pointer);
-            resolve?.();
-          } catch {
-            // ignore malformed notifications
-          }
-        };
-
-        listenClient.on("notification", onNotification);
-        const onAbort = () => {
-          resolve?.();
-        };
-        signal.addEventListener("abort", onAbort);
-
-        try {
-          while (!signal.aborted) {
-            // Drain queue
-            let pointer = queue.shift();
-            while (pointer !== undefined) {
-              if (await matchesFilter(pointer.runId)) {
-                const event = await readEvent(pointer.runId, pointer.seq);
-                if (event) yield event;
-              }
-              pointer = queue.shift();
+        await ensureListening();
+        while (!signal.aborted) {
+          let pointer = sub.queue.shift();
+          while (pointer !== undefined) {
+            if (await matchesFilter(pointer.runId)) {
+              const event = await readEvent(pointer.runId, pointer.seq);
+              if (event) yield event;
             }
-            if (signal.aborted) return;
-            // Wait for next notification
-            await new Promise<void>((r) => { resolve = r; });
-            resolve = null;
+            pointer = sub.queue.shift();
           }
-        } finally {
-          signal.removeEventListener("abort", onAbort);
-          listenClient.removeListener("notification", onNotification);
-          await listenClient.query(`UNLISTEN ${NOTIFY_CHANNEL}`).catch(() => {});
+          if (signal.aborted) return;
+          await new Promise<void>((r) => { sub.wake = r; });
+          sub.wake = null;
         }
       } finally {
-        listenClient.release();
+        signal.removeEventListener("abort", onAbort);
+        subs.delete(sub);
+        await stopListening();
       }
     }
 
@@ -230,15 +284,28 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
     switch (p.type) {
       case "run.started":
+        // Keep the event log self-sufficient (D10): a `run.started` carrying a
+        // threadId must be appendable even when the thread row wasn't created
+        // out-of-band, so the `runs.thread_id` FK holds. Idempotent minimal
+        // insert mirrors the memory store, which has no such constraint (CR-09).
+        if (p.threadId) {
+          await client.query(
+            `INSERT INTO threads (id, user_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $3)
+             ON CONFLICT (id) DO NOTHING`,
+            [p.threadId, p.userId ?? null, rec.ts],
+          );
+        }
         await client.query(
-          `INSERT INTO runs (id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version)
-           VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8)
+          `INSERT INTO runs (id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id)
+           VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8, $9)
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
              started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
              thread_id = COALESCE(EXCLUDED.thread_id, runs.thread_id),
              user_id = COALESCE(EXCLUDED.user_id, runs.user_id),
-             agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version)`,
+             agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version),
+             parent_span_id = COALESCE(EXCLUDED.parent_span_id, runs.parent_span_id)`,
           [
             rec.runId,
             rec.agentName ?? "",
@@ -248,6 +315,7 @@ export class PgEventLogStore implements EventLogStore {
             p.threadId ?? null,
             p.userId ?? null,
             p.agentVersion ?? null,
+            rec.parentSpanId ?? null,
           ],
         );
         break;
@@ -566,7 +634,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getRun(id: string): Promise<RunRecord | undefined> {
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
        FROM runs WHERE id = $1`,
       [id],
     );
@@ -590,6 +658,9 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       conditions.push(`thread_id = $${paramIdx++}`);
       params.push(opts.threadId);
     }
+    if (opts?.roots) {
+      conditions.push(`parent_span_id IS NULL`);
+    }
     if (opts?.before) {
       // Keyset pagination: runs started before the cursor run's started_at
       conditions.push(`started_at < (SELECT started_at FROM runs WHERE id = $${paramIdx++})`);
@@ -603,11 +674,27 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
        FROM runs ${where}
        ORDER BY started_at DESC, id DESC
        ${limitClause}`,
       finalParams,
+    );
+    return res.rows.map(mapRunRow);
+  }
+
+  async listChildRuns(runId: string): Promise<RunRecord[]> {
+    // Children hang off a span within the parent run. Workflow `.task()`/`.run()`
+    // fan-out points at the parent's root span (id === runId); LLM subagents
+    // point at a tool-call span. Match either via the parent's span set.
+    const res = await this.pool.query<PgRunRow>(
+      `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
+       FROM runs
+       WHERE parent_span_id IS NOT NULL
+         AND (parent_span_id = $1 OR parent_span_id IN (SELECT id FROM spans WHERE run_id = $1))
+       ORDER BY started_at ASC, id ASC`,
+      [runId],
     );
     return res.rows.map(mapRunRow);
   }
@@ -960,7 +1047,32 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     return res.rows.map((r) => mapOAuthRow(r, key));
   }
 
+  /** In-process single-flight for token refresh, keyed by `${userId}:${provider}`
+   *  (parity with the memory store). Concurrent refreshers in the same process
+   *  share one refresh — fewer redundant provider calls and fewer connections
+   *  holding the row lock. Cross-process coordination is the `FOR UPDATE` lock
+   *  in `doRefreshConnection` (CR-08). */
+  private readonly refreshLocks = new Map<string, Promise<OAuthConnection | undefined>>();
+
   async refreshConnection(
+    userId: string,
+    provider: string,
+    isExpired: (conn: OAuthConnection) => boolean,
+    doRefresh: (conn: OAuthConnection) => Promise<RefreshedTokens>,
+  ): Promise<OAuthConnection | undefined> {
+    const lockKey = `${userId}:${provider}`;
+    const inflight = this.refreshLocks.get(lockKey);
+    if (inflight) return inflight;
+    const run = this.doRefreshConnection(userId, provider, isExpired, doRefresh);
+    this.refreshLocks.set(lockKey, run);
+    try {
+      return await run;
+    } finally {
+      this.refreshLocks.delete(lockKey);
+    }
+  }
+
+  private async doRefreshConnection(
     userId: string,
     provider: string,
     isExpired: (conn: OAuthConnection) => boolean,
@@ -1042,6 +1154,7 @@ interface PgRunRow {
   thread_id: string | null;
   user_id: string | null;
   agent_version: string | null;
+  parent_span_id: string | null;
   started_at: Date;
   finished_at: Date | null;
 }
@@ -1104,6 +1217,7 @@ function mapRunRow(row: PgRunRow): RunRecord {
     threadId: row.thread_id ?? undefined,
     userId: row.user_id ?? undefined,
     agentVersion: row.agent_version ?? undefined,
+    parentSpanId: row.parent_span_id ?? undefined,
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
   };

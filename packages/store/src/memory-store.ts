@@ -102,6 +102,21 @@ export class MemoryEventLogStore implements EventLogStore {
     return slice.map(e => ({ ...e }));
   }
 
+  async readThread(threadId: string): Promise<RunEventRecord[]> {
+    const out: RunEventRecord[] = [];
+    for (const [runId, events] of this.byRun) {
+      if (this.runThread.get(runId) !== threadId) continue;
+      for (const e of events) out.push({ ...e });
+    }
+    // Canonical thread order: ts, then runId, then seq (matches the Pg query).
+    out.sort((a, b) =>
+      a.ts < b.ts ? -1 : a.ts > b.ts ? 1
+        : a.runId < b.runId ? -1 : a.runId > b.runId ? 1
+          : a.seq - b.seq,
+    );
+    return out;
+  }
+
   tail(
     filter: { runId?: string; threadId?: string },
     signal: AbortSignal,
@@ -195,6 +210,10 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
 
   async listRuns(opts?: ListRunsOptions): Promise<RunRecord[]> {
     return this.projections.listRuns(opts);
+  }
+
+  async listChildRuns(runId: string): Promise<RunRecord[]> {
+    return this.projections.listChildRuns(runId);
   }
 
   async getMessages(runId: string, agentName: string): Promise<Message[]> {

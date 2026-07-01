@@ -84,6 +84,13 @@ export interface RunEventRecord {
 export interface EventLogStore {
   append(event: RunEventRecord): Promise<void>;
   read(runId: string, fromSeq?: number): Promise<RunEventRecord[]>;
+  /**
+   * Durable events across every run belonging to a thread, in a single canonical
+   * order (`ts`, then `runId`, then `seq`). Powers SSE catch-up replay for the
+   * thread stream, where per-run `seq` alone is ambiguous (each run restarts at
+   * 1). Clients de-dupe on the composite `runId:seq` cursor.
+   */
+  readThread(threadId: string): Promise<RunEventRecord[]>;
   tail(filter: { runId?: string; threadId?: string }, signal: AbortSignal): AsyncIterable<RunEventRecord>;
 }
 
