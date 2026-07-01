@@ -1,35 +1,27 @@
 import { client } from "../api/client";
-import { useApp } from "../state/app";
 import { useAsync } from "../hooks/useAsync";
 import { relativeTime } from "../lib/format";
 import { ErrorBanner, Empty, Spinner, SectionHeader } from "../components/ui";
 import { useToast } from "../components/Toaster";
 import type { ConnectionInfo } from "../api/types";
 
-// Per-user OAuth connections. The operator name (top bar) is the user id — each
-// provider connection is scoped to that user (multi-tenant), matching the
-// gateway's signed-state OAuth flow.
+// OAuth connections for the signed-in user. Identity comes from the session
+// (server-derived), so connections are always scoped to the authenticated
+// caller — never a client-supplied user id (CR-D1).
 export function ConnectionsView() {
   const toast = useToast();
-  const { operator } = useApp();
-  const userId = operator.trim();
-  const { data, error, loading, reload } = useAsync(
-    () => client.listConnections(userId || undefined),
-    [userId],
-  );
+  const { data, error, loading, reload } = useAsync(() => client.listConnections(), []);
   const providers = data?.providers ?? [];
 
   function connect(p: ConnectionInfo) {
-    if (!userId) { toast.error("Set an operator name (top bar) first — it's used as the user id.", "No user id"); return; }
     // Full-page redirect into the provider's consent screen; the gateway handles
-    // the callback and stores the encrypted tokens.
-    window.location.href = client.oauthAuthorizeUrl(p.provider, userId);
+    // the callback (userId recovered from the signed state) and stores the tokens.
+    window.location.href = client.oauthAuthorizeUrl(p.provider);
   }
 
   async function disconnect(p: ConnectionInfo) {
-    if (!userId) return;
     try {
-      await client.disconnectOAuth(p.provider, userId);
+      await client.disconnectOAuth(p.provider);
       toast.info(`Disconnected ${p.provider}`);
       reload();
     } catch (e) {
@@ -41,12 +33,11 @@ export function ConnectionsView() {
     <div className="panel">
       <SectionHeader
         title="Connections"
-        sub={userId ? <>OAuth connections for <span className="mono">{userId}</span></> : "Set an operator name to manage connections"}
+        sub="OAuth connections for your account"
       >
         <button className="ghost" aria-label="Reload" onClick={reload}>{loading ? <Spinner /> : "↻"}</button>
       </SectionHeader>
 
-      {!userId && <div className="banner">Enter an operator name in the top bar; it is used as the OAuth user id.</div>}
       <ErrorBanner error={error} />
 
       {providers.length === 0 && !loading ? (

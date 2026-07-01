@@ -47,26 +47,32 @@ describe("UI read endpoints — GET /connections", () => {
     expect((await app.request("/connections")).status).toBe(404);
   });
 
-  it("reports configured providers and per-user connected status", async () => {
+  it("reports configured providers and the caller's connected status", async () => {
     const runtime = await createTestRuntime();
     const oauthProviders = new Map([["github", githubProvider]]);
+    // disableAuth → the caller is the operator; the connections shown are always
+    // the authenticated caller's own (userId from auth, never a query param, CR-D1).
     const app = createGatewayApp({ runtime, oauthProviders, disableAuth: true });
 
-    // No userId → providers listed, none connected.
+    // Nothing connected yet.
     const anon = await (await app.request("/connections")).json();
     expect(anon.providers).toEqual([{ provider: "github", connected: false, scopes: undefined, expiresAt: undefined }]);
 
-    // Seed a connection for u1, then it reports connected with scopes.
     const now = new Date().toISOString();
+    // A connection owned by a *different* user is NOT visible to this caller.
     await runtime.oauthStore.upsertConnection({
-      id: "u1:github", userId: "u1", provider: "github",
+      id: "u2:github", userId: "u2", provider: "github",
+      accessToken: "tok2", scopes: ["repo"], createdAt: now, updatedAt: now,
+    });
+    const stillNone = await (await app.request("/connections")).json();
+    expect(stillNone.providers[0].connected).toBe(false);
+
+    // Seed a connection for the caller (operator), then it reports connected.
+    await runtime.oauthStore.upsertConnection({
+      id: "operator:github", userId: "operator", provider: "github",
       accessToken: "tok", scopes: ["repo"], createdAt: now, updatedAt: now,
     });
-    const mine = await (await app.request("/connections?userId=u1")).json();
+    const mine = await (await app.request("/connections")).json();
     expect(mine.providers).toEqual([{ provider: "github", connected: true, scopes: ["repo"], expiresAt: undefined }]);
-
-    // A different user still sees it as not connected.
-    const other = await (await app.request("/connections?userId=u2")).json();
-    expect(other.providers[0].connected).toBe(false);
   });
 });

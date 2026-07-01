@@ -27,20 +27,27 @@ function tokenFetch(): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-function buildApp() {
+function buildApp(userId = "u1") {
   const store = createMemoryStore();
   const providers = new Map([["github", provider()]]);
   const app = new Hono();
+  // Stand in for the auth middleware: the OAuth routes derive the userId from the
+  // principal (never a query param), so seed one for the test.
+  app.use("*", async (c, next) => {
+    c.set("principal", { userId, role: "user" });
+    await next();
+  });
   app.route("/", oauthRoutes({ providers, baseUrl: "http://gw", oauthStore: store, fetchImpl: tokenFetch() }));
   return { app, store };
 }
 
 describe("gateway OAuth — connect / persist / revoke", () => {
   it("authorize → callback exchanges the code and persists the connection", async () => {
-    const { app, store } = buildApp();
+    const { app, store } = buildApp("u1");
 
-    // Authorize redirects to the provider with a signed state.
-    const authRes = await app.request("/oauth/github/authorize?userId=u1", { redirect: "manual" });
+    // Authorize redirects to the provider with a signed state carrying the
+    // auth-derived userId (no `?userId=` query — that would be spoofable, CR-D1).
+    const authRes = await app.request("/oauth/github/authorize", { redirect: "manual" });
     expect(authRes.status).toBe(302);
     const location = authRes.headers.get("location")!;
     const state = new URL(location).searchParams.get("state")!;
@@ -56,8 +63,8 @@ describe("gateway OAuth — connect / persist / revoke", () => {
     expect(conn?.refreshToken).toBe("RT-456");
     expect(conn?.expiresAt).toBeTruthy();
 
-    // Revoke removes it.
-    const delRes = await app.request("/oauth/github?userId=u1", { method: "DELETE" });
+    // Revoke removes it — scoped to the caller (no `?userId=`).
+    const delRes = await app.request("/oauth/github", { method: "DELETE" });
     expect(delRes.status).toBe(200);
     expect(await store.getConnection("u1", "github")).toBeUndefined();
   });
@@ -68,10 +75,12 @@ describe("gateway OAuth — connect / persist / revoke", () => {
     expect(res.status).toBe(403);
   });
 
-  it("requires userId to authorize", async () => {
-    const { app } = buildApp();
+  it("derives the user from auth — authorize needs no userId query", async () => {
+    const { app } = buildApp("alice");
     const res = await app.request("/oauth/github/authorize", { redirect: "manual" });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(302);
+    const state = new URL(res.headers.get("location")!).searchParams.get("state")!;
+    expect(state).toBeTruthy();
   });
 });
 

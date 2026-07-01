@@ -368,6 +368,7 @@ export class Projections {
     if (opts?.workflow) rows = rows.filter(r => r.workflow === opts.workflow);
     if (opts?.status) rows = rows.filter(r => r.status === opts.status);
     if (opts?.threadId) rows = rows.filter(r => r.threadId === opts.threadId);
+    if (opts?.userId) rows = rows.filter(r => r.userId === opts.userId);
     if (opts?.roots) rows = rows.filter(r => !r.parentSpanId);
     rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
     if (opts?.before) {

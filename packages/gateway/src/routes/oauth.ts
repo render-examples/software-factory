@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import type { OAuthStore, OAuthConnection } from "@render-agents/store";
 import { encrypt, decrypt, encryptionKeyFromEnv } from "@render-agents/store";
+import { getPrincipal } from "../auth.js";
 
 export interface OAuthProviderConfig {
   clientId: string;
@@ -38,17 +39,16 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
   const { providers, baseUrl, oauthStore } = deps;
   const doFetch: typeof fetch = deps.fetchImpl ?? fetch;
 
-  // GET /oauth/:provider/authorize?userId=... — initiate the OAuth flow
+  // GET /oauth/:provider/authorize — initiate the OAuth flow for the caller.
+  // The userId comes from auth and is bound into the signed state, so a caller
+  // can only connect a provider to their own account (CR-D1).
   app.get("/oauth/:provider/authorize", async (c) => {
     const provider = c.req.param("provider");
     const config = providers.get(provider);
     if (!config) {
       return c.json({ error: `OAuth provider "${provider}" not configured` }, 404);
     }
-    const userId = c.req.query("userId");
-    if (!userId) {
-      return c.json({ error: "userId query parameter is required" }, 400);
-    }
+    const { userId } = getPrincipal(c);
 
     const state = signState({ provider, userId, nonce: randomBytes(8).toString("hex"), ts: Date.now() });
     const redirectUri = `${baseUrl}/oauth/${provider}/callback`;
@@ -106,16 +106,14 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
     return c.json({ status: "connected", provider, userId: verified.userId });
   });
 
-  // DELETE /oauth/:provider?userId=... — revoke a stored connection
+  // DELETE /oauth/:provider — revoke the caller's stored connection. userId is
+  // from auth, so a caller can only revoke their own connection (CR-D1).
   app.delete("/oauth/:provider", async (c) => {
     const provider = c.req.param("provider");
     if (!providers.has(provider)) {
       return c.json({ error: `OAuth provider "${provider}" not configured` }, 404);
     }
-    const userId = c.req.query("userId");
-    if (!userId) {
-      return c.json({ error: "userId query parameter is required" }, 400);
-    }
+    const { userId } = getPrincipal(c);
     await oauthStore.deleteConnection(userId, provider);
     return c.json({ status: "revoked", provider, userId });
   });
