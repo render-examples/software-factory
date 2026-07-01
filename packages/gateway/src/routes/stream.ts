@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SSEStreamingApi } from "hono/streaming";
-import type { DeltaBus, RunEventRecord, RunStore, StreamDelta } from "@render-agents/store";
+import type { DeltaBus, RunEventRecord, RunStore, StreamDelta, ThreadStore } from "@render-agents/store";
+import { getPrincipal, canAccess } from "../auth.js";
 
 /**
  * SSE streaming routes. A stream is a live tail of the durable event log
@@ -13,15 +14,15 @@ import type { DeltaBus, RunEventRecord, RunStore, StreamDelta } from "@render-ag
  * persisted and never replayed; a reconnecting client skips them and converges
  * on the durable `message.assistant`.
  */
-export function streamRoutes(deps: { store: RunStore; deltaBus?: DeltaBus }) {
+export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore; deltaBus?: DeltaBus }) {
   const app = new Hono();
-  const { store, deltaBus } = deps;
+  const { store, threadStore, deltaBus } = deps;
 
   // GET /runs/:id/stream — SSE of a single run's events + live token deltas
   app.get("/runs/:id/stream", async (c) => {
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
-    if (!run) {
+    if (!run || !canAccess(run.userId, getPrincipal(c))) {
       return c.json({ error: `Run "${runId}" not found` }, 404);
     }
 
@@ -80,6 +81,11 @@ export function streamRoutes(deps: { store: RunStore; deltaBus?: DeltaBus }) {
   // SSE `id` is composite (`runId:seq`) so a reconnecting client can still
   // de-dupe reliably — per-run `seq` alone collides across runs (BUG-07).
   app.get("/events/stream", async (c) => {
+    // The global tail exposes every run's events — operators only (CR-D1). End
+    // users stream their own runs/threads via the scoped endpoints.
+    if (getPrincipal(c).role !== "operator") {
+      return c.json({ error: "forbidden" }, 403);
+    }
     return streamSSE(c, async (stream) => {
       const controller = new AbortController();
       const onClose = () => controller.abort();
@@ -117,6 +123,16 @@ export function streamRoutes(deps: { store: RunStore; deltaBus?: DeltaBus }) {
   // GET /threads/:id/stream — thread stream spanning all runs + live token deltas
   app.get("/threads/:id/stream", async (c) => {
     const threadId = c.req.param("id");
+    // Ownership: only the thread owner (or an operator) may tail it (CR-D1).
+    // Only enforce when a thread metadata row exists — threads known purely via
+    // the event log (workflow/system threads) have no owner to check against, and
+    // operators see everything regardless.
+    if (threadStore) {
+      const thread = await threadStore.getThread(threadId);
+      if (thread && !canAccess(thread.userId, getPrincipal(c))) {
+        return c.json({ error: `Thread "${threadId}" not found` }, 404);
+      }
+    }
     // Reconnect cursor is a composite `runId:seq` (see below); the numeric `seq`
     // query is unused for the thread stream since per-run seq is ambiguous here.
     const lastEventId = c.req.header("Last-Event-ID") ?? c.req.query("cursor") ?? undefined;

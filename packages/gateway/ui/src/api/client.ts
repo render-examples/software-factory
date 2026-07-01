@@ -1,4 +1,3 @@
-import { getKey } from "./auth";
 import type {
   Approval, RunDetail, RunEventRecord, RunRecord, ScheduleRecord,
   SpanRecord, Thread, ThreadMessage, ToolCallEntry, RunStatus,
@@ -13,11 +12,12 @@ export class ApiError extends Error {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
-    Authorization: "Bearer " + getKey(),
     ...(init?.body ? { "Content-Type": "application/json" } : {}),
     ...(init?.headers as Record<string, string> | undefined),
   };
-  const res = await fetch(path, { ...init, headers });
+  // Auth rides the same-origin session cookie set at /ui/login — no bearer token
+  // is held in JS (CR-D1 / CR-19).
+  const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
   if (!res.ok) {
     let detail = `${res.status}`;
     try {
@@ -141,17 +141,17 @@ export const client = {
     });
   },
 
-  listConnections(userId?: string): Promise<{ providers: ConnectionInfo[] }> {
-    const q = userId ? `?userId=${encodeURIComponent(userId)}` : "";
-    return api(`/connections${q}`);
+  listConnections(): Promise<{ providers: ConnectionInfo[] }> {
+    // userId is derived from the session server-side (CR-D1) — never sent by the client.
+    return api(`/connections`);
   },
-  /** Full-page URL that starts the OAuth flow (carries the API key as a query fallback). */
-  oauthAuthorizeUrl(provider: string, userId: string): string {
-    const q = new URLSearchParams({ userId, key: getKey() });
-    return `/oauth/${encodeURIComponent(provider)}/authorize?${q.toString()}`;
+  /** Full-page URL that starts the OAuth flow. Identity rides the same-origin
+   *  session cookie on the navigation; no key/userId in the URL (CR-D1 / CR-19). */
+  oauthAuthorizeUrl(provider: string): string {
+    return `/oauth/${encodeURIComponent(provider)}/authorize`;
   },
-  disconnectOAuth(provider: string, userId: string): Promise<{ status: string }> {
-    return api(`/oauth/${encodeURIComponent(provider)}?userId=${encodeURIComponent(userId)}`, {
+  disconnectOAuth(provider: string): Promise<{ status: string }> {
+    return api(`/oauth/${encodeURIComponent(provider)}`, {
       method: "DELETE",
     });
   },

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useApp } from "../state/app";
 import { navigate, type Route } from "../state/router";
 import { GROUP_ORDER, NAV_ITEMS, type NavItem } from "../state/sections";
-import { getKey } from "../api/auth";
+import { logout } from "../api/auth";
 import { getTheme, nextTheme, setTheme, type ThemeChoice } from "../state/theme";
 import { MenuIcon, SunIcon, MoonIcon, MonitorIcon } from "./Icons";
 
@@ -70,7 +70,14 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
             />
             <div className="footer-row">
               <ThemeToggle />
-              <span className="chip" title="API key in use">key ••{getKey().slice(-3)}</span>
+              <button
+                type="button"
+                className="chip"
+                title="End this session"
+                onClick={async () => { await logout(); location.reload(); }}
+              >
+                sign out
+              </button>
             </div>
           </div>
         </div>

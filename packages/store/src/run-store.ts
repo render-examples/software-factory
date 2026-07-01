@@ -88,6 +88,8 @@ export interface ListRunsOptions {
   workflow?: string;
   status?: RunStatus;
   threadId?: string;
+  /** Scope to a single owner (tenant). Omit for all users (operator view). */
+  userId?: string;
   limit?: number;
   before?: string;
   /** When true, return only top-level roots (runs with no `parentSpanId`). */

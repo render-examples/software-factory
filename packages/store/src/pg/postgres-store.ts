@@ -658,6 +658,10 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       conditions.push(`thread_id = $${paramIdx++}`);
       params.push(opts.threadId);
     }
+    if (opts?.userId) {
+      conditions.push(`user_id = $${paramIdx++}`);
+      params.push(opts.userId);
+    }
     if (opts?.roots) {
       conditions.push(`parent_span_id IS NULL`);
     }

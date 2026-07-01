@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { RunStore } from "@render-agents/store";
 import { buildEventRecord } from "@render-agents/store";
+import { getPrincipal, canAccess } from "../auth.js";
 
 /**
  * HITL routes: list pending approvals, resolve them, and resume paused runs.
@@ -28,11 +29,23 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
   // to pending (the operator action queue); `?status=approved|denied` powers the
   // UI's resolved-history tab, and `?status=all` returns every approval.
   app.get("/approvals", async (c) => {
+    const principal = getPrincipal(c);
     const q = c.req.query("status");
     const threadId = c.req.query("threadId");
     const opts =
       !q ? { status: "pending" as const } : q === "all" ? undefined : { status: q as "pending" | "approved" | "denied" };
     let records = await store.listApprovals(opts);
+    // Tenant scoping: an approval belongs to whoever owns its run. Operators see
+    // all; end users only see approvals for their own runs (CR-D1).
+    if (principal.role !== "operator") {
+      const owned = await Promise.all(
+        records.map(async (a) => {
+          const run = await store.getRun(a.runId).catch(() => undefined);
+          return run && canAccess(run.userId, principal) ? a : null;
+        }),
+      );
+      records = owned.filter((a): a is (typeof records)[number] => a != null);
+    }
     // Optional thread scoping. Approvals carry only a runId, so resolve each
     // run's threadId server-side — one round trip for the caller instead of the
     // UI fanning out a getRun per approval. The candidate set (usually pending)
@@ -81,6 +94,11 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     if (!target) {
       return c.json({ error: `Approval "${approvalId}" not found` }, 404);
     }
+    // Ownership: the caller must be able to access the approval's run (CR-D1).
+    const ownerRun = await store.getRun(target.runId).catch(() => undefined);
+    if (!ownerRun || !canAccess(ownerRun.userId, getPrincipal(c))) {
+      return c.json({ error: `Approval "${approvalId}" not found` }, 404);
+    }
     if (target.status !== "pending") {
       return c.json({ error: `Approval "${approvalId}" already ${target.status}` }, 409);
     }
@@ -107,7 +125,7 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
   app.post("/runs/:id/input", async (c) => {
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
-    if (!run) {
+    if (!run || !canAccess(run.userId, getPrincipal(c))) {
       return c.json({ error: `Run "${runId}" not found` }, 404);
     }
     if (run.status !== "paused") {

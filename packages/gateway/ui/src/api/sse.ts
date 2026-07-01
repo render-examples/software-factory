@@ -1,4 +1,3 @@
-import { getKey } from "./auth";
 import type { EventCategory } from "./types";
 
 const CATEGORIES: EventCategory[] = [
@@ -13,21 +12,19 @@ export interface StreamMessage {
 }
 
 /**
- * Open an SSE stream against a gateway stream endpoint. The API key rides as a
- * `?key=` query param (EventSource can't set headers). EventSource auto-reconnects
- * and replays `Last-Event-ID`, so the server resumes from the last event id — a
- * numeric `seq` for a single-run stream, or a composite `runId:seq` for the
- * thread/global streams (per-run seq collides across a thread's runs).
- * Returns a close function.
+ * Open an SSE stream against a gateway stream endpoint. Auth rides the same-origin
+ * session cookie — EventSource sends it automatically, so the key is no longer in
+ * the URL (CR-D1 / CR-19). EventSource auto-reconnects and replays `Last-Event-ID`,
+ * so the server resumes from the last event id — a numeric `seq` for a single-run
+ * stream, or a composite `runId:seq` for the thread/global streams (per-run seq
+ * collides across a thread's runs). Returns a close function.
  */
 export function openSSE(
   path: string,
   onMessage: (msg: StreamMessage) => void,
   onError?: (e: Event) => void,
 ): () => void {
-  const sep = path.includes("?") ? "&" : "?";
-  const url = `${path}${sep}key=${encodeURIComponent(getKey())}`;
-  const es = new EventSource(url);
+  const es = new EventSource(path, { withCredentials: true });
 
   const handle = (category: EventCategory) => (e: MessageEvent) => {
     try {
