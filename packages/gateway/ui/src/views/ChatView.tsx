@@ -3,7 +3,9 @@ import { client, ApiError } from "../api/client";
 import { openSSE } from "../api/sse";
 import { navigate, type Route } from "../state/router";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { ErrorBanner, Spinner } from "../components/ui";
+import { ErrorBanner, CopyButton } from "../components/ui";
+import { Markdown } from "../components/Markdown";
+import { useToast } from "../components/Toaster";
 import { ThreadsView } from "./ThreadsView";
 import type { Approval, RunStatus, Thread, ThreadMessage } from "../api/types";
 
@@ -23,9 +25,19 @@ function Conversation({ threadId }: { threadId: string }) {
   const [draft, setDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [liveTool, setLiveTool] = useState<string | null>(null);
+  // Live token stream (D13): transient text.delta buffer for the in-flight turn.
+  // Replaced by the canonical message.assistant once the transcript refetches.
+  const [streamingText, setStreamingText] = useState("");
   const activeRunId = useRef<string | undefined>(undefined);
+  // The last canonical assistant message id we've rendered for the active run.
+  // Streaming preview is dropped only when a *newer* assistant message appears,
+  // so a multi-iteration turn (tool calls) doesn't wipe the live buffer of a
+  // later iteration just because an earlier assistant message already exists.
+  const lastAssistantId = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const toast = useToast();
 
   const refresh = useCallback(async () => {
     try {
@@ -34,22 +46,28 @@ function Conversation({ threadId }: { threadId: string }) {
       setMessages(m);
       if (!activeRunId.current && t.currentRunId) activeRunId.current = t.currentRunId;
 
-      // Find pending approvals belonging to this thread (cross-reference runId→threadId).
-      const pend = (await client.listApprovals("pending")).approvals;
-      const mine: Approval[] = [];
-      let runStatus: RunStatus | undefined;
-      for (const a of pend) {
-        try {
-          const run = await client.getRun(a.runId);
-          if (run.threadId === threadId) mine.push(a);
-        } catch { /* run may be gone */ }
-      }
+      // Pending approvals for this thread, scoped server-side (one request).
+      const mine = (await client.listApprovals("pending", threadId)).approvals;
       setApprovals(mine);
 
+      let runStatus: RunStatus | undefined;
       if (activeRunId.current) {
         try { runStatus = (await client.getRun(activeRunId.current)).status; } catch { /* */ }
       }
-      setStatus(deriveStatus(t, runStatus, mine.length > 0));
+      const next = deriveStatus(t, runStatus, mine.length > 0);
+      setStatus(next);
+      if (next !== "thinking") setLiveTool(null);
+      // Drop the transient stream buffer only when a *new* canonical assistant
+      // message for the active run appears (id changed since we last saw one),
+      // so the durable message replaces the live preview without wiping the
+      // buffer mid-stream on a later tool-loop iteration.
+      const latestAssistant = [...m].reverse().find(
+        (msg) => msg.role === "assistant" && msg.runId === activeRunId.current,
+      );
+      if (latestAssistant && latestAssistant.id !== lastAssistantId.current) {
+        lastAssistantId.current = latestAssistant.id;
+        setStreamingText("");
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setErr("Thread not found.");
     }
@@ -62,36 +80,73 @@ function Conversation({ threadId }: { threadId: string }) {
 
   useEffect(() => {
     refresh();
-    const close = openSSE(`/threads/${threadId}/stream`, scheduleRefresh);
+    // Fold live events: reflect tool activity immediately, and debounce a full
+    // transcript refetch (message-level streaming — the finished assistant turn
+    // appears on the next refetch).
+    const close = openSSE(`/threads/${threadId}/stream`, (msg) => {
+      const p = msg.data;
+      // Token-level streaming: append deltas live and skip the transcript
+      // refetch (the finished turn arrives on the next durable event's refresh).
+      if (msg.category === "message" && p.type === "text.delta" && typeof p.text === "string") {
+        // Scope deltas to the active run: the thread stream carries deltas for
+        // every run in the thread, so ignore any that aren't this turn's (avoids
+        // a stray/older run flipping status or polluting the buffer).
+        if (activeRunId.current && typeof p.runId === "string" && p.runId !== activeRunId.current) return;
+        setStreamingText((t) => t + p.text);
+        setStatus((s) => (s === "idle" ? "thinking" : s));
+        return;
+      }
+      if (msg.category === "tool") {
+        if (p.type === "tool.called" && typeof p.name === "string") setLiveTool(p.name);
+        else if (p.type === "tool.result") setLiveTool(null);
+      }
+      scheduleRefresh();
+    });
     return () => { clearTimeout(debounce.current); close(); };
   }, [threadId, refresh, scheduleRefresh]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages.length, approvals.length]);
+  }, [messages.length, approvals.length, status]);
 
   async function send() {
     const content = draft.trim();
     if (!content || sending) return;
     setSending(true);
     setErr(null);
-    // optimistic echo
     setMessages((m) => [...m, { id: `local-${Date.now()}`, threadId, runId: "", seq: -1, role: "user", content, createdAt: new Date().toISOString() }]);
     setDraft("");
+    setStreamingText("");
+    lastAssistantId.current = undefined;
     setStatus("thinking");
     try {
       const res = await client.sendMessage(threadId, content) as { runId?: string };
       if (res?.runId) activeRunId.current = res.runId;
       setTimeout(refresh, 200);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setErr(message);
+      toast.error(message, "Message failed");
       setStatus("idle");
     } finally {
       setSending(false);
     }
   }
 
+  async function stop() {
+    const runId = activeRunId.current;
+    if (!runId) return;
+    try {
+      await client.cancelRun(runId);
+      toast.info("Stopping the current turn…");
+      setTimeout(refresh, 150);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e), "Couldn't stop");
+    }
+  }
+
   const busy = status === "thinking";
+  const runId = activeRunId.current;
 
   return (
     <div className="chat">
@@ -100,7 +155,7 @@ function Conversation({ threadId }: { threadId: string }) {
         <span className="chip mono">{threadId.slice(0, 8)}</span>
         <StatusLine status={status} />
         <span className="spacer" />
-        {activeRunId.current && <a href={`#/runs/${activeRunId.current}`} onClick={(e) => { e.preventDefault(); navigate(`runs/${activeRunId.current}`); }}>open trace ↗</a>}
+        {runId && <a href={`#/runs/${runId}`} onClick={(e) => { e.preventDefault(); navigate(`runs/${runId}`); }}>open trace ↗</a>}
       </div>
 
       <div className="scroll" ref={scrollRef}>
@@ -111,7 +166,16 @@ function Conversation({ threadId }: { threadId: string }) {
             <ApprovalCard approval={a} showRunLink onResolved={() => setTimeout(refresh, 150)} />
           </div>
         ))}
-        {busy && <div className="msg assistant"><div className="who">assistant</div><div className="bubble"><Spinner /> thinking…</div></div>}
+        {busy && (
+          <div className="msg assistant">
+            <div className="who">assistant</div>
+            <div className="bubble">
+              {streamingText
+                ? <Markdown>{streamingText}</Markdown>
+                : <ThinkingIndicator tool={liveTool} />}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="composer">
@@ -119,21 +183,55 @@ function Conversation({ threadId }: { threadId: string }) {
           placeholder={status === "needs-approval" ? "Resolve the approval above to continue…" : "Message the agent…  (Enter to send, Shift+Enter for newline)"}
           value={draft}
           disabled={busy}
+          aria-label="Message"
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+          }}
         />
-        <button className="primary" disabled={busy || !draft.trim()} onClick={send}>Send</button>
+        {busy ? (
+          <button className="danger" onClick={stop} title="Stop the current turn">Stop</button>
+        ) : (
+          <button className="primary" disabled={!draft.trim()} onClick={send}>Send</button>
+        )}
       </div>
     </div>
   );
 }
 
 function Bubble({ msg }: { msg: ThreadMessage }) {
+  const isAssistant = msg.role === "assistant";
   return (
     <div className={`msg ${msg.role}`}>
-      <div className="who">{msg.role}{msg.runId && msg.seq >= 0 ? <a style={{ marginLeft: 6 }} href={`#/runs/${msg.runId}`} onClick={(e) => { e.preventDefault(); navigate(`runs/${msg.runId}`); }}>trace</a> : null}</div>
-      <div className="bubble">{msg.content}</div>
+      <div className="who">
+        <span>{msg.role}</span>
+        {msg.runId && msg.seq >= 0 && (
+          <a href={`#/runs/${msg.runId}`} onClick={(e) => { e.preventDefault(); navigate(`runs/${msg.runId}`); }}>trace</a>
+        )}
+        {isAssistant && msg.content && <span className="copy"><CopyButton text={msg.content} /></span>}
+      </div>
+      <div className="bubble">
+        {isAssistant ? <Markdown>{msg.content}</Markdown> : msg.content}
+      </div>
     </div>
+  );
+}
+
+const PHRASES = ["Thinking…", "Working on it…", "Reasoning…", "Composing a reply…"];
+
+function ThinkingIndicator({ tool }: { tool: string | null }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    const t = setInterval(() => setI((n) => (n + 1) % PHRASES.length), 2400);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="thinking">
+      <span className="dots"><i /><i /><i /></span>
+      {tool ? <span className="tool-live">using {tool}…</span> : <span>{PHRASES[i]}</span>}
+    </span>
   );
 }
 

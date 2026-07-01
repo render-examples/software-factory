@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ContentBlock, Message, TokenUsage } from "@render-agents/store";
-import type { ModelClient, CompleteArgs, CompleteResult, ToolSchema } from "../model.js";
+import type { ModelClient, CompleteArgs, CompleteResult, ModelStreamEvent, ToolSchema } from "../model.js";
 
 /**
  * Native Anthropic adapter for the Messages API.
@@ -20,7 +20,28 @@ export class AnthropicClient implements ModelClient {
   }
 
   async complete(args: CompleteArgs): Promise<CompleteResult> {
-    const { model, system, tools, messages, sampling, signal, responseFormat } = args;
+    const response = await this.client.messages.create(this.buildBody(args), { signal: args.signal });
+    return toResult(response);
+  }
+
+  /**
+   * Streaming variant (D13). Yields `text_delta`s as the model generates so the
+   * runner can publish token deltas over the transient `DeltaBus`, then returns
+   * the fully-assembled `CompleteResult` (identical shape to `complete`) — the
+   * durable `message.assistant`/`llm.call` are still emitted once from that.
+   */
+  async *stream(args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult> {
+    const streamed = this.client.messages.stream(this.buildBody(args), { signal: args.signal });
+    for await (const event of streamed) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        yield { type: "text_delta", text: event.delta.text };
+      }
+    }
+    return toResult(await streamed.finalMessage());
+  }
+
+  private buildBody(args: CompleteArgs): Anthropic.MessageCreateParamsNonStreaming {
+    const { model, system, tools, messages, sampling, responseFormat } = args;
 
     const apiMessages = messages
       .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
@@ -43,38 +64,31 @@ export class AnthropicClient implements ModelClient {
       },
     ];
 
-    const response = await this.client.messages.create(
-      {
-        model: model.model,
-        max_tokens: sampling?.maxOutputTokens ?? 8192,
-        system: systemBlock,
-        tools: apiTools.length > 0 ? apiTools : undefined,
-        messages: apiMessages,
-        ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
-        ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
-      },
-      { signal },
-    );
-
-    const content: ContentBlock[] = response.content.map(fromApiBlock);
-
-    const usage: TokenUsage = {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      ...(response.usage.cache_read_input_tokens
-        ? { cacheReadTokens: response.usage.cache_read_input_tokens }
-        : {}),
-      ...(response.usage.cache_creation_input_tokens
-        ? { cacheWriteTokens: response.usage.cache_creation_input_tokens }
-        : {}),
-    };
-
     return {
-      content,
-      usage,
-      stopReason: normalizeStopReason(response.stop_reason),
+      model: model.model,
+      max_tokens: sampling?.maxOutputTokens ?? 8192,
+      system: systemBlock,
+      tools: apiTools.length > 0 ? apiTools : undefined,
+      messages: apiMessages,
+      ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
+      ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
     };
   }
+}
+
+function toResult(response: Anthropic.Message): CompleteResult {
+  const content: ContentBlock[] = response.content.map(fromApiBlock);
+  const usage: TokenUsage = {
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    ...(response.usage.cache_read_input_tokens
+      ? { cacheReadTokens: response.usage.cache_read_input_tokens }
+      : {}),
+    ...(response.usage.cache_creation_input_tokens
+      ? { cacheWriteTokens: response.usage.cache_creation_input_tokens }
+      : {}),
+  };
+  return { content, usage, stopReason: normalizeStopReason(response.stop_reason) };
 }
 
 function normalizeStopReason(reason: string | null): string {

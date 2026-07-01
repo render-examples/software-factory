@@ -6,6 +6,9 @@ import { getPool, type PoolConfig } from "./pg/db.js";
 import type { JobQueue } from "./job-queue.js";
 import { MemoryJobQueue } from "./memory-job-queue.js";
 import { PgJobQueue } from "./pg/job-queue.js";
+import type { DeltaBus } from "./delta-bus.js";
+import { MemoryDeltaBus } from "./delta-bus.js";
+import { PgDeltaBus } from "./pg/delta-bus.js";
 
 export interface CreateStoreOptions extends PoolConfig {
   /**
@@ -61,4 +64,34 @@ export function createJobQueue(opts?: CreateJobQueueOptions & { store?: RunStore
 
   // No store given: env detection.
   return process.env.DATABASE_URL ? new PgJobQueue(getPool(opts)) : new MemoryJobQueue();
+}
+
+export interface CreateDeltaBusOptions extends PoolConfig {
+  /** Force a bus type. Defaults to postgres when the store is Postgres-backed, else memory. */
+  type?: "memory" | "postgres";
+  /** Share an existing pool (e.g. the run store's) instead of opening another. */
+  pool?: Pool;
+}
+
+/**
+ * Auto-detecting transient delta-bus factory, mirroring `createJobQueue`. The
+ * Postgres bus shares the run store's pool (its `LISTEN/NOTIFY` runs on the same
+ * database); any non-Postgres store yields the in-memory bus. Deltas are never
+ * persisted — the backend choice only affects cross-process fan-out (D12/D13).
+ */
+export function createDeltaBus(opts?: CreateDeltaBusOptions & { store?: RunStore }): DeltaBus {
+  if (opts?.pool) return new PgDeltaBus(opts.pool);
+
+  if (opts?.type === "memory") return new MemoryDeltaBus();
+  if (opts?.type === "postgres") {
+    return new PgDeltaBus(opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts));
+  }
+
+  if (opts?.store) {
+    return opts.store instanceof PgRunStore
+      ? new PgDeltaBus(opts.store.pool)
+      : new MemoryDeltaBus();
+  }
+
+  return process.env.DATABASE_URL ? new PgDeltaBus(getPool(opts)) : new MemoryDeltaBus();
 }

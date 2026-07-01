@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ContentBlock, Message, TokenUsage } from "@render-agents/store";
-import type { ModelClient, CompleteArgs, CompleteResult, ToolSchema } from "../model.js";
+import type { ModelClient, CompleteArgs, CompleteResult, ModelStreamEvent, ToolSchema } from "../model.js";
 
 /**
  * OpenAI-compatible adapter for the Chat Completions API.
@@ -21,40 +21,7 @@ export class OpenAIClient implements ModelClient {
   }
 
   async complete(args: CompleteArgs): Promise<CompleteResult> {
-    const { model, system, tools, messages, sampling, signal } = args;
-
-    const apiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: "system", content: system },
-      ...messages.flatMap(toApiMessages),
-    ];
-
-    const apiTools = tools.map(toApiTool);
-
-    const response = await this.client.chat.completions.create(
-      {
-        model: model.model,
-        messages: apiMessages,
-        ...(apiTools.length > 0 ? { tools: apiTools } : {}),
-        ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
-        ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
-        ...(sampling?.maxOutputTokens !== undefined
-          ? { max_tokens: sampling.maxOutputTokens }
-          : {}),
-        ...(args.responseFormat?.type === "json_schema"
-          ? {
-              response_format: {
-                type: "json_schema" as const,
-                json_schema: {
-                  name: "response",
-                  schema: args.responseFormat.schema,
-                  strict: true,
-                },
-              },
-            }
-          : {}),
-      },
-      { signal },
-    );
+    const response = await this.client.chat.completions.create(this.buildBody(args), { signal: args.signal });
 
     const choice = response.choices[0];
     if (!choice) {
@@ -68,18 +35,7 @@ export class OpenAIClient implements ModelClient {
     }
     for (const tc of choice.message.tool_calls ?? []) {
       if (tc.type !== "function") continue;
-      let parsedInput: unknown = {};
-      try {
-        parsedInput = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-      } catch {
-        parsedInput = { _raw: tc.function.arguments };
-      }
-      content.push({
-        type: "tool_use",
-        id: tc.id,
-        name: tc.function.name,
-        input: parsedInput,
-      });
+      content.push(toToolUseBlock(tc.id, tc.function.name, tc.function.arguments));
     }
 
     const usage: TokenUsage = {
@@ -93,6 +49,95 @@ export class OpenAIClient implements ModelClient {
       stopReason: normalizeStopReason(choice.finish_reason),
     };
   }
+
+  /**
+   * Streaming variant (D13). Yields assistant `text_delta`s as they arrive, then
+   * returns the fully-assembled `CompleteResult` (text + tool_use blocks + usage)
+   * — reconstructed from the streamed chunks so it is identical to `complete`.
+   * Requires `stream_options.include_usage` for token counts.
+   */
+  async *stream(args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult> {
+    const streamed = await this.client.chat.completions.create(
+      { ...this.buildBody(args), stream: true, stream_options: { include_usage: true } },
+      { signal: args.signal },
+    );
+
+    let text = "";
+    const toolCalls: Array<{ id?: string; name?: string; args: string }> = [];
+    let finishReason: string | null = null;
+    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+
+    for await (const chunk of streamed) {
+      const choice = chunk.choices[0];
+      if (choice) {
+        const delta = choice.delta;
+        if (delta?.content) {
+          text += delta.content;
+          yield { type: "text_delta", text: delta.content };
+        }
+        for (const tc of delta?.tool_calls ?? []) {
+          const slot = (toolCalls[tc.index] ??= { args: "" });
+          if (tc.id) slot.id = tc.id;
+          if (tc.function?.name) slot.name = tc.function.name;
+          if (tc.function?.arguments) slot.args += tc.function.arguments;
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+      }
+      if (chunk.usage) {
+        usage = { inputTokens: chunk.usage.prompt_tokens, outputTokens: chunk.usage.completion_tokens };
+      }
+    }
+
+    const content: ContentBlock[] = [];
+    if (text) content.push({ type: "text", text });
+    toolCalls.forEach((tc, i) => {
+      if (tc) content.push(toToolUseBlock(tc.id ?? `call_${i}`, tc.name ?? "", tc.args));
+    });
+
+    return { content, usage, stopReason: normalizeStopReason(finishReason) };
+  }
+
+  private buildBody(args: CompleteArgs): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
+    const { model, system, tools, messages, sampling } = args;
+
+    const apiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: "system", content: system },
+      ...messages.flatMap(toApiMessages),
+    ];
+
+    const apiTools = tools.map(toApiTool);
+
+    return {
+      model: model.model,
+      messages: apiMessages,
+      ...(apiTools.length > 0 ? { tools: apiTools } : {}),
+      ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
+      ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
+      ...(sampling?.maxOutputTokens !== undefined ? { max_tokens: sampling.maxOutputTokens } : {}),
+      ...(args.responseFormat?.type === "json_schema"
+        ? {
+            response_format: {
+              type: "json_schema" as const,
+              json_schema: {
+                name: "response",
+                schema: args.responseFormat.schema,
+                strict: true,
+              },
+            },
+          }
+        : {}),
+    };
+  }
+}
+
+function toToolUseBlock(id: string, name: string, args: string | undefined): ContentBlock {
+  let parsedInput: unknown = {};
+  try {
+    parsedInput = args ? JSON.parse(args) : {};
+  } catch {
+    parsedInput = { _raw: args };
+  }
+  return { type: "tool_use", id, name, input: parsedInput };
 }
 
 function normalizeStopReason(reason: string | null): string {

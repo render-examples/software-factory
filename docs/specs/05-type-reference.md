@@ -522,6 +522,15 @@ interface RunContext {
   emit(event: RunEvent): Promise<void>;
 
   /**
+   * Publish a transient token delta for live streaming (D13). Fire-and-forget
+   * and non-durable: it rides the out-of-band `DeltaBus` (Postgres NOTIFY /
+   * in-process), NEVER the event log, and is a no-op when no bus is wired. The
+   * runner calls this with coalesced text as the model streams; the canonical
+   * turn output is still the durable `message.assistant` emitted once via `emit`.
+   */
+  streamDelta(text: string): void;
+
+  /**
    * The model-visible message history for `agentName`, folded from the event
    * log and passed through context management/compaction. Returns [] for
    * a fresh run; on resume it reconstructs exactly where the loop left off.
@@ -568,7 +577,7 @@ type EventCategory =
 ```
 
 ### RunEvent
-The single, unified event taxonomy. One vocabulary serves persistence, the trace tree, the SSE stream, hooks, and cost — emitted once via `RunContext.emit`. Token-level provider deltas (see [`ModelStreamEvent`](#modelstreamevent)) are lifted by the runner into `text.delta` events; they are not a separate run vocabulary.
+The single, unified event taxonomy. One vocabulary serves persistence, the trace tree, the SSE stream, hooks, and cost — emitted once via `RunContext.emit`. **`text.delta` is the one exception: it is transient (D13)** — a wire/SSE shape for live token streaming that is *never* persisted, folded, or retained. It rides the out-of-band [`DeltaBus`](#streamdelta--deltabus) (from coalesced provider [`ModelStreamEvent`](#modelstreamevent)s), and the store's `append` path *rejects* it as a guard. The durable turn output stays the single `message.assistant`.
 
 ```ts
 type RunEvent =
@@ -891,6 +900,8 @@ interface AgentRuntime {
   readonly dispatcher?: TaskDispatcher;
   /** Chat-lane (Lane B) durable job queue (`run_jobs`) for `agent`/`resume` jobs. Backed by Postgres when available, else in-memory. */
   readonly jobQueue: JobQueue;
+  /** Transient token-delta bus (D13) for live streaming; NEVER persisted. Postgres NOTIFY (`run_deltas`) when available, else in-memory fan-out. */
+  readonly deltaBus: DeltaBus;
   /** Whether chat-lane runs/resumes execute inline at the trigger or are enqueued for the warm worker. Default `inline`. */
   readonly executionMode: ExecutionMode;
   /** Cooperative cancellation store, shared across in-process runs/dispatch. */
@@ -1402,6 +1413,28 @@ interface JobQueue {
   countByStatus(): Promise<Record<JobStatus, number>>;
   /** Yield a tick on enqueue (LISTEN/NOTIFY or in-process signal) so an idle worker claims without polling. Pair with a poll fallback. */
   tail(signal: AbortSignal): AsyncIterable<void>;
+}
+```
+
+### StreamDelta / DeltaBus
+The transient token-streaming side channel (D13). A `DeltaBus` carries coalesced `text.delta`s **out-of-band** from the event log: `MemoryDeltaBus` fans out in-process (inline dev/tests); `PgDeltaBus` uses `pg_notify('run_deltas')` with a **single shared `LISTEN` connection per process**, demultiplexed to per-run/-thread subscribers. Deltas are never appended to `run_events`, never folded into a projection, and never retained — the append path *rejects* a transient event as a guard. `createDeltaBus({ store })` auto-selects the backend (Postgres when the store is Postgres-backed, else memory), mirroring `createJobQueue`.
+
+```ts
+interface StreamDelta {
+  runId: string;
+  /** Set so a thread SSE stream can filter without a DB lookup on the hot path. */
+  threadId?: string;
+  agentName: string;
+  /** Per-run monotonic delta sequence, independent of `run_events.seq`. */
+  seq: number;
+  text: string;
+}
+
+interface DeltaBus {
+  /** Publish one coalesced delta. Best-effort, non-durable — never throws into the loop. */
+  publish(delta: StreamDelta): Promise<void>;
+  /** Live subscription to deltas matching a run or thread. Yields only deltas published after subscription (no catch-up). */
+  subscribe(filter: { runId?: string; threadId?: string }, signal: AbortSignal): AsyncIterable<StreamDelta>;
 }
 ```
 

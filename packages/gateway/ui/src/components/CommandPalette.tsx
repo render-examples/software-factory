@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../state/router";
 
 interface Cmd { label: string; hint?: string; run: () => void }
@@ -8,12 +8,16 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
+  const restoreFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((o) => !o);
+        setOpen((o) => {
+          if (!o) restoreFocus.current = document.activeElement as HTMLElement;
+          return !o;
+        });
         setQ("");
         setSel(0);
       } else if (e.key === "Escape") {
@@ -23,6 +27,14 @@ export function CommandPalette() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Restore focus to the trigger element when the palette closes.
+  useEffect(() => {
+    if (!open && restoreFocus.current) {
+      restoreFocus.current.focus?.();
+      restoreFocus.current = null;
+    }
+  }, [open]);
 
   const commands = useMemo<Cmd[]>(() => {
     const go = (path: string): (() => void) => () => { navigate(path); setOpen(false); };
@@ -45,9 +57,19 @@ export function CommandPalette() {
 
   return (
     <div className="overlay" onClick={() => setOpen(false)}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onClick={(e) => e.stopPropagation()}
+      >
         <input
           autoFocus
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="palette-list"
+          aria-activedescendant={commands[sel] ? `palette-opt-${sel}` : undefined}
           placeholder="Jump to a view, or paste a run id…"
           value={q}
           onChange={(e) => { setQ(e.target.value); setSel(0); }}
@@ -57,12 +79,22 @@ export function CommandPalette() {
             else if (e.key === "Enter") { commands[sel]?.run(); }
           }}
         />
-        {commands.map((c, i) => (
-          <div key={c.label} className={`opt ${i === sel ? "sel" : ""}`} onMouseEnter={() => setSel(i)} onClick={c.run}>
-            <span className="grow">{c.label}</span>
-            {c.hint && <span className="faint">{c.hint}</span>}
-          </div>
-        ))}
+        <div id="palette-list" role="listbox" aria-label="Commands">
+          {commands.map((c, i) => (
+            <div
+              key={c.label}
+              id={`palette-opt-${i}`}
+              role="option"
+              aria-selected={i === sel}
+              className={`opt ${i === sel ? "sel" : ""}`}
+              onMouseEnter={() => setSel(i)}
+              onClick={c.run}
+            >
+              <span className="grow">{c.label}</span>
+              {c.hint && <span className="faint">{c.hint}</span>}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

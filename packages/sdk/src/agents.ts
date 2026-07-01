@@ -217,6 +217,7 @@ function runInProcess<T>(
     delegation: runtime.delegation,
     oauthStore: runtime.oauthStore,
     oauthRefreshers: runtime.oauthRefreshers,
+    deltaBus: runtime.deltaBus,
   }, {
     runId: opts?.runId,
     parentSpanId: opts?.parentSpanId,
@@ -249,6 +250,7 @@ function createInlineDispatcher(runtime: AgentRuntime) {
         delegation: runtime.delegation,
         oauthStore: runtime.oauthStore,
         oauthRefreshers: runtime.oauthRefreshers,
+        deltaBus: runtime.deltaBus,
       }, { runId: dOpts.runId, parentSpanId: dOpts.parentSpanId, userId: dOpts.userId, depth: dOpts.depth, signal: dOpts.signal });
     },
   };

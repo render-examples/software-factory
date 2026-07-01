@@ -12,6 +12,7 @@ import type {
   OAuthStore,
   OAuthConnection,
   RefreshedTokens,
+  DeltaBus,
 } from "@render-agents/store";
 import { buildEventRecord, idempotencyKey } from "@render-agents/store";
 import type { ModelSpec } from "./agent.js";
@@ -81,6 +82,8 @@ export interface InProcessRunContextOptions {
   oauthStore?: OAuthStore;
   /** Per-provider token refreshers (token-endpoint exchange), keyed by provider. */
   oauthRefreshers?: Map<string, OAuthRefresher>;
+  /** Transient token-delta bus (D13). When present, `streamDelta` publishes live deltas; absent = no-op. */
+  deltaBus?: DeltaBus;
 }
 
 /**
@@ -113,6 +116,11 @@ export class InProcessRunContext implements RunContext {
   private readonly threadScopedHistory: boolean;
   private readonly oauthStore?: OAuthStore;
   private readonly oauthRefreshers: Map<string, OAuthRefresher>;
+  private readonly deltaBus?: DeltaBus;
+  // Per-run monotonic delta sequence + a serialized publish tail so deltas keep
+  // their order across `LISTEN/NOTIFY` without blocking the agent loop.
+  private deltaSeq = 0;
+  private deltaTail: Promise<void> = Promise.resolve();
 
   // Deterministic so resume/replay reuses the same agent span id and the
   // terminal run.completed/failed/cancelled close the original span.
@@ -141,6 +149,7 @@ export class InProcessRunContext implements RunContext {
     this.threadScopedHistory = opts.threadScopedHistory ?? false;
     this.oauthStore = opts.oauthStore;
     this.oauthRefreshers = opts.oauthRefreshers ?? new Map();
+    this.deltaBus = opts.deltaBus;
     this.agentSpanId = idempotencyKey(opts.runId, `agent-span:${opts.agentName}`);
 
     if (opts.cancelStore) {
@@ -202,6 +211,21 @@ export class InProcessRunContext implements RunContext {
     });
     await this.store.events.append(record);
     if (span) this.notifyTracer(event, span);
+  }
+
+  streamDelta(text: string): void {
+    const bus = this.deltaBus;
+    if (!bus || text.length === 0) return;
+    const delta = {
+      runId: this.runId,
+      threadId: this.threadId,
+      agentName: this.agentName,
+      seq: ++this.deltaSeq,
+      text,
+    };
+    // Serialize publishes to preserve order; never let a NOTIFY failure or its
+    // latency surface into the loop (streaming is best-effort UX).
+    this.deltaTail = this.deltaTail.then(() => bus.publish(delta)).catch(() => {});
   }
 
   /**

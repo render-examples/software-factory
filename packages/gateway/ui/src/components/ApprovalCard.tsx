@@ -4,6 +4,7 @@ import { useApp } from "../state/app";
 import { navigate } from "../state/router";
 import { relativeTime, truncate, pretty } from "../lib/format";
 import { Json } from "./ui";
+import { useToast } from "./Toaster";
 import type { Approval } from "../api/types";
 
 /** Approve / deny / comment card. The comment is the resolve `reason`, persisted
@@ -16,6 +17,7 @@ export function ApprovalCard({
   showRunLink?: boolean;
 }) {
   const { operator } = useApp();
+  const toast = useToast();
   const [comment, setComment] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
@@ -30,9 +32,12 @@ export function ApprovalCard({
         resolvedBy: operator || undefined,
         reason: comment.trim() || undefined,
       });
+      toast.success(`${approval.toolName} ${approved ? "approved" : "denied"}`);
       onResolved?.();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setErr(message);
+      toast.error(message, "Resolve failed");
       setBusy(null);
     }
   }

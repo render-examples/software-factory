@@ -148,8 +148,9 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Runtime-managed schedules (CRUD + /admin/schedules/tick reconciler).
   app.route("/", scheduleRoutes({ scheduleStore: runtime.scheduleStore, workflows: wf }));
 
-  // SSE streaming routes
-  app.route("/", streamRoutes({ store }));
+  // SSE streaming routes — merge the durable event tail with the transient
+  // token-delta bus (D13) for live streaming.
+  app.route("/", streamRoutes({ store, deltaBus: runtime.deltaBus }));
 
   const awaitResume = opts.awaitResume ?? false;
 

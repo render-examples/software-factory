@@ -26,6 +26,14 @@ export interface RunContext {
   requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
   awaitInput(): Promise<ContentBlock[]>;
   emit(event: RunEvent): Promise<void>;
+  /**
+   * Publish a transient token delta for live streaming (D13). Fire-and-forget
+   * and non-durable: it rides the out-of-band `DeltaBus`, never the event log,
+   * and is a no-op when no bus is wired. The runner calls this with coalesced
+   * text as the model streams; the canonical turn is still the durable
+   * `message.assistant`.
+   */
+  streamDelta(text: string): void;
   messages(agentName: string): Promise<Message[]>;
   appliedToolResult(toolCallId: string): Promise<ToolResult | undefined>;
   isCancelled(): Promise<boolean>;

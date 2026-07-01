@@ -78,11 +78,70 @@ describe("withRetry", () => {
   });
 });
 
+describe("withRetry — streaming (D13)", () => {
+  it("forwards stream() so the runner's feature-detection still streams through the retry wrapper", async () => {
+    const client: ModelClient = {
+      async complete() { return OK_RESULT; },
+      async *stream() {
+        yield { type: "text_delta", text: "hel" };
+        yield { type: "text_delta", text: "lo" };
+        return OK_RESULT;
+      },
+    };
+    const retrying = withRetry(client, { maxRetries: 3, initialDelayMs: 1 });
+    expect(typeof retrying.stream).toBe("function");
+
+    const gen = retrying.stream!(DUMMY_ARGS);
+    const deltas: string[] = [];
+    let next = await gen.next();
+    while (!next.done) {
+      if (next.value.type === "text_delta") deltas.push(next.value.text);
+      next = await gen.next();
+    }
+    expect(deltas.join("")).toBe("hello");
+    expect(next.value).toEqual(OK_RESULT);
+  });
+
+  it("does NOT expose stream() when the underlying client has none (preserves complete() fallback)", () => {
+    const retrying = withRetry(failingClient(0), { maxRetries: 1, initialDelayMs: 1 });
+    expect(retrying.stream).toBeUndefined();
+  });
+
+  it("retries establishing a stream on a transient error before the first token", async () => {
+    let calls = 0;
+    const client: ModelClient = {
+      async complete() { return OK_RESULT; },
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        calls++;
+        if (calls === 1) {
+          const err = new Error("rate limited") as Error & { status: number };
+          err.status = 429;
+          throw err;
+        }
+        yield { type: "text_delta", text: "ok" };
+        return OK_RESULT;
+      },
+    };
+    const retrying = withRetry(client, { maxRetries: 3, initialDelayMs: 1 });
+    const gen = retrying.stream!(DUMMY_ARGS);
+    const deltas: string[] = [];
+    let next = await gen.next();
+    while (!next.done) {
+      if (next.value.type === "text_delta") deltas.push(next.value.text);
+      next = await gen.next();
+    }
+    expect(calls).toBe(2);
+    expect(deltas.join("")).toBe("ok");
+  });
+});
+
 describe("resolveClient", () => {
   it("returns a client for anthropic provider", () => {
     const client = resolveClient({ provider: "anthropic", model: "claude-sonnet-4-6" });
     expect(client).toBeDefined();
     expect(typeof client.complete).toBe("function");
+    expect(typeof client.stream).toBe("function");
   });
 
   it("returns a client for openai provider", () => {
