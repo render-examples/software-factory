@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { CancelStore } from "@render-agents/store";
-import { runRetention, buildEventRecord } from "@render-agents/store";
+import { runRetention, reapRuns, buildEventRecord } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
 import { resumeRun, submitRootRun, driveAgentTurn, RunPaused } from "@render-agents/sdk";
 import { apiKeyAuth } from "./auth.js";
@@ -97,7 +97,20 @@ export function createGatewayApp(opts: GatewayOptions) {
         const def = runtime.workflows.get(run.workflow);
         const dispatcher = runtime.dispatcher;
         if (dispatcher?.dispatchRoot) {
-          await dispatcher.dispatchRoot({ workflow: run.workflow, runId, plan: def?.options.plan });
+          // Fail-fast (E6, mode 1): if re-triggering Lane A throws (workflows
+          // host down), don't leave the resumed root stranded — record
+          // `run.failed` so it's terminal and observable.
+          try {
+            await dispatcher.dispatchRoot({ workflow: run.workflow, runId, plan: def?.options.plan });
+          } catch (err) {
+            await store.events.append(
+              buildEventRecord(
+                runId,
+                { type: "run.failed", error: `failed to dispatch root to workflows host: ${err instanceof Error ? err.message : String(err)}` },
+                { agentName: run.workflow, spanId: runId },
+              ),
+            );
+          }
         } else {
           await def?.drive(runId);
         }
@@ -109,6 +122,14 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Admin: retention cleanup (authed) — wired to a daily Render Cron.
   app.post("/admin/retention", async (c) => {
     const result = await runRetention(store);
+    return c.json(result);
+  });
+
+  // Admin: stranded-run reaper (authed) — wired to a periodic Render Cron. Fails
+  // Lane A roots whose hand-off to the workflows host was accepted but never
+  // progressed (host died / task lost), so they don't sit `running` forever (E6).
+  app.post("/admin/runs/reap", async (c) => {
+    const result = await reapRuns(store);
     return c.json(result);
   });
 

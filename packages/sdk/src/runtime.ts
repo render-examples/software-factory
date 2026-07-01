@@ -46,6 +46,12 @@ export interface DispatchOptions {
   idempotencyKey: string;
   plan?: RenderPlan;
   signal?: AbortSignal;
+  /**
+   * Cancel scope (the root run id) this child belongs to (E3). Cancelling the
+   * root cascades to descendants that share the scope. Propagated to the child's
+   * run context and onward to its own children.
+   */
+  cancelScopeId?: string;
 }
 
 /**
@@ -133,6 +139,14 @@ export interface CreateRuntimeOptions {
   /** Custom runners discovered from `runners/` (keyed by name); merged with the built-in `default`. */
   extraRunners?: Map<string, AgentRunner>;
   dispatcher?: TaskDispatcher;
+  /**
+   * Auto-detect a Render Workflows dispatcher from the ambient environment
+   * (`RENDER_USE_LOCAL_DEV` / `RENDER_SDK_SOCKET_PATH` / `RENDER_WORKFLOW_SLUG`).
+   * Defaults to `true`. Set `false` to force the in-process dispatcher regardless
+   * of ambient env — tests use this so they stay hermetic when run inside a
+   * `render workflows dev` shell (where those vars are exported).
+   */
+  autoDetectDispatcher?: boolean;
   jobQueue?: JobQueue;
   /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
   executionMode?: ExecutionMode;
@@ -264,7 +278,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   // observable behavior (events/spans/output + idempotent re-dispatch) minus
   // container isolation. Tests can still pass an explicit dispatcher override.
   const dispatcher = opts?.dispatcher
-    ?? detectDispatcher()
+    ?? (opts?.autoDetectDispatcher === false ? undefined : detectDispatcher())
     ?? new InProcessDispatcher({
       store,
       runners,

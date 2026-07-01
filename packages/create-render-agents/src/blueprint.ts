@@ -549,6 +549,22 @@ function renderYaml(opts: ScaffoldOptions): string {
     `        fromService: { type: web, name: ${opts.name}-gateway, property: hostport }`,
     "      - key: RENDER_AGENTS_API_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
+    "",
+    "  # Stranded-run reaper: fails Lane A roots whose hand-off to the workflows",
+    "  # host was accepted but never progressed (host died / task lost), so they",
+    "  # don't sit `running` forever. Horizon: RENDER_AGENTS_RUN_STALE_MS (15m).",
+    "  - type: cron",
+    `    name: ${opts.name}-reaper`,
+    "    runtime: node",
+    "    plan: starter",
+    `    schedule: "*/5 * * * *"`,
+    "    buildCommand: npm install && npm run build",
+    `    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'`,
+    "    envVars:",
+    "      - key: GATEWAY_URL",
+    `        fromService: { type: web, name: ${opts.name}-gateway, property: hostport }`,
+    "      - key: RENDER_AGENTS_API_KEY",
+    `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
   ].join("\n");
 }
 

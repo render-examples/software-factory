@@ -142,7 +142,18 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     // (queue) or the gateway itself (inline) drives the turn.
     if (defaultAgent && startAgentRun) {
       const runId = randomUUID();
-      await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: body.userId ?? thread.userId });
+      try {
+        await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: body.userId ?? thread.userId });
+      } catch (err) {
+        // DB-level guard (concurrent message that slipped past the soft check
+        // above): the partial unique index on one-active-run-per-thread rejects
+        // the second `run.started`. Translate to a clean 409 like the workflow
+        // path below, instead of leaking a 500.
+        if (isUniqueViolation(err)) {
+          return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
+        }
+        throw err;
+      }
       return c.json({ runId, dispatched: true, agent: defaultAgent }, 202);
     }
 

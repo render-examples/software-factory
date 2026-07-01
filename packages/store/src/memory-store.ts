@@ -8,7 +8,7 @@ import type {
 } from "./events.js";
 import { categoryOf } from "./categories.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
@@ -241,6 +241,32 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
       }
     }
     return { eventDetailTrimmed, runsDeleted };
+  }
+
+  async reapStaleRuns(opts: ReapOptions): Promise<ReapResult> {
+    const now = (opts.now ?? new Date()).getTime();
+    const horizon = now - opts.staleMs;
+    const runIds: string[] = [];
+    // No durable queue in memory/inline mode, so there is no Lane B job to
+    // protect: any non-terminal run with no recent activity is stranded.
+    for (const run of this.projections.listRuns()) {
+      if (run.status !== "running" && run.status !== "pending") continue;
+      const events = await this.events.read(run.id);
+      const last = events[events.length - 1];
+      const lastTs = Date.parse(last?.ts ?? run.startedAt);
+      if (Number.isNaN(lastTs) || lastTs >= horizon) continue;
+      runIds.push(run.id);
+    }
+    for (const runId of runIds) {
+      await this.events.append(
+        buildEventRecord(
+          runId,
+          { type: "run.failed", error: "reaped: no progress (workflows host unreachable or task died)" },
+          { agentName: this.projections.getRun(runId)?.workflow, spanId: runId },
+        ),
+      );
+    }
+    return { reaped: runIds.length, runIds };
   }
 
   // --- ThreadStore (metadata in-memory; transcript folded from the event log) ---

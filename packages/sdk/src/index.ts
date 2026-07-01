@@ -93,7 +93,7 @@ export type {
   TierEntry,
   ResolveModelResult,
 } from "@render-agents/engine";
-export { RunPaused, MODEL_PRICING, estimateCost } from "@render-agents/engine";
+export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-agents/engine";
 export { resolveModelSpec, isTierAlias, inferProvider } from "@render-agents/engine";
 export { defineTool as engineDefineTool, defineToolSource, ToolEnvironment, buildToolContext, ssrfFetch, validateToolInput } from "@render-agents/engine";
 

@@ -21,6 +21,10 @@ export function mockModel(
  */
 export function createTestRuntime(opts?: Partial<CreateRuntimeOptions>): Promise<AgentRuntime> {
   return createRuntime({
+    // Hermetic by default: ignore ambient Render env (RENDER_USE_LOCAL_DEV etc.)
+    // so the suite uses the in-process dispatcher even when run inside a
+    // `render workflows dev` shell. Callers can still pass an explicit dispatcher.
+    autoDetectDispatcher: false,
     ...opts,
     store: opts?.store ?? createMemoryStore(),
   });

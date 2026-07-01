@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { idempotencyKey } from "@render-agents/store";
+import { idempotencyKey, buildEventRecord } from "@render-agents/store";
 import {
   workflow,
   bindWorkflow,
@@ -91,6 +91,40 @@ describe("gateway workflow lane (Lane A) — trigger, don't execute at the gatew
     expect((await runtime.store.getRun(result.fired[0].runId))?.status).toBe("running");
   });
 
+  it("resume fail-fast (E6): re-triggering an input-paused workflow root when the host is down marks it failed", async () => {
+    const runtime = await createTestRuntime();
+    const wf = workflow(async () => "done");
+    bindWorkflow(wf, "wf", runtime);
+    // Stand in for a down workflows host on the *resume* path: dispatchRoot throws.
+    (runtime as { dispatcher: TaskDispatcher }).dispatcher = {
+      dispatch: async () => ({ text: "", usage: { inputTokens: 0, outputTokens: 0 } }),
+      dispatchRoot: async () => { throw new Error("ECONNREFUSED 127.0.0.1:8120"); },
+    };
+
+    // Seed an input-paused workflow root (as if a child requested user input).
+    const runId = "wf-resume-failfast";
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.started", input: {}, trigger: "api", spanKind: "workflow" }, { agentName: "wf", spanId: runId }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.paused", reason: "input" }, { agentName: "wf", spanId: runId }),
+    );
+    expect((await runtime.store.getRun(runId))?.status).toBe("paused");
+
+    const workflows = new Map<string, WorkflowDefinition>([["wf", wf]]);
+    const app = createGatewayApp({ runtime, workflows, awaitResume: true, disableAuth: true });
+
+    const res = await app.request(`/runs/${runId}/input`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "go" }),
+    });
+    expect(res.status).toBe(200);
+
+    // Fail-fast on resume: the stranded root is now terminal (failed), not stuck.
+    expect((await runtime.store.getRun(runId))?.status).toBe("failed");
+    const types = (await runtime.store.events.read(runId)).map((e) => e.type);
+    expect(types.filter((t) => t === "run.completed" || t === "run.failed" || t === "run.cancelled")).toEqual(["run.failed"]);
+  });
+
   it("dev (InProcessDispatcher): POST /workflows/:name drives the workflow inline to completion", async () => {
     const runtime = await createTestRuntime(); // default in-process dispatcher
     let handlerRan = 0;
@@ -160,6 +194,36 @@ describe("gateway queue mode — agent threads", () => {
     const finalTypes = (await runtime.store.events.read(runId)).map((e) => e.type);
     expect(finalTypes.filter((t) => t === "run.started")).toHaveLength(1); // not duplicated by the drive
     expect(finalTypes.filter((t) => t === "message.user")).toHaveLength(1);
+  });
+
+  it("thread-busy guard (E4): a second message while the first turn is still active → 409", async () => {
+    // Queue mode + no worker: the first turn stays active (run.started + queued
+    // job, never drained), so the soft one-active-run-per-thread check trips.
+    const runtime = await createTestRuntime({ executionMode: "queue" });
+    runtime.agentDefinitions.set("concierge", {
+      name: "concierge", model: { provider: "anthropic", model: "claude-haiku-4-5" }, systemPrompt: "be helpful", tools: [],
+    });
+    const app = createGatewayApp({ runtime, defaultAgent: "concierge", disableAuth: true });
+
+    const thread = (await (await app.request("/threads", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json()) as { id: string };
+
+    const first = await app.request(`/threads/${thread.id}/messages`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "one" }),
+    });
+    expect(first.status).toBe(202);
+    const { runId } = (await first.json()) as { runId: string };
+
+    const second = await app.request(`/threads/${thread.id}/messages`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "two" }),
+    });
+    expect(second.status).toBe(409);
+    const body = (await second.json()) as { error: string; runId: string };
+    expect(body.error).toMatch(/busy/i);
+    expect(body.runId).toBe(runId); // points at the in-flight run
+
+    // Exactly one run was opened for the thread (the second never started one).
+    expect((await runtime.store.listRuns({ threadId: thread.id })).length).toBe(1);
+    expect((await runtime.jobQueue.countByStatus()).queued).toBe(1);
   });
 
   it("a single thread tail spans many turns without reconnecting (SSE across runs)", async () => {
