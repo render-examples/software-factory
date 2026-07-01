@@ -1,0 +1,28 @@
+{
+  "name": "@render-agents/example-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable demo wiring the gateway + chat worker + workflows host against the monorepo packages.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "worker": "tsx src/worker.ts",
+    "workflows": "tsx src/workflows.ts",
+    "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
+  },
+  "dependencies": {
+    "@render-agents/gateway": "workspace:*",
+    "@render-agents/sdk": "workspace:*",
+    "@renderinc/sdk": "^0.6.0",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^5.5.0"
+  }
+}

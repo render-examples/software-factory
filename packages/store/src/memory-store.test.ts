@@ -47,6 +47,99 @@ describe("approvals read-surface", () => {
   });
 });
 
+describe("reapStaleRuns (E6) — stranded Lane A roots", () => {
+  const ts = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+
+  it("fails a non-terminal run whose last event is older than the horizon", async () => {
+    const store = createMemoryStore();
+    // Stranded: run.started 20m ago, no further activity.
+    await store.events.append(
+      buildEventRecord("stranded", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "stranded", ts: ts(20 * 60_000) }),
+    );
+
+    const res = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+
+    expect(res.runIds).toEqual(["stranded"]);
+    const run = await store.getRun("stranded");
+    expect(run?.status).toBe("failed");
+    expect(run?.error).toMatch(/no progress/);
+  });
+
+  it("leaves a run that is still progressing (recent event) untouched", async () => {
+    const store = createMemoryStore();
+    await store.events.append(
+      buildEventRecord("live", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "live", ts: ts(20 * 60_000) }),
+    );
+    // A fresh step.completed resets the liveness clock.
+    await store.events.append(
+      buildEventRecord("live", { type: "step.completed", name: "s", result: 1 }, { agentName: "wf", ts: ts(10_000) }),
+    );
+
+    const res = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+
+    expect(res.reaped).toBe(0);
+    expect((await store.getRun("live"))?.status).toBe("running");
+  });
+
+  it("never reaps paused or terminal runs", async () => {
+    const store = createMemoryStore();
+    await store.events.append(
+      buildEventRecord("paused", { type: "run.started", input: {} }, { agentName: "wf", spanId: "paused", ts: ts(60 * 60_000) }),
+    );
+    await store.events.append(
+      buildEventRecord("paused", { type: "run.paused", reason: "approval", pendingApprovalIds: ["a1"] }, { agentName: "wf", ts: ts(60 * 60_000) }),
+    );
+    await store.events.append(
+      buildEventRecord("done", { type: "run.started", input: {} }, { agentName: "wf", spanId: "done", ts: ts(60 * 60_000) }),
+    );
+    await store.events.append(
+      buildEventRecord("done", { type: "run.completed", result: "ok" }, { agentName: "wf", ts: ts(60 * 60_000) }),
+    );
+
+    const res = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+
+    expect(res.reaped).toBe(0);
+    expect((await store.getRun("paused"))?.status).toBe("paused");
+    expect((await store.getRun("done"))?.status).toBe("completed");
+  });
+
+  it("is idempotent: a second pass reaps nothing (the run is already terminal)", async () => {
+    const store = createMemoryStore();
+    await store.events.append(
+      buildEventRecord("stranded", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "stranded", ts: ts(20 * 60_000) }),
+    );
+
+    const first = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+    expect(first.reaped).toBe(1);
+
+    // Re-running the reaper must not append a second run.failed (no double-fail).
+    const second = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+    expect(second.reaped).toBe(0);
+
+    const types = (await store.events.read("stranded")).map((e) => e.type);
+    expect(types.filter((t) => t === "run.failed")).toHaveLength(1);
+  });
+
+  it("respects the horizon boundary: just-inside is reaped, just-outside is spared", async () => {
+    const store = createMemoryStore();
+    const now = new Date();
+    const staleMs = 15 * 60_000;
+    // Pin `now` so the boundary is exact (no wall-clock drift between the two runs).
+    await store.events.append(
+      buildEventRecord("old", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "old", ts: new Date(now.getTime() - staleMs - 1).toISOString() }),
+    );
+    await store.events.append(
+      buildEventRecord("fresh", { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: "fresh", ts: new Date(now.getTime() - staleMs + 1_000).toISOString() }),
+    );
+
+    const res = await store.reapStaleRuns({ staleMs, now });
+
+    expect(res.runIds).toEqual(["old"]);
+    expect((await store.getRun("old"))?.status).toBe("failed");
+    expect((await store.getRun("fresh"))?.status).toBe("running");
+  });
+});
+
 describe("aggregateRunCost — cross-run subagent cost", () => {
   const llm = (cost: number): RunEvent => ({ type: "llm.call", model: "m", usage: { inputTokens: 1, outputTokens: 1 }, costUsd: cost, stopReason: "end_turn", latencyMs: 1 });
 

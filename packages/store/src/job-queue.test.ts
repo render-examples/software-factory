@@ -267,6 +267,54 @@ describeWithPg("PgJobQueue parity", () => {
     expect(woke).toBe("woke");
   });
 
+  // E6: the run reaper fails Lane A roots that the workflow host never
+  // progressed, but must leave Lane B runs (which have a queue job and are
+  // reclaimed by `q.reap`) alone.
+  it("reapStaleRuns fails a stranded Lane A root but spares a run with an active job", async () => {
+    const stale = `stale-${randomUUID()}`;
+    const laneB = `laneb-${randomUUID()}`;
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+
+    // Stranded Lane A root: run.started long ago, no job, no further events.
+    await store.events.append(
+      buildEventRecord(stale, { type: "run.started", input: {}, spanKind: "workflow" }, { agentName: "wf", spanId: stale, ts: old }),
+    );
+    // Lane B run: equally old, but with an active queue job (worker may still pick it up).
+    await store.events.append(
+      buildEventRecord(laneB, { type: "run.started", input: {} }, { agentName: "assistant", spanId: laneB, ts: old }),
+    );
+    await q.enqueue({ runId: laneB, kind: "agent" });
+
+    const res = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+
+    expect(res.runIds).toContain(stale);
+    expect(res.runIds).not.toContain(laneB);
+    expect((await store.getRun(stale))?.status).toBe("failed");
+    expect((await store.getRun(laneB))?.status).toBe("running");
+  });
+
+  // E6 / decision (idea 10): a Lane B run whose only job has been *dead-lettered*
+  // is genuinely stuck — no worker will ever reclaim it — so the run reaper SHOULD
+  // fail it (a dead job is not 'queued'/'running', so it doesn't shield the run).
+  // This pins the intended behavior so a future change to the exclusion is caught.
+  it("reapStaleRuns DOES reap a Lane B run whose only job is dead-lettered", async () => {
+    const runId = `deadletter-${randomUUID()}`;
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    await store.events.append(
+      buildEventRecord(runId, { type: "run.started", input: {} }, { agentName: "assistant", spanId: runId, ts: old }),
+    );
+    // Burn the single attempt → the job dead-letters.
+    const job = await q.enqueue({ runId, kind: "agent", maxAttempts: 1 });
+    await claimById(q, job.id); // attempts → 1 (== max)
+    await q.fail(job.id, { requeue: true });
+    expect((await q.get(job.id))?.status).toBe("dead");
+
+    const res = await store.reapStaleRuns({ staleMs: 15 * 60_000 });
+
+    expect(res.runIds).toContain(runId);
+    expect((await store.getRun(runId))?.status).toBe("failed");
+  });
+
   it("never hands the same job to concurrent claimers (SKIP LOCKED)", async () => {
     const runIds = Array.from({ length: 5 }, () => `job-${randomUUID()}`);
     for (const r of runIds) {

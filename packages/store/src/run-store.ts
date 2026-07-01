@@ -25,6 +25,24 @@ export interface RetentionResult {
   runsDeleted: number;
 }
 
+/** Options for the stranded-run reaper (E6). */
+export interface ReapOptions {
+  /**
+   * A non-terminal run whose most recent event is older than this is considered
+   * stranded (the workflow host accepted the hand-off but never progressed it).
+   */
+  staleMs: number;
+  /** Clock injection for tests. Defaults to now. */
+  now?: Date;
+}
+
+export interface ReapResult {
+  /** Number of stranded runs transitioned to `failed`. */
+  reaped: number;
+  /** The ids that were reaped (handy for tests/observability). */
+  runIds: string[];
+}
+
 export type RunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
 export interface RunRecord {
@@ -95,6 +113,15 @@ export interface RunStore {
    * thread metadata/transcript, or schedules.
    */
   cleanup(opts: RetentionOptions): Promise<RetentionResult>;
+  /**
+   * Fail Lane A roots stranded in a non-terminal state (E6). Targets runs in
+   * `pending`/`running` that have **no active queue job** (Lane B runs are
+   * reclaimed by the job queue's own reaper, not failed here) and whose most
+   * recent event is older than `staleMs`. Appends `run.failed` so the run is
+   * terminal and the log stays canonical. Never touches `paused` or terminal
+   * runs. Idempotent.
+   */
+  reapStaleRuns(opts: ReapOptions): Promise<ReapResult>;
   close(): Promise<void>;
 }
 

@@ -35,7 +35,12 @@ function makeCtx(
   store: MemoryRunStore,
   agent: AgentDefinition,
   runId: string,
-  opts: { tools?: Map<string, Tool>; isCancelledFn?: () => boolean } = {},
+  opts: {
+    tools?: Map<string, Tool>;
+    isCancelledFn?: () => boolean;
+    cancelStore?: import("@render-agents/store").CancelStore;
+    cancelScopeId?: string;
+  } = {},
 ): InProcessRunContext {
   return new InProcessRunContext({
     runId,
@@ -47,6 +52,8 @@ function makeCtx(
     signal: new AbortController().signal,
     tools: opts.tools,
     isCancelledFn: opts.isCancelledFn,
+    cancelStore: opts.cancelStore,
+    cancelScopeId: opts.cancelScopeId,
   });
 }
 
@@ -204,6 +211,89 @@ describe("DefaultRunner — control signals", () => {
     expect(out.text).toBe("");
     expect(await types(store, "r1")).toEqual(["run.started", "message.user", "run.cancelled"]);
     expect((await store.getRun("r1"))?.status).toBe("cancelled");
+  });
+
+  it("cancel cascade (E3): a run is cancelled when its enclosing scope (root) is cancelled", async () => {
+    const { MemoryCancelStore } = await import("@render-agents/store");
+    const store = createMemoryStore();
+    const agent = makeAgent();
+    const cancelStore = new MemoryCancelStore();
+
+    // A child whose own id is NOT cancelled, but whose scope (the root) is.
+    const ctx = makeCtx(store, agent, "child-1", { cancelStore, cancelScopeId: "root-1" });
+    expect(await ctx.isCancelled()).toBe(false);
+
+    await cancelStore.requestCancel("root-1");
+    expect(await ctx.isCancelled()).toBe(true);
+  });
+
+  it("cancel cascade: the runner exits a child when its scope root is cancelled", async () => {
+    const { MemoryCancelStore } = await import("@render-agents/store");
+    const store = createMemoryStore();
+    const agent = makeAgent();
+    const cancelStore = new MemoryCancelStore();
+    await cancelStore.requestCancel("root-1"); // root cancelled before the child starts
+
+    const runner = new DefaultRunner(
+      mockModel([
+        { content: [{ type: "text", text: "never" }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" },
+      ]),
+    );
+    const out = await runner.run(agent, "go", makeCtx(store, agent, "child-1", { cancelStore, cancelScopeId: "root-1" }));
+    expect(out.text).toBe("");
+    expect((await store.getRun("child-1"))?.status).toBe("cancelled");
+  });
+
+  it("cancel cascade (E3): stops a child *mid-flight* (after the scope is cancelled while a tool runs)", async () => {
+    const { MemoryCancelStore } = await import("@render-agents/store");
+    const store = createMemoryStore();
+    const cancelStore = new MemoryCancelStore();
+
+    // Deferreds to interleave: `started` fires when the tool begins; the tool
+    // then blocks on `release` so the test can cancel the scope mid-run.
+    let signalStarted!: () => void;
+    const started = new Promise<void>((r) => { signalStarted = r; });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+
+    let modelCalls = 0;
+    const model: ModelClient = {
+      async complete() {
+        modelCalls += 1;
+        // Iteration 1: ask for the gated tool (forces a second loop turn so the
+        // top-of-loop cancel check runs again after the tool resolves). If the
+        // model is ever called a second time the test fails on the count below.
+        return { content: [{ type: "tool_use", id: "tc1", name: "gate", input: {} }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "tool_use" };
+      },
+    };
+    const runner = new DefaultRunner(model);
+
+    const gateTool: Tool = {
+      name: "gate",
+      description: "blocks until released",
+      inputSchema: {},
+      async invoke() {
+        signalStarted();
+        await gate;
+        return { content: "done" };
+      },
+    };
+    const agent = makeAgent({ tools: ["gate"] });
+    const ctx = makeCtx(store, agent, "child-1", { tools: new Map([["gate", gateTool]]), cancelStore, cancelScopeId: "root-1" });
+
+    const runPromise = runner.run(agent, "go", ctx);
+    await started;                       // child is mid-tool
+    await cancelStore.requestCancel("root-1"); // operator cancels the root while in flight
+    release();                           // let the tool finish
+
+    const out = await runPromise;
+    expect(out.text).toBe("");
+    expect(modelCalls).toBe(1);          // the second model turn was never reached
+    const evTypes = await types(store, "child-1");
+    expect(evTypes).toContain("run.cancelled");
+    // Exactly one terminal event (no run.completed slipped through).
+    expect(evTypes.filter((t) => t === "run.completed" || t === "run.failed" || t === "run.cancelled")).toEqual(["run.cancelled"]);
+    expect((await store.getRun("child-1"))?.status).toBe("cancelled");
   });
 
   it("auto-approves a gated tool and records approval.auto", async () => {

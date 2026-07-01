@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
+import { buildEventRecord, PgRunStore } from "@render-agents/store";
 import { workflow, bindWorkflow, type AgentDefinition, type WorkflowDefinition } from "@render-agents/sdk";
 import { createTestRuntime, mockModel } from "@render-agents/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
+import { threadRoutes, type ThreadRouteDeps } from "../src/routes/threads.js";
+
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const describeWithPg = TEST_DATABASE_URL ? describe : describe.skip;
 
 function responderDef(): AgentDefinition {
   return {
@@ -134,6 +138,86 @@ describe("gateway threads — end-to-end", () => {
       body: JSON.stringify({ content: "second turn" }),
     });
     expect(res.status).toBe(409);
+  });
+
+  // E4: the soft sequential-turn check can be lost to a genuine race (two
+  // concurrent messages both observe "no active run"). The partial unique index
+  // `idx_runs_thread_active` is the real backstop — the loser's `run.started`
+  // append raises Postgres 23505. The agent (defaultAgent) path must translate
+  // that to a clean 409, matching the workflow path, instead of leaking a 500.
+  describe("concurrent-turn DB guard (E4)", () => {
+    const thread = { id: "t1", status: "active" as const, createdAt: "", updatedAt: "" };
+    const deps = (startAgentRun: ThreadRouteDeps["startAgentRun"]): ThreadRouteDeps =>
+      ({
+        store: { listRuns: async () => [], events: { append: async () => {} } },
+        threadStore: { getThread: async () => thread, getThreadMessages: async () => [] },
+        workflows: new Map(),
+        defaultAgent: "assistant",
+        startAgentRun,
+      } as unknown as ThreadRouteDeps);
+
+    const send = (app: ReturnType<typeof threadRoutes>) =>
+      app.request("/threads/t1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "hi" }),
+      });
+
+    it("translates a unique-violation (23505) into 409, not 500", async () => {
+      const app = threadRoutes(deps(async () => {
+        throw Object.assign(new Error("duplicate key"), { code: "23505" });
+      }));
+      const res = await send(app);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toContain("busy");
+    });
+
+    it("still surfaces a genuine (non-unique) error as 500", async () => {
+      const app = threadRoutes(deps(async () => {
+        throw new Error("boom");
+      }));
+      const res = await send(app);
+      expect(res.status).toBe(500);
+    });
+  });
+
+  // E4 (real race): the in-memory tests above mock the throw; this drives two
+  // genuinely concurrent messages against Postgres so the partial unique index
+  // `idx_runs_thread_active` is the actual arbiter. Queue mode + no worker keeps
+  // both turns active, so the loser can't "win" by the first run completing first.
+  describeWithPg("concurrent-turn race over Postgres (E4)", () => {
+    it("two simultaneous messages settle as exactly one 202 + one 409, one active run", async () => {
+      const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+      await store.init();
+      try {
+        const runtime = await createTestRuntime({
+          store,
+          executionMode: "queue", // no worker started → opened runs stay active
+          model: mockModel(() => ({ content: [{ type: "text", text: "hi" }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" })),
+        });
+        runtime.agentDefinitions.set("assistant", {
+          name: "assistant", model: { provider: "anthropic", model: "claude-haiku-4-5" }, systemPrompt: "chat", tools: [], interactive: true,
+        });
+        const app = createGatewayApp({ runtime, defaultAgent: "assistant", disableAuth: true });
+
+        const thread = (await (await app.request("/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()) as { id: string };
+
+        const send = (content: string) => app.request(`/threads/${thread.id}/messages`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }),
+        });
+        const [a, b] = await Promise.all([send("one"), send("two")]);
+        const statuses = [a.status, b.status].sort();
+        expect(statuses).toEqual([202, 409]); // one accepted, one rejected as busy
+
+        // Exactly one active run survived the race (the unique index held).
+        const active = (await store.listRuns({ threadId: thread.id })).filter(
+          (r) => r.status === "running" || r.status === "pending" || r.status === "paused",
+        );
+        expect(active.length).toBe(1);
+      } finally {
+        await store.close();
+      }
+    });
   });
 
   it("rejects message delivery to an approval-paused run (must use the approvals API)", async () => {

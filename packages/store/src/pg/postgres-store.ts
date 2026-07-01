@@ -7,9 +7,9 @@ import type {
   RunEventRecord,
   ToolResult,
 } from "../events.js";
-import { EventRejectedError } from "../memory-store.js";
+import { EventRejectedError, buildEventRecord } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult } from "../run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
 import type { ApprovalProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
@@ -861,6 +861,48 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     } finally {
       client.release();
     }
+  }
+
+  async reapStaleRuns(opts: ReapOptions): Promise<ReapResult> {
+    const now = opts.now ?? new Date();
+    const horizon = new Date(now.getTime() - opts.staleMs).toISOString();
+
+    // Lane A roots only: non-terminal, with no active queue job (Lane B is
+    // reclaimed/re-driven by the job queue's own reaper, never failed here), and
+    // silent past the horizon. "Silent" = the run's most recent event predates
+    // the horizon — a progressing workflow keeps appending events, resetting the
+    // clock, so only genuinely stranded roots match.
+    const res = await this.pool.query<{ id: string }>(
+      `SELECT r.id
+         FROM runs r
+        WHERE r.status IN ('running', 'pending')
+          AND NOT EXISTS (
+            SELECT 1 FROM run_jobs j
+             WHERE j.run_id = r.id AND j.status IN ('queued', 'running')
+          )
+          AND COALESCE(
+            (SELECT max(e.ts) FROM run_events e WHERE e.run_id = r.id),
+            r.started_at
+          ) < $1`,
+      [horizon],
+    );
+
+    const runIds: string[] = [];
+    for (const { id } of res.rows) {
+      // Re-check before appending so a run that settled in the (tiny) window
+      // between the scan and now is never flipped from terminal to failed.
+      const run = await this.getRun(id);
+      if (!run || (run.status !== "running" && run.status !== "pending")) continue;
+      await this.events.append(
+        buildEventRecord(
+          id,
+          { type: "run.failed", error: "reaped: no progress (workflows host unreachable or task died)" },
+          { agentName: run.workflow, spanId: id },
+        ),
+      );
+      runIds.push(id);
+    }
+    return { reaped: runIds.length, runIds };
   }
 
   /** Delete event-detail rows for the given runs. `messages` (transcript) is preserved. */

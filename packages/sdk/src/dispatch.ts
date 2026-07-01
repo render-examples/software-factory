@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { RunStore, CancelStore, Tracer } from "@render-agents/store";
 import { buildEventRecord } from "@render-agents/store";
 import type {
@@ -11,7 +14,7 @@ import type {
   DelegationLimits,
   ToolSource,
 } from "@render-agents/engine";
-import { noopTracer } from "@render-agents/engine";
+import { noopTracer, RunPaused, RunCancelled } from "@render-agents/engine";
 import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry, RootDispatchJob } from "./runtime.js";
 import type { WorkflowDefinition } from "./workflow.js";
 import { runAgentInProcess } from "./run-in-process.js";
@@ -114,6 +117,7 @@ export class InProcessDispatcher implements TaskDispatcher {
       threadId: dispatchOpts.threadId,
       depth: (dispatchOpts.depth ?? 0) + 1,
       signal: dispatchOpts.signal,
+      cancelScopeId: dispatchOpts.cancelScopeId,
     });
 
     assertSerializable(result, `Task output from agent "${agentName}"`);
@@ -198,22 +202,28 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
       threadId: opts.threadId,
       depth: opts.depth ?? 0,
       idempotencyKey: opts.idempotencyKey,
+      cancelScopeId: opts.cancelScopeId,
     };
 
     assertSerializable(taskInput, `Serialized task payload for "${agentName}"`);
 
     // Dynamic import to avoid hard dependency on @renderinc/sdk in dev
     const { Render } = await importRenderSdk();
-    const client = Render();
-    const result = await client.workflows.runTask(taskSlug, [taskInput]);
+    const client = new Render(renderClientOptions());
+    // runTask resolves once the task completes; the result is `{ status, results }`
+    // where `results` is the positional return array. Our handler takes one arg
+    // (`[taskInput]`) and returns one value (the AgentOutput), so unwrap index 0.
+    const taskRun = await client.workflows.runTask(taskSlug, [taskInput]);
+    const output = taskRun?.results?.[0];
 
-    if (!result || typeof result !== "object") {
+    if (!output || typeof output !== "object") {
       throw new Error(
-        `RenderWorkflowsDispatcher: task "${taskSlug}" returned invalid result`,
+        `RenderWorkflowsDispatcher: task "${taskSlug}" returned invalid result ` +
+        `(status=${taskRun?.status ?? "unknown"})`,
       );
     }
 
-    return result as AgentOutput;
+    return output as AgentOutput;
   }
 
   /**
@@ -231,28 +241,63 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
     assertSerializable(taskInput, `Serialized root payload for workflow "${job.workflow}"`);
 
     const { Render } = await importRenderSdk();
-    const client = Render();
+    const client = new Render(renderClientOptions());
     await client.workflows.startTask(taskSlug, [taskInput]);
   }
 }
 
+/**
+ * Build `Render` client options. In local-dev mode (`RENDER_USE_LOCAL_DEV`) the
+ * client targets the Render CLI local task server and needs no API token; the
+ * constructor otherwise *requires* `RENDER_API_KEY`, so we must pass
+ * `useLocalDev` explicitly (the constructor does not infer it from the env).
+ * In production we pass nothing and let it read `RENDER_API_KEY`.
+ */
+function renderClientOptions(): { useLocalDev: true; localDevUrl?: string; token: string } | undefined {
+  if (process.env.RENDER_USE_LOCAL_DEV === "true") {
+    // The constructor requires *a* token even in local-dev (the local task
+    // server ignores its value), so pass a placeholder when none is set.
+    return {
+      useLocalDev: true,
+      localDevUrl: process.env.RENDER_LOCAL_DEV_URL,
+      token: process.env.RENDER_API_KEY ?? "local-dev",
+    };
+  }
+  return undefined;
+}
+
 async function importRenderSdk(): Promise<{
-  Render: () => {
+  Render: new (opts?: { useLocalDev?: boolean; localDevUrl?: string; token?: string }) => {
     workflows: {
-      runTask: (slug: string, args: unknown[]) => Promise<unknown>;
-      startTask: (slug: string, args: unknown[]) => Promise<unknown>;
+      runTask: (slug: string, args: unknown[]) => Promise<{ status?: string; results?: unknown[] }>;
+      startTask: (slug: string, args: unknown[]) => Promise<{ taskRunId: string }>;
     };
   };
 }> {
+  // `@renderinc/sdk` is an optional peer — it lives in the *application's*
+  // dependencies (the gateway / workflows-host service), not in this package, so
+  // it must be resolved from the app's working directory rather than from
+  // packages/sdk (where it is intentionally absent). A bare dynamic `import()`
+  // would resolve relative to this module and fail under pnpm's isolated layout.
+  // Using a variable specifier also keeps tsc from resolving it at build time.
+  const moduleName = "@renderinc/sdk";
   try {
-    // Dynamic import with variable to prevent TypeScript from resolving the module at build time
-    const moduleName = "@renderinc/sdk";
-    return await (Function("m", "return import(m)")(moduleName)) as never;
-  } catch {
-    throw new Error(
-      "RenderWorkflowsDispatcher requires @renderinc/sdk. " +
-      "Install it or use InProcessDispatcher for local development.",
-    );
+    const require = createRequire(pathToFileURL(join(process.cwd(), "noop.js")).href);
+    const resolved = require.resolve(moduleName);
+    return (await import(pathToFileURL(resolved).href)) as never;
+  } catch (cwdErr) {
+    // Fallback: resolve relative to this module (covers layouts where the SDK is
+    // hoisted next to @render-agents/sdk).
+    try {
+      return (await import(moduleName)) as never;
+    } catch (relErr) {
+      const detail = cwdErr instanceof Error ? cwdErr.message : String(cwdErr);
+      throw new Error(
+        `RenderWorkflowsDispatcher requires @renderinc/sdk (resolved from ${process.cwd()}). ` +
+        `Install it in your app, or use InProcessDispatcher for local development. Cause: ${detail}`,
+        { cause: relErr },
+      );
+    }
   }
 }
 
@@ -267,6 +312,8 @@ export interface AgentTaskInput {
   threadId?: string;
   depth: number;
   idempotencyKey: string;
+  /** Cancel scope (root run id) so cancellation cascades into this task container (E3). */
+  cancelScopeId?: string;
 }
 
 /**
@@ -279,7 +326,7 @@ export async function agentTaskHandler(
   runtime: AgentRuntime,
   getDefinition: (name: string) => AgentDefinition | undefined,
 ): Promise<AgentOutput> {
-  const { agentName, input, runId, parentSpanId, userId, threadId, depth } = taskInput;
+  const { agentName, input, runId, parentSpanId, userId, threadId, depth, cancelScopeId } = taskInput;
 
   const definition = getDefinition(agentName);
   if (!definition) {
@@ -307,6 +354,7 @@ export async function agentTaskHandler(
     userId,
     threadId,
     depth: depth + 1,
+    cancelScopeId,
   });
 }
 
@@ -329,7 +377,7 @@ function throwNoDispatcher(): never {
 export async function workflowTaskHandler(
   args: { workflow: string; runId: string },
   workflows: Map<string, WorkflowDefinition>,
-): Promise<void> {
+): Promise<{ runId: string; status: "completed" | "paused" | "cancelled" }> {
   const wf = workflows.get(args.workflow);
   if (!wf) {
     throw new Error(
@@ -337,7 +385,30 @@ export async function workflowTaskHandler(
       `Ensure workflows/${args.workflow}/index.ts exists and is loaded via loadWorkflows().`,
     );
   }
-  await wf.drive(args.runId);
+  try {
+    await wf.drive(args.runId);
+    // Return a JSON-serializable summary: the Render task runner requires a
+    // result (or a throw) — returning `void` makes it mark an otherwise-
+    // successful run as a FAILED task. The authoritative outcome lives in the
+    // event log; this is just the task-level ack.
+    return { runId: args.runId, status: "completed" };
+  } catch (err) {
+    // HITL pause is a *settled* state, not a failure: `executeHandler` already
+    // recorded `run.paused`, and resume = re-trigger + replay. Return a result so
+    // Render marks the task done (not failed → no spurious retry/failure count).
+    if (err instanceof RunPaused) {
+      return { runId: args.runId, status: "paused" };
+    }
+    // Cancellation (E3) is a settled terminal state, not a failure:
+    // `executeHandler` already recorded `run.cancelled`. Return a result so
+    // Render marks the task done rather than failed.
+    if (err instanceof RunCancelled) {
+      return { runId: args.runId, status: "cancelled" };
+    }
+    // Genuine failure: `run.failed` is already recorded; rethrow so Render marks
+    // the task failed too.
+    throw err;
+  }
 }
 
 // --- Plan registration helpers ---

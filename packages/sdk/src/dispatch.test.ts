@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { isWorkflowsEnvironment, computeDispatchKey, computeRequiredPlans } from "./dispatch.js";
+import { isWorkflowsEnvironment, computeDispatchKey, computeRequiredPlans, workflowTaskHandler } from "./dispatch.js";
 import type { AgentDefinition } from "@render-agents/engine";
+import { RunPaused } from "@render-agents/engine";
+import type { WorkflowDefinition } from "./workflow.js";
 
 const SOCKET = "RENDER_SDK_SOCKET_PATH";
 const LOCAL = "RENDER_USE_LOCAL_DEV";
@@ -59,5 +61,32 @@ describe("computeRequiredPlans", () => {
       { name: "d", plan: "pro" },
     ] as AgentDefinition[];
     expect(computeRequiredPlans(defs)).toEqual(["pro", "standard", "starter"]);
+  });
+});
+
+describe("workflowTaskHandler return contract", () => {
+  // The Render task runner requires a result or a throw — a `void` return marks
+  // an otherwise-successful run as a FAILED task. These guard that contract.
+  const makeWorkflows = (drive: () => Promise<void>): Map<string, WorkflowDefinition> =>
+    new Map([["wf", { drive } as unknown as WorkflowDefinition]]);
+
+  it("returns a completed summary on success (not void)", async () => {
+    const result = await workflowTaskHandler({ workflow: "wf", runId: "r1" }, makeWorkflows(async () => {}));
+    expect(result).toEqual({ runId: "r1", status: "completed" });
+  });
+
+  it("returns a paused summary when the handler parks (HITL) instead of throwing", async () => {
+    const drive = async () => { throw new RunPaused("r2", "approval", ["req-1"]); };
+    const result = await workflowTaskHandler({ workflow: "wf", runId: "r2" }, makeWorkflows(drive));
+    expect(result).toEqual({ runId: "r2", status: "paused" });
+  });
+
+  it("rethrows a genuine handler failure so Render marks the task failed", async () => {
+    const drive = async () => { throw new Error("boom"); };
+    await expect(workflowTaskHandler({ workflow: "wf", runId: "r3" }, makeWorkflows(drive))).rejects.toThrow("boom");
+  });
+
+  it("throws when the workflow is not in the deployed image", async () => {
+    await expect(workflowTaskHandler({ workflow: "missing", runId: "r4" }, makeWorkflows(async () => {}))).rejects.toThrow(/no workflow "missing"/);
   });
 });
