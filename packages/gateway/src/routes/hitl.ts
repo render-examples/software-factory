@@ -144,6 +144,17 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
       if (!body.approvalId) {
         return c.json({ error: "approvalId is required for approval-paused runs" }, 400);
       }
+      // Validate the approval exists, is still pending, and belongs to THIS run
+      // before recording a resolution — don't blindly append an approval.resolved
+      // for an arbitrary/foreign/already-resolved id (CR-10).
+      const approvals = await store.listApprovals();
+      const approval = approvals.find((a) => a.approvalRequestId === body.approvalId);
+      if (!approval || approval.runId !== runId) {
+        return c.json({ error: `Approval "${body.approvalId}" not found for run "${runId}"` }, 404);
+      }
+      if (approval.status !== "pending") {
+        return c.json({ error: `Approval "${body.approvalId}" already ${approval.status}` }, 409);
+      }
       await store.events.append(
         buildEventRecord(runId, {
           type: "approval.resolved",

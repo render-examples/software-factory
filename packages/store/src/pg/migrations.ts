@@ -19,6 +19,7 @@ const CORE_MIGRATIONS = [
   "0005_messages_oauth.sql",
   "0006_schedules_fk.sql",
   "0007_run_jobs.sql",
+  "0008_run_parent_span.sql",
 ];
 
 /**
@@ -35,9 +36,27 @@ export async function applyMigrations(pool: Pool): Promise<string[]> {
   try {
     await client.query("SELECT pg_advisory_lock($1::bigint)", [MIGRATION_LOCK_ID]);
     try {
+      // Version ledger (CR-25): run each migration at most once so future
+      // non-idempotent migrations are safe. Existing deployments transition
+      // cleanly — the ledger starts empty, every current file is IF-NOT-EXISTS,
+      // so re-running them once to backfill the ledger is a no-op.
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS schema_migrations (
+           name TEXT PRIMARY KEY,
+           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+         )`,
+      );
+      const doneRes = await client.query<{ name: string }>("SELECT name FROM schema_migrations");
+      const done = new Set(doneRes.rows.map((r) => r.name));
+
       for (const name of CORE_MIGRATIONS) {
+        if (done.has(name)) continue;
         const sql = loadMigrationSql(name);
         await client.query(sql);
+        await client.query(
+          "INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING",
+          [name],
+        );
         applied.push(name);
       }
     } finally {

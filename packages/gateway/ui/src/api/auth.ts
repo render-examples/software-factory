@@ -9,8 +9,33 @@ function fromQuery(name: string): string | null {
   return new URLSearchParams(location.search).get(name);
 }
 
+/** Remove a query param from the address bar without a navigation (CR-19). */
+function stripQueryParam(name: string): void {
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.delete(name);
+      history.replaceState(null, "", url.toString());
+    }
+  } catch {
+    /* non-browser / malformed URL — ignore */
+  }
+}
+
 export function getKey(): string {
-  return sessionStorage.getItem(KEY) ?? fromQuery("key") ?? "";
+  const stored = sessionStorage.getItem(KEY);
+  if (stored) return stored;
+  // A key supplied via `?key=` (e.g. a bookmarked link) is persisted to
+  // sessionStorage and immediately stripped from the URL so it doesn't linger in
+  // browser history, server logs, or the Referer header (CR-19).
+  const fromUrl = fromQuery("key");
+  if (fromUrl) {
+    const trimmed = fromUrl.trim();
+    sessionStorage.setItem(KEY, trimmed);
+    stripQueryParam("key");
+    return trimmed;
+  }
+  return "";
 }
 
 export function setKey(k: string): void {

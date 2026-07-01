@@ -12,15 +12,33 @@ import type { ModelClient, CompleteArgs, CompleteResult, ModelStreamEvent, ToolS
  */
 export class OpenAIClient implements ModelClient {
   private client: OpenAI;
+  /**
+   * Whether the client has a usable configuration: a real API key, or a custom
+   * `baseURL` (keyless local endpoints like Ollama/vLLM). When neither is
+   * present we defer failure to call time with a clear error rather than sending
+   * a request with a sentinel key that returns an opaque 401 (CR-18).
+   */
+  private readonly configured: boolean;
 
   constructor(opts?: { apiKey?: string; baseURL?: string }) {
+    const apiKey = opts?.apiKey ?? process.env.OPENAI_API_KEY;
+    this.configured = Boolean(apiKey) || Boolean(opts?.baseURL);
     this.client = new OpenAI({
-      apiKey: opts?.apiKey ?? process.env.OPENAI_API_KEY ?? "missing",
+      apiKey: apiKey ?? "missing",
       ...(opts?.baseURL ? { baseURL: opts.baseURL } : {}),
     });
   }
 
+  private assertConfigured(): void {
+    if (!this.configured) {
+      throw new Error(
+        "OpenAIClient: OPENAI_API_KEY is not set. Set it, or configure a `baseURL` for a keyless local endpoint.",
+      );
+    }
+  }
+
   async complete(args: CompleteArgs): Promise<CompleteResult> {
+    this.assertConfigured();
     const response = await this.client.chat.completions.create(this.buildBody(args), { signal: args.signal });
 
     const choice = response.choices[0];
@@ -57,6 +75,7 @@ export class OpenAIClient implements ModelClient {
    * Requires `stream_options.include_usage` for token counts.
    */
   async *stream(args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult> {
+    this.assertConfigured();
     const streamed = await this.client.chat.completions.create(
       { ...this.buildBody(args), stream: true, stream_options: { include_usage: true } },
       { signal: args.signal },

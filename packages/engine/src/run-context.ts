@@ -307,6 +307,9 @@ export class InProcessRunContext implements RunContext {
   }
 
   async mountTools(toolIds: string[]): Promise<MountedTools> {
+    // Dispose a previously-mounted environment before remounting so MCP
+    // connections / child processes from a prior mount don't leak (CR-06).
+    await this.toolEnv?.dispose();
     // If tool sources are provided, use the real ToolEnvironment mount path.
     if (this.toolSources.size > 0) {
       this.toolEnv = new ToolEnvironment();
@@ -320,6 +323,11 @@ export class InProcessRunContext implements RunContext {
       tools,
       byName: (name: string) => tools.find((t) => t.name === name),
     };
+  }
+
+  async disposeTools(): Promise<void> {
+    await this.toolEnv?.dispose();
+    this.toolEnv = undefined;
   }
 
   /**
@@ -348,7 +356,12 @@ export class InProcessRunContext implements RunContext {
     }
 
     const raw = this.envFn(STRICT_APPROVAL_ENV);
-    const strict = raw !== undefined && raw !== "" && raw !== "0" && raw.toLowerCase() !== "false";
+    const explicitlyDisabled = raw === "0" || (raw ?? "").toLowerCase() === "false";
+    const explicitlyEnabled = raw !== undefined && raw !== "" && !explicitlyDisabled;
+    // Fail safe (CR-17): gated tools require approval by default in production
+    // (explicit opt-out required); dev/test keep auto-approve for convenience.
+    const strict =
+      explicitlyEnabled || (process.env.NODE_ENV === "production" && !explicitlyDisabled);
 
     // 3. Auto-approve (default).
     if (!strict) {

@@ -23,6 +23,13 @@ export interface RunContext {
    */
   connection(provider: string): Promise<OAuthTokens | undefined>;
   mountTools(toolIds: string[]): Promise<MountedTools>;
+  /**
+   * Dispose any mounted tool sources (MCP connections / stdio child processes).
+   * The runner calls this when a run reaches a terminal, paused, or cancelled
+   * state so long-lived transports don't leak (CR-06). Optional so lightweight
+   * test doubles need not implement it.
+   */
+  disposeTools?(): Promise<void>;
   requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
   awaitInput(): Promise<ContentBlock[]>;
   emit(event: RunEvent): Promise<void>;

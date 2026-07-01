@@ -1,5 +1,5 @@
 import { mkdir, writeFile, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import type { ScaffoldOptions } from "./blueprint.js";
 import { buildFileMap } from "./blueprint.js";
 
@@ -17,9 +17,14 @@ export async function writeProject(targetDir: string, opts: ScaffoldOptions, for
     throw new Error(`Target directory "${targetDir}" is not empty. Use --force to overwrite.`);
   }
   const fileMap = buildFileMap(opts);
+  const base = resolve(targetDir);
   const written: string[] = [];
   for (const [rel, contents] of fileMap) {
-    const abs = join(targetDir, rel);
+    const abs = resolve(base, rel);
+    // Defense in depth: never let a blueprint key escape the project dir (CR-27).
+    if (abs !== base && !abs.startsWith(base + sep)) {
+      throw new Error(`Refusing to write outside the project directory: "${rel}"`);
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, contents, "utf8");
     written.push(rel);

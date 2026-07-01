@@ -2,7 +2,6 @@ export interface Thread {
   id: string;
   userId?: string;
   metadata?: Record<string, unknown>;
-  currentRunId?: string;
   status: "active" | "idle" | "completed" | "failed" | "cancelled";
   title?: string;
   createdAt: string;

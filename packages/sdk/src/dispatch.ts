@@ -81,7 +81,25 @@ export interface InProcessDispatcherOptions {
 export class InProcessDispatcher implements TaskDispatcher {
   constructor(private readonly opts: InProcessDispatcherOptions) {}
 
+  /** In-process single-flight by runId: two concurrent dispatches of the same
+   *  (deterministic) runId share one execution instead of both slipping past the
+   *  memo lookup and running the child twice (CR-15). */
+  private readonly inflight = new Map<string, Promise<AgentOutput>>();
+
   async dispatch(agentName: string, input: AgentInput, dispatchOpts: DispatchOptions): Promise<AgentOutput> {
+    const runId = dispatchOpts.runId;
+    const inflight = this.inflight.get(runId);
+    if (inflight) return inflight;
+    const run = this.doDispatch(agentName, input, dispatchOpts);
+    this.inflight.set(runId, run);
+    try {
+      return await run;
+    } finally {
+      this.inflight.delete(runId);
+    }
+  }
+
+  private async doDispatch(agentName: string, input: AgentInput, dispatchOpts: DispatchOptions): Promise<AgentOutput> {
     assertSerializable(input, `Task input for agent "${agentName}"`);
 
     const runId = dispatchOpts.runId;

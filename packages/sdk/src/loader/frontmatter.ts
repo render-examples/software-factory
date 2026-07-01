@@ -47,17 +47,31 @@ export interface ParsedMarkdown {
   body: string;
 }
 
+/** Cap the frontmatter block size before YAML parsing (defense-in-depth DoS
+ *  guard; the `yaml` library also caps alias expansion at 100 by default). */
+const MAX_FRONTMATTER_BYTES = 64 * 1024;
+
 export function parseAgentMarkdown(content: string, filename: string): ParsedMarkdown {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  // Normalize CRLF so Windows-authored files parse identically — the regex below
+  // anchors on `\n`, so `---\r\n` would otherwise skip frontmatter entirely (CR-13).
+  const normalized = content.replace(/\r\n/g, "\n");
+  const match = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 
   let rawFrontmatter: Record<string, unknown> = {};
   let body: string;
 
   if (match) {
+    if (match[1].length > MAX_FRONTMATTER_BYTES) {
+      throw new LoadError(
+        ERR_FRONTMATTER_VALIDATION,
+        `Agent "${filename}" frontmatter exceeds ${MAX_FRONTMATTER_BYTES} bytes`,
+        { agent: filename },
+      );
+    }
     rawFrontmatter = (parseYaml(match[1]) as Record<string, unknown>) ?? {};
     body = match[2].trim();
   } else {
-    body = content.trim();
+    body = normalized.trim();
   }
 
   if (!body) {

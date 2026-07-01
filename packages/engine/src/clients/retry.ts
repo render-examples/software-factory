@@ -35,6 +35,9 @@ export function withRetry(
 
           const delayMs = computeDelay(attempt, p, err);
           await sleep(delayMs, args.signal);
+          // A cancel during backoff must stop retrying, not fall through to
+          // another (immediately-aborting) attempt (CR-16).
+          if (args.signal.aborted) break;
         }
       }
       throw lastError;
@@ -69,6 +72,7 @@ export function withRetry(
           if (!isRetryable(err, p.retryableStatuses)) break;
 
           await sleep(computeDelay(attempt, p, err), args.signal);
+          if (args.signal.aborted) break;
         }
       }
       throw lastError;

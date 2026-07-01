@@ -57,6 +57,13 @@ export interface RunRecord {
   threadId?: string;
   userId?: string;
   agentVersion?: string;
+  /**
+   * Span this run hangs off in its parent run, when spawned by another run
+   * (workflow `.task()`/`.run()` fan-out, or an LLM subagent). Undefined for
+   * top-level roots. Lets the UI hide child runs from the top-level list and
+   * stitch them into the parent's trace.
+   */
+  parentSpanId?: string;
   startedAt: string;
   finishedAt?: string;
 }
@@ -83,6 +90,8 @@ export interface ListRunsOptions {
   threadId?: string;
   limit?: number;
   before?: string;
+  /** When true, return only top-level roots (runs with no `parentSpanId`). */
+  roots?: boolean;
 }
 
 export interface RunStore {
@@ -90,6 +99,12 @@ export interface RunStore {
   readonly events: EventLogStore;
   getRun(id: string): Promise<RunRecord | undefined>;
   listRuns(opts?: ListRunsOptions): Promise<RunRecord[]>;
+  /**
+   * Child runs spawned by `runId` — runs whose `parentSpanId` points at a span
+   * within `runId` (workflow `.task()`/`.run()` fan-out or LLM subagents),
+   * oldest first. Used to stitch the parent's trace across runs.
+   */
+  listChildRuns(runId: string): Promise<RunRecord[]>;
   getMessages(runId: string, agentName: string): Promise<Message[]>;
   /**
    * Model-visible history folded across *every run sharing a thread* (ordered by

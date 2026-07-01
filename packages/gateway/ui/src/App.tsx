@@ -1,15 +1,20 @@
+import type { ReactNode } from "react";
 import { AppProvider } from "./state/app";
-import { useRoute } from "./state/router";
+import { useRoute, navigate, type Route } from "./state/router";
+import { DEFAULT_SECTION } from "./state/sections";
 import { AuthGate } from "./components/AuthGate";
 import { Shell } from "./components/Shell";
 import { CommandPalette } from "./components/CommandPalette";
 import { ToastProvider } from "./components/Toaster";
+import { Empty } from "./components/ui";
 import { RunsView } from "./views/RunsView";
 import { RunDetailView } from "./views/RunDetailView";
 import { ApprovalsView } from "./views/ApprovalsView";
 import { ChatView } from "./views/ChatView";
-import { ThreadsView } from "./views/ThreadsView";
 import { SchedulesView } from "./views/SchedulesView";
+import { WorkflowsView } from "./views/WorkflowsView";
+import { ConnectionsView } from "./views/ConnectionsView";
+import { OpsView } from "./views/OpsView";
 
 export function App() {
   return (
@@ -26,19 +31,32 @@ export function App() {
 
 function Routed() {
   const route = useRoute();
-  const [top] = route.segments;
+  const section = route.segments[0] ?? DEFAULT_SECTION;
+  return <Shell route={route}>{renderSection(section, route)}</Shell>;
+}
 
-  let view;
-  switch (top) {
-    case "runs":
-      view = route.segments[1] ? <RunDetailView route={route} /> : <RunsView route={route} />;
-      break;
-    case "approvals": view = <ApprovalsView />; break;
-    case "chat": view = <ChatView route={route} />; break;
-    case "threads": view = <ThreadsView />; break;
-    case "schedules": view = <SchedulesView />; break;
-    default: view = <RunsView route={route} />;
+function renderSection(id: string, route: Route): ReactNode {
+  switch (id) {
+    case "chat": return <ChatView route={route} />;
+    case "workflows": return <WorkflowsView route={route} />;
+    case "schedules": return <SchedulesView />;
+    case "runs": return route.segments[1] ? <RunDetailView route={route} /> : <RunsView route={route} />;
+    case "approvals": return <ApprovalsView />;
+    case "connections": return <ConnectionsView />;
+    case "ops": return <OpsView />;
+    default: return <NotFound id={id} />;
   }
+}
 
-  return <Shell route={route}>{view}</Shell>;
+function NotFound({ id }: { id: string }) {
+  return (
+    <div className="panel">
+      <Empty>
+        <div style={{ display: "grid", gap: "0.6rem", justifyItems: "center" }}>
+          <div>No view for <span className="mono">#/{id}</span>.</div>
+          <button className="primary" onClick={() => navigate(DEFAULT_SECTION)}>Go to Chat</button>
+        </div>
+      </Empty>
+    </div>
+  );
 }

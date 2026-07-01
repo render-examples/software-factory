@@ -3,20 +3,28 @@ import { client, ApiError } from "../api/client";
 import { useApp } from "../state/app";
 import { navigate, type Route } from "../state/router";
 import { formatCost, formatDuration, relativeTime } from "../lib/format";
-import { StatusBadge, ErrorBanner, Empty, Spinner } from "../components/ui";
+import { StatusBadge, ErrorBanner, Empty, Spinner, Select } from "../components/ui";
 import type { RunRecord } from "../api/types";
 
 type Filter = "attention" | "live" | "all";
+type Lane = "all" | "workflow" | "chat";
 
 const PAGE = 100;
+
+// A run carries a threadId iff it is a Lane B chat turn; Lane A workflow roots
+// don't. This is the one field that distinguishes the two execution lanes (D12).
+function laneOf(r: RunRecord): Exclude<Lane, "all"> {
+  return r.threadId ? "chat" : "workflow";
+}
 
 function errMsg(e: unknown): string {
   return e instanceof ApiError ? `${e.message} (${e.status})` : String((e as Error)?.message ?? e);
 }
 
 export function RunsView({ route }: { route: Route }) {
-  const initial = (route.query.get("filter") as Filter) ?? "attention";
+  const initial = (route.query.get("filter") as Filter) ?? "all";
   const [filter, setFilter] = useState<Filter>(initial);
+  const [lane, setLane] = useState<Lane>((route.query.get("lane") as Lane) ?? "all");
   const [workflow, setWorkflow] = useState("");
   const [text, setText] = useState("");
   const { lastEvent } = useApp();
@@ -27,7 +35,10 @@ export function RunsView({ route }: { route: Route }) {
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
 
-  useEffect(() => { setFilter((route.query.get("filter") as Filter) ?? "attention"); }, [route.hash]);
+  useEffect(() => {
+    setFilter((route.query.get("filter") as Filter) ?? "all");
+    setLane((route.query.get("lane") as Lane) ?? "all");
+  }, [route.hash]);
 
   // First page (and refresh). Keyed on workflow so a server-side filter change
   // resets the cursor. Client-side filters (attention/live/text) operate on the
@@ -74,11 +85,12 @@ export function RunsView({ route }: { route: Route }) {
   const runs = useMemo(() => {
     return runsData.filter((r) => {
       if (text && !r.id.includes(text) && !r.workflow.includes(text)) return false;
+      if (lane !== "all" && laneOf(r) !== lane) return false;
       if (filter === "attention") return r.status === "failed" || r.status === "paused";
       if (filter === "live") return r.status === "running" || r.status === "paused" || r.status === "pending";
       return true;
     });
-  }, [runsData, filter, text]);
+  }, [runsData, filter, lane, text]);
 
   const totals = useMemo(() => {
     const cost = runs.reduce((s, r) => s + (r.totalCostUsd ?? 0), 0);
@@ -95,12 +107,22 @@ export function RunsView({ route }: { route: Route }) {
               role="tab"
               aria-selected={filter === f}
               className={filter === f ? "on" : ""}
-              onClick={() => { setFilter(f); navigate(`runs?filter=${f}`); }}
+              onClick={() => { setFilter(f); navigate(`runs?filter=${f}&lane=${lane}`); }}
             >
               {f === "attention" ? "Needs attention" : f === "live" ? "Live" : "All"}
             </button>
           ))}
         </div>
+        <Select
+          aria-label="Filter by lane"
+          value={lane}
+          onChange={(e) => { const v = e.target.value as Lane; setLane(v); navigate(`runs?filter=${filter}&lane=${v}`); }}
+          options={[
+            { value: "all", label: "All lanes" },
+            { value: "workflow", label: "Workflow" },
+            { value: "chat", label: "Chat" },
+          ]}
+        />
         <input aria-label="Filter by workflow" placeholder="filter by workflow" value={workflow} onChange={(e) => setWorkflow(e.target.value)} />
         <input aria-label="Find by id or name" placeholder="find by id / name" value={text} onChange={(e) => setText(e.target.value)} />
         <button className="ghost" aria-label="Reload" onClick={loadFirst}>{loading ? <Spinner /> : "↻"}</button>
@@ -118,7 +140,7 @@ export function RunsView({ route }: { route: Route }) {
         <table>
           <thead>
             <tr>
-              <th>Status</th><th>Workflow</th><th>Trigger</th>
+              <th>Status</th><th>Lane</th><th>Workflow</th><th>Trigger</th>
               <th style={{ textAlign: "right" }}>Cost</th><th>Duration</th><th>Started</th>
             </tr>
           </thead>
@@ -141,6 +163,7 @@ export function RunsView({ route }: { route: Route }) {
 
 function RunRow({ run }: { run: RunRecord }) {
   const live = run.status === "running" || run.status === "paused";
+  const lane = laneOf(run);
   const open = () => navigate(`runs/${run.id}`);
   return (
     <tr
@@ -153,7 +176,22 @@ function RunRow({ run }: { run: RunRecord }) {
         <StatusBadge status={run.status} />
         {run.status === "paused" && <span className="live-tag" style={{ marginLeft: 6 }}>needs action</span>}
       </td>
-      <td>{run.workflow}</td>
+      <td>
+        <span className="chip">{lane}</span>
+      </td>
+      <td>
+        {run.workflow}
+        {lane === "chat" && run.threadId && (
+          <a
+            className="faint"
+            style={{ marginLeft: 8 }}
+            href={`#/chat/${run.threadId}`}
+            onClick={(e) => { e.stopPropagation(); e.preventDefault(); navigate(`chat/${run.threadId}`); }}
+          >
+            open in chat ↗
+          </a>
+        )}
+      </td>
       <td className="muted">{run.trigger ?? "—"}</td>
       <td className="num">{formatCost(run.totalCostUsd)}</td>
       <td className="mono">{live ? <span className="live-tag">running</span> : formatDuration(run.startedAt, run.finishedAt)}</td>

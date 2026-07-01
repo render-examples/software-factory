@@ -10,7 +10,7 @@ import type {
   ScheduleRecord,
 } from "@render-agents/store";
 import type { JobQueue, DeltaBus } from "@render-agents/store";
-import { createStore, createJobQueue, createDeltaBus, MemoryCancelStore } from "@render-agents/store";
+import { createStore, createJobQueue, createDeltaBus, createCancelStore } from "@render-agents/store";
 import type {
   ModelClient,
   CompleteArgs,
@@ -259,7 +259,11 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing, opts?.extraRunners);
-  const cancelStore = opts?.cancelStore ?? new MemoryCancelStore();
+  // Cooperative cancellation store: share the run store's Postgres pool when
+  // available (so the gateway's `runs.status = 'cancelled'` write is read back by
+  // the loop's per-iteration poll), in-memory otherwise. The gateway defaults its
+  // cancel route to this same instance (BUG-01) so a cancel request is observed.
+  const cancelStore = opts?.cancelStore ?? createCancelStore({ store });
   // Durable control-plane queue: shares the run store's pool in Postgres mode,
   // in-memory otherwise. Consumed by the runner (Phase 2) and gateway enqueue.
   const jobQueue = opts?.jobQueue ?? createJobQueue({ store });

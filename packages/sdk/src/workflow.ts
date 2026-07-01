@@ -455,6 +455,10 @@ function createRunScopedAgent(
       // Cancel cascade (E3): don't launch (or, on return, don't keep driving) a
       // child once the workflow root is cancelled — unwind the handler instead.
       if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(childRunId, parentRunId);
+      // Replay idempotency: a child that already completed on a prior drive
+      // returns its memoized result rather than re-entering the model loop.
+      const memo = await memoizedChildOutput<T>(runtime, childRunId);
+      if (memo) return memo;
       const out = await runAgentInProcess<T>(def, input, {
         store: runtime.store,
         tracer: runtime.tracer,
@@ -484,6 +488,9 @@ function createRunScopedAgent(
       const dispatcher = runtime.dispatcher ?? inlineWorkflowDispatcher(runtime);
       const runId = opts?.runId ?? idempotencyKey(parentRunId, `task:${name}:${nextOrdinal(name)}`);
       if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(runId, parentRunId);
+      // Replay idempotency: a completed child task is memoized (see run()).
+      const memo = await memoizedChildOutput<T>(runtime, runId);
+      if (memo) return memo;
       const out = await dispatcher.dispatch(name, input, {
         runId,
         parentSpanId: parentRunId,
@@ -498,6 +505,28 @@ function createRunScopedAgent(
       return out;
     },
   };
+}
+
+/**
+ * Workflow replay idempotency: a child run (`.run()`/`.task()`) that already
+ * reached `completed` on a prior drive returns its memoized result instead of
+ * being re-dispatched into the model loop. Re-driving a completed run would
+ * re-run side effects and — since its transcript ends on an assistant turn —
+ * fail the provider call ("conversation must end with a user message"). Only
+ * `completed` short-circuits; a still-`paused` child is re-dispatched so a
+ * now-resolved approval lets it proceed past the gate.
+ */
+async function memoizedChildOutput<T>(
+  runtime: AgentRuntime,
+  runId: string,
+): Promise<AgentOutput<T> | undefined> {
+  const run = await runtime.store.getRun(runId);
+  if (!run || run.status !== "completed") return undefined;
+  const result = run.result;
+  const usage = { inputTokens: 0, outputTokens: 0 };
+  return typeof result === "string"
+    ? ({ text: result, usage } as AgentOutput<T>)
+    : ({ text: "", data: result as T, usage } as AgentOutput<T>);
 }
 
 /** In-process dispatcher fallback for workflows whose runtime lacks one. */
