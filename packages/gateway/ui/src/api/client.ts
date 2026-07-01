@@ -61,9 +61,15 @@ export const client = {
     return api(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
   },
 
-  listApprovals(status?: "pending" | "approved" | "denied" | "all"): Promise<{ approvals: Approval[] }> {
-    const q = status ? `?status=${status}` : "";
-    return api(`/approvals${q}`);
+  listApprovals(
+    status?: "pending" | "approved" | "denied" | "all",
+    threadId?: string,
+  ): Promise<{ approvals: Approval[] }> {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (threadId) q.set("threadId", threadId);
+    const qs = q.toString();
+    return api(`/approvals${qs ? `?${qs}` : ""}`);
   },
   resolveApproval(
     id: string,

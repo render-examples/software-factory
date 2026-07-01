@@ -16,6 +16,7 @@ import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-stor
 import type { ScheduleRecord, ScheduleStore } from "../schedule-store.js";
 import { encrypt, decrypt, encryptionKeyFromEnv } from "../crypto.js";
 import { categoryOf } from "../categories.js";
+import { isTransientEvent } from "../events.js";
 import { idempotencyKey } from "../idempotency.js";
 import { applyMigrations } from "./migrations.js";
 import { createPool, type PoolConfig } from "./db.js";
@@ -39,6 +40,11 @@ export class PgEventLogStore implements EventLogStore {
   }
 
   async append(record: RunEventRecord): Promise<void> {
+    if (isTransientEvent(record.payload.type)) {
+      throw new Error(
+        `Event "${record.payload.type}" is transient (D13) and must not be persisted; publish it via DeltaBus instead.`,
+      );
+    }
     let payload: RunEvent = record.payload;
     if (this.interceptor) {
       const res = await this.interceptor.intercept(payload, {

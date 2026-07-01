@@ -4,8 +4,24 @@ import { RunPaused } from "./agent.js";
 import type { AgentRunner } from "./context.js";
 import type { RunContext } from "./context.js";
 import type { MountedTools, Tool, ToolContext } from "./tool.js";
-import type { ModelClient, ModelPricing, ToolSchema } from "./model.js";
+import type { ModelClient, ModelPricing, ToolSchema, CompleteArgs, CompleteResult } from "./model.js";
 import { estimateCost, addUsage } from "./model.js";
+
+/**
+ * Token-delta coalescing (D13): flush the streamed text buffer to the DeltaBus
+ * on whichever comes first — a short time slice or a character budget — plus a
+ * final flush at turn end. ~20 updates/sec reads as real-time without a
+ * NOTIFY-per-token firehose (a 500-token answer → ~10-20 publishes, not 500).
+ */
+const DELTA_FLUSH_MS = 50;
+const DELTA_FLUSH_CHARS = 120;
+/**
+ * How often, during an in-flight model call, to poll cooperative cancellation
+ * and abort the provider request. Bounds how long a streamed answer keeps
+ * generating after the operator hits Stop (plus provider abort latency). Cheap:
+ * one cancel check per interval, only while a call is active.
+ */
+const CANCEL_POLL_MS = 250;
 import { validateToolInput } from "./schema-validate.js";
 import { ssrfFetch } from "./ssrf-fetch.js";
 
@@ -104,14 +120,14 @@ export class DefaultRunner implements AgentRunner {
         }
 
         const startedAt = Date.now();
-        const result = await this.model.complete({
+        const result = await this.callModel({
           model: agent.model,
           system: systemPrompt,
           tools: toolSchemas,
           messages: history,
           sampling: agent.sampling,
           signal: ctx.signal,
-        });
+        }, ctx);
         const latencyMs = Date.now() - startedAt;
         const callCost = estimateCost(agent.model.model, result.usage, this.options.pricing);
         tokensUsed += result.usage.inputTokens + result.usage.outputTokens;
@@ -163,8 +179,82 @@ export class DefaultRunner implements AgentRunner {
       }
     } catch (err) {
       if (err instanceof RunPaused) throw err;
+      // A cancel observed mid model-call aborts the provider request and surfaces
+      // here as an abort error; record it as a cancellation (not a failure) so
+      // Stop during a streamed answer ends the run cleanly.
+      if (await ctx.isCancelled()) {
+        await ctx.emit({ type: "run.cancelled" });
+        return { text: "", usage };
+      }
       await ctx.emit({ type: "run.failed", error: err instanceof Error ? err.message : String(err) });
       throw err;
+    }
+  }
+
+  /**
+   * Call the model, preferring the streaming seam (D13) when the client
+   * implements it: coalesce `text_delta`s and publish them via `ctx.streamDelta`
+   * for live token streaming, then return the assembled `CompleteResult`. Falls
+   * back to blocking `complete()` when the client has no `stream()`. Either way
+   * the caller emits the same durable `llm.call` + `message.assistant`.
+   *
+   * Cancellation (Stop): the provider request runs under a local `AbortController`
+   * that fires when either the run's external signal aborts or cooperative
+   * cancellation is observed (polled here + checked at each flush). Aborting mid
+   * generation makes Stop actually halt a long streamed answer; the thrown abort
+   * is classified as a cancellation by `run()`'s catch (which re-checks
+   * `isCancelled`), so it records `run.cancelled`, not `run.failed`.
+   */
+  private async callModel(args: CompleteArgs, ctx: RunContext): Promise<CompleteResult> {
+    const controller = new AbortController();
+    const external = args.signal;
+    const onExternalAbort = () => controller.abort();
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+    const poll = setInterval(() => {
+      void Promise.resolve(ctx.isCancelled())
+        .then((cancelled) => { if (cancelled) controller.abort(); })
+        .catch(() => {});
+    }, CANCEL_POLL_MS);
+    const modelArgs: CompleteArgs = { ...args, signal: controller.signal };
+
+    try {
+      if (!this.model.stream) {
+        return await this.model.complete(modelArgs);
+      }
+      const generator = this.model.stream(modelArgs);
+      let buffer = "";
+      let lastFlushAt = Date.now();
+      const flush = () => {
+        if (buffer.length === 0) return;
+        ctx.streamDelta(buffer);
+        buffer = "";
+        lastFlushAt = Date.now();
+      };
+
+      let next = await generator.next();
+      while (!next.done) {
+        const event = next.value;
+        if (event.type === "text_delta") {
+          buffer += event.text;
+          if (buffer.length >= DELTA_FLUSH_CHARS || Date.now() - lastFlushAt >= DELTA_FLUSH_MS) {
+            // Check cancellation at the (throttled) flush boundary before
+            // publishing, so Stop halts promptly without a per-token store read.
+            if (await ctx.isCancelled()) {
+              controller.abort();
+              await generator.return(undefined as never).catch(() => {});
+              throw new Error("run cancelled");
+            }
+            flush();
+          }
+        }
+        next = await generator.next();
+      }
+      flush();
+      return next.value;
+    } finally {
+      clearInterval(poll);
+      external.removeEventListener("abort", onExternalAbort);
     }
   }
 

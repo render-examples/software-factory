@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 /**
  * Build config for the operator UI SPA (`ui/`). Named `vite.ui.config.ts` (not
@@ -26,7 +27,7 @@ const API_PREFIXES = [
 export default defineConfig({
   root: "ui",
   base: "/ui/",
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     proxy: Object.fromEntries(
       API_PREFIXES.map((p) => [p, { target: GATEWAY_ORIGIN, changeOrigin: true }]),

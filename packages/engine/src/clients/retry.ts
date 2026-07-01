@@ -1,4 +1,4 @@
-import type { ModelClient, CompleteArgs, CompleteResult, RetryPolicy } from "../model.js";
+import type { ModelClient, CompleteArgs, CompleteResult, ModelStreamEvent, RetryPolicy } from "../model.js";
 
 const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxRetries: 3,
@@ -21,7 +21,7 @@ export function withRetry(
 ): ModelClient {
   const p: RetryPolicy = { ...DEFAULT_RETRY_POLICY, ...policy };
 
-  return {
+  const wrapped: ModelClient = {
     async complete(args: CompleteArgs): Promise<CompleteResult> {
       let lastError: unknown;
       for (let attempt = 0; attempt <= p.maxRetries; attempt++) {
@@ -40,6 +40,42 @@ export function withRetry(
       throw lastError;
     },
   };
+
+  // Only expose `stream` when the underlying client supports it, so the runner's
+  // `model.stream` feature-detection (D13) still correctly falls back to
+  // `complete` for non-streaming clients. Retry only covers *establishing* the
+  // stream: once a token has been yielded we cannot replay a partial turn, so a
+  // mid-stream error propagates (the runner has already published those deltas).
+  if (client.stream) {
+    const underlying = client.stream.bind(client);
+    wrapped.stream = async function* (args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult> {
+      let lastError: unknown;
+      for (let attempt = 0; attempt <= p.maxRetries; attempt++) {
+        let yielded = false;
+        try {
+          const gen = underlying(args);
+          let next = await gen.next();
+          while (!next.done) {
+            yielded = true;
+            yield next.value;
+            next = await gen.next();
+          }
+          return next.value;
+        } catch (err) {
+          lastError = err;
+          if (yielded) throw err;
+          if (attempt >= p.maxRetries) break;
+          if (args.signal.aborted) break;
+          if (!isRetryable(err, p.retryableStatuses)) break;
+
+          await sleep(computeDelay(attempt, p, err), args.signal);
+        }
+      }
+      throw lastError;
+    };
+  }
+
+  return wrapped;
 }
 
 function isRetryable(err: unknown, retryableStatuses: number[]): boolean {

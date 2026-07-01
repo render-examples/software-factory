@@ -29,8 +29,11 @@ export { PgEventLogStore, PgRunStore, createPgStore } from "./pg/postgres-store.
 export { getPool, createPool, closeSharedPool, applyMigrations } from "./pg/index.js";
 export { PgCancelStore, MemoryCancelStore } from "./pg/cancel-store.js";
 export type { PoolConfig } from "./pg/index.js";
-export { createStore, createJobQueue } from "./create-store.js";
-export type { CreateStoreOptions, CreateJobQueueOptions } from "./create-store.js";
+export { createStore, createJobQueue, createDeltaBus } from "./create-store.js";
+export type { CreateStoreOptions, CreateJobQueueOptions, CreateDeltaBusOptions } from "./create-store.js";
+export type { DeltaBus, StreamDelta } from "./delta-bus.js";
+export { MemoryDeltaBus, DELTA_CHANNEL } from "./delta-bus.js";
+export { PgDeltaBus } from "./pg/delta-bus.js";
 export type {
   JobQueue,
   JobRecord,

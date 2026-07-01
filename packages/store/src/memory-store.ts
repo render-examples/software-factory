@@ -7,6 +7,7 @@ import type {
   ToolResult,
 } from "./events.js";
 import { categoryOf } from "./categories.js";
+import { isTransientEvent } from "./events.js";
 import type { Message } from "./messages.js";
 import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
@@ -53,6 +54,11 @@ export class MemoryEventLogStore implements EventLogStore {
   }
 
   async append(record: RunEventRecord): Promise<void> {
+    if (isTransientEvent(record.payload.type)) {
+      throw new Error(
+        `Event "${record.payload.type}" is transient (D13) and must not be persisted; publish it via DeltaBus instead.`,
+      );
+    }
     let payload: RunEvent = record.payload;
     if (this.interceptor) {
       const res = await this.interceptor.intercept(payload, {

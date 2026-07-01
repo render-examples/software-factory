@@ -80,6 +80,40 @@ describe("gateway HITL — resolve resumes the paused run", () => {
   });
 });
 
+describe("gateway HITL — thread-scoped approvals (chat N+1 avoidance)", () => {
+  it("GET /approvals?threadId= returns only that thread's approvals", async () => {
+    const runtime = await createTestRuntime();
+    const { store } = runtime;
+
+    const seed = async (runId: string, threadId: string) => {
+      await store.events.append(
+        buildEventRecord(runId, { type: "run.started", input: {}, threadId }, { agentName: "deployer", spanId: runId }),
+      );
+      await store.events.append(
+        buildEventRecord(
+          runId,
+          { type: "approval.requested", approvalRequestId: `ap-${runId}`, toolName: "deploy", input: {} },
+          { agentName: "deployer", spanId: runId },
+        ),
+      );
+    };
+    await seed("run-a", "thread-a");
+    await seed("run-b", "thread-b");
+
+    const app = createGatewayApp({ runtime, disableAuth: true });
+
+    const scoped = await app.request("/approvals?threadId=thread-a");
+    expect(scoped.status).toBe(200);
+    const { approvals } = await scoped.json();
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0].runId).toBe("run-a");
+
+    // Unfiltered still returns both pending approvals.
+    const all = await (await app.request("/approvals")).json();
+    expect(all.approvals).toHaveLength(2);
+  });
+});
+
 describe("gateway HITL — events scaffolding sanity", () => {
   it("buildEventRecord is importable from store (smoke)", () => {
     const rec = buildEventRecord("r", { type: "run.started" });

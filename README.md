@@ -42,7 +42,7 @@ Open the operator UI at `http://localhost:3000/ui`.
 
 ## Documentation
 
-- [Specification](docs/specs/00-foundations.md) — the layered technical contract (D1–D12).
+- [Specification](docs/specs/00-foundations.md) — the layered technical contract (D1–D13).
 - [Architecture](docs/architecture.md) — how the event-log-first design fits together.
 - [Deployment, configuration & retention](docs/deployment.md).
 - [Getting started](docs/getting-started.md) — scaffold → run → deploy.

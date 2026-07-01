@@ -47,6 +47,46 @@ describe("operator routes — approvals status filter", () => {
   });
 });
 
+describe("operator routes — token-delta streaming (D13)", () => {
+  it("GET /runs/:id/stream merges transient text.delta frames from the DeltaBus", async () => {
+    const runtime = await createTestRuntime();
+    const runId = "stream-delta-run";
+    // A live (non-terminal) run so the stream stays open for the live tail.
+    await runtime.store.events.append(buildEventRecord(runId, { type: "run.started", trigger: "api" }));
+
+    const app = createGatewayApp({ runtime, disableAuth: true });
+    const ac = new AbortController();
+    const res = await app.request(`/runs/${runId}/stream`, { signal: ac.signal });
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    // Let the merged tail + delta subscription attach before publishing.
+    await new Promise((r) => setTimeout(r, 50));
+    await runtime.deltaBus.publish({ runId, agentName: "tester", seq: 1, text: "streamed token" });
+
+    let seen = "";
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !seen.includes("text.delta")) {
+      const chunk = await Promise.race([
+        reader.read().then((r) => new TextDecoder().decode(r.value ?? new Uint8Array())),
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000)),
+      ]);
+      seen += chunk;
+    }
+    expect(seen).toContain("text.delta");
+    expect(seen).toContain("streamed token");
+    // Transient frames carry no SSE id (they must not move the reconnect cursor):
+    // isolate the delta frame and assert it has no `id:` line at all (not merely
+    // that it isn't `id: undefined`).
+    const deltaFrame = seen.split("\n\n").find((f) => f.includes("text.delta"));
+    expect(deltaFrame).toBeDefined();
+    expect(deltaFrame!).not.toMatch(/(^|\n)id:/);
+
+    ac.abort();
+    await reader.cancel().catch(() => {});
+  });
+});
+
 describe("operator routes — global event stream", () => {
   it("GET /events/stream tails events across all runs", async () => {
     const runtime = await createTestRuntime();
