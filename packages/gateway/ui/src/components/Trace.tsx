@@ -3,7 +3,7 @@ import { client } from "../api/client";
 import { useAsync } from "../hooks/useAsync";
 import { buildSpanTree, spanCostUsd, type SpanNode } from "../lib/trace";
 import { formatCost, formatDuration, pretty } from "../lib/format";
-import type { RunEventRecord, SpanRecord } from "../api/types";
+import type { RunEventRecord, RunRecord, SpanRecord } from "../api/types";
 import { Json, Spinner, ErrorBanner } from "./ui";
 
 interface ToolIO { input?: unknown; result?: unknown; isError?: boolean }
@@ -11,13 +11,30 @@ interface ToolIO { input?: unknown; result?: unknown; isError?: boolean }
 interface TraceData {
   tree: SpanNode[];
   toolIO: Map<string, ToolIO>;
-  childRunBySpanId: Map<string, string>;
+  /** Cross-run children keyed by the parent span they hang off. */
+  childRunsBySpanId: Map<string, string[]>;
+  /** Children whose parent span isn't in this run's tree (rendered at root). */
+  orphanRunIds: string[];
 }
 
-function deriveTrace(spans: SpanRecord[], events: RunEventRecord[]): TraceData {
+function deriveTrace(spans: SpanRecord[], events: RunEventRecord[], children: RunRecord[]): TraceData {
   const toolIO = new Map<string, ToolIO>();
   const callIdToSpanId = new Map<string, string>();
-  const childRunBySpanId = new Map<string, string>();
+  const childRunsBySpanId = new Map<string, string[]>();
+  const seen = new Set<string>();
+
+  const link = (spanId: string | undefined, runId: string | undefined) => {
+    if (!spanId || !runId || seen.has(runId)) return;
+    seen.add(runId);
+    const arr = childRunsBySpanId.get(spanId) ?? [];
+    arr.push(runId);
+    childRunsBySpanId.set(spanId, arr);
+  };
+
+  // Authoritative cross-run links: workflow `.task()`/`.run()` fan-out plus
+  // subagents. The workflow/agent root span shares the run id, so fan-out
+  // children (parentSpanId === parentRunId) attach to the root span.
+  for (const c of children) link(c.parentSpanId, c.id);
 
   for (const e of events) {
     const p = e.payload;
@@ -37,12 +54,20 @@ function deriveTrace(spans: SpanRecord[], events: RunEventRecord[]): TraceData {
         toolIO.set(e.spanId, io);
       }
     } else if (p.type === "subagent.spawned") {
-      const spanId = callIdToSpanId.get(String(p.toolCallId));
-      if (spanId) childRunBySpanId.set(spanId, String(p.childRunId));
+      // Fallback for older runs where the child summary wasn't captured.
+      link(callIdToSpanId.get(String(p.toolCallId)), String(p.childRunId));
     }
   }
 
-  return { tree: buildSpanTree(spans), toolIO, childRunBySpanId };
+  // Any child whose parent span isn't part of this run's span tree still gets
+  // shown (attached at the root) rather than silently dropped.
+  const spanIds = new Set(spans.map((s) => s.id));
+  const orphanRunIds: string[] = [];
+  for (const [spanId, runIds] of childRunsBySpanId) {
+    if (!spanIds.has(spanId)) orphanRunIds.push(...runIds);
+  }
+
+  return { tree: buildSpanTree(spans), toolIO, childRunsBySpanId, orphanRunIds };
 }
 
 function NodeMeta({ span }: { span: SpanNode }) {
@@ -65,17 +90,18 @@ function NodeMeta({ span }: { span: SpanNode }) {
 }
 
 function SpanNodeView({
-  span, toolIO, childRunBySpanId, defaultOpen,
+  span, toolIO, childRunsBySpanId, defaultOpen, reloadKey = 0,
 }: {
   span: SpanNode;
   toolIO: Map<string, ToolIO>;
-  childRunBySpanId: Map<string, string>;
+  childRunsBySpanId: Map<string, string[]>;
   defaultOpen: boolean;
+  reloadKey?: number;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const childRunId = childRunBySpanId.get(span.id);
+  const childRunIds = childRunsBySpanId.get(span.id) ?? [];
   const io = toolIO.get(span.id);
-  const hasDetail = span.children.length > 0 || !!io || !!childRunId || !!span.error || span.output !== undefined;
+  const hasDetail = span.children.length > 0 || !!io || childRunIds.length > 0 || !!span.error || span.output !== undefined;
   const startOpen = span.kind === "agent" || span.kind === "workflow";
 
   return (
@@ -100,14 +126,14 @@ function SpanNodeView({
               <Json value={typeof io.result === "string" ? io.result : pretty(io.result)} />
             </div>
           )}
-          {childRunId && (
-            <div className="detail" style={{ paddingLeft: `${span.depth * 16 + 22}px` }}>
-              <div className="faint">subagent run · {childRunId.slice(0, 8)}</div>
-              <TraceView runId={childRunId} depthOffset={span.depth + 1} />
+          {childRunIds.map((childRunId) => (
+            <div key={childRunId} className="detail" style={{ paddingLeft: `${span.depth * 16 + 22}px` }}>
+              <div className="faint">child run · {childRunId.slice(0, 8)}</div>
+              <TraceView runId={childRunId} depthOffset={span.depth + 1} reloadKey={reloadKey} />
             </div>
-          )}
+          ))}
           {span.children.map((c) => (
-            <SpanNodeView key={c.id} span={c} toolIO={toolIO} childRunBySpanId={childRunBySpanId} defaultOpen={startOpen} />
+            <SpanNodeView key={c.id} span={c} toolIO={toolIO} childRunsBySpanId={childRunsBySpanId} defaultOpen={startOpen} reloadKey={reloadKey} />
           ))}
         </>
       )}
@@ -116,20 +142,25 @@ function SpanNodeView({
 }
 
 /**
- * The span/trace tree for one run. Loads spans + raw events (events give tool
- * I/O and the subagent.spawned → childRunId mapping for cross-run stitching).
- * `reloadKey` forces a refetch (used to keep a live run's tree fresh).
+ * The span/trace tree for one run. Loads spans + raw events (tool I/O) + child
+ * runs, and stitches child runs (workflow `.task()`/`.run()` fan-out and LLM
+ * subagents) under the parent span they hang off — recursing into each child's
+ * own trace. `reloadKey` forces a refetch (keeps a live run's tree fresh).
  */
 export function TraceView({ runId, reloadKey = 0, depthOffset = 0 }: { runId: string; reloadKey?: number; depthOffset?: number }) {
   const { data, error, loading } = useAsync(
-    () => Promise.all([client.getSpans(runId), client.getRunEvents(runId)]),
+    () => Promise.all([
+      client.getSpans(runId),
+      client.getRunEvents(runId),
+      client.listRunChildren(runId).catch(() => ({ runs: [] as RunRecord[] })),
+    ]),
     [runId, reloadKey],
   );
 
   const derived = useMemo<TraceData | null>(() => {
     if (!data) return null;
-    const [{ spans }, { events }] = data;
-    const t = deriveTrace(spans, events);
+    const [{ spans }, { events }, { runs: children }] = data;
+    const t = deriveTrace(spans, events, children);
     if (depthOffset) for (const r of t.tree) shiftDepth(r, depthOffset);
     return t;
   }, [data, depthOffset]);
@@ -141,7 +172,13 @@ export function TraceView({ runId, reloadKey = 0, depthOffset = 0 }: { runId: st
   return (
     <div className="tree">
       {derived.tree.map((n) => (
-        <SpanNodeView key={n.id} span={n} toolIO={derived.toolIO} childRunBySpanId={derived.childRunBySpanId} defaultOpen />
+        <SpanNodeView key={n.id} span={n} toolIO={derived.toolIO} childRunsBySpanId={derived.childRunsBySpanId} defaultOpen reloadKey={reloadKey} />
+      ))}
+      {derived.orphanRunIds.map((childRunId) => (
+        <div key={childRunId} className="detail" style={{ paddingLeft: `${depthOffset * 16 + 22}px` }}>
+          <div className="faint">child run · {childRunId.slice(0, 8)}</div>
+          <TraceView runId={childRunId} depthOffset={depthOffset + 1} reloadKey={reloadKey} />
+        </div>
       ))}
     </div>
   );

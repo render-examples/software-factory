@@ -24,8 +24,57 @@ const COLS =
  * runner's `tail` to wake immediately; a poll fallback (in the runner) covers
  * delayed/backoff jobs and any missed notification.
  */
+/** One live `tail()` subscriber: a wake counter fed by the shared listener. */
+interface JobTailSub {
+  pending: number;
+  wake: (() => void) | null;
+}
+
 export class PgJobQueue implements JobQueue {
+  // Shared LISTEN multiplexer (CR-07): one `run_jobs` LISTEN connection fans out
+  // wake signals to all `tail()` subscribers, instead of one connection each.
+  private tailListenClient: pg.PoolClient | null = null;
+  private tailListening: Promise<void> | null = null;
+  private readonly tailSubs = new Set<JobTailSub>();
+
   constructor(private readonly pool: Pool) {}
+
+  private async ensureTailListening(): Promise<void> {
+    if (!this.tailListening) {
+      this.tailListening = this.connectTailListener().catch((err) => {
+        this.tailListening = null;
+        this.tailListenClient = null;
+        throw err;
+      });
+    }
+    return this.tailListening;
+  }
+
+  private async connectTailListener(): Promise<void> {
+    const client = await this.pool.connect();
+    this.tailListenClient = client;
+    client.on("notification", (_msg: pg.Notification) => {
+      for (const sub of this.tailSubs) {
+        sub.pending += 1;
+        sub.wake?.();
+      }
+    });
+    await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
+  }
+
+  private async stopTailListening(): Promise<void> {
+    if (this.tailSubs.size > 0) return;
+    const client = this.tailListenClient;
+    this.tailListenClient = null;
+    this.tailListening = null;
+    if (!client) return;
+    try {
+      await client.query(`UNLISTEN ${NOTIFY_CHANNEL}`);
+    } catch {
+      // ignore — releasing the client drops the LISTEN anyway
+    }
+    client.release();
+  }
 
   async enqueue(opts: EnqueueOptions): Promise<JobRecord> {
     const id = opts.id ?? randomUUID();
@@ -154,38 +203,31 @@ export class PgJobQueue implements JobQueue {
   }
 
   tail(signal: AbortSignal): AsyncIterable<void> {
-    const pool = this.pool;
+    const sub: JobTailSub = { pending: 0, wake: null };
+    const subs = this.tailSubs;
+    const ensureListening = () => this.ensureTailListening();
+    const stopListening = () => this.stopTailListening();
+
     async function* generator(): AsyncGenerator<void> {
       if (signal.aborted) return;
-      const listenClient = await pool.connect();
+      subs.add(sub);
+      const onAbort = () => sub.wake?.();
+      signal.addEventListener("abort", onAbort);
       try {
-        await listenClient.query(`LISTEN ${NOTIFY_CHANNEL}`);
-        let pending = 0;
-        let wake: (() => void) | null = null;
-        const onNotification = (_msg: pg.Notification) => {
-          pending += 1;
-          wake?.();
-        };
-        listenClient.on("notification", onNotification);
-        const onAbort = () => wake?.();
-        signal.addEventListener("abort", onAbort);
-        try {
-          while (!signal.aborted) {
-            while (pending > 0) {
-              pending -= 1;
-              yield;
-            }
-            if (signal.aborted) return;
-            await new Promise<void>((resolve) => { wake = resolve; });
-            wake = null;
+        await ensureListening();
+        while (!signal.aborted) {
+          while (sub.pending > 0) {
+            sub.pending -= 1;
+            yield;
           }
-        } finally {
-          signal.removeEventListener("abort", onAbort);
-          listenClient.removeListener("notification", onNotification);
-          await listenClient.query(`UNLISTEN ${NOTIFY_CHANNEL}`).catch(() => {});
+          if (signal.aborted) return;
+          await new Promise<void>((resolve) => { sub.wake = resolve; });
+          sub.wake = null;
         }
       } finally {
-        listenClient.release();
+        signal.removeEventListener("abort", onAbort);
+        subs.delete(sub);
+        await stopListening();
       }
     }
     return generator();

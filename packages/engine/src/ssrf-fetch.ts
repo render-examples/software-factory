@@ -7,12 +7,19 @@ const TIMEOUT_MS = 30_000;
 const MAX_REDIRECTS = 5;
 
 /**
- * Classify an IP literal as private/internal/reserved and therefore unsafe as
- * an SSRF target. Covers IPv4 + IPv6 including IPv4-mapped IPv6, CGNAT, the
- * full link-local range (cloud metadata lives at 169.254.169.254), and the
- * loopback/unspecified ranges.
+ * Classify an IP literal as an unsafe fetch target. Covers IPv4 + IPv6 including
+ * IPv4-mapped IPv6, CGNAT, the full link-local range (cloud metadata lives at
+ * 169.254.169.254), and the loopback/unspecified ranges.
+ *
+ * `allowPrivate` selects the trust level:
+ *  - `false` (default) — untrusted, model-influenced URLs (tool `ctx.fetch`):
+ *    block every private/loopback/reserved range.
+ *  - `true` — operator-configured endpoints (e.g. MCP servers): permit loopback
+ *    + private LAN (local/docker MCP is legitimate) but STILL block the ranges
+ *    that are never a valid destination, above all link-local 169.254/16 (cloud
+ *    metadata) and the AWS IMDSv6 address.
  */
-function isPrivateIP(rawIp: string): boolean {
+function isBlockedIP(rawIp: string, allowPrivate = false): boolean {
   let ip = rawIp.trim().toLowerCase();
   // Normalize IPv4-mapped IPv6 to IPv4. The URL parser canonicalizes these to
   // hex form (::ffff:7f00:1), but DNS/string inputs may use dotted-decimal
@@ -29,39 +36,44 @@ function isPrivateIP(rawIp: string): boolean {
     }
   }
 
-  if (isIP(ip) === 4) return isPrivateIPv4(ip);
-  if (isIP(ip) === 6) return isPrivateIPv6(ip);
+  if (isIP(ip) === 4) return isBlockedIPv4(ip, allowPrivate);
+  if (isIP(ip) === 6) return isBlockedIPv6(ip, allowPrivate);
   // Unparseable — treat as unsafe.
   return true;
 }
 
-function isPrivateIPv4(ip: string): boolean {
+function isBlockedIPv4(ip: string, allowPrivate: boolean): boolean {
   const parts = ip.split(".").map((p) => parseInt(p, 10));
   if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
   const [a, b] = parts;
+  // Never a valid destination — blocked even for trusted operator config.
+  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+  if (a === 0) return true; // 0.0.0.0/8 "this host"
+  if (a >= 224) return true; // multicast + reserved (224.0.0.0+)
+  if (allowPrivate) return false; // trusted config may target loopback/LAN (local/docker MCP)
+  // Untrusted callers: block all private/reserved ranges.
   if (a === 10) return true; // 10.0.0.0/8
   if (a === 127) return true; // loopback
-  if (a === 0) return true; // 0.0.0.0/8 "this host"
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
   if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
   if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
   if (a === 192 && b === 0) return true; // 192.0.0.0/24 IETF protocol assignments
   if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmarking
-  if (a >= 224) return true; // multicast + reserved (224.0.0.0+)
   return false;
 }
 
-function isPrivateIPv6(rawIp: string): boolean {
+function isBlockedIPv6(rawIp: string, allowPrivate: boolean): boolean {
   const ip = rawIp.toLowerCase();
-  if (ip === "::1") return true; // loopback
+  // Never a valid destination — blocked even for trusted operator config.
   if (ip === "::") return true; // unspecified
-  if (ip.startsWith("fc") || ip.startsWith("fd")) return true; // unique local fc00::/7
   if (ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb")) {
     return true; // link-local fe80::/10
   }
   if (ip.startsWith("ff")) return true; // multicast
   if (ip === "fd00:ec2::254") return true; // AWS IMDS over IPv6
+  if (allowPrivate) return false; // trusted config may target loopback/ULA
+  if (ip === "::1") return true; // loopback
+  if (ip.startsWith("fc") || ip.startsWith("fd")) return true; // unique local fc00::/7
   return false;
 }
 
@@ -71,12 +83,15 @@ function isPrivateIPv6(rawIp: string): boolean {
  * pinned IP (rather than re-resolving at connect time) closes the DNS-rebinding
  * / TOCTOU window.
  */
-async function resolveSafeAddress(hostname: string): Promise<{ ip: string; family: number }> {
+async function resolveSafeAddress(
+  hostname: string,
+  allowPrivate = false,
+): Promise<{ ip: string; family: number }> {
   // IP literal (strip brackets from `[::1]`).
   const literal = hostname.replace(/^\[|\]$/g, "");
   if (isIP(literal) !== 0) {
-    if (isPrivateIP(literal)) {
-      throw new Error(`SSRF blocked: "${hostname}" is a private address`);
+    if (isBlockedIP(literal, allowPrivate)) {
+      throw new Error(`SSRF blocked: "${hostname}" is a disallowed address`);
     }
     return { ip: literal, family: isIP(literal) };
   }
@@ -92,15 +107,38 @@ async function resolveSafeAddress(hostname: string): Promise<{ ip: string; famil
   if (addresses.length === 0) {
     throw new Error(`DNS resolution failed for "${hostname}": no addresses`);
   }
-  // Every resolved address must be public — a host with a mix of public and
-  // private records must not pass.
+  // Every resolved address must pass — a host with a mix of allowed and blocked
+  // records must not pass.
   for (const { address } of addresses) {
-    if (isPrivateIP(address)) {
-      throw new Error(`SSRF blocked: "${hostname}" resolves to private address ${address}`);
+    if (isBlockedIP(address, allowPrivate)) {
+      throw new Error(`SSRF blocked: "${hostname}" resolves to disallowed address ${address}`);
     }
   }
   const chosen = addresses[0];
   return { ip: chosen.address, family: chosen.family };
+}
+
+export interface SsrfGuardOptions {
+  /**
+   * Permit loopback + private LAN targets (for operator-configured endpoints
+   * like MCP servers). Cloud-metadata/link-local/multicast ranges remain blocked.
+   * Default `false`.
+   */
+  allowPrivateHosts?: boolean;
+}
+
+/**
+ * Resolve and validate a URL's destination without performing a request. Throws
+ * if the scheme is unsupported or any resolved address is disallowed. Used to
+ * guard operator-configured HTTP endpoints (MCP) where connection-level IP
+ * pinning would break TLS SNI, so the request itself uses the normal hostname.
+ */
+export async function assertUrlAllowed(url: string, opts?: SsrfGuardOptions): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`SSRF blocked: unsupported protocol "${parsed.protocol}"`);
+  }
+  await resolveSafeAddress(parsed.hostname, opts?.allowPrivateHosts ?? false);
 }
 
 /**

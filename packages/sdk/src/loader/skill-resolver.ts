@@ -8,26 +8,38 @@ export interface SkillRegistryData {
   skills: Map<string, SkillMetadata>;
 }
 
+/** Coerce a frontmatter value to a string, ignoring non-string YAML values
+ *  (e.g. a numeric `name:`) rather than mis-casting them (CR-13). */
+function asString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+const MAX_FRONTMATTER_BYTES = 64 * 1024;
+
 export async function loadSkillRegistry(items: DiscoveredItem[]): Promise<SkillRegistryData> {
   const skills = new Map<string, SkillMetadata>();
 
   for (const item of items) {
-    const content = await readTextFile(item.path);
+    // Normalize CRLF so Windows-authored skills parse frontmatter identically (CR-13).
+    const content = (await readTextFile(item.path)).replace(/\r\n/g, "\n");
     const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 
     let frontmatter: Record<string, unknown> = {};
     let body = content.trim();
 
-    if (match) {
+    if (match && match[1].length <= MAX_FRONTMATTER_BYTES) {
       frontmatter = (parseYaml(match[1]) as Record<string, unknown>) ?? {};
+      body = match[2].trim();
+    } else if (match) {
+      // Oversized frontmatter — skip parsing it, keep the body after the fence.
       body = match[2].trim();
     }
 
     const metadata: SkillMetadata = {
       id: item.key,
-      name: (frontmatter["name"] as string) ?? item.key,
-      description: (frontmatter["description"] as string) ?? "",
-      whenToUse: (frontmatter["whenToUse"] as string) ?? "",
+      name: asString(frontmatter["name"], item.key),
+      description: asString(frontmatter["description"], ""),
+      whenToUse: asString(frontmatter["whenToUse"], ""),
       content: body,
     };
 

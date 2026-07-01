@@ -30,6 +30,14 @@ export interface ToolSource {
 
 export interface ResolvedSource {
   readonly tools: Tool[];
+  /**
+   * When true, the environment always namespaces these tools as
+   * `<sourceId>__<toolName>` at mount time, where `<sourceId>` is the convention
+   * directory key the agent referenced — never collapsing a single tool to the
+   * bare source id. MCP sources set this so their model-facing names track the
+   * `tools/<dir>` folder (D6), independent of the server's advertised names.
+   */
+  readonly prefixTools?: boolean;
   close(): Promise<void>;
 }
 

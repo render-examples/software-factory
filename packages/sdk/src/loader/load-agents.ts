@@ -121,9 +121,14 @@ export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
       item.key,
     );
 
+    // Subagent delegation tools (`subagents__<name>`) are mounted at run time
+    // from the `subagents` field, not `tools[]`, but they are gateable by HITL
+    // (D6). Include them in the approval-validation set so
+    // `requireApproval: [subagents__researcher]` is accepted (BUG-09).
+    const subagentToolIds = (frontmatter.subagents ?? []).map((s) => `subagents__${s}`);
     validateApprovalRefs(
       frontmatter.permissions?.requireApproval,
-      expandedTools,
+      [...expandedTools, ...subagentToolIds],
       item.key,
     );
 

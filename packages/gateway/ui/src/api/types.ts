@@ -19,6 +19,7 @@ export interface RunRecord {
   threadId?: string;
   userId?: string;
   agentVersion?: string;
+  parentSpanId?: string;
   startedAt: string;
   finishedAt?: string;
 }
@@ -26,6 +27,8 @@ export interface RunRecord {
 export interface RunDetail extends RunRecord {
   /** All-in cost incl. subagent descendants (server-aggregated). */
   aggregateCostUsd: number;
+  /** Why the run is paused, when it is: an approval gate vs. an input request. */
+  pauseReason?: "approval" | "input";
 }
 
 export interface SpanRecord {
@@ -81,7 +84,6 @@ export interface Thread {
   id: string;
   userId?: string;
   metadata?: Record<string, unknown>;
-  currentRunId?: string;
   status: "active" | "idle" | "completed" | "failed" | "cancelled";
   title?: string;
   createdAt: string;
@@ -108,6 +110,34 @@ export interface ScheduleRecord {
   lastRunAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WorkflowInfo {
+  name: string;
+}
+
+export interface ConnectionInfo {
+  provider: string;
+  connected: boolean;
+  scopes?: string[];
+  expiresAt?: string;
+}
+
+export type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
+
+export interface JobsSnapshot {
+  counts: Record<JobStatus, number>;
+  backlog: number;
+}
+
+export interface RetentionResult {
+  eventDetailTrimmed: number;
+  runsDeleted: number;
+}
+
+export interface ReapResult {
+  reaped: number;
+  runIds: string[];
 }
 
 /** A decoded event from the global `/events/stream` (carries runId). */

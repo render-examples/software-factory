@@ -120,7 +120,13 @@ async function driveByKind(job: JobRecord, runtime: AgentRuntime): Promise<void>
   switch (job.kind) {
     case "agent": {
       const run = await runtime.store.getRun(job.runId);
-      if (!run) return; // nothing to drive (deleted) — treated as settled
+      if (!run) {
+        // The gateway records `run.started` before enqueue, so a missing run row
+        // is a contract violation (or the run was deleted out-of-band). Fail
+        // loudly (→ retry/backoff → dead-letter) rather than silently marking the
+        // job complete, which would hide the anomaly (CR-14).
+        throw new Error(`agent job "${job.id}": run "${job.runId}" not found`);
+      }
       // Contract: the gateway records the opening turn (`run.started` +
       // `message.user`) before enqueue — the run row satisfies the job's FK and
       // the runner's hasStarted() guard then drives without duplicating them.

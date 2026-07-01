@@ -1,6 +1,13 @@
-import Ajv, { type ErrorObject } from "ajv";
+import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 
 const ajv = new Ajv.default({ allErrors: true, strict: false });
+
+// Compiled validators are cached by schema *identity* (tool `inputSchema` objects
+// are stable references), so a hot tool isn't recompiled on every dispatch —
+// `ajv.compile` is expensive and unbounded work on adversarial schemas (CR-12).
+// A WeakMap keys on the schema object and never grows unbounded (GC-collected
+// with the schema).
+const validatorCache = new WeakMap<object, ValidateFunction>();
 
 /**
  * Validate tool input against a JSON Schema. Returns `undefined` on success or
@@ -10,11 +17,14 @@ const ajv = new Ajv.default({ allErrors: true, strict: false });
  */
 export function validateToolInput(input: unknown, schema: Record<string, unknown>): string | undefined {
   if (!schema || Object.keys(schema).length === 0) return undefined;
-  let validate;
-  try {
-    validate = ajv.compile(schema);
-  } catch (err) {
-    return `Schema compilation error: ${err instanceof Error ? err.message : String(err)}`;
+  let validate = validatorCache.get(schema);
+  if (!validate) {
+    try {
+      validate = ajv.compile(schema);
+    } catch (err) {
+      return `Schema compilation error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    validatorCache.set(schema, validate);
   }
   const valid = validate(input);
   if (valid) return undefined;

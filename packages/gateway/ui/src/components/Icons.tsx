@@ -30,6 +30,18 @@ export function SchedulesIcon(p: IconProps) {
   return (<svg {...base(p)}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>);
 }
 
+export function WorkflowsIcon(p: IconProps) {
+  return (<svg {...base(p)}><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="15" width="6" height="6" rx="1" /><path d="M9 6h6a2 2 0 0 1 2 2v7" /></svg>);
+}
+
+export function ConnectionsIcon(p: IconProps) {
+  return (<svg {...base(p)}><path d="M9 7L5.5 10.5a4 4 0 0 0 5.66 5.66l1.34-1.34" /><path d="M15 17l3.5-3.5a4 4 0 0 0-5.66-5.66l-1.34 1.34" /><line x1="9" y1="15" x2="15" y2="9" /></svg>);
+}
+
+export function OpsIcon(p: IconProps) {
+  return (<svg {...base(p)}><path d="M3 12h4l2 6 4-14 2 8h6" /></svg>);
+}
+
 export function MenuIcon(p: IconProps) {
   return (<svg {...base(p)}><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" /></svg>);
 }

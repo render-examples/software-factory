@@ -70,6 +70,10 @@ export function defineToolSource(id: string, specs: DefineToolSpec[]): ToolSourc
  * proxied over JSON-RPC `tools/call`; `close()` tears down the connection.
  */
 export function defineMcpSource(spec: DefineMcpSpec): ToolSource {
+  // The source `id` is only a fallback for the rare direct (non-loader) use; the
+  // model-facing namespace comes from the `tools/<dir>` key at mount time via
+  // `prefixTools` (BUG-10). Tools are emitted with their bare server names so the
+  // environment can namespace them by the directory the agent referenced.
   const id = spec.name ?? "mcp";
   return {
     id,
@@ -84,7 +88,7 @@ export function defineMcpSource(spec: DefineMcpSpec): ToolSource {
       }
 
       const tools: Tool[] = descriptors.map((d) => ({
-        name: `${id}__${d.name}`,
+        name: d.name,
         description: d.description ?? `MCP tool ${d.name}`,
         inputSchema: d.inputSchema ?? { type: "object" },
         async invoke(input: unknown): Promise<ToolResult> {
@@ -93,7 +97,7 @@ export function defineMcpSource(spec: DefineMcpSpec): ToolSource {
         },
       }));
 
-      return { tools, close: () => connection.close() };
+      return { tools, prefixTools: true, close: () => connection.close() };
     },
   };
 }
@@ -140,10 +144,10 @@ export class ToolEnvironment {
       this.sources.push(resolved);
 
       if (isNamespaced) {
-        const toolName = declaredId;
-        const tool = resolved.tools.find((t) => t.name === toolName || t.name === declaredId.split("__")[1]);
+        const bareName = declaredId.split("__")[1];
+        const tool = resolved.tools.find((t) => t.name === declaredId || t.name === bareName);
         if (tool) {
-          const mountedName = toolName;
+          const mountedName = declaredId;
           this.checkCollision(mountedName, nameSet, declaredId);
           allTools.push({ ...tool, name: mountedName });
           nameSet.add(mountedName);
@@ -152,11 +156,17 @@ export class ToolEnvironment {
         }
       } else {
         for (const tool of resolved.tools) {
-          // If the source already produced namespaced names (e.g. defineToolSource),
-          // use them as-is. Otherwise namespace as sourceId__toolName for multi-tool.
-          const mountedName = resolved.tools.length > 1
-            ? (tool.name.startsWith(`${sourceId}__`) ? tool.name : `${sourceId}__${tool.name}`)
-            : sourceId;
+          // Model-facing naming:
+          // - `prefixTools` sources (MCP) always namespace as sourceId__toolName,
+          //   keyed on the directory the agent referenced (D6) — no single-tool
+          //   collapse (BUG-10).
+          // - defineToolSource already produced sourceId__name; keep as-is.
+          // - a lone tool (defineTool) collapses to the bare source id.
+          const mountedName = resolved.prefixTools
+            ? `${sourceId}__${tool.name}`
+            : resolved.tools.length > 1
+              ? (tool.name.startsWith(`${sourceId}__`) ? tool.name : `${sourceId}__${tool.name}`)
+              : sourceId;
           this.checkCollision(mountedName, nameSet, declaredId);
           allTools.push({ ...tool, name: mountedName });
           nameSet.add(mountedName);

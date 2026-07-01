@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import type { CancelStore } from "@render-agents/store";
+import type { CancelStore, RunRecord } from "@render-agents/store";
 import { runRetention, reapRuns, buildEventRecord } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
 import { resumeRun, submitRootRun, driveAgentTurn, RunPaused } from "@render-agents/sdk";
-import { apiKeyAuth } from "./auth.js";
+import { apiKeyAuth, defaultPublicPath, allowsQueryKey } from "./auth.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
 import { threadRoutes } from "./routes/threads.js";
@@ -74,13 +74,23 @@ export function createGatewayApp(opts: GatewayOptions) {
     app.route("/", uiRoutes());
   }
 
-  // Auth middleware on all routes except health + the UI shell
+  // Auth middleware on all routes except health + the UI shell. Two carve-outs
+  // baked into the middleware (not route ordering) so they survive refactors:
+  //   - `isPublicPath`: OAuth callback (authed by signed `state`) and inbound
+  //     webhooks/connectors (authed by adapter signatures) — third parties can't
+  //     send our bearer token (CR-01).
+  //   - `allowQueryKey`: SSE endpoints only, since EventSource can't set headers.
+  //     Everywhere else the `?key=` fallback is rejected so the key can't leak
+  //     via logs/history/Referer (CR-05).
   if (!opts.disableAuth) {
-    app.use("/*", apiKeyAuth());
+    app.use("/*", apiKeyAuth({ isPublicPath: defaultPublicPath, allowQueryKey: allowsQueryKey }));
   }
 
   const store = runtime.store;
-  const cancel = cancelStore ?? { requestCancel: async () => {}, isCancelled: async () => false, clearCancel: async () => {} };
+  // Cancellation is cooperative: the loop polls `runtime.cancelStore` each
+  // iteration, so the gateway's cancel route MUST write to that same store
+  // (BUG-01). Default to it; an explicit `cancelStore` override still wins (tests).
+  const cancel = cancelStore ?? runtime.cancelStore;
   const wf = workflows ?? new Map();
   // HITL resume routing (two lanes). Classify the paused run by registry lookup:
   // - a **workflow** root → Lane A: re-trigger + replay (`dispatchRoot` →
@@ -89,33 +99,70 @@ export function createGatewayApp(opts: GatewayOptions) {
   // - an **agent/chat** turn → Lane B: a durable `resume` job (queue, survives a
   //   gateway restart) or an inline `resumeRun` (inline mode). Same call site,
   //   mode chosen by `submitRootRun`.
+  // Re-trigger a paused workflow root (Lane A): `dispatchRoot` on Render, or an
+  // in-process drive in dev. The handler is replay-safe (memoized `ctx.step` +
+  // deterministic child ids), so re-driving resumes from where it parked.
+  const redriveRoot = async (root: RunRecord): Promise<void> => {
+    const def = runtime.workflows.get(root.workflow);
+    const dispatcher = runtime.dispatcher;
+    if (dispatcher?.dispatchRoot) {
+      // Fail-fast (E6, mode 1): if re-triggering Lane A throws (workflows host
+      // down), don't leave the resumed root stranded — record `run.failed` so
+      // it's terminal and observable.
+      try {
+        await dispatcher.dispatchRoot({ workflow: root.workflow, runId: root.id, plan: def?.options.plan });
+      } catch (err) {
+        await store.events.append(
+          buildEventRecord(
+            root.id,
+            { type: "run.failed", error: `failed to dispatch root to workflows host: ${err instanceof Error ? err.message : String(err)}` },
+            { agentName: root.workflow, spanId: root.id },
+          ),
+        );
+      }
+    } else {
+      await def?.drive(root.id);
+    }
+  };
+
+  // Child→parent HITL bubble: an approval gate fires inside a *child* agent run
+  // (`.task()`/`.run()`), so the resolved run is the child, but the run that
+  // parked is the workflow root above it. Walk `parentSpanId` up to the nearest
+  // paused workflow root so resolving the child's approval re-drives that root
+  // (its replay re-dispatches the still-paused child past the now-resolved gate).
+  // Interim until native Workflows pause/resume lands (see docs/bug-bash.md).
+  const findPausedWorkflowRoot = async (run: RunRecord): Promise<RunRecord | undefined> => {
+    const seen = new Set<string>();
+    let cursor: RunRecord | undefined = run;
+    while (cursor?.parentSpanId && !seen.has(cursor.parentSpanId)) {
+      seen.add(cursor.parentSpanId);
+      const parent = await store.getRun(cursor.parentSpanId);
+      if (!parent) return undefined;
+      if (runtime.workflows.has(parent.workflow) && parent.status === "paused") return parent;
+      cursor = parent;
+    }
+    return undefined;
+  };
+
   const resume =
     opts.resume ??
     (async (runId: string) => {
       const run = await store.getRun(runId);
+      // A paused workflow root resolved directly → re-drive it (Lane A).
       if (run && runtime.workflows.has(run.workflow)) {
-        const def = runtime.workflows.get(run.workflow);
-        const dispatcher = runtime.dispatcher;
-        if (dispatcher?.dispatchRoot) {
-          // Fail-fast (E6, mode 1): if re-triggering Lane A throws (workflows
-          // host down), don't leave the resumed root stranded — record
-          // `run.failed` so it's terminal and observable.
-          try {
-            await dispatcher.dispatchRoot({ workflow: run.workflow, runId, plan: def?.options.plan });
-          } catch (err) {
-            await store.events.append(
-              buildEventRecord(
-                runId,
-                { type: "run.failed", error: `failed to dispatch root to workflows host: ${err instanceof Error ? err.message : String(err)}` },
-                { agentName: run.workflow, spanId: runId },
-              ),
-            );
-          }
-        } else {
-          await def?.drive(runId);
-        }
+        await redriveRoot(run);
         return;
       }
+      // A child agent run gated inside a workflow → re-drive its paused root.
+      if (run) {
+        const root = await findPausedWorkflowRoot(run);
+        if (root) {
+          await redriveRoot(root);
+          return;
+        }
+      }
+      // Otherwise an agent/chat turn → Lane B: durable `resume` job (queue) or
+      // an inline `resumeRun` (inline mode). Same call site, mode via submitRootRun.
       await submitRootRun(runtime, { runId, kind: "resume", driveInline: async () => { await resumeRun(runId, runtime); } });
     });
 
@@ -140,6 +187,14 @@ export function createGatewayApp(opts: GatewayOptions) {
     const counts = await runtime.jobQueue.countByStatus();
     const backlog = counts.queued + counts.running;
     return c.json({ counts, backlog });
+  });
+
+  // Registered workflow names (read-only) — powers the operator UI's dispatch
+  // and schedule pickers. The dispatch POST lives in runRoutes; this is the
+  // matching list route so the UI doesn't have to hardcode workflow names.
+  app.get("/workflows", (c) => {
+    const list = [...wf.keys()].map((name) => ({ name }));
+    return c.json({ workflows: list, defaultWorkflow: opts.defaultWorkflow });
   });
 
   // Core run routes
@@ -205,6 +260,20 @@ export function createGatewayApp(opts: GatewayOptions) {
         runtime.oauthRefreshers.set(name, buildRefresher(config));
       }
     }
+    // Read-only connection status for the operator UI: the configured providers
+    // plus, when a userId is supplied, whether that user has a live connection.
+    // Only registered when OAuth is configured, so the UI can gate the nav on it.
+    const providers = opts.oauthProviders;
+    app.get("/connections", async (c) => {
+      const userId = c.req.query("userId");
+      const out = [];
+      for (const name of providers.keys()) {
+        const conn = userId ? await runtime.oauthStore.getConnection(userId, name) : undefined;
+        out.push({ provider: name, connected: !!conn, scopes: conn?.scopes, expiresAt: conn?.expiresAt });
+      }
+      return c.json({ providers: out });
+    });
+
     app.route("/", oauthRoutes({
       providers: opts.oauthProviders,
       baseUrl: opts.baseUrl ?? `http://localhost:${opts.port ?? 3000}`,

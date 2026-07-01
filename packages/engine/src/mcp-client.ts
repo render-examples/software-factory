@@ -1,9 +1,51 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { DefineMcpSpec } from "./tool.js";
+import { assertUrlAllowed } from "./ssrf-fetch.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "render-agents", version: "0" };
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_HTTP_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Environment variables passed to a spawned stdio MCP child. The child never
+ * inherits the full parent environment (API keys, `DATABASE_URL`, the encryption
+ * key, …) — only what a subprocess needs to launch, plus the server's own
+ * explicitly-declared vars (CR-02).
+ */
+const ENV_PASSTHROUGH = [
+  "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP",
+  "PATHEXT", "SystemRoot", "USERPROFILE", "APPDATA",
+];
+
+function childEnv(declared?: Record<string, string>): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {};
+  for (const key of ENV_PASSTHROUGH) {
+    const value = process.env[key];
+    if (value !== undefined) base[key] = value;
+  }
+  return { ...base, ...declared };
+}
+
+/** Read a response body with a hard byte cap so a hostile/broken MCP server
+ *  can't exhaust memory (mirrors the ssrfFetch stream cap). */
+async function readBodyCapped(res: Response, maxBytes: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`MCP HTTP response exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -81,7 +123,7 @@ class StdioMcpConnection implements McpConnection {
 
   static async connect(command: string, args: string[], env?: Record<string, string>): Promise<StdioMcpConnection> {
     const child = spawn(command, args, {
-      env: { ...process.env, ...env },
+      env: childEnv(env),
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
     const conn = new StdioMcpConnection(child);
@@ -195,6 +237,12 @@ class HttpMcpConnection implements McpConnection {
     };
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
 
+    // MCP endpoints are operator-configured (trusted) and are frequently local
+    // or on the docker/private network — so loopback + private LAN are allowed,
+    // but cloud-metadata/link-local targets are still blocked (CR-02). Validated
+    // per-request (no connection-level IP pinning, to preserve TLS SNI).
+    await assertUrlAllowed(this.url, { allowPrivateHosts: true });
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
@@ -228,6 +276,7 @@ class HttpMcpConnection implements McpConnection {
     // Stateless HTTP: best-effort session teardown.
     if (!this.sessionId) return;
     try {
+      await assertUrlAllowed(this.url, { allowPrivateHosts: true });
       await fetch(this.url, {
         method: "DELETE",
         headers: { "mcp-session-id": this.sessionId, ...(this.headersFn?.() ?? {}) },
@@ -241,7 +290,7 @@ class HttpMcpConnection implements McpConnection {
 /** Parse an MCP HTTP response as either a JSON body or an SSE stream. */
 async function parseHttpJsonRpc(res: Response): Promise<JsonRpcResponse> {
   const contentType = res.headers.get("content-type") ?? "";
-  const text = await res.text();
+  const text = await readBodyCapped(res, MAX_HTTP_RESPONSE_BYTES);
   if (contentType.includes("text/event-stream")) {
     // Take the last `data:` payload that parses as a JSON-RPC response.
     const dataLines = text

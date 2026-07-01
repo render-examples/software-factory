@@ -27,6 +27,8 @@ export function ApprovalsView() {
 
   const onResolved = () => { reload(); refreshCounts(); };
 
+  const items = data ?? [];
+
   return (
     <div className="panel">
       <div className="toolbar" style={{ marginBottom: "0.75rem" }}>
@@ -36,17 +38,19 @@ export function ApprovalsView() {
         </div>
         <button className="ghost" onClick={reload}>{loading ? <Spinner /> : "↻"}</button>
         <span className="spacer" />
-        <span className="muted">{data?.length ?? 0} {tab}</span>
+        <span className="muted">{items.length} {tab}</span>
       </div>
 
       <ErrorBanner error={error} />
 
-      {(data?.length ?? 0) === 0 && !loading ? (
+      {loading && !data ? (
+        <div className="panel"><Spinner /> loading approvals…</div>
+      ) : items.length === 0 ? (
         <Empty>{tab === "pending" ? "Nothing awaiting approval. 🎉" : "No resolved approvals yet."}</Empty>
       ) : tab === "pending" ? (
-        data!.map((a) => <ApprovalCard key={a.id} approval={a} onResolved={onResolved} />)
+        items.map((a) => <ApprovalCard key={a.id} approval={a} onResolved={onResolved} />)
       ) : (
-        data!.map((a) => <ResolvedRow key={a.id} approval={a} />)
+        items.map((a) => <ResolvedRow key={a.id} approval={a} />)
       )}
     </div>
   );

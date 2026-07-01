@@ -102,6 +102,7 @@ export class Projections {
         if (p.agentVersion) r.agentVersion = p.agentVersion;
         if (p.threadId) r.threadId = p.threadId;
         if (p.userId) r.userId = p.userId;
+        if (rec.parentSpanId) r.parentSpanId = rec.parentSpanId;
         break;
       }
       case "run.completed": {
@@ -367,6 +368,7 @@ export class Projections {
     if (opts?.workflow) rows = rows.filter(r => r.workflow === opts.workflow);
     if (opts?.status) rows = rows.filter(r => r.status === opts.status);
     if (opts?.threadId) rows = rows.filter(r => r.threadId === opts.threadId);
+    if (opts?.roots) rows = rows.filter(r => !r.parentSpanId);
     rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
     if (opts?.before) {
       const idx = rows.findIndex(r => r.id === opts.before);
@@ -374,6 +376,18 @@ export class Projections {
     }
     if (opts?.limit !== undefined) rows = rows.slice(0, opts.limit);
     return rows.map(r => ({ ...r }));
+  }
+
+  /** Child runs whose `parentSpanId` points at a span within `runId` (oldest first). */
+  listChildRuns(runId: string): RunRecord[] {
+    const spanIds = new Set(this.spans.get(runId)?.keys() ?? []);
+    // The workflow/agent root span shares the run id, so `.task()`/`.run()`
+    // children (parentSpanId === parentRunId) match even before spans load.
+    spanIds.add(runId);
+    return [...this.runs.values()]
+      .filter(r => r.parentSpanId !== undefined && spanIds.has(r.parentSpanId))
+      .sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0))
+      .map(r => ({ ...r }));
   }
 
   getMessages(runId: string, agentName: string): Message[] {

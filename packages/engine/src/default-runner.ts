@@ -1,6 +1,7 @@
 import type { ContentBlock, ToolResult } from "@render-agents/store";
+import { EventRejectedError } from "@render-agents/store";
 import type { AgentDefinition, AgentInput, AgentOutput, Budget, SkillMetadata } from "./agent.js";
-import { RunPaused } from "./agent.js";
+import { RunPaused, RunCancelled } from "./agent.js";
 import type { AgentRunner } from "./context.js";
 import type { RunContext } from "./context.js";
 import type { MountedTools, Tool, ToolContext } from "./tool.js";
@@ -188,6 +189,10 @@ export class DefaultRunner implements AgentRunner {
       }
       await ctx.emit({ type: "run.failed", error: err instanceof Error ? err.message : String(err) });
       throw err;
+    } finally {
+      // Release mounted tool sources (MCP connections / stdio children) on every
+      // exit — completion, pause, cancel, or error. A resumed run remounts (CR-06).
+      await ctx.disposeTools?.();
     }
   }
 
@@ -304,12 +309,28 @@ export class DefaultRunner implements AgentRunner {
       return toolResultBlock(toolCallId, err);
     }
 
-    // 5. Dispatch.
-    await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
+    // 5. Dispatch. A gate hook may veto the call here by rejecting `tool.called`.
+    // A veto must NOT crash the run (D9): the tool is not invoked, and the block
+    // becomes a canonical error `tool_result` the model can recover from.
+    try {
+      await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
+    } catch (err) {
+      if (err instanceof EventRejectedError) {
+        const vetoed: ToolResult = { content: `Tool call blocked by policy: ${err.reason}`, isError: true };
+        await ctx.emit({ type: "tool.result", toolCallId, name, result: vetoed });
+        return toolResultBlock(toolCallId, vetoed);
+      }
+      throw err;
+    }
     let result: ToolResult;
     try {
       result = await tool.invoke(toolUse.input, toolContextFrom(ctx, toolCallId));
     } catch (err) {
+      // Control-flow signals from a nested run (e.g. a subagent tool that parks
+      // for HITL, or a cooperative cancel) must propagate — not be flattened into
+      // a recoverable error `tool_result`, which would silently swallow the pause
+      // or cancel and let the parent keep running (CR-04).
+      if (err instanceof RunPaused || err instanceof RunCancelled) throw err;
       result = { content: err instanceof Error ? err.message : String(err), isError: true };
     }
     // 6. Record.
