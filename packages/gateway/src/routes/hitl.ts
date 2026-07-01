@@ -29,9 +29,23 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
   // UI's resolved-history tab, and `?status=all` returns every approval.
   app.get("/approvals", async (c) => {
     const q = c.req.query("status");
+    const threadId = c.req.query("threadId");
     const opts =
       !q ? { status: "pending" as const } : q === "all" ? undefined : { status: q as "pending" | "approved" | "denied" };
-    const records = await store.listApprovals(opts);
+    let records = await store.listApprovals(opts);
+    // Optional thread scoping. Approvals carry only a runId, so resolve each
+    // run's threadId server-side — one round trip for the caller instead of the
+    // UI fanning out a getRun per approval. The candidate set (usually pending)
+    // is small, so the per-run lookups are cheap.
+    if (threadId) {
+      const matches = await Promise.all(
+        records.map(async (a) => {
+          const run = await store.getRun(a.runId).catch(() => undefined);
+          return run?.threadId === threadId ? a : null;
+        }),
+      );
+      records = matches.filter((a): a is (typeof records)[number] => a != null);
+    }
     const approvals = records.map((a) => ({
       id: a.approvalRequestId,
       runId: a.runId,

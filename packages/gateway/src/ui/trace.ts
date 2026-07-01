@@ -15,6 +15,12 @@ export interface SpanLike {
   startedAt?: string;
   finishedAt?: string;
   attributes?: Record<string, unknown>;
+  // Optional payload fields the operator UI reads off tree nodes. Kept optional
+  // so plain `{ id, seq, name, kind, status }` fixtures remain valid SpanLikes.
+  runId?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
 }
 
 export interface SpanNode extends SpanLike {
@@ -82,6 +88,11 @@ export function perAgentCost(spans: SpanLike[]): Record<string, number> {
     totals[agent] = round((totals[agent] ?? 0) + cost);
   }
   return totals;
+}
+
+/** Cost (USD) recorded on an llm span's attributes, defaulting to 0. */
+export function spanCostUsd(s: SpanLike): number {
+  return Number((s.attributes as { costUsd?: number } | undefined)?.costUsd ?? 0);
 }
 
 export function formatCost(usd: number | undefined): string {

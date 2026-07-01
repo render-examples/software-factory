@@ -9,8 +9,8 @@ import type {
   ScheduleStore,
   ScheduleRecord,
 } from "@render-agents/store";
-import type { JobQueue } from "@render-agents/store";
-import { createStore, createJobQueue, MemoryCancelStore } from "@render-agents/store";
+import type { JobQueue, DeltaBus } from "@render-agents/store";
+import { createStore, createJobQueue, createDeltaBus, MemoryCancelStore } from "@render-agents/store";
 import type {
   ModelClient,
   CompleteArgs,
@@ -111,6 +111,8 @@ export interface AgentRuntime {
   readonly dispatcher?: TaskDispatcher;
   /** Durable job queue (control plane) for root-run + resume dispatch. Backed by Postgres when available, else in-memory. */
   readonly jobQueue: JobQueue;
+  /** Transient token-delta bus (D13) for live streaming; never persisted. Postgres NOTIFY when available, else in-memory. */
+  readonly deltaBus: DeltaBus;
   /** Whether root runs/resumes execute inline at the trigger or are enqueued for a runner. Default `inline`. */
   readonly executionMode: ExecutionMode;
   /** Cooperative cancellation store, shared across in-process runs/dispatch. */
@@ -148,6 +150,7 @@ export interface CreateRuntimeOptions {
    */
   autoDetectDispatcher?: boolean;
   jobQueue?: JobQueue;
+  deltaBus?: DeltaBus;
   /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
   executionMode?: ExecutionMode;
   cancelStore?: CancelStore;
@@ -260,6 +263,9 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   // Durable control-plane queue: shares the run store's pool in Postgres mode,
   // in-memory otherwise. Consumed by the runner (Phase 2) and gateway enqueue.
   const jobQueue = opts?.jobQueue ?? createJobQueue({ store });
+  // Transient streaming side-channel (D13): shares the store's Postgres pool for
+  // cross-process NOTIFY, in-memory otherwise. Never persists.
+  const deltaBus = opts?.deltaBus ?? createDeltaBus({ store });
   const executionMode: ExecutionMode =
     opts?.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
   const agentDefinitions = new Map<string, AgentDefinition>();
@@ -291,6 +297,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       getWorkflow: (name) => workflows.get(name),
       oauthStore,
       oauthRefreshers,
+      deltaBus,
     });
 
   // Inject hook interceptor into the store's append pipeline
@@ -313,6 +320,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     contextManager,
     dispatcher,
     jobQueue,
+    deltaBus,
     executionMode,
     cancelStore,
     agentDefinitions,

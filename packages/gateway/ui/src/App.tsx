@@ -3,6 +3,7 @@ import { useRoute } from "./state/router";
 import { AuthGate } from "./components/AuthGate";
 import { Shell } from "./components/Shell";
 import { CommandPalette } from "./components/CommandPalette";
+import { ToastProvider } from "./components/Toaster";
 import { RunsView } from "./views/RunsView";
 import { RunDetailView } from "./views/RunDetailView";
 import { ApprovalsView } from "./views/ApprovalsView";
@@ -12,12 +13,14 @@ import { SchedulesView } from "./views/SchedulesView";
 
 export function App() {
   return (
-    <AuthGate>
-      <AppProvider>
-        <Routed />
-        <CommandPalette />
-      </AppProvider>
-    </AuthGate>
+    <ToastProvider>
+      <AuthGate>
+        <AppProvider>
+          <Routed />
+          <CommandPalette />
+        </AppProvider>
+      </AuthGate>
+    </ToastProvider>
   );
 }
 

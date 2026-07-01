@@ -54,6 +54,19 @@ export type RunEvent =
   // context
   | { type: "context.compacted"; agentName: string; strategy: string; beforeTokens: number; afterTokens: number };
 
+/**
+ * Event types that are **transient** (D13): part of the SSE `RunEvent` taxonomy
+ * clients subscribe to, but never persisted to `run_events`, never folded into a
+ * projection, and never retained. They travel over the out-of-band `DeltaBus`
+ * (Postgres `NOTIFY` / in-process), not `events.append`. The append path rejects
+ * them as a guard against accidental persistence.
+ */
+export const TRANSIENT_EVENT_TYPES: ReadonlySet<RunEvent["type"]> = new Set(["text.delta"]);
+
+export function isTransientEvent(type: RunEvent["type"]): boolean {
+  return TRANSIENT_EVENT_TYPES.has(type);
+}
+
 export interface RunEventRecord {
   id: string;
   runId: string;

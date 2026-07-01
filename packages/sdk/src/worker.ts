@@ -198,7 +198,8 @@ export function runWorkerLoop(
   // Wake on enqueue NOTIFY (LISTEN client released when the signal aborts).
   const tailDone = (async () => {
     try {
-      for await (const _ of queue.tail(ac.signal)) {
+      const notifications = queue.tail(ac.signal)[Symbol.asyncIterator]();
+      while (!(await notifications.next()).done) {
         wake();
       }
     } catch (err) {

@@ -66,6 +66,8 @@ export interface InProcessDispatcherOptions {
   delegation?: Partial<DelegationLimits>;
   oauthStore?: import("@render-agents/store").OAuthStore;
   oauthRefreshers?: Map<string, import("@render-agents/engine").OAuthRefresher>;
+  /** Transient token-delta bus (D13) for live streaming; never persisted. */
+  deltaBus?: import("@render-agents/store").DeltaBus;
 }
 
 /**
@@ -110,6 +112,7 @@ export class InProcessDispatcher implements TaskDispatcher {
       delegation: this.opts.delegation,
       oauthStore: this.opts.oauthStore,
       oauthRefreshers: this.opts.oauthRefreshers,
+      deltaBus: this.opts.deltaBus,
     }, {
       runId,
       parentSpanId: dispatchOpts.parentSpanId,
@@ -348,6 +351,7 @@ export async function agentTaskHandler(
     delegation: runtime.delegation,
     oauthStore: runtime.oauthStore,
     oauthRefreshers: runtime.oauthRefreshers,
+    deltaBus: runtime.deltaBus,
   }, {
     runId,
     parentSpanId,

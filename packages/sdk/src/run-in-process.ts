@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RunStore, Tracer, CancelStore, Logger, OAuthStore } from "@render-agents/store";
+import type { RunStore, Tracer, CancelStore, Logger, OAuthStore, DeltaBus } from "@render-agents/store";
 import { idempotencyKey } from "@render-agents/store";
 import type {
   AgentDefinition,
@@ -34,6 +34,8 @@ export interface RunInProcessDeps {
   /** OAuth store + refreshers so tools can resolve the run user's tokens. */
   oauthStore?: OAuthStore;
   oauthRefreshers?: Map<string, OAuthRefresher>;
+  /** Transient token-delta bus (D13) for live streaming; omit to disable (no-op). */
+  deltaBus?: DeltaBus;
 }
 
 export interface RunInProcessOptions {
@@ -98,6 +100,7 @@ export function runAgentInProcess<T = unknown>(
     threadScopedHistory: opts?.threadScopedHistory,
     oauthStore: deps.oauthStore,
     oauthRefreshers: deps.oauthRefreshers,
+    deltaBus: deps.deltaBus,
   });
 
   // The scope descendants inherit: the enclosing scope if set, otherwise this
