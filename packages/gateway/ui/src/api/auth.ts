@@ -1,49 +1,54 @@
-// Auth + operator identity. The API key is the sole gate (same as the gateway).
-// The operator name is a self-entered handle sent as `resolvedBy` for the audit
-// trail — a display convenience, not an access boundary (per the spec).
+// Auth + operator identity for the UI.
+//
+// The API key is exchanged once at `/ui/login` for a signed, httpOnly session
+// cookie — so the raw key never lives in JS (XSS-safe) or in a URL. Every request
+// and EventSource rides that same-origin cookie automatically; there is no bearer
+// token stored client-side. The operator name is a self-entered handle sent as
+// `resolvedBy` for the audit trail — a display convenience, not an access boundary.
 
-const KEY = "render-agents-ui-key";
 const OPERATOR = "render-agents-operator";
 
-function fromQuery(name: string): string | null {
-  return new URLSearchParams(location.search).get(name);
+export interface Whoami {
+  userId: string;
+  role: string;
 }
 
-/** Remove a query param from the address bar without a navigation (CR-19). */
-function stripQueryParam(name: string): void {
+/** Exchange a `?key=` bootstrap (e.g. a bookmarked link) for a session, then
+ *  strip it from the URL so it doesn't linger in history/logs (CR-19). */
+export async function bootstrapFromQuery(): Promise<void> {
+  const key = new URLSearchParams(location.search).get("key");
+  if (!key) return;
+  await login(key.trim());
+  stripQueryParam("key");
+}
+
+/** POST the key to `/ui/login`; on success the server sets the session cookie. */
+export async function login(key: string): Promise<boolean> {
   try {
-    const url = new URL(location.href);
-    if (url.searchParams.has(name)) {
-      url.searchParams.delete(name);
-      history.replaceState(null, "", url.toString());
-    }
+    const res = await fetch("/ui/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key }),
+      credentials: "same-origin",
+    });
+    return res.ok;
   } catch {
-    /* non-browser / malformed URL — ignore */
+    return false;
   }
 }
 
-export function getKey(): string {
-  const stored = sessionStorage.getItem(KEY);
-  if (stored) return stored;
-  // A key supplied via `?key=` (e.g. a bookmarked link) is persisted to
-  // sessionStorage and immediately stripped from the URL so it doesn't linger in
-  // browser history, server logs, or the Referer header (CR-19).
-  const fromUrl = fromQuery("key");
-  if (fromUrl) {
-    const trimmed = fromUrl.trim();
-    sessionStorage.setItem(KEY, trimmed);
-    stripQueryParam("key");
-    return trimmed;
+export async function logout(): Promise<void> {
+  await fetch("/ui/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+}
+
+/** Resolve the current session (cookie is httpOnly, so JS can't read it directly). */
+export async function whoami(): Promise<Whoami | null> {
+  try {
+    const res = await fetch("/whoami", { credentials: "same-origin" });
+    return res.ok ? ((await res.json()) as Whoami) : null;
+  } catch {
+    return null;
   }
-  return "";
-}
-
-export function setKey(k: string): void {
-  sessionStorage.setItem(KEY, k.trim());
-}
-
-export function hasKey(): boolean {
-  return getKey().trim().length > 0;
 }
 
 export function getOperator(): string {
@@ -52,4 +57,16 @@ export function getOperator(): string {
 
 export function setOperator(name: string): void {
   localStorage.setItem(OPERATOR, name.trim());
+}
+
+function stripQueryParam(name: string): void {
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.delete(name);
+      history.replaceState(null, "", url.toString());
+    }
+  } catch {
+    /* ignore */
+  }
 }

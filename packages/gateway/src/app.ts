@@ -4,7 +4,16 @@ import type { CancelStore, RunRecord } from "@render-agents/store";
 import { runRetention, reapRuns, buildEventRecord } from "@render-agents/store";
 import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
 import { resumeRun, submitRootRun, driveAgentTurn, RunPaused } from "@render-agents/sdk";
-import { apiKeyAuth, defaultPublicPath, allowsQueryKey } from "./auth.js";
+import {
+  apiKeyAuth,
+  defaultPublicPath,
+  allowsQueryKey,
+  getPrincipal,
+  DEFAULT_OPERATOR_ID,
+  bearerKeyResolver,
+  type AuthResolver,
+} from "./auth.js";
+import { buildCookieConfig, registerLoginRoutes, wrapWithSession } from "./ui-session.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
 import { threadRoutes } from "./routes/threads.js";
@@ -46,6 +55,15 @@ export interface GatewayOptions {
   serveUI?: boolean;
   /** Disable auth for local dev (NOT for production). */
   disableAuth?: boolean;
+  /**
+   * Custom auth resolver — derive the caller's identity from a JWT, session, or
+   * per-tenant key. Return `null` to reject. Defaults to shared-key bearer auth,
+   * mapping the key to a single operator identity. Override for true
+   * multi-tenancy.
+   */
+  auth?: AuthResolver;
+  /** userId assigned to the shared-key operator (default `RENDER_AGENTS_OPERATOR_ID` env → `"operator"`). */
+  operatorUserId?: string;
 }
 
 /**
@@ -55,6 +73,8 @@ export interface GatewayOptions {
 export function createGatewayApp(opts: GatewayOptions) {
   const app = new Hono();
   const { runtime, workflows, cancelStore } = opts;
+  const operatorUserId =
+    opts.operatorUserId ?? process.env.RENDER_AGENTS_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
 
   // Production-readiness config audit: OAuth token encryption falls back to an
   // insecure dev key when this is unset — warn loudly so it isn't shipped.
@@ -64,27 +84,64 @@ export function createGatewayApp(opts: GatewayOptions) {
         "Set a strong 32+ char secret in production.",
     );
   }
+  if (!opts.disableAuth && !opts.auth && !process.env.RENDER_AGENTS_API_KEY) {
+    console.warn(
+      "[render-agents] RENDER_AGENTS_API_KEY is not set; all authenticated routes will reject (401). " +
+        "Set the key, pass a custom `auth` resolver, or use disableAuth for local dev.",
+    );
+  }
 
   // Health check (no auth)
   app.get("/health", (c) => c.json({ status: "ok" }));
 
-  // Operator UI shell (no auth on the static shell + assets; data fetches carry
-  // the API key). Registered before the auth middleware so it stays unauthenticated.
-  if (opts.serveUI !== false) {
+  // Operator UI shell (no auth on the static shell + assets). Registered before
+  // the auth middleware so it stays unauthenticated.
+  const uiEnabled = opts.serveUI !== false;
+  if (uiEnabled) {
     app.route("/", uiRoutes());
   }
 
-  // Auth middleware on all routes except health + the UI shell. Two carve-outs
-  // baked into the middleware (not route ordering) so they survive refactors:
-  //   - `isPublicPath`: OAuth callback (authed by signed `state`) and inbound
-  //     webhooks/connectors (authed by adapter signatures) — third parties can't
-  //     send our bearer token (CR-01).
-  //   - `allowQueryKey`: SSE endpoints only, since EventSource can't set headers.
-  //     Everywhere else the `?key=` fallback is rejected so the key can't leak
-  //     via logs/history/Referer (CR-05).
-  if (!opts.disableAuth) {
-    app.use("/*", apiKeyAuth({ isPublicPath: defaultPublicPath, allowQueryKey: allowsQueryKey }));
+  // Identity resolution. The browser UI logs in once (POST /ui/login) and rides a
+  // signed, httpOnly cookie thereafter — so the raw key never lives in JS or in a
+  // URL. `curl`/API callers keep using `Authorization: Bearer`. A custom resolver
+  // (JWT/session/per-tenant) can be injected for true multi-tenancy.
+  const cookieCfg = buildCookieConfig();
+  const baseResolver: AuthResolver =
+    opts.auth ?? bearerKeyResolver("RENDER_AGENTS_API_KEY", operatorUserId);
+  const resolver: AuthResolver = uiEnabled ? wrapWithSession(baseResolver, cookieCfg) : baseResolver;
+
+  if (uiEnabled && !opts.disableAuth) {
+    // Public login/logout — must precede the auth middleware.
+    registerLoginRoutes(app, cookieCfg, { envKey: "RENDER_AGENTS_API_KEY", operatorUserId });
   }
+
+  if (opts.disableAuth) {
+    // Local dev: still give every handler a principal so tenant scoping works.
+    app.use("/*", async (c, next) => {
+      c.set("principal", { userId: operatorUserId, role: "operator" });
+      await next();
+    });
+  } else {
+    // Auth middleware on all routes except health + the UI shell/login. Carve-outs
+    // baked into the middleware (not route ordering) so they survive refactors:
+    //   - `isPublicPath`: OAuth callback (authed by signed `state`) and inbound
+    //     webhooks/connectors (authed by adapter signatures) — CR-01.
+    //   - `allowQueryKey`: SSE + OAuth authorize only, since EventSource / full-page
+    //     navigations can't set headers; rejected elsewhere so the key can't leak
+    //     via logs/history/Referer (CR-05).
+    app.use(
+      "/*",
+      apiKeyAuth({
+        resolver,
+        operatorUserId,
+        isPublicPath: (p) => defaultPublicPath(p) || p === "/ui/login" || p === "/ui/logout",
+        allowQueryKey: allowsQueryKey,
+      }),
+    );
+  }
+
+  // Who am I — lets the UI check auth state (cookie is httpOnly, unreadable by JS).
+  app.get("/whoami", (c) => c.json(getPrincipal(c)));
 
   const store = runtime.store;
   // Cancellation is cooperative: the loop polls `runtime.cancelStore` each
@@ -205,7 +262,7 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   // SSE streaming routes — merge the durable event tail with the transient
   // token-delta bus (D13) for live streaming.
-  app.route("/", streamRoutes({ store, deltaBus: runtime.deltaBus }));
+  app.route("/", streamRoutes({ store, threadStore: runtime.threadStore, deltaBus: runtime.deltaBus }));
 
   const awaitResume = opts.awaitResume ?? false;
 
@@ -260,15 +317,15 @@ export function createGatewayApp(opts: GatewayOptions) {
         runtime.oauthRefreshers.set(name, buildRefresher(config));
       }
     }
-    // Read-only connection status for the operator UI: the configured providers
-    // plus, when a userId is supplied, whether that user has a live connection.
-    // Only registered when OAuth is configured, so the UI can gate the nav on it.
+    // Read-only connection status for the caller: the configured providers plus
+    // whether the authenticated user has a live connection. The userId comes from
+    // auth (never a client param), so a caller can only see their own connections.
     const providers = opts.oauthProviders;
     app.get("/connections", async (c) => {
-      const userId = c.req.query("userId");
+      const { userId } = getPrincipal(c);
       const out = [];
       for (const name of providers.keys()) {
-        const conn = userId ? await runtime.oauthStore.getConnection(userId, name) : undefined;
+        const conn = await runtime.oauthStore.getConnection(userId, name);
         out.push({ provider: name, connected: !!conn, scopes: conn?.scopes, expiresAt: conn?.expiresAt });
       }
       return c.json({ providers: out });

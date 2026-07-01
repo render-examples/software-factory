@@ -1,6 +1,6 @@
 # Code Review — security, correctness & quality remediation
 
-**Status:** REMEDIATED — all 30 tracked items landed (CR-24 verified already-present); 3 items deferred as design decisions. Full gate green: `typecheck` 9/9, `lint` 5/5, `test` 11/11 (engine 57, store 89 with Postgres, sdk 80, gateway 56, scaffolder 17).
+**Status:** REMEDIATED — all 30 tracked items landed (CR-24 verified already-present). CR-D1 (multi-tenancy/auth) also landed by adopting the `render-agent-harness` model (pluggable resolver → `Principal`, server-derived userId, ownership-scoped queries, per-user OAuth, UI cookie session). CR-D2/D3 remain design-tracked. Full gate green.
 **Date:** 2026-07-01
 **Source:** Full per-module review of `packages/*` (engine, store, sdk, gateway + operator UI, create-render-agents). Every Critical/High item was verified against the source before landing here. This is the single triage + tracking surface; fixing an item flips its status to `RESOLVED` with a one-line note on what shipped.
 
@@ -195,8 +195,14 @@ Distinct from [`bug-bash.md`](bug-bash.md) (spec-reconciliation gaps). This doc 
 
 ## Deferred (design decisions)
 
-### CR-D1 — Single shared key + client-supplied userId (IDOR)
-Real multi-tenant auth (per-user identity + server-side ownership checks) is a product decision, not a mechanical fix. **Disposition:** document the shipped model as **single-tenant / trusted-operator** in the security docs; when tenancy is required, derive `userId` from a verified credential and scope every run/thread/approval/OAuth query by it.
+### CR-D1 — Single shared key + client-supplied userId (IDOR) — ✅ RESOLVED
+Adopted the `render-agent-harness` auth + multi-tenancy model. **What shipped:**
+- **Pluggable auth resolver** (`gateway/src/auth.ts`): `AuthResolver = (req) => Promise<Principal | null>`, `Principal = { userId, role }`. The default maps the shared `RENDER_AGENTS_API_KEY` to one operator identity (`RENDER_AGENTS_OPERATOR_ID`); inject `serveWeb`-style `auth` for JWT/session/per-tenant keys → true multi-tenancy.
+- **Identity is always server-derived.** The `userId` query/body params were removed from threads, OAuth authorize/revoke, and `/connections`; every handler reads `getPrincipal(c)`. The middleware stashes the resolved principal on the Hono context (via a `ContextVariableMap` augmentation).
+- **Ownership-scoped reads.** `runs`/`threads`/`approvals`/streams use `canAccess(ownerUserId, principal)` — operators (shared key) see all (operator console preserved); end users get their own only, foreign ids return 404. `listRuns`/`listThreads` default to the caller; the global `/events/stream` is operator-only. Added a `userId` filter to `ListRunsOptions` (memory + Postgres).
+- **Per-user OAuth.** authorize binds the auth-derived `userId` into the signed `state`; the callback recovers it from the state (unchanged); revoke + `/connections` are caller-scoped.
+- **UI cookie session** (`gateway/src/ui-session.ts`): `POST /ui/login` exchanges the key for a signed, httpOnly cookie; `wrapWithSession` accepts cookie OR bearer; `/whoami` reports the session. The browser no longer holds the key in JS or in URLs — EventSource rides the same-origin cookie, superseding the CR-19 URL-strip workaround. `curl`/API callers keep using `Authorization: Bearer`.
+- **Tests:** `tests/auth-tenancy.test.ts` covers 401, cross-user 404 on runs/threads, scoped lists, operator-sees-all, and the cookie login → `/whoami` roundtrip.
 
 ### CR-D2 — Encryption AAD + key rotation
 Binding ciphertext to `(userId, provider)` via GCM AAD and supporting key rotation changes the on-disk format and needs a migration. **Disposition:** track separately; CR-03 lands the fail-closed + validation portion now.

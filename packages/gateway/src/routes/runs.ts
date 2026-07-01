@@ -1,7 +1,8 @@
-import { Hono } from "hono";
-import type { RunStore, CancelStore } from "@render-agents/store";
+import { Hono, type Context } from "hono";
+import type { RunStore, CancelStore, RunRecord } from "@render-agents/store";
 import { aggregateRunCost } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
+import { getPrincipal, canAccess } from "../auth.js";
 
 /** Upper bound on a single `/runs` page (CR-22). */
 const MAX_LIST_LIMIT = 100;
@@ -20,8 +21,16 @@ export function runRoutes(deps: {
   const app = new Hono();
   const { store, cancelStore, workflows } = deps;
 
-  // POST /workflows/:name — dispatch a workflow run
+  /** Load a run only if the caller may access it (operators: any; users: own).
+   *  Returns undefined for missing OR foreign runs so ids aren't enumerable. */
+  const loadOwnedRun = async (c: Context, id: string): Promise<RunRecord | undefined> => {
+    const run = await store.getRun(id);
+    return run && canAccess(run.userId, getPrincipal(c)) ? run : undefined;
+  };
+
+  // POST /workflows/:name — dispatch a workflow run (owned by the caller)
   app.post("/workflows/:name", async (c) => {
+    const principal = getPrincipal(c);
     const name = c.req.param("name");
     const workflow = workflows.get(name);
     if (!workflow) {
@@ -39,7 +48,8 @@ export function runRoutes(deps: {
       return c.json({ error: "input is required and must be non-empty" }, 400);
     }
 
-    const run = await workflow.dispatch(body.input, body.trigger);
+    // Stamp ownership so the caller can see their own dispatched run.
+    const run = await workflow.dispatch(body.input, body.trigger, { userId: principal.userId });
     return c.json(run, 202);
   });
 
@@ -73,7 +83,12 @@ export function runRoutes(deps: {
     // model carrying a UI-shaped `currentRunId`.
     const roots = c.req.query("roots") !== "false";
 
-    const runs = await store.listRuns({ workflow, status, threadId, before, limit, roots });
+    // Tenant scoping: operators (shared key) see all by default and may filter
+    // with ?userId; end users are always confined to their own runs (CR-D1).
+    const principal = getPrincipal(c);
+    const userId = principal.role === "operator" ? c.req.query("userId") : principal.userId;
+
+    const runs = await store.listRuns({ workflow, status, threadId, userId, before, limit, roots });
     return c.json({ runs });
   });
 
@@ -81,7 +96,7 @@ export function runRoutes(deps: {
   // or subagents), for cross-run trace stitching in the operator UI.
   app.get("/runs/:id/children", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
@@ -92,7 +107,7 @@ export function runRoutes(deps: {
   // GET /runs/:id — run details (+ all-in cost incl. subagent descendants)
   app.get("/runs/:id", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
@@ -114,7 +129,7 @@ export function runRoutes(deps: {
   // GET /runs/:id/spans — span tree for a run
   app.get("/runs/:id/spans", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
@@ -125,7 +140,7 @@ export function runRoutes(deps: {
   // GET /runs/:id/tool-calls — tool calls + results
   app.get("/runs/:id/tool-calls", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
@@ -145,7 +160,7 @@ export function runRoutes(deps: {
   // otherwise reconstructable from the SSE stream's catch-up replay.
   app.get("/runs/:id/events", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
@@ -157,7 +172,7 @@ export function runRoutes(deps: {
   // POST /runs/:id/cancel — cancel a running or paused run
   app.post("/runs/:id/cancel", async (c) => {
     const id = c.req.param("id");
-    const run = await store.getRun(id);
+    const run = await loadOwnedRun(c, id);
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }

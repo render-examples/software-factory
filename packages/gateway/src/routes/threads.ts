@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { RunStore, ThreadStore, Thread } from "@render-agents/store";
 import { buildEventRecord } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
+import { getPrincipal, canAccess } from "../auth.js";
 
 export interface ThreadRouteDeps {
   store: RunStore;
@@ -46,9 +47,10 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return undefined;
   };
 
-  // POST /threads — create + persist a thread
+  // POST /threads — create + persist a thread owned by the caller
   app.post("/threads", async (c) => {
-    let body: { userId?: string; metadata?: Record<string, unknown>; title?: string } = {};
+    const principal = getPrincipal(c);
+    let body: { metadata?: Record<string, unknown>; title?: string } = {};
     try {
       body = await c.req.json();
     } catch {
@@ -56,9 +58,10 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     }
 
     const now = new Date().toISOString();
+    // Ownership comes from auth, never the client body (CR-D1).
     const thread: Thread = {
       id: randomUUID(),
-      userId: body.userId,
+      userId: principal.userId,
       metadata: body.metadata,
       status: "active",
       title: body.title,
@@ -69,18 +72,22 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return c.json(thread, 201);
   });
 
-  // GET /threads — list persisted threads (optionally by user)
+  // GET /threads — the caller's threads (operators see all; users see their own)
   app.get("/threads", async (c) => {
-    const userId = c.req.query("userId");
-    const threads = await threadStore.listThreads(userId ? { userId } : undefined);
+    const principal = getPrincipal(c);
+    const threads = await threadStore.listThreads(
+      principal.role === "operator" ? undefined : { userId: principal.userId },
+    );
     return c.json({ threads });
   });
 
-  // GET /threads/:id — thread metadata + transcript
+  // GET /threads/:id — thread metadata + transcript (ownership-scoped)
   app.get("/threads/:id", async (c) => {
+    const principal = getPrincipal(c);
     const id = c.req.param("id");
     const thread = await threadStore.getThread(id);
-    if (!thread) {
+    // 404 (not 403) on a foreign thread so ids aren't enumerable.
+    if (!thread || !canAccess(thread.userId, principal)) {
       return c.json({ error: `Thread "${id}" not found` }, 404);
     }
     const messages = await threadStore.getThreadMessages(id);
@@ -89,8 +96,9 @@ export function threadRoutes(deps: ThreadRouteDeps) {
 
   // POST /threads/:id/messages — deliver a message to a thread
   app.post("/threads/:id/messages", async (c) => {
+    const principal = getPrincipal(c);
     const threadId = c.req.param("id");
-    let body: { content: string; userId?: string } = { content: "" };
+    let body: { content: string } = { content: "" };
     try {
       body = await c.req.json();
     } catch {
@@ -102,7 +110,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     }
 
     const thread = await threadStore.getThread(threadId);
-    if (!thread) {
+    if (!thread || !canAccess(thread.userId, principal)) {
       return c.json({ error: `Thread "${threadId}" not found` }, 404);
     }
 
@@ -143,7 +151,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     if (defaultAgent && startAgentRun) {
       const runId = randomUUID();
       try {
-        await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: body.userId ?? thread.userId });
+        await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: thread.userId });
       } catch (err) {
         // DB-level guard (concurrent message that slipped past the soft check
         // above): the partial unique index on one-active-run-per-thread rejects
@@ -169,7 +177,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       const run = await workflow.dispatch(
         { message: body.content, threadId },
         "thread_message",
-        { threadId, userId: body.userId ?? thread.userId },
+        { threadId, userId: thread.userId },
       );
       return c.json({ runId: run.id, dispatched: true }, 202);
     } catch (err) {
