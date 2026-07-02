@@ -10,10 +10,11 @@
 # │ as isolated agent@standard tasks) must be created MANUALLY in the Dashboard  │
 # │ (New > Workflow, Language = Docker). See examples/demo/README.md → Deploy.   │
 # │                                                                             │
-# │ The Workflow SLUG is defined in CODE (examples/demo/src/lib/render.ts), so   │
-# │ neither service needs a RENDER_WORKFLOW_SLUG env var — just name the         │
-# │ Workflow service `render-agents-demo-workflows` to match the constant (or    │
-# │ edit the constant / set RENDER_WORKFLOW_SLUG, which wins).                   │
+# │ The Workflow SLUG is defined in CODE (examples/demo/src/lib/render.ts) as    │
+# │ `render-agents`, so neither service needs a RENDER_WORKFLOW_SLUG env var —    │
+# │ just ensure the Workflow service's slug (shown on its Tasks page, before the  │
+# │ "/") equals it. If it differs, edit the constant or set RENDER_WORKFLOW_SLUG  │
+# │ (env wins).                                                                  │
 # │                                                                             │
 # │ Both the gateway (to trigger the root) and the Workflow service (to trigger  │
 # │ the reviewer fan-out) call the Render task API, so BOTH need RENDER_API_KEY  │
@@ -114,8 +115,9 @@ services:
 
 # --- Create this MANUALLY in the Dashboard (Blueprints can't manage Workflows) ---
 # New > Workflow:
-#   Name:            render-agents-demo-workflows   (must match WORKFLOW_SLUG in
-#                                                     src/lib/render.ts)
+#   Name:            any name whose slug matches WORKFLOW_SLUG in
+#                     src/lib/render.ts (currently "render-agents"; confirm the
+#                     slug before "/" on the Tasks page and reconcile if different)
 #   Repo:            this repo/branch
 #   Language:        Docker
 #   Dockerfile Path: ./Dockerfile
