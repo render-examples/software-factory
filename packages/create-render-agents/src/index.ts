@@ -110,6 +110,7 @@ async function runWizard(args: CliArgs): Promise<ScaffoldOptions> {
     { value: "npm", label: "npm" },
     { value: "yarn", label: "yarn" },
   ];
+  
   const packageManager = (args.packageManager ?? (await p.select({
     message: "Package manager",
     options: pmOptions,
