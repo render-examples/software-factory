@@ -184,16 +184,16 @@ create the durable **Workflow service** (Lane A) by hand.
 
 3. **Workflow service** — **New > Workflow** in the Dashboard, same repo,
    **Language = Docker**, Dockerfile `./Dockerfile`, **Start Command**
-   `pnpm --filter @render-agents/example-demo workflows`. **Name it
-   `render-agents-demo-workflows`** so it matches `WORKFLOW_SLUG` in
-   `src/lib/render.ts` (the slug is defined in code, so no `RENDER_WORKFLOW_SLUG`
-   env var is needed anywhere). Env vars: same `DATABASE_URL` (the demo-db
-   Internal URL) and same `RENDER_AGENTS_ENCRYPTION_KEY` as the gateway, plus
-   `RENDER_API_KEY` (needed to `runTask` the reviewer fan-out), `GITHUB_TOKEN`,
-   `GITHUB_BOT_LOGIN`, `ANTHROPIC_API_KEY`, `GIT_AUTHOR_NAME/EMAIL`. Deploying
-   registers the `workflow@standard` / `agent@standard` tasks — confirm the slug
-   before the `/` on its Tasks page equals `render-agents-demo-workflows` (if
-   Render suffixed it, update the constant or set `RENDER_WORKFLOW_SLUG`).
+   `pnpm --filter @render-agents/example-demo workflows`. The slug is defined in
+   code as `render-agents` (`WORKFLOW_SLUG` in `src/lib/render.ts`), so no
+   `RENDER_WORKFLOW_SLUG` env var is needed — just make sure this service's slug
+   matches. Env vars: same `DATABASE_URL` (the demo-db Internal URL) and same
+   `RENDER_AGENTS_ENCRYPTION_KEY` as the gateway, plus `RENDER_API_KEY` (needed to
+   `runTask` the reviewer fan-out), `GITHUB_TOKEN`, `GITHUB_BOT_LOGIN`,
+   `ANTHROPIC_API_KEY`, `GIT_AUTHOR_NAME/EMAIL`. Deploying registers the
+   `workflow@standard` / `agent@standard` tasks — confirm the slug before the `/`
+   on its Tasks page equals `render-agents` (if it differs, update the constant or
+   set `RENDER_WORKFLOW_SLUG`).
 
 4. **Enable Lane A** — set `RENDER_API_KEY` (a Render API key, `rnd_…`) on **the
    gateway** (to `startTask` the root) — it's also on the Workflow service from
