@@ -1,5 +1,5 @@
 ---
-model: large
+model: medium
 description: Makes the final approve/reject decision
 output:
   type: object
