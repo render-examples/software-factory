@@ -70,13 +70,16 @@ services:
         value: render-agent@users.noreply.github.com
 
   # --- Daily retention cleanup ---
+  # Native runtime + curl (no app image / dockerCommand): a cron only calls the
+  # gateway, so it needs no build. `buildCommand: "true"` is a no-op; curl is
+  # present in Render's native environment and $VARS expand in the startCommand.
   - type: cron
     name: render-agents-demo-retention
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    runtime: node
+    plan: starter
     schedule: "0 4 * * *"
-    dockerCommand: sh -c 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    buildCommand: "true"
+    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
     envVars:
       - key: GATEWAY_URL
         fromService:
@@ -92,11 +95,11 @@ services:
   # --- Stranded-run reaper (fails Lane A roots stranded by a lost task) ---
   - type: cron
     name: render-agents-demo-reaper
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    runtime: node
+    plan: starter
     schedule: "*/5 * * * *"
-    dockerCommand: sh -c 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    buildCommand: "true"
+    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
     envVars:
       - key: GATEWAY_URL
         fromService:
