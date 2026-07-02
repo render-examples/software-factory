@@ -13,24 +13,21 @@
 // in-process Docker demo) it just validates the image loads and idles.
 import { task } from "@renderinc/sdk/workflows";
 import {
-  createRuntime,
-  loadAgents,
-  loadWorkflows,
-  loadToolSources,
-  loadHooks,
-  loadRunners,
+  loadProject,
   workflowTaskHandler,
   agentTaskHandler,
   computeRequiredPlans,
 } from "@render-agents/sdk";
+import { ensureWorkflowSlug } from "./lib/render.js";
 
 const root = new URL("..", import.meta.url).pathname;
-const toolSources = await loadToolSources(root);
-const extraRunners = await loadRunners(root);
-const hooks = await loadHooks(root);
-const runtime = await createRuntime({ toolSources, extraRunners, hooks });
-await loadAgents(root, runtime);
-const workflows = await loadWorkflows(root, runtime);
+
+// Same slug the gateway uses, defined in code (lib/render.ts): this host chains
+// reviewer fan-out as `<slug>/agent@<plan>`, so it needs the slug too. Env
+// (RENDER_WORKFLOW_SLUG) still wins if set. Must precede loadProject.
+ensureWorkflowSlug();
+
+const { runtime, workflows } = await loadProject(root);
 
 const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
 
