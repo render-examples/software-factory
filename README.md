@@ -7,15 +7,15 @@ Build production-grade AI agents on Render with markdown-first authoring, durabl
 - **Authoring that stays simple**: agents are `agents/*.md` files (prompt + config).
 - **Runtime that scales**: same code path locally and on Render.
 - **Durability by default**: append-only event log, replay-safe workflows, queue-backed chat lane.
-- **Operational features built in**: approvals (HITL), threads, OAuth connections, schedules, retention.
+- **Operational features built in**: approvals (HITL), context management, OAuth connections, schedules, and retention.
 - **Deep observability**: spans, messages, tool calls, and costs from one canonical event stream.
 
 ---
 
-## Why developers choose this
+## Why choose render-agents
 
 - **Fast to start**: `npm create render-agents` scaffolds a complete, deployable project.
-- **Clear mental model**: `run` for in-process calls, `task` for isolated durable calls.
+- **Clear mental model**: `agent.run()` for in-process calls, `agent.task()` for isolated durable calls.
 - **Debuggable systems**: every meaningful event is persisted and streamable.
 - **Production-ready architecture**: gateway + worker lanes + Postgres, not a toy loop.
 
@@ -29,7 +29,7 @@ Build production-grade AI agents on Render with markdown-first authoring, durabl
   - durable, isolated tasks on Render Workflows,
   - interactive chat on warm workers backed by `run_jobs`.
 - **Event-sourced platform model**: `run_events` is canonical; runs/spans/messages/approvals are projections.
-- **Tooling support** for local tools, MCP sources, and dynamic subagent delegation.
+- **Tooling support** for local tools, MCP sources, and dynamic subagent delegation (in-process or isolated).
 - **Operator UI at `/ui`** for runs, traces, event log, approvals, chat, schedules, and ops.
 
 ---
