@@ -3,9 +3,13 @@ import { githubFromEnv, type PullFile, type ReviewComment } from "../../src/lib/
 import type { NormalizedGitHubEvent } from "../../src/lib/github-events.js";
 
 // PR reviewer (trigger: pull_request). Fans out to four specialist reviewers as
-// isolated tasks (they only need the diff text, so separate containers are fine),
-// then a judge makes the final structured decision and the workflow submits a
-// real GitHub review (APPROVE / REQUEST_CHANGES) in a deterministic step.
+// isolated Render Workflows tasks (.task()), then a judge makes the final
+// structured decision and the workflow submits a real GitHub review (APPROVE /
+// REQUEST_CHANGES) in a deterministic step.
+//
+// Each .task() dispatches an `agent@<plan>` task on the Workflows service, so the
+// four reviewers run concurrently in their own scale-to-zero containers — the
+// fan-out this demo showcases. (They only need the diff text; no shared FS.)
 
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review"]);
 const MAX_DIFF_CHARS = 60_000;
@@ -48,7 +52,7 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
 
   if (files === 0) return { skipped: "no files changed" };
 
-  // Fan out to specialist reviewers in parallel (isolated tasks).
+  // Fan out to specialist reviewers as isolated, concurrent tasks.
   const [security, performance, correctness, tests] = await Promise.all([
     ctx.agents.get("security").task(diff),
     ctx.agents.get("performance").task(diff),

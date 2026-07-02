@@ -13,7 +13,7 @@ const out = await agents.get("security").run("review this diff");
 
 ## Highlights
 
-- **Authoring & discovery** — `loadAgents`, `loadWorkflows`, `loadWebhooks`, `loadToolSources` (convention directories), `defineTool`, `defineMcpSource`, `defineHook`.
+- **Authoring & discovery** — `loadProject` (one call: runtime + agents + workflows + webhooks), or the individual `loadAgents`, `loadWorkflows`, `loadWebhooks`, `loadToolSources` (convention directories), `defineTool`, `defineMcpSource`, `defineHook`.
 - **Runtime composition** — `createRuntime({ store?, model?, dispatcher?, oauthRefreshers?, ... })` (the D5 composition root).
 - **Execution** — `agent.run()` (in-process) vs `agent.task()` (durable/isolated); `workflow(handler)` with memoized `ctx.step()`.
 - **HITL** — `resumeRun(runId, runtime)` re-drives a paused run after an out-of-band approval/input.

@@ -113,6 +113,9 @@ export type { AgentSet, Agent } from "./agents.js";
 export { loadAgents, resumeRun, driveAgentTurn } from "./agents.js";
 export { loadWorkflows, loadWebhooks, loadToolSources, loadHooks, loadRunners } from "./loader/load-project.js";
 
+export { loadProject } from "./project.js";
+export type { LoadProjectOptions, LoadedProject } from "./project.js";
+
 export type {
   WorkflowOptions,
   WorkflowContext,

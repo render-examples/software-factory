@@ -1,17 +1,26 @@
-# Render Blueprint for the GitHub agent demo (examples/demo): an issue-to-pr
-# pipeline (triage -> Research/Plan/Implement -> PR) and a pr-review pipeline
-# (multi-reviewer -> judge -> approve/request-changes). Two-lane topology:
+# Render Blueprint for the GitHub agent demo (examples/demo).
 #
-#   gateway (web)        — receives GitHub webhooks, triggers workflows, SSE, /ui
-#   chat-worker (worker) — Lane B: drains run_jobs (interactive chat threads)
-#   workflows (worker)   — Lane A: Render Workflows host; runs the durable
-#                          pipelines (clone/RPI/PR) in isolated per-run containers
-#   + Postgres, retention + reaper crons.
+# Two pipelines, triggered by one webhook at POST /webhooks/github:
+#   issue-to-pr  (issues, issue_comment): triage -> Research/Plan/Implement -> PR
+#   pr-review    (pull_request): fan out 4 reviewers -> judge -> approve/request-changes
 #
-# IMPORTANT: paste a Render API token into RENDER_API_KEY (gateway) to enable
-# Lane A. Without it the gateway drives workflows in-process and the coding
-# workflow can exceed GitHub's ~10s webhook timeout. With Lane A, the gateway
-# fires the run and returns immediately.
+# ┌─ Render Blueprints CANNOT create/manage Workflow services yet ─────────────┐
+# │ This file provisions the gateway (web) + Postgres + crons. The durable      │
+# │ "Lane A" Workflow service that runs the pipelines (and the reviewer fan-out  │
+# │ as isolated agent@standard tasks) must be created MANUALLY in the Dashboard  │
+# │ (New > Workflow, Language = Docker). See examples/demo/README.md → Deploy.   │
+# │                                                                             │
+# │ The Workflow SLUG is defined in CODE (examples/demo/src/lib/render.ts), so   │
+# │ neither service needs a RENDER_WORKFLOW_SLUG env var — just name the         │
+# │ Workflow service `render-agents-demo-workflows` to match the constant (or    │
+# │ edit the constant / set RENDER_WORKFLOW_SLUG, which wins).                   │
+# │                                                                             │
+# │ Both the gateway (to trigger the root) and the Workflow service (to trigger  │
+# │ the reviewer fan-out) call the Render task API, so BOTH need RENDER_API_KEY  │
+# │ (a Render API key, rnd_…). Until it's set on the gateway, the gateway runs   │
+# │ workflows in-process — OK for pr-review, but issue-to-pr can exceed GitHub's │
+# │ ~10s webhook timeout, so Lane A is strongly recommended.                     │
+# └─────────────────────────────────────────────────────────────────────────────┘
 #
 # All services build the repo-root Dockerfile (which installs git + the Node
 # toolchain). Point one GitHub webhook (Issues, Issue comments, Pull requests)
@@ -40,77 +49,25 @@ services:
         generateValue: true
       - key: RENDER_AGENTS_ENCRYPTION_KEY
         generateValue: true
-      # Route interactive chat turns to the warm chat worker (Lane B).
-      - key: RENDER_AGENTS_EXECUTION_MODE
-        value: queue
-      # Paste a Render API token to upgrade workflow dispatch to Lane A (Render
-      # Workflows). Empty => in-process drive on the gateway (dev/fallback).
+      # Lane A: paste a Render API key (rnd_…) so the gateway can startTask the
+      # workflow root. Empty => in-process drive (fallback). (Slug is in code.)
       - key: RENDER_API_KEY
         sync: false
-      - key: RENDER_WORKFLOW_SLUG
-        value: render-agents-demo-workflows
-      # GitHub: the gateway verifies inbound webhook signatures, and drives the
-      # workflow in-process until Lane A is enabled (so it needs the token too).
+      # The gateway verifies inbound webhook signatures.
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
+      # Only used if the gateway runs a workflow IN-PROCESS (before Lane A is on).
+      # In Lane A these live on the Workflow service instead.
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_BOT_LOGIN
         sync: false
       - key: ANTHROPIC_API_KEY
-        sync: false
-
-  # --- Chat worker (Lane B): drains run_jobs, drives interactive turns ---
-  - type: worker
-    name: render-agents-demo-chat-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: pnpm --filter @render-agents/example-demo worker
-    plan: starter
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: render-agents-demo-db
-          property: connectionString
-      - key: RENDER_AGENTS_ENCRYPTION_KEY
-        fromService:
-          type: web
-          name: render-agents-demo-gateway
-          envVarKey: RENDER_AGENTS_ENCRYPTION_KEY
-      - key: ANTHROPIC_API_KEY
-        sync: false
-
-  # --- Workflows host (Lane A): runs issue-to-pr + pr-review durably ---
-  # This is where the clone / Research-Plan-Implement / git push happens, so it
-  # needs git (in the image) and the GitHub token + commit identity.
-  - type: worker
-    name: render-agents-demo-workflows
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: pnpm --filter @render-agents/example-demo workflows
-    plan: standard
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: render-agents-demo-db
-          property: connectionString
-      - key: RENDER_AGENTS_ENCRYPTION_KEY
-        fromService:
-          type: web
-          name: render-agents-demo-gateway
-          envVarKey: RENDER_AGENTS_ENCRYPTION_KEY
-      - key: GITHUB_TOKEN
-        sync: false
-      - key: GITHUB_BOT_LOGIN
         sync: false
       - key: GIT_AUTHOR_NAME
         value: render-agent
       - key: GIT_AUTHOR_EMAIL
         value: render-agent@users.noreply.github.com
-      - key: ANTHROPIC_API_KEY
-        sync: false
 
   # --- Daily retention cleanup ---
   - type: cron
@@ -151,3 +108,23 @@ services:
           type: web
           name: render-agents-demo-gateway
           envVarKey: RENDER_AGENTS_API_KEY
+
+# --- Create this MANUALLY in the Dashboard (Blueprints can't manage Workflows) ---
+# New > Workflow:
+#   Name:            render-agents-demo-workflows   (must match WORKFLOW_SLUG in
+#                                                     src/lib/render.ts)
+#   Repo:            this repo/branch
+#   Language:        Docker
+#   Dockerfile Path: ./Dockerfile
+#   Start Command:   pnpm --filter @render-agents/example-demo workflows
+#   Instance type:   standard (headroom for clone + build + tests)
+#   Environment variables (the slug is in code, so no RENDER_WORKFLOW_SLUG here):
+#     DATABASE_URL                 = render-agents-demo-db Internal Database URL (same DB)
+#     RENDER_AGENTS_ENCRYPTION_KEY = same value as the gateway (reveal + copy)
+#     RENDER_API_KEY               = a Render API key (rnd_…) — needed to runTask
+#                                    the reviewer fan-out (agent@standard) children
+#     GITHUB_TOKEN                 = fine-grained PAT (Contents/PRs/Issues RW)
+#     GITHUB_BOT_LOGIN             = the PAT account login (loop guard)
+#     ANTHROPIC_API_KEY            = provider key
+#     GIT_AUTHOR_NAME              = render-agent
+#     GIT_AUTHOR_EMAIL             = render-agent@users.noreply.github.com

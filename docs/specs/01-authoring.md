@@ -154,6 +154,16 @@ Key authoring contract:
 
 ## Bootstrap Sequence (Recommended)
 
+`loadProject(root)` does the whole discovery + composition in one call — the
+form every service entrypoint should use:
+
+```ts
+const { runtime, agents, workflows, webhooks } = await loadProject(".");
+```
+
+It is exactly the explicit sequence below (drop to this form to load only part
+of it, or to pass extra `createRuntime` options via `loadProject(root, { runtime })`):
+
 ```ts
 const toolSources = await loadToolSources(".");
 const hooks = await loadHooks(".");
@@ -161,6 +171,7 @@ const extraRunners = await loadRunners(".");
 const runtime = await createRuntime({ toolSources, hooks, extraRunners });
 const agents = await loadAgents(".", runtime);
 const workflows = await loadWorkflows(".", runtime);
+const webhooks = await loadWebhooks(".");
 ```
 
 ---
