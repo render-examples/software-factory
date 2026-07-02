@@ -4,6 +4,14 @@
 # One image, three commands (gateway / worker / workflows) selected by compose.
 FROM node:22-slim
 
+# git: the issue-to-pr workflow clones/commits/pushes the target repo.
+# curl + ca-certificates: the cron services POST to the gateway admin routes,
+# and git needs CA certs for HTTPS. (Add the target repo's toolchain here too —
+# e.g. python/go — if the coding agent must run non-Node test suites.)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable

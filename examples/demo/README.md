@@ -10,6 +10,11 @@ A runnable demo that wires the monorepo packages (`engine` → `store` → `sdk`
 The default example is a **code-review** pipeline (security + performance
 reviewers → judge) plus a conversational `assistant` for chat threads.
 
+It also ships two **GitHub agent workflows** (see
+[GitHub agent workflows](#github-agent-workflows-issue--pr--pr-review) below):
+`issue-to-pr` (triage an issue → Research/Plan/Implement → open a PR) and
+`pr-review` (multi-reviewer → judge → approve / request changes).
+
 ## Run it (Docker, from the repo root)
 
 ```sh
@@ -111,3 +116,61 @@ Notes:
   only for the SDK's experimental Key Value API). Restart it to clear state.
 - The local task server **ignores the API key**, but `@renderinc/sdk`'s client
   still requires *some* token; the dispatcher passes a placeholder in local-dev.
+
+## GitHub agent workflows (issue → PR + PR review)
+
+Two webhook-triggered pipelines, wired through a single adapter at
+`POST /webhooks/github`:
+
+- **`issue-to-pr`** (`issues`, `issue_comment`) — a `triage` agent decides if the
+  issue has enough detail. If not, it posts the blocking questions as a comment
+  and labels the issue `agent:needs-info`. Once there's enough (on open or after a
+  human reply), it labels `agent:working`, clones the repo into an **ephemeral**
+  per-run checkout, runs **Research → Plan → Implement** (three agents, in-process
+  so they share one working copy), commits + pushes `agent/issue-<n>`, opens a PR,
+  comments the link, and labels `agent:done`.
+- **`pr-review`** (`pull_request`) — fans out to `security` + `performance` +
+  `correctness` + `tests` reviewers in parallel, a `judge` produces a structured
+  verdict, and the workflow submits a real GitHub review (**APPROVE** or
+  **REQUEST_CHANGES**) with optional inline comments.
+
+State is stored in **GitHub itself** (labels + the issue thread), so each webhook
+delivery re-evaluates from scratch — there are no paused runs to correlate. The
+`agent:working` / `agent:done` labels dedupe redundant deliveries, and events
+authored by `GITHUB_BOT_LOGIN` are ignored (loop guard).
+
+### Configure
+
+```sh
+# in .env (see repo-root .env.example)
+GITHUB_TOKEN=            # fine-grained PAT: Contents RW, Pull requests RW, Issues RW
+GITHUB_WEBHOOK_SECRET=   # shared secret set on the GitHub webhook
+GITHUB_BOT_LOGIN=        # the PAT's account login (so the bot ignores its own events)
+ANTHROPIC_API_KEY=       # (or OPENAI_API_KEY, with agents set to an OpenAI model)
+```
+
+On the target repo → **Settings → Webhooks → Add webhook**:
+- **Payload URL:** `https://<your-gateway>/webhooks/github`
+- **Content type:** `application/json`
+- **Secret:** the same `GITHUB_WEBHOOK_SECRET`
+- **Events:** Issues, Issue comments, Pull requests
+
+Inbound webhooks are authenticated by the HMAC signature, not the operator API
+key — the gateway exempts `/webhooks/*` from bearer auth by design.
+
+### Filesystem substrate
+
+The coding agents get `workspace__{exec,read_file,write_file,apply_patch,list_dir}`
+tools (`tools/workspace`) backed by `node:child_process`, confined to the run's
+checkout under `RENDER_WORKSPACE_DIR` (a temp dir by default). This is a
+trusted-repo demo substrate — swap in a real sandbox (MCP/E2B) for untrusted code.
+The deploy image (repo-root `Dockerfile`) installs `git`; add the target repo's
+toolchain there if the implementer must run non-Node test suites.
+
+### Deploy
+
+`render.yaml` (repo root) provisions gateway + chat-worker + workflows host +
+Postgres + crons. **Paste a Render API token into `RENDER_API_KEY`** on the
+gateway to enable Lane A (Render Workflows) — the coding + review pipelines run
+longer than GitHub's ~10s webhook timeout, so they must dispatch durably
+(fire-and-forget) rather than run in-process on the gateway.

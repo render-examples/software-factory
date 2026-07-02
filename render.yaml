@@ -1,0 +1,153 @@
+# Render Blueprint for the GitHub agent demo (examples/demo): an issue-to-pr
+# pipeline (triage -> Research/Plan/Implement -> PR) and a pr-review pipeline
+# (multi-reviewer -> judge -> approve/request-changes). Two-lane topology:
+#
+#   gateway (web)        — receives GitHub webhooks, triggers workflows, SSE, /ui
+#   chat-worker (worker) — Lane B: drains run_jobs (interactive chat threads)
+#   workflows (worker)   — Lane A: Render Workflows host; runs the durable
+#                          pipelines (clone/RPI/PR) in isolated per-run containers
+#   + Postgres, retention + reaper crons.
+#
+# IMPORTANT: paste a Render API token into RENDER_API_KEY (gateway) to enable
+# Lane A. Without it the gateway drives workflows in-process and the coding
+# workflow can exceed GitHub's ~10s webhook timeout. With Lane A, the gateway
+# fires the run and returns immediately.
+#
+# All services build the repo-root Dockerfile (which installs git + the Node
+# toolchain). Point one GitHub webhook (Issues, Issue comments, Pull requests)
+# at https://<gateway-url>/webhooks/github with GITHUB_WEBHOOK_SECRET.
+
+databases:
+  - name: render-agents-demo-db
+    plan: basic-256mb
+
+services:
+  # --- Gateway (web): webhook ingress + trigger surface + SSE + /ui ---
+  - type: web
+    name: render-agents-demo-gateway
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @render-agents/example-demo start
+    plan: standard
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: render-agents-demo-db
+          property: connectionString
+      - key: RENDER_AGENTS_API_KEY
+        generateValue: true
+      - key: RENDER_AGENTS_ENCRYPTION_KEY
+        generateValue: true
+      # Route interactive chat turns to the warm chat worker (Lane B).
+      - key: RENDER_AGENTS_EXECUTION_MODE
+        value: queue
+      # Paste a Render API token to upgrade workflow dispatch to Lane A (Render
+      # Workflows). Empty => in-process drive on the gateway (dev/fallback).
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKFLOW_SLUG
+        value: render-agents-demo-workflows
+      # GitHub: the gateway verifies inbound webhook signatures, and drives the
+      # workflow in-process until Lane A is enabled (so it needs the token too).
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_BOT_LOGIN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # --- Chat worker (Lane B): drains run_jobs, drives interactive turns ---
+  - type: worker
+    name: render-agents-demo-chat-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @render-agents/example-demo worker
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: render-agents-demo-db
+          property: connectionString
+      - key: RENDER_AGENTS_ENCRYPTION_KEY
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          envVarKey: RENDER_AGENTS_ENCRYPTION_KEY
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # --- Workflows host (Lane A): runs issue-to-pr + pr-review durably ---
+  # This is where the clone / Research-Plan-Implement / git push happens, so it
+  # needs git (in the image) and the GitHub token + commit identity.
+  - type: worker
+    name: render-agents-demo-workflows
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @render-agents/example-demo workflows
+    plan: standard
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: render-agents-demo-db
+          property: connectionString
+      - key: RENDER_AGENTS_ENCRYPTION_KEY
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          envVarKey: RENDER_AGENTS_ENCRYPTION_KEY
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_BOT_LOGIN
+        sync: false
+      - key: GIT_AUTHOR_NAME
+        value: render-agent
+      - key: GIT_AUTHOR_EMAIL
+        value: render-agent@users.noreply.github.com
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # --- Daily retention cleanup ---
+  - type: cron
+    name: render-agents-demo-retention
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "0 4 * * *"
+    dockerCommand: sh -c 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    envVars:
+      - key: GATEWAY_URL
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          property: hostport
+      - key: RENDER_AGENTS_API_KEY
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          envVarKey: RENDER_AGENTS_API_KEY
+
+  # --- Stranded-run reaper (fails Lane A roots stranded by a lost task) ---
+  - type: cron
+    name: render-agents-demo-reaper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "*/5 * * * *"
+    dockerCommand: sh -c 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    envVars:
+      - key: GATEWAY_URL
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          property: hostport
+      - key: RENDER_AGENTS_API_KEY
+        fromService:
+          type: web
+          name: render-agents-demo-gateway
+          envVarKey: RENDER_AGENTS_API_KEY
