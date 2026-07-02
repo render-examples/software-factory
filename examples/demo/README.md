@@ -167,10 +167,41 @@ trusted-repo demo substrate — swap in a real sandbox (MCP/E2B) for untrusted c
 The deploy image (repo-root `Dockerfile`) installs `git`; add the target repo's
 toolchain there if the implementer must run non-Node test suites.
 
-### Deploy
+### Deploy to Render
 
-`render.yaml` (repo root) provisions gateway + chat-worker + workflows host +
-Postgres + crons. **Paste a Render API token into `RENDER_API_KEY`** on the
-gateway to enable Lane A (Render Workflows) — the coding + review pipelines run
-longer than GitHub's ~10s webhook timeout, so they must dispatch durably
-(fire-and-forget) rather than run in-process on the gateway.
+Render **Blueprints can't create Workflow services** (Dashboard-only), so deploy
+is two parts: the Blueprint provisions the gateway + Postgres + crons, and you
+create the durable **Workflow service** (Lane A) by hand.
+
+1. **Blueprint** — from the repo root `render.yaml`, create a Blueprint. It
+   builds the repo-root `Dockerfile` (installs `git`) and provisions:
+   - `render-agents-demo-gateway` (web) — webhook ingress + `/ui`
+   - `render-agents-demo-db` (Postgres)
+   - retention + reaper crons
+
+2. **Gateway secrets** — set `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`,
+   `GITHUB_BOT_LOGIN`, `ANTHROPIC_API_KEY`.
+
+3. **Workflow service** — **New > Workflow** in the Dashboard, same repo,
+   **Language = Docker**, Dockerfile `./Dockerfile`, **Start Command**
+   `pnpm --filter @render-agents/example-demo workflows`. **Name it
+   `render-agents-demo-workflows`** so it matches `WORKFLOW_SLUG` in
+   `src/lib/render.ts` (the slug is defined in code, so no `RENDER_WORKFLOW_SLUG`
+   env var is needed anywhere). Env vars: same `DATABASE_URL` (the demo-db
+   Internal URL) and same `RENDER_AGENTS_ENCRYPTION_KEY` as the gateway, plus
+   `RENDER_API_KEY` (needed to `runTask` the reviewer fan-out), `GITHUB_TOKEN`,
+   `GITHUB_BOT_LOGIN`, `ANTHROPIC_API_KEY`, `GIT_AUTHOR_NAME/EMAIL`. Deploying
+   registers the `workflow@standard` / `agent@standard` tasks — confirm the slug
+   before the `/` on its Tasks page equals `render-agents-demo-workflows` (if
+   Render suffixed it, update the constant or set `RENDER_WORKFLOW_SLUG`).
+
+4. **Enable Lane A** — set `RENDER_API_KEY` (a Render API key, `rnd_…`) on **the
+   gateway** (to `startTask` the root) — it's also on the Workflow service from
+   step 3 (to `runTask` the fan-out). No slug env var: it's in code. Now the
+   gateway dispatches workflows durably and acks webhooks instantly — required
+   because the pipelines run longer than GitHub's ~10s webhook timeout.
+
+5. **GitHub webhook** — point it at `https://<gateway>/webhooks/github`
+   (see [Configure](#configure)).
+
+The full click-by-click walkthrough is in the deployment instructions.

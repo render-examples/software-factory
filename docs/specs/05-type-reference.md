@@ -33,6 +33,7 @@ Authoritative file: `packages/sdk/src/index.ts`
 
 ### Loader utilities
 
+- `loadProject`, `LoadedProject`, `LoadProjectOptions` (one call: runtime + agents + workflows + webhooks)
 - `loadWorkflows`
 - `loadWebhooks`
 - `loadToolSources`
