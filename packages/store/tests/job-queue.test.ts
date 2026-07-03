@@ -37,6 +37,22 @@ describe("MemoryJobQueue", () => {
     expect(b.status).toBe("queued");
   });
 
+  it("lets a deliver job coexist with the run's active turn job (idempotent by id)", async () => {
+    const q = new MemoryJobQueue();
+    const agent = await q.enqueue({ runId: "r1", kind: "agent" });
+    // A `deliver` job for the same run is NOT deduped against the active turn job
+    // (delivery must be able to run while — or just after — the turn is finishing).
+    const deliver = await q.enqueue({ id: "deliver:r1:5", runId: "r1", kind: "deliver" });
+    expect(deliver.id).toBe("deliver:r1:5");
+    expect(deliver.id).not.toBe(agent.id);
+    expect((await q.countByStatus()).queued).toBe(2);
+    // Turn jobs still dedupe against the active agent job (a deliver doesn't count).
+    expect((await q.enqueue({ runId: "r1", kind: "resume" })).id).toBe(agent.id);
+    // Deliver jobs are idempotent by their explicit id (tail replay is a no-op).
+    expect((await q.enqueue({ id: "deliver:r1:5", runId: "r1", kind: "deliver" })).id).toBe("deliver:r1:5");
+    expect((await q.countByStatus()).queued).toBe(2);
+  });
+
   it("claims in priority then availability order", async () => {
     const q = new MemoryJobQueue();
     await q.enqueue({ runId: "low", kind: "agent", priority: 200 });
@@ -219,6 +235,19 @@ describeWithPg("PgJobQueue parity", () => {
     const a = await q.enqueue({ runId, kind: "agent" });
     const b = await q.enqueue({ runId, kind: "agent" });
     expect(b.id).toBe(a.id);
+  });
+
+  it("lets a deliver job coexist with the active turn job; idempotent by id", async () => {
+    const runId = `job-${randomUUID()}`;
+    await seedRun(runId);
+    const agent = await q.enqueue({ runId, kind: "agent" });
+    const deliver = await q.enqueue({ id: `deliver:${runId}:5`, runId, kind: "deliver" });
+    expect(deliver.id).toBe(`deliver:${runId}:5`);
+    expect(deliver.id).not.toBe(agent.id);
+    // Turn jobs still dedupe against the active agent job.
+    expect((await q.enqueue({ runId, kind: "resume" })).id).toBe(agent.id);
+    // Deliver jobs are idempotent by their explicit id.
+    expect((await q.enqueue({ id: `deliver:${runId}:5`, runId, kind: "deliver" })).id).toBe(deliver.id);
   });
 
   it("requeues with backoff then dead-letters when exhausted", async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadWorkflows, loadWebhooks, loadToolSources, loadHooks, loadRunners } from "../../src/loader/load-project.js";
+import { loadWorkflows, loadChannels, loadToolSources, loadHooks, loadRunners } from "../../src/loader/load-project.js";
 import { createTestRuntime, mockModel } from "../../src/testing.js";
 
 let dir: string;
@@ -17,11 +17,11 @@ beforeAll(async () => {
     `import { workflow } from "${sdkEntry()}";\nexport default workflow(async (ctx) => ctx.input);\n`,
   );
 
-  // webhooks/github.ts
-  await mkdir(join(dir, "webhooks"), { recursive: true });
+  // channels/github.ts — a Channel (the inbound surface; deliver omitted = inbound-only)
+  await mkdir(join(dir, "channels"), { recursive: true });
   await writeFile(
-    join(dir, "webhooks", "github.ts"),
-    `export default { name: "github", match: () => ({ workflow: "echo", trigger: "push" }), parse: async () => ({ ok: true }) };\n`,
+    join(dir, "channels", "github.ts"),
+    `export default { target: { workflow: "echo" }, match: () => ({ event: "push" }), parse: async () => ({ conversationId: "c1", input: { ok: true } }) };\n`,
   );
 
   // tools/greeter/index.ts (DefineToolSpec default export)
@@ -66,10 +66,11 @@ describe("project discovery loaders", () => {
     expect(run.id).toBeTruthy();
   });
 
-  it("loadWebhooks discovers adapters by filename", async () => {
-    const webhooks = await loadWebhooks(dir);
-    expect([...webhooks.keys()]).toEqual(["github"]);
-    expect(webhooks.get("github")!.match(new Request("http://x"))).toEqual({ workflow: "echo", trigger: "push" });
+  it("loadChannels discovers channels by filename", async () => {
+    const channels = await loadChannels(dir);
+    expect([...channels.keys()]).toEqual(["github"]);
+    expect(channels.get("github")!.target).toEqual({ workflow: "echo" });
+    expect(channels.get("github")!.match(new Request("http://x"))).toEqual({ event: "push" });
   });
 
   it("loadToolSources coerces a DefineToolSpec default export into a ToolSource", async () => {

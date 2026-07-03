@@ -40,11 +40,17 @@ export interface ApiKeyAuthOptions {
   resolver?: AuthResolver;
   /**
    * Paths that bypass auth entirely — they carry their own authentication
-   * (OAuth callback → signed `state`; webhooks/connectors → adapter signatures).
+   * (OAuth callback → signed `state`; channels → the channel's signature policy).
    */
   isPublicPath?: (path: string) => boolean;
   /** Paths that may present the key via `?key=` (SSE + OAuth authorize). */
   allowQueryKey?: (path: string) => boolean;
+  /**
+   * Verify a per-user stream token from `?token=` on `allowQueryKey` paths — the
+   * per-user SSE credential (EventSource can't send an Authorization header). Takes
+   * precedence over the shared-key `?key=` operator fallback. See `stream-token.ts`.
+   */
+  streamTokenResolver?: (token: string) => Principal | null;
 }
 
 /**
@@ -67,10 +73,18 @@ export function apiKeyAuth(options: ApiKeyAuthOptions = {}) {
 
     let principal = await resolver(c.req.raw);
     // SSE / authorize fallback: EventSource and full-page navigations can't set
-    // an Authorization header, so accept the shared key via `?key=` on the
-    // allowlisted paths only (CR-05). Cookie sessions ride EventSource for free.
+    // an Authorization header, so accept a query credential on the allowlisted
+    // paths only (CR-05). A per-user stream token (`?token=`) is preferred — it
+    // carries the caller's own identity — falling back to the shared operator key
+    // (`?key=`) for the console. Cookie sessions ride EventSource for free.
     if (!principal && allowQueryKey(path)) {
-      principal = queryKeyPrincipal(c.req.query("key"), envKey, operatorUserId);
+      const token = c.req.query("token");
+      if (token && options.streamTokenResolver) {
+        principal = options.streamTokenResolver(token);
+      }
+      if (!principal) {
+        principal = queryKeyPrincipal(c.req.query("key"), envKey, operatorUserId);
+      }
     }
     if (!principal) return c.json({ error: "unauthorized" }, 401);
 
@@ -95,6 +109,21 @@ export function bearerKeyResolver(envKey: string, operatorUserId: string): AuthR
   };
 }
 
+/**
+ * Compose resolvers into one; the first to return a non-null {@link Principal}
+ * wins. Lets a deployment run per-user JWT auth with a shared-key operator
+ * break-glass side by side: `composeResolvers(jwtAuthResolver(...), bearerKeyResolver(...))`.
+ */
+export function composeResolvers(...resolvers: AuthResolver[]): AuthResolver {
+  return async (req: Request) => {
+    for (const resolve of resolvers) {
+      const principal = await resolve(req);
+      if (principal) return principal;
+    }
+    return null;
+  };
+}
+
 function queryKeyPrincipal(
   key: string | undefined,
   envKey: string,
@@ -112,6 +141,21 @@ export function getPrincipal(c: Context): Principal {
 }
 
 /**
+ * Middleware restricting a route group to operators — the control plane
+ * (`/admin/*`: retention, run reaper, queue depth, schedule tick) must never be
+ * reachable by an end user (`role: "user"`), even with a valid per-user token.
+ * 403 for non-operators. Mount AFTER the auth middleware so the principal is set.
+ */
+export function requireOperator() {
+  return async (c: Context, next: Next) => {
+    if (getPrincipal(c).role !== "operator") {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    await next();
+  };
+}
+
+/**
  * Ownership check for tenant-scoped reads. Operators (shared key) see everything
  * — this is an operator console. End users are confined to records they own.
  */
@@ -120,12 +164,11 @@ export function canAccess(ownerUserId: string | undefined | null, principal: Pri
   return ownerUserId != null && ownerUserId === principal.userId;
 }
 
-/** Default public-path matcher: OAuth callback + inbound webhooks/connectors. */
+/** Default public-path matcher: OAuth callback + inbound channels (signature-authed). */
 export function defaultPublicPath(path: string): boolean {
   return (
     /^\/oauth\/[^/]+\/callback$/.test(path) ||
-    path.startsWith("/webhooks/") ||
-    path.startsWith("/connectors/")
+    path.startsWith("/channels/")
   );
 }
 

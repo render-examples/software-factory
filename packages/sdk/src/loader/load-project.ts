@@ -4,12 +4,13 @@ import { pathToFileURL } from "node:url";
 import type { ToolSource, DefineToolSpec, Hook, AgentRunner } from "@render-agents/engine";
 import { defineTool, defineToolSource } from "@render-agents/engine";
 import type { AgentRuntime } from "../runtime.js";
-import type { WorkflowDefinition, WebhookAdapter } from "../workflow.js";
+import type { WorkflowDefinition } from "../workflow.js";
+import type { Channel } from "../channel.js";
 import { bindWorkflow } from "../workflow.js";
 
 /**
  * Convention discovery + dynamic import for the code-bearing project
- * directories (`workflows/`, `webhooks/`, `tools/`). Unlike markdown agents,
+ * directories (`workflows/`, `channels/`, `tools/`). Unlike markdown agents,
  * these are TypeScript/JavaScript modules, so they must be `import()`ed.
  *
  * The entry resolver accepts both source (`.ts`, run via tsx/vitest) and built
@@ -72,10 +73,11 @@ function isWorkflowDefinition(v: unknown): v is WorkflowDefinition {
   return typeof v === "object" && v !== null && typeof (v as WorkflowDefinition).dispatch === "function";
 }
 
-function isWebhookAdapter(v: unknown): v is WebhookAdapter {
+function isChannel(v: unknown): v is Channel {
   return typeof v === "object" && v !== null
-    && typeof (v as WebhookAdapter).match === "function"
-    && typeof (v as WebhookAdapter).parse === "function";
+    && (v as Channel).target !== undefined
+    && typeof (v as Channel).match === "function"
+    && typeof (v as Channel).parse === "function";
 }
 
 function isToolSource(v: unknown): v is ToolSource {
@@ -106,18 +108,21 @@ export async function loadWorkflows(dir: string, runtime: AgentRuntime): Promise
 }
 
 /**
- * Discover webhook adapters from `webhooks/*.{js,ts}`. The key is the filename;
- * each default-exported `WebhookAdapter` is mounted at `POST /webhooks/:name`.
+ * Discover channels from `channels/*.{js,ts}`. The key is the filename (the
+ * channel id); each default-exported `Channel` is mounted by the gateway at
+ * `POST /channels/:id`. A channel is the single inbound/outbound message
+ * surface (it supersedes the old `webhooks/` + `connectors/` concepts); an
+ * inbound-only channel simply omits `deliver`.
  */
-export async function loadWebhooks(dir: string): Promise<Map<string, WebhookAdapter>> {
-  const root = join(dir, "webhooks");
-  const out = new Map<string, WebhookAdapter>();
+export async function loadChannels(dir: string): Promise<Map<string, Channel>> {
+  const root = join(dir, "channels");
+  const out = new Map<string, Channel>();
   for (const { key, path } of await listModuleFiles(root)) {
-    const adapter = await importDefault(path);
-    if (!isWebhookAdapter(adapter)) {
-      throw new Error(`webhooks/${key}: default export is not a WebhookAdapter ({ name, match, parse })`);
+    const channel = await importDefault(path);
+    if (!isChannel(channel)) {
+      throw new Error(`channels/${key}: default export is not a Channel ({ target, match, parse, deliver? })`);
     }
-    out.set(key, adapter);
+    out.set(key, channel);
   }
   return out;
 }

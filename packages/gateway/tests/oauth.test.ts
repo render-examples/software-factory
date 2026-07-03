@@ -97,7 +97,7 @@ describe("operator UI (/ui)", () => {
       runners: { get: () => { throw new Error("no"); }, has: () => false },
       hooks: { get: () => { throw new Error("no"); }, has: () => false, ids: () => [] },
       contextManager: { prepare: async (m: unknown) => m },
-      cancelStore: new MemoryCancelStore(), agentDefinitions: new Map(), toolSources: new Map(),
+      cancelStore: new MemoryCancelStore(), agentDefinitions: new Map(), toolSources: new Map(), channels: new Map(),
     } as unknown as Parameters<typeof createGatewayApp>[0]["runtime"];
 
     // Auth ENABLED — the UI shell must still load (registered before auth).
@@ -147,17 +147,21 @@ describe("gateway auth carve-outs (CR-01/CR-05)", () => {
       runners: { get: () => { throw new Error("no"); }, has: () => false },
       hooks: { get: () => { throw new Error("no"); }, has: () => false, ids: () => [] },
       contextManager: { prepare: async (m: unknown) => m },
-      cancelStore: new MemoryCancelStore(), agentDefinitions: new Map(), toolSources: new Map(),
+      cancelStore: new MemoryCancelStore(), agentDefinitions: new Map(), toolSources: new Map(), channels: new Map(),
       workflows: new Map(), deltaBus: { publish: () => {}, subscribe: () => () => {} },
       scheduleStore: store, jobQueue: { countByStatus: async () => ({ queued: 0, running: 0, completed: 0, failed: 0 }) },
     } as unknown as Parameters<typeof createGatewayApp>[0]["runtime"];
 
-    const webhook = { name: "github", match: () => null, parse: async () => ({}) };
+    const channel: import("@render-agents/sdk").Channel = {
+      target: { workflow: "x" },
+      match: () => null,
+      parse: async () => ({ conversationId: "c", input: {} }),
+    };
     process.env.RENDER_AGENTS_API_KEY = "test-key";
     const app = createGatewayApp({
       runtime,
       oauthProviders: new Map([["github", provider()]]),
-      webhooks: new Map([["github", webhook]]),
+      channels: new Map([["github", channel]]),
     });
     return app;
   }
@@ -170,10 +174,10 @@ describe("gateway auth carve-outs (CR-01/CR-05)", () => {
     delete process.env.RENDER_AGENTS_API_KEY;
   });
 
-  it("inbound webhooks are reachable without the operator key (authed by adapter)", async () => {
+  it("inbound channels are reachable without the operator key (authed by signature)", async () => {
     const app = await buildAuthedGateway();
-    // Adapter returns no match → 400 from the handler (NOT 401): it got past auth.
-    const res = await app.request("/webhooks/github", { method: "POST" });
+    // Channel returns no match → 400 from the handler (NOT 401): it got past auth.
+    const res = await app.request("/channels/github", { method: "POST" });
     expect(res.status).toBe(400);
     delete process.env.RENDER_AGENTS_API_KEY;
   });

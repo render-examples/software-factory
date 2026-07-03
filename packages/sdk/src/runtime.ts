@@ -31,6 +31,7 @@ import type {
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
 import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment, isRootTriggerEnvironment } from "./dispatch.js";
 import type { WorkflowDefinition } from "./workflow.js";
+import type { Channel } from "./channel.js";
 
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
@@ -129,6 +130,12 @@ export interface AgentRuntime {
   readonly delegation?: Partial<DelegationLimits>;
   /** Resolved tool sources from the tools/ directory, keyed by source id. */
   readonly toolSources: Map<string, import("@render-agents/engine").ToolSource>;
+  /**
+   * Discovered channels keyed by id. Populated by `loadProject`; used by the
+   * gateway's channel routes (inbound) and the outbound delivery path
+   * (`deliverForRun` + the worker's delivery producer).
+   */
+  readonly channels: Map<string, Channel>;
 }
 
 export interface CreateRuntimeOptions {
@@ -161,6 +168,8 @@ export interface CreateRuntimeOptions {
   toolSources?: Map<string, import("@render-agents/engine").ToolSource>;
   /** Per-provider OAuth token refreshers (token-endpoint exchange). */
   oauthRefreshers?: Map<string, OAuthRefresher>;
+  /** Discovered channels (keyed by id); usually populated by `loadProject`. */
+  channels?: Map<string, Channel>;
 }
 
 /**
@@ -278,6 +287,9 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   // still resolvable at dispatchRoot time.
   const workflows = new Map<string, WorkflowDefinition>();
   const toolSources = opts?.toolSources ?? new Map();
+  // Populated later by loadProject (like agentDefinitions/workflows); the
+  // outbound delivery path resolves a run's channel from this map.
+  const channels = opts?.channels ?? new Map<string, Channel>();
   // Shared instances so the dispatcher and any later registrations (e.g. the
   // gateway populating refreshers from provider configs) see the same objects.
   const oauthStore = asOAuthStore(store);
@@ -331,6 +343,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     workflows,
     delegation: opts?.delegation,
     toolSources,
+    channels,
   };
 }
 

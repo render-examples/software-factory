@@ -1,16 +1,18 @@
-export type { ConnectorSpec, ConnectorContext, WebhookMatch } from "./connector.js";
-export { loadConnectors } from "./connector.js";
+export { channelRoutes } from "./routes/channels.js";
+export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget } from "@render-agents/sdk";
 export { createGatewayApp, startGateway } from "./app.js";
 export type { GatewayOptions } from "./app.js";
-export { apiKeyAuth } from "./auth.js";
+export { apiKeyAuth, bearerKeyResolver, composeResolvers, canAccess, getPrincipal } from "./auth.js";
+export type { Principal, AuthResolver, ApiKeyAuthOptions } from "./auth.js";
+export { jwtAuthResolver } from "./jwt-auth.js";
+export type { JwtAuthOptions } from "./jwt-auth.js";
+export { issueStreamToken, verifyStreamToken, DEFAULT_STREAM_TOKEN_TTL_MS } from "./stream-token.js";
 export { runRoutes } from "./routes/runs.js";
 export { streamRoutes } from "./routes/stream.js";
 export { threadRoutes } from "./routes/threads.js";
 export { hitlRoutes } from "./routes/hitl.js";
 export { oauthRoutes, buildRefresher, encryptToken, decryptToken } from "./routes/oauth.js";
 export type { OAuthProviderConfig, OAuthRouteDeps } from "./routes/oauth.js";
-export { webhookRoutes } from "./routes/webhooks.js";
-export type { WebhookAdapter } from "./routes/webhooks.js";
 export {
   verifyWebhookRequest,
   webhookVerifyRequired,

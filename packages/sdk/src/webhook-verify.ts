@@ -1,9 +1,9 @@
 /**
- * Declarative inbound-signature verification for webhooks and connectors.
+ * Declarative inbound-signature verification for channels.
  *
- * Inbound webhook/connector routes are public (a third party can't present the
- * operator API key), so the *signature is the authentication*. This module is
- * the authored, declarative surface: an adapter/connector sets `verify` and the
+ * Inbound channel routes are public (a third party can't present the operator
+ * API key), so the *signature is the authentication*. This module is the
+ * authored, declarative surface: a channel sets `verify` and the
  * gateway enforces it — computing the expected signature over the raw request
  * body and rejecting mismatches with 401 *before* the request is routed or
  * dispatched. The runtime that executes these schemes lives in
@@ -15,12 +15,14 @@
  *
  * @example
  *   import { githubVerify } from "@render-agents/sdk";
- *   export default {
- *     name: "github",
+ *   import type { Channel } from "@render-agents/sdk";
+ *   const channel: Channel = {
+ *     target: { workflow: "code-review" },
  *     verify: githubVerify(), // reads GITHUB_WEBHOOK_SECRET
  *     match(req) { ... },
  *     parse(req) { ... },
- *   } satisfies WebhookAdapter;
+ *   };
+ *   export default channel;
  */
 
 /** Digest encoding of a signature header value. */

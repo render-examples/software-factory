@@ -23,15 +23,24 @@ export class MemoryJobQueue implements JobQueue {
   private readonly waiters = new Set<() => void>();
 
   async enqueue(opts: EnqueueOptions): Promise<JobRecord> {
-    // Idempotent per run: an existing active job short-circuits a duplicate.
-    const active = [...this.jobs.values()].find(
-      (j) => j.runId === opts.runId && (j.status === "queued" || j.status === "running"),
-    );
-    if (active) return { ...active };
+    const id = opts.id ?? randomUUID();
+    // `deliver` jobs are post-processing side-effects, not turn drivers: exempt
+    // from the per-run active constraint (so they coexist with the run's active
+    // agent/resume job) and idempotent by their explicit id instead.
+    if (opts.kind === "deliver") {
+      const existing = this.jobs.get(id);
+      if (existing) return { ...existing };
+    } else {
+      // Idempotent per run: an existing active turn job short-circuits a duplicate.
+      const active = [...this.jobs.values()].find(
+        (j) => j.runId === opts.runId && j.kind !== "deliver" && (j.status === "queued" || j.status === "running"),
+      );
+      if (active) return { ...active };
+    }
 
     const now = new Date().toISOString();
     const job: JobRecord = {
-      id: opts.id ?? randomUUID(),
+      id,
       runId: opts.runId,
       kind: opts.kind,
       status: "queued",

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildEventRecord } from "@render-agents/store";
+import { workflow, bindWorkflow, type WorkflowDefinition } from "@render-agents/sdk";
 import { createTestRuntime } from "@render-agents/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 import type { AuthResolver } from "../src/auth.js";
@@ -29,6 +30,21 @@ async function seedRun(
 
 const U = (id: string) => ({ headers: { "x-user": id } });
 const OP = { headers: { "x-op": "1" } };
+
+/** JSON POST body with an auth header merged in. */
+function jsonReq(auth: { headers: Record<string, string> }, body: unknown) {
+  return { method: "POST", headers: { ...auth.headers, "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+/** A runtime + app with one registered workflow, for schedule/admin tests. */
+async function appWithWorkflow() {
+  const runtime = await createTestRuntime();
+  const wf = workflow(async () => "ok");
+  bindWorkflow(wf, "wf", runtime);
+  const workflows = new Map<string, WorkflowDefinition>([["wf", wf]]);
+  const app = createGatewayApp({ runtime, workflows, auth: testAuth(), serveUI: false });
+  return { runtime, app };
+}
 
 describe("multi-tenancy — run ownership (CR-D1)", () => {
   it("rejects unauthenticated requests with 401", async () => {
@@ -136,5 +152,91 @@ describe("UI cookie session (CR-D1 / CR-19)", () => {
     expect(who.status).toBe(200);
     expect(await who.json()).toMatchObject({ role: "operator" });
     delete process.env.RENDER_AGENTS_API_KEY;
+  });
+});
+
+describe("multi-tenancy — schedule ownership (CR-D1)", () => {
+  it("confines schedules to their owner; operators see all; owner comes from auth", async () => {
+    const { app } = await appWithWorkflow();
+    const mk = (u: string) => app.request("/schedules", jsonReq(U(u), { workflow: "wf", cronExpression: "* * * * *" }));
+
+    const aSched = await (await mk("alice")).json();
+    expect(aSched.userId).toBe("alice"); // stamped from auth, not the body
+
+    // A different user can't read, patch, or delete it (404, not enumerable).
+    expect((await app.request(`/schedules/${aSched.id}`, U("bob"))).status).toBe(404);
+    const bobPatch = await app.request(`/schedules/${aSched.id}`, {
+      method: "PATCH",
+      headers: { ...U("bob").headers, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(bobPatch.status).toBe(404);
+    expect((await app.request(`/schedules/${aSched.id}`, { method: "DELETE", ...U("bob") })).status).toBe(404);
+
+    // Owner + operator can read it.
+    expect((await app.request(`/schedules/${aSched.id}`, U("alice"))).status).toBe(200);
+    expect((await app.request(`/schedules/${aSched.id}`, OP)).status).toBe(200);
+
+    // Listing is scoped: bob sees only his, alice only hers, operator sees all.
+    await mk("bob");
+    const bobList = await (await app.request("/schedules", U("bob"))).json();
+    expect(bobList.schedules.every((s: { userId: string }) => s.userId === "bob")).toBe(true);
+    const aliceList = await (await app.request("/schedules", U("alice"))).json();
+    expect(aliceList.schedules.map((s: { id: string }) => s.id)).toEqual([aSched.id]);
+    const opList = await (await app.request("/schedules", OP)).json();
+    expect(opList.schedules.length).toBe(2);
+  });
+});
+
+describe("multi-tenancy — /admin/* is operator-only (CR-D1)", () => {
+  it("rejects end users with 403 and admits operators", async () => {
+    const { app } = await appWithWorkflow();
+    const adminRoutes: Array<["GET" | "POST", string]> = [
+      ["POST", "/admin/retention"],
+      ["POST", "/admin/runs/reap"],
+      ["GET", "/admin/jobs"],
+      ["POST", "/admin/schedules/tick"],
+    ];
+    for (const [method, path] of adminRoutes) {
+      expect((await app.request(path, { method, ...U("alice") })).status).toBe(403);
+    }
+    // Operators pass through to the handler.
+    expect((await app.request("/admin/jobs", OP)).status).toBe(200);
+    expect((await app.request("/admin/schedules/tick", { method: "POST", ...OP })).status).toBe(200);
+    expect((await app.request("/admin/retention", { method: "POST", ...OP })).status).toBe(200);
+    expect((await app.request("/admin/runs/reap", { method: "POST", ...OP })).status).toBe(200);
+  });
+});
+
+describe("multi-tenancy — thread stream ownership (CR-D1)", () => {
+  it("denies a user tailing a foreign thread or one with no owner row (404)", async () => {
+    const runtime = await createTestRuntime();
+    const app = createGatewayApp({ runtime, auth: testAuth(), serveUI: false });
+    const created = await (await app.request("/threads", { method: "POST", ...U("alice"), body: "{}" })).json();
+
+    // Foreign thread → 404 (check happens before streaming starts).
+    expect((await app.request(`/threads/${created.id}/stream`, U("bob"))).status).toBe(404);
+    // A thread id with no metadata row → non-operator denied (closes the no-row bypass).
+    expect((await app.request("/threads/ghost-thread/stream", U("bob"))).status).toBe(404);
+  });
+});
+
+describe("multi-tenancy — per-user SSE stream token (CR-D1)", () => {
+  it("mints a token that streams the owner's run but not another tenant's", async () => {
+    const runtime = await createTestRuntime();
+    await seedRun(runtime, "r-alice", "alice");
+    await seedRun(runtime, "r-bob", "bob");
+    const app = createGatewayApp({ runtime, auth: testAuth(), serveUI: false });
+
+    // Alice mints a stream token by authenticating normally.
+    const { token } = await (await app.request("/auth/stream-token", { method: "POST", ...U("alice") })).json();
+    const tok = encodeURIComponent(token);
+
+    // Her terminal run streams (and closes) with the token in the query.
+    expect((await app.request(`/runs/r-alice/stream?token=${tok}`)).status).toBe(200);
+    // The same token cannot read another tenant's run (canAccess still enforced).
+    expect((await app.request(`/runs/r-bob/stream?token=${tok}`)).status).toBe(404);
+    // A tampered token is rejected outright.
+    expect((await app.request(`/runs/r-alice/stream?token=${tok}TAMPER`)).status).toBe(401);
   });
 });
