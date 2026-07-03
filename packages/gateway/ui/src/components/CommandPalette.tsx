@@ -31,7 +31,6 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Restore focus to the trigger element when the palette closes.
   useEffect(() => {
     if (!open && restoreFocus.current) {
       restoreFocus.current.focus?.();

@@ -31,6 +31,12 @@ export interface RunDetail extends RunRecord {
   pauseReason?: "input";
 }
 
+export interface RunView {
+  run: RunDetail;
+  spans: SpanRecord[];
+  approvals: Approval[];
+}
+
 export interface SpanRecord {
   id: string;
   runId: string;

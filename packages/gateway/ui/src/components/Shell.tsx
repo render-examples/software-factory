@@ -11,13 +11,10 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const top = route.segments[0] ?? "chat";
   const [navOpen, setNavOpen] = useState(false);
 
-  // Close the mobile nav whenever the route changes.
   useEffect(() => { setNavOpen(false); }, [route.hash]);
 
   const go = (id: string) => { navigate(id); setNavOpen(false); };
 
-  // Filter nav by runtime capability (e.g. Connections needs OAuth configured),
-  // then partition into the intent groups defined by the registry.
   const visible = NAV_ITEMS.filter((n) => !n.gate || (n.gate === "oauth" && capabilities.oauth));
 
   return (

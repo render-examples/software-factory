@@ -39,9 +39,7 @@ function splitRaw(raw: string): { segments: string[]; query: string } {
 export function parseHash(): Route {
   const raw = location.hash.replace(/^#\/?/, "");
   const { segments, query } = splitRaw(raw);
-  // Map alias sections to their canonical id so the rendered view is always
-  // correct even if the URL still carries the old id (URL cleanup happens once
-  // on boot via rewriteAlias).
+  // Renders correctly even if the URL still carries the old id (cleaned up on boot via rewriteAlias).
   const mapped = segments.length > 0 && ALIASES[segments[0]]
     ? [ALIASES[segments[0]], ...segments.slice(1)]
     : segments;

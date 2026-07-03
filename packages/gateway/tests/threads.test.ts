@@ -85,6 +85,23 @@ describe("gateway threads — end-to-end", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects invalid create payload types", async () => {
+    const { app } = await buildApp();
+    const badTitle = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: 123 }),
+    });
+    expect(badTitle.status).toBe(400);
+
+    const badMetadata = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metadata: "oops" }),
+    });
+    expect(badMetadata.status).toBe(400);
+  });
+
   it("creates a thread, dispatches a thread run, and folds the transcript", async () => {
     const { app, runtime } = await buildApp();
 
@@ -148,6 +165,23 @@ describe("gateway threads — end-to-end", () => {
       body: JSON.stringify({ content: "second turn" }),
     });
     expect(res.status).toBe(409);
+  });
+
+  it("rejects non-string message content with 400", async () => {
+    const { app } = await buildApp();
+    const thread = await (
+      await app.request("/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    ).json();
+    const res = await app.request(`/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: { text: "hello" } }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("GET /threads/:id/view returns consolidated active-run and approval state", async () => {
@@ -286,5 +320,26 @@ describe("gateway threads — end-to-end", () => {
     });
     expect(res.status).toBe(409);
     expect((await res.json()).error).toContain("approval");
+  });
+
+  it("rejects message delivery when paused run has no pending message input", async () => {
+    const { app, runtime } = await buildApp();
+    const createRes = await app.request("/threads", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+    });
+    const thread = await createRes.json();
+
+    await runtime.store.events.append(
+      buildEventRecord("stale-paused", { type: "run.started", threadId: thread.id, input: "x" }, { agentName: "chat" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord("stale-paused", { type: "run.paused", reason: "input", pendingInputIds: ["missing"] }, { agentName: "chat" }),
+    );
+
+    const res = await app.request(`/threads/${thread.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "hi" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("no pending message input");
   });
 });

@@ -5,8 +5,7 @@ import { Hono, type Context } from "hono";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Candidate locations for the built SPA (`vite build` → `dist/ui-app`). The first
-// covers the published/built layout (dist/routes → dist/ui-app); the second covers
+// Built SPA locations: published layout (dist/routes → dist/ui-app) vs
 // running from source under vitest/tsx (src/routes → dist/ui-app).
 const UI_DIRS = [
   join(HERE, "..", "ui-app"),
@@ -58,8 +57,7 @@ function withUiHeaders(extra: Record<string, string> = {}, includeCsp = false): 
 async function readFromUiDirs(relative: string): Promise<Buffer | null> {
   for (const dir of UI_DIRS) {
     try {
-      // Read as a Buffer (no encoding) so binary assets (fonts, images) aren't
-      // corrupted by a UTF-8 round-trip (CR-23).
+      // Buffer (no encoding) avoids corrupting binary assets via UTF-8 round-trip (CR-23).
       return await readFile(join(dir, relative));
     } catch {
       /* try next */
@@ -82,22 +80,19 @@ const NOT_BUILT_HTML = `<!doctype html><meta charset="utf-8" />
 export function uiRoutes() {
   const app = new Hono();
 
-  // Built static assets (hashed filenames under /ui/assets/).
   app.get("/ui/assets/:file", async (c) => {
     const file = c.req.param("file");
-    // Guard against path traversal — assets are flat, hashed filenames.
+    // Guard against path traversal; assets are flat, hashed filenames.
     if (file.includes("..") || file.includes("/")) return c.text("not found", 404, withUiHeaders());
     const body = await readFromUiDirs(join("assets", file));
     if (body === null) return c.text("not found", 404, withUiHeaders());
     const type = CONTENT_TYPES[extname(file)] ?? "application/octet-stream";
-    // Copy into a standalone Uint8Array view for Hono's body type (binary-safe).
     return c.body(new Uint8Array(body), 200, withUiHeaders({
       "Content-Type": type,
       "Cache-Control": "public, max-age=31536000, immutable",
     }));
   });
 
-  // Shell + SPA client-side routing fallback.
   const serveShell = async (c: Context) => {
     const html = await readFromUiDirs("index.html");
     return c.html(

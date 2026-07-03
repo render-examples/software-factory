@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { client } from "../api/client";
 import { useAsync } from "../hooks/useAsync";
 import { summarizeEvent, pretty } from "../lib/format";
@@ -8,6 +8,8 @@ import type { EventCategory, RunEventRecord } from "../api/types";
 const CATS: (EventCategory | "all")[] = [
   "all", "lifecycle", "message", "tool", "model", "step", "input", "delegation", "context",
 ];
+const PAGE_SIZE = 200;
+const RUN_EVENT_FETCH_LIMIT = 300;
 
 interface TaggedEvent extends RunEventRecord {
   /** The run this event belongs to (root or a descendant child run). */
@@ -17,20 +19,21 @@ interface TaggedEvent extends RunEventRecord {
 }
 
 /**
- * Fetch the root run's events plus every descendant run's events (workflow
- * `.task()`/`.run()` fan-out + subagents), merged chronologically. A workflow
- * root only logs orchestration events (run.started, step.*, run.completed) — the
- * real per-step work lives in child runs, so stitching the tree is what makes the
- * Events lens actually show what happened. Bounded by a seen-set + depth cap.
+ * Fetch the root run's events plus every descendant run's events, merged
+ * chronologically. A workflow root only logs orchestration events; real
+ * per-step work lives in child runs. Bounded by a seen-set + depth cap.
  */
-async function fetchTreeEvents(rootId: string): Promise<TaggedEvent[]> {
+async function fetchTreeEvents(
+  rootId: string,
+  opts: { category?: EventCategory; q?: string; limit?: number },
+): Promise<TaggedEvent[]> {
   const out: TaggedEvent[] = [];
   const seen = new Set<string>();
   async function walk(runId: string, label: string, depth: number): Promise<void> {
     if (seen.has(runId) || depth > 6) return;
     seen.add(runId);
     const [ev, kids] = await Promise.all([
-      client.getRunEvents(runId).catch(() => ({ events: [] as RunEventRecord[] })),
+      client.getRunEvents(runId, opts).catch(() => ({ events: [] as RunEventRecord[] })),
       client.listRunChildren(runId).catch(() => ({ runs: [] })),
     ]);
     for (const e of ev.events) out.push({ ...e, ownerRunId: runId, ownerLabel: label });
@@ -43,30 +46,30 @@ async function fetchTreeEvents(rootId: string): Promise<TaggedEvent[]> {
 
 export function EventLog({ runId, reloadKey = 0 }: { runId: string; reloadKey?: number }) {
   const [includeChildren, setIncludeChildren] = useState(true);
-  const { data, error, loading } = useAsync<TaggedEvent[]>(
-    () =>
-      includeChildren
-        ? fetchTreeEvents(runId)
-        : client
-            .getRunEvents(runId)
-            .then((r) => r.events.map((e) => ({ ...e, ownerRunId: runId, ownerLabel: "workflow" }))),
-    [runId, reloadKey, includeChildren],
-  );
   const [cat, setCat] = useState<EventCategory | "all">("all");
   const [text, setText] = useState("");
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const trimmedText = text.trim();
+  const category = cat === "all" ? undefined : cat;
+  const { data, error, loading } = useAsync<TaggedEvent[]>(
+    () =>
+      includeChildren
+        ? fetchTreeEvents(runId, { category, q: trimmedText || undefined, limit: RUN_EVENT_FETCH_LIMIT })
+        : client
+            .getRunEvents(runId, { category, q: trimmedText || undefined, limit: RUN_EVENT_FETCH_LIMIT })
+            .then((r) => r.events.map((e) => ({ ...e, ownerRunId: runId, ownerLabel: "workflow" }))),
+    [runId, reloadKey, includeChildren, category, trimmedText],
+  );
 
-  const events = useMemo(() => {
-    const all = data ?? [];
-    return all.filter((e) => {
-      if (cat !== "all" && e.category !== cat) return false;
-      if (text) {
-        const hay = `${e.type} ${e.agentName ?? ""} ${e.ownerLabel} ${pretty(e.payload)}`.toLowerCase();
-        if (!hay.includes(text.toLowerCase())) return false;
-      }
-      return true;
-    });
-  }, [data, cat, text]);
+  const events = data ?? [];
+  const visible = useMemo(() => events.slice(0, visibleCount), [events, visibleCount]);
+  const hasMore = visible.length < events.length;
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    setOpenKey(null);
+  }, [runId, reloadKey, includeChildren, cat, trimmedText]);
 
   if (loading && !data) return <div className="panel"><Spinner /> loading events…</div>;
 
@@ -84,11 +87,13 @@ export function EventLog({ runId, reloadKey = 0 }: { runId: string; reloadKey?: 
           child runs
         </label>
         <span className="spacer" />
-        <span className="muted">{events.length} events</span>
-        <CopyButton text={pretty(data ?? [])} label="copy log" />
+        <span className="muted">
+          showing {visible.length}/{events.length} events
+        </span>
+        <CopyButton text={pretty(events)} label="copy log" />
       </div>
       <ErrorBanner error={error} />
-      {events.length === 0 ? <Empty>No events.</Empty> : events.map((e) => {
+      {events.length === 0 ? <Empty>No events.</Empty> : visible.map((e) => {
         const key = `${e.ownerRunId}:${e.seq}`;
         return (
           <EventRow
@@ -100,6 +105,11 @@ export function EventLog({ runId, reloadKey = 0 }: { runId: string; reloadKey?: 
           />
         );
       })}
+      {hasMore && (
+        <div className="row" style={{ justifyContent: "center", marginTop: "0.75rem" }}>
+          <button className="ghost" onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}>Load more</button>
+        </div>
+      )}
     </div>
   );
 }

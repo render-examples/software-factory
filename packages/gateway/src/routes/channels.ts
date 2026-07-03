@@ -7,6 +7,7 @@ export type { Channel };
 
 const MAX_CHANNEL_BODY_BYTES_ENV = "RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES";
 const DEFAULT_MAX_CHANNEL_BODY_BYTES = 1_000_000;
+const REQUIRE_CHANNEL_CONTENT_TYPE_ENV = "RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE";
 
 function maxChannelBodyBytesFromEnv(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[MAX_CHANNEL_BODY_BYTES_ENV];
@@ -14,6 +15,24 @@ function maxChannelBodyBytesFromEnv(env: NodeJS.ProcessEnv = process.env): numbe
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_CHANNEL_BODY_BYTES;
   return Math.floor(n);
+}
+
+function requireChannelContentType(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[REQUIRE_CHANNEL_CONTENT_TYPE_ENV];
+  if (!raw) return false;
+  const lowered = raw.toLowerCase();
+  return lowered !== "0" && lowered !== "false";
+}
+
+function hasSupportedContentType(contentType: string): boolean {
+  const mediaType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  return (
+    mediaType === "application/json" ||
+    mediaType.endsWith("+json") ||
+    mediaType === "application/x-www-form-urlencoded" ||
+    mediaType === "multipart/form-data" ||
+    mediaType === "text/plain"
+  );
 }
 
 /** Rebuild a body-readable Request from buffered bytes (the raw body is read once
@@ -97,6 +116,7 @@ export function channelRoutes(deps: {
   const app = new Hono();
   const { channels, workflows, handleChannelMessage, deliver } = deps;
   const maxBodyBytes = maxChannelBodyBytesFromEnv();
+  const strictContentType = requireChannelContentType();
 
   // Best-effort inline delivery: a delivery failure must not fail the inbound ack
   // (the run already ran); the worker path is the one with real retries.
@@ -124,6 +144,15 @@ export function channelRoutes(deps: {
     const rawBody = body.rawBody;
     const headers = c.req.raw.headers;
     const url = c.req.raw.url;
+    if (strictContentType && rawBody.length > 0) {
+      const contentType = headers.get("content-type");
+      if (!contentType) {
+        return c.json({ error: "missing content-type for non-empty channel request body" }, 415);
+      }
+      if (!hasSupportedContentType(contentType)) {
+        return c.json({ error: `unsupported content-type "${contentType}" for channel request body` }, 415);
+      }
+    }
 
     const auth = checkWebhookAuth(channel.verify, `channel "${id}"`, { rawBody, headers });
     if (!auth.ok) {
