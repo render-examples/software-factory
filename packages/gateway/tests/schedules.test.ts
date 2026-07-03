@@ -115,6 +115,39 @@ describe("gateway schedule routes (CRUD)", () => {
     expect(badWf.status).toBe(400);
   });
 
+  it("PATCH /schedules/:id rejects unsupported fields and invalid types", async () => {
+    const app = await appWithWorkflow();
+    const created = await (
+      await app.request("/schedules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow: "code-review", cronExpression: "0 4 * * *" }),
+      })
+    ).json();
+
+    const id = created.id as string;
+    const unsupported = await app.request(`/schedules/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastRunAt: "2026-01-01T00:00:00.000Z" }),
+    });
+    expect(unsupported.status).toBe(400);
+
+    const invalidType = await app.request(`/schedules/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: "false" }),
+    });
+    expect(invalidType.status).toBe(400);
+
+    const empty = await app.request(`/schedules/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(empty.status).toBe(400);
+  });
+
   it("POST /admin/schedules/tick returns a reconcile result", async () => {
     const app = await appWithWorkflow();
     const res = await app.request("/admin/schedules/tick", { method: "POST" });

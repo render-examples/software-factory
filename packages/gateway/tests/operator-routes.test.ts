@@ -23,6 +23,63 @@ describe("operator routes — per-run event log", () => {
     expect((await app.request("/runs/missing/events")).status).toBe(404);
     expect((await app.request(`/runs/${runId}/events?seq=nan`)).status).toBe(400);
   });
+
+  it("supports category/text/limit filters and validates category", async () => {
+    const runtime = await createTestRuntime();
+    const runId = "ev-run-filter";
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.started", trigger: "api" }, { agentName: "planner" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "tool.called", name: "search_docs", toolCallId: "t1", input: { q: "billing" } }, { agentName: "planner" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "message.assistant", content: [{ type: "text", text: "done" }] }, { agentName: "writer" }),
+    );
+    const app = createGatewayApp({ runtime, disableAuth: true });
+
+    const toolOnly = await (await app.request(`/runs/${runId}/events?category=tool`)).json();
+    expect(toolOnly.events).toHaveLength(1);
+    expect(toolOnly.events[0].category).toBe("tool");
+
+    const textFiltered = await (await app.request(`/runs/${runId}/events?q=search_docs`)).json();
+    expect(textFiltered.events).toHaveLength(1);
+    expect(textFiltered.events[0].type).toBe("tool.called");
+
+    const limited = await (await app.request(`/runs/${runId}/events?limit=2`)).json();
+    expect(limited.events).toHaveLength(2);
+
+    expect((await app.request(`/runs/${runId}/events?category=bad`)).status).toBe(400);
+    expect((await app.request(`/runs/${runId}/events?limit=0`)).status).toBe(400);
+  });
+});
+
+describe("operator routes — run detail hydration", () => {
+  it("GET /runs/:id/view returns run, spans, and pending approvals", async () => {
+    const runtime = await createTestRuntime();
+    const runId = "view-run";
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.started", trigger: "api" }, { spanId: runId, agentName: "wf" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "input.requested", inputRequestId: "ap-view", kind: "approval", toolName: "deploy", input: {} }, { spanId: runId, agentName: "wf" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.paused", reason: "input", pendingInputIds: ["ap-view"] }, { spanId: runId, agentName: "wf" }),
+    );
+
+    const app = createGatewayApp({ runtime, disableAuth: true });
+    const res = await app.request(`/runs/${runId}/view`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.run).toMatchObject({ id: runId, status: "paused", pauseReason: "input" });
+    expect(Array.isArray(body.spans)).toBe(true);
+    expect(body.spans.length).toBeGreaterThan(0);
+    expect(body.approvals).toHaveLength(1);
+    expect(body.approvals[0]).toMatchObject({ id: "ap-view", status: "pending", runId, kind: "approval" });
+
+    expect((await app.request("/runs/missing/view")).status).toBe(404);
+  });
 });
 
 describe("operator routes — cross-run children", () => {
@@ -74,6 +131,15 @@ describe("operator routes — inputs status filter", () => {
 
     const all = await (await app.request("/inputs?status=all")).json();
     expect(all.inputs).toHaveLength(2);
+  });
+
+  it("rejects invalid /inputs filters with 400", async () => {
+    const runtime = await createTestRuntime();
+    const app = createGatewayApp({ runtime, disableAuth: true });
+    expect((await app.request("/inputs?status=bad")).status).toBe(400);
+    expect((await app.request("/inputs?kind=bad")).status).toBe(400);
+    expect((await app.request("/inputs/counts?status=bad")).status).toBe(400);
+    expect((await app.request("/inputs/counts?kind=bad")).status).toBe(400);
   });
 });
 

@@ -3,6 +3,9 @@ import type { RunStore } from "@render-agents/store";
 import { buildEventRecord } from "@render-agents/store";
 import { getPrincipal, canAccess } from "../auth.js";
 
+const INPUT_STATUSES = new Set(["pending", "approved", "denied", "provided", "all"]);
+const INPUT_KINDS = new Set(["approval", "message"]);
+
 /**
  * HITL routes: list pending input requests, provide values/decisions, and resume
  * paused runs.
@@ -44,23 +47,41 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     };
   };
 
-  // GET /inputs — list input requests (read from the projection). Defaults to
-  // pending approvals (`kind=approval`) to power the operator action queue.
+  const parseInputFilters = (
+    statusQ: string | undefined,
+    kindQ: string | undefined,
+  ):
+    | { ok: true; opts: { status?: "pending" | "approved" | "denied" | "provided"; kind?: "approval" | "message" } }
+    | { ok: false; error: string } => {
+    if (statusQ && !INPUT_STATUSES.has(statusQ)) {
+      return { ok: false, error: `invalid status "${statusQ}"` };
+    }
+    if (kindQ && !INPUT_KINDS.has(kindQ)) {
+      return { ok: false, error: `invalid kind "${kindQ}"` };
+    }
+    if (!statusQ && !kindQ) {
+      return { ok: true, opts: { status: "pending", kind: "approval" } };
+    }
+    return {
+      ok: true,
+      opts: {
+        status: statusQ === "all" || !statusQ ? undefined : (statusQ as "pending" | "approved" | "denied" | "provided"),
+        kind: kindQ as "approval" | "message" | undefined,
+      },
+    };
+  };
+
+  // Defaults to pending approvals to power the operator action queue.
   app.get("/inputs", async (c) => {
     const principal = getPrincipal(c);
     const statusQ = c.req.query("status");
     const kindQ = c.req.query("kind");
     const threadId = c.req.query("threadId");
     const runId = c.req.query("runId");
-    const opts =
-      !statusQ && !kindQ
-        ? { status: "pending" as const, kind: "approval" as const }
-        : {
-            status: statusQ === "all" || !statusQ ? undefined : (statusQ as "pending" | "approved" | "denied" | "provided"),
-            kind: kindQ ? (kindQ as "approval" | "message") : undefined,
-          };
+    const filters = parseInputFilters(statusQ, kindQ);
+    if (!filters.ok) return c.json({ error: filters.error }, 400);
+    const opts = filters.opts;
     let records = await store.listInputs(opts);
-    // Tenant scoping: an input request belongs to whoever owns its run.
     if (principal.role !== "operator") {
       const loadRun = newRunCache();
       const owned = await Promise.all(
@@ -74,10 +95,8 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     if (runId) {
       records = records.filter((input) => input.runId === runId);
     }
-    // Optional thread scoping. Inputs carry only a runId, so resolve each
-    // run's threadId server-side — one round trip for the caller instead of the
-    // UI fanning out a getRun per input. The candidate set (usually pending)
-    // is small, so the per-run lookups are cheap.
+    // Inputs carry only runId, so resolve threadId server-side (one round trip
+    // vs the UI fanning out a getRun per input); candidate set is small.
     if (threadId) {
       const loadRun = newRunCache();
       const matches = await Promise.all(
@@ -106,20 +125,15 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return c.json({ inputs });
   });
 
-  // GET /inputs/counts — lightweight counters for dashboard badges.
   app.get("/inputs/counts", async (c) => {
     const principal = getPrincipal(c);
     const statusQ = c.req.query("status");
     const kindQ = c.req.query("kind");
     const threadId = c.req.query("threadId");
     const runId = c.req.query("runId");
-    const opts =
-      !statusQ && !kindQ
-        ? { status: "pending" as const, kind: "approval" as const }
-        : {
-            status: statusQ === "all" || !statusQ ? undefined : (statusQ as "pending" | "approved" | "denied" | "provided"),
-            kind: kindQ ? (kindQ as "approval" | "message") : undefined,
-          };
+    const filters = parseInputFilters(statusQ, kindQ);
+    if (!filters.ok) return c.json({ error: filters.error }, 400);
+    const opts = filters.opts;
     let records = await store.listInputs(opts);
     if (principal.role !== "operator") {
       const loadRun = newRunCache();
@@ -148,7 +162,6 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return c.json({ count: records.length, pendingApprovals });
   });
 
-  // POST /inputs/:id/provide — provide an input value/decision
   app.post("/inputs/:id/provide", async (c) => {
     const inputId = c.req.param("id");
     const actor = getPrincipal(c);
@@ -204,7 +217,6 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return c.json({ provided: true, inputId, runId: targetRunId });
   });
 
-  // POST /runs/:id/input — convenience route to provide pending input on a run
   app.post("/runs/:id/input", async (c) => {
     const actor = getPrincipal(c);
     const runId = c.req.param("id");
@@ -227,10 +239,17 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     if (pending.length === 0) {
       return c.json({ error: `Run "${runId}" has no pending input requests` }, 409);
     }
-    const target =
-      (body.inputId ? pending.find((input) => input.inputRequestId === body.inputId) : undefined)
-      ?? (body.content !== undefined ? pending.find((input) => input.kind === "message") : undefined)
-      ?? pending[0];
+    let target = pending[0];
+    if (body.inputId) {
+      const byId = pending.find((input) => input.inputRequestId === body.inputId);
+      if (!byId) {
+        return c.json({ error: `Input "${body.inputId}" not found for run "${runId}"` }, 404);
+      }
+      target = byId;
+    } else if (body.content !== undefined) {
+      const byMessage = pending.find((input) => input.kind === "message");
+      if (byMessage) target = byMessage;
+    }
     if (!target) {
       return c.json({ error: `Input "${body.inputId}" not found for run "${runId}"` }, 404);
     }
@@ -238,8 +257,8 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     if (target.kind === "message" && value === undefined) {
       return c.json({ error: "content (or value) is required for message inputs" }, 400);
     }
-    if (target.kind === "approval" && body.approved === undefined) {
-      return c.json({ error: "approved is required for approval inputs" }, 400);
+    if (target.kind === "approval" && typeof body.approved !== "boolean") {
+      return c.json({ error: "approved (boolean) is required for approval inputs" }, 400);
     }
     await store.events.append(
       buildEventRecord(runId, {

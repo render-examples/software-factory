@@ -1,21 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { client, ApiError } from "../api/client";
-import { openSSE } from "../api/sse";
+import { useEffect, useRef, useState } from "react";
+import { client } from "../api/client";
 import { navigate, type Route } from "../state/router";
 import { useApp } from "../state/app";
 import { useAsync } from "../hooks/useAsync";
+import { useConversation, type ChatStatus } from "../hooks/useConversation";
 import { relativeTime } from "../lib/format";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { ErrorBanner, CopyButton, Empty, Spinner, StatusBadge } from "../components/ui";
 import { Markdown } from "../components/Markdown";
-import { useToast } from "../components/Toaster";
-import type { Approval, RunStatus, Thread, ThreadMessage } from "../api/types";
+import type { ThreadMessage } from "../api/types";
 
-type ChatStatus = "idle" | "thinking" | "waiting" | "needs-approval" | "failed";
-
-// Chat is the app's primary object. The former standalone Threads view now lives
-// here as a conversation-picker pane (left), with the selected conversation on
-// the right — one surface instead of two overlapping doors to the same data.
+// Former standalone Threads view lives here as a conversation-picker pane
+// (left), with the selected conversation on the right.
 export function ChatView({ route }: { route: Route }) {
   const threadId = route.segments[1];
   return (
@@ -36,7 +32,6 @@ function ConversationList({ activeId }: { activeId?: string }) {
   const [creating, setCreating] = useState(false);
   const { data, loading, error, reload } = useAsync(() => client.listThreads(userId || undefined), [userId]);
 
-  // Reflect new turns / new threads as they happen.
   useEffect(() => {
     if (lastEvent?.category === "lifecycle") {
       const t = setTimeout(reload, 400);
@@ -87,137 +82,35 @@ function ConversationList({ activeId }: { activeId?: string }) {
 }
 
 function Conversation({ threadId }: { threadId: string }) {
-  const [thread, setThread] = useState<Thread | null>(null);
-  const [messages, setMessages] = useState<ThreadMessage[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [status, setStatus] = useState<ChatStatus>("idle");
   const [draft, setDraft] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [liveTool, setLiveTool] = useState<string | null>(null);
-  // Live token stream (D13): transient text.delta buffer for the in-flight turn.
-  // Replaced by the canonical message.assistant once the transcript refetches.
-  const [streamingText, setStreamingText] = useState("");
-  const activeRunId = useRef<string | undefined>(undefined);
-  // The last canonical assistant message id we've rendered for the active run.
-  // Streaming preview is dropped only when a *newer* assistant message appears,
-  // so a multi-iteration turn (tool calls) doesn't wipe the live buffer of a
-  // later iteration just because an earlier assistant message already exists.
-  const lastAssistantId = useRef<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const toast = useToast();
-
-  const refresh = useCallback(async () => {
-    try {
-      const view = await client.getThreadView(threadId);
-      const { thread: t, messages: m } = view;
-      setThread(t);
-      setMessages(m);
-      // Consolidated thread view returns the active run + pending approvals so
-      // refreshes don't fan out to listRuns/listInputs/getRun each cycle.
-      activeRunId.current = view.activeRun?.id;
-      const mine = view.approvals;
-      setApprovals(mine);
-      const runStatus: RunStatus | undefined = view.activeRun?.status;
-      const next = deriveStatus(t, runStatus, mine.length > 0);
-      setStatus(next);
-      if (next !== "thinking") setLiveTool(null);
-      // Drop the transient stream buffer only when a *new* canonical assistant
-      // message for the active run appears (id changed since we last saw one),
-      // so the durable message replaces the live preview without wiping the
-      // buffer mid-stream on a later tool-loop iteration.
-      const latestAssistant = [...m].reverse().find(
-        (msg) => msg.role === "assistant" && msg.runId === activeRunId.current,
-      );
-      if (latestAssistant && latestAssistant.id !== lastAssistantId.current) {
-        lastAssistantId.current = latestAssistant.id;
-        setStreamingText("");
-      }
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) setErr("Thread not found.");
-    }
-  }, [threadId]);
-
-  const scheduleRefresh = useCallback(() => {
-    clearTimeout(debounce.current);
-    debounce.current = setTimeout(refresh, 250);
-  }, [refresh]);
-
-  useEffect(() => {
-    refresh();
-    // Fold live events: reflect tool activity immediately, and debounce a full
-    // transcript refetch (message-level streaming — the finished assistant turn
-    // appears on the next refetch).
-    const close = openSSE(`/threads/${threadId}/stream`, (msg) => {
-      const p = msg.data;
-      // Token-level streaming: append deltas live and skip the transcript
-      // refetch (the finished turn arrives on the next durable event's refresh).
-      if (msg.category === "message" && p.type === "text.delta" && typeof p.text === "string") {
-        // Scope deltas to the active run: the thread stream carries deltas for
-        // every run in the thread, so ignore any that aren't this turn's (avoids
-        // a stray/older run flipping status or polluting the buffer).
-        if (activeRunId.current && typeof p.runId === "string" && p.runId !== activeRunId.current) return;
-        setStreamingText((t) => t + p.text);
-        setStatus((s) => (s === "idle" ? "thinking" : s));
-        return;
-      }
-      if (msg.category === "tool") {
-        if (p.type === "tool.called" && typeof p.name === "string") setLiveTool(p.name);
-        else if (p.type === "tool.result") setLiveTool(null);
-      }
-      scheduleRefresh();
-    });
-    return () => { clearTimeout(debounce.current); close(); };
-  }, [threadId, refresh, scheduleRefresh]);
+  const {
+    thread,
+    messages,
+    approvals,
+    status,
+    err,
+    sending,
+    liveTool,
+    streamingText,
+    runId,
+    busy,
+    inputBlocked,
+    refresh,
+    send,
+    stop,
+  } = useConversation(threadId);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length, approvals.length, status]);
 
-  async function send() {
+  async function sendMessage() {
     const content = draft.trim();
     if (!content || sending) return;
-    setSending(true);
-    setErr(null);
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, threadId, runId: "", seq: -1, role: "user", content, createdAt: new Date().toISOString() }]);
     setDraft("");
-    setStreamingText("");
-    lastAssistantId.current = undefined;
-    setStatus("thinking");
-    try {
-      const res = await client.sendMessage(threadId, content) as { runId?: string };
-      if (res?.runId) activeRunId.current = res.runId;
-      setTimeout(refresh, 200);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setErr(message);
-      toast.error(message, "Message failed");
-      setStatus("idle");
-    } finally {
-      setSending(false);
-    }
+    await send(content);
   }
-
-  async function stop() {
-    const runId = activeRunId.current;
-    if (!runId) return;
-    try {
-      await client.cancelRun(runId);
-      toast.info("Stopping the current turn…");
-      setTimeout(refresh, 150);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e), "Couldn't stop");
-    }
-  }
-
-  const busy = status === "thinking";
-  // The composer is blocked while the turn is mid-flight (`thinking`) and while
-  // an approval is pending (`needs-approval`) — the server 409s a message during
-  // an approval pause (BUG-11), so prevent it in the UI. An input pause
-  // (`waiting`) intentionally keeps the composer open: the reply resumes the run.
-  const inputBlocked = status === "thinking" || status === "needs-approval";
-  const runId = activeRunId.current;
 
   return (
     <div className="chat">
@@ -266,13 +159,13 @@ function Conversation({ threadId }: { threadId: string }) {
           aria-label="Message"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
           }}
         />
         {busy ? (
           <button className="danger" onClick={stop} title="Stop the current turn">Stop</button>
         ) : (
-          <button className="primary" disabled={!draft.trim() || inputBlocked} onClick={send}>Send</button>
+          <button className="primary" disabled={!draft.trim() || inputBlocked} onClick={sendMessage}>Send</button>
         )}
       </div>
     </div>
@@ -325,22 +218,4 @@ function StatusLine({ status }: { status: ChatStatus }) {
   };
   const s = map[status];
   return <span className={`live-tag ${s.cls}`} style={{ border: "none" }}>{s.label}</span>;
-}
-
-function deriveStatus(
-  thread: Thread,
-  runStatus: RunStatus | undefined,
-  hasApproval: boolean,
-): ChatStatus {
-  if (hasApproval) return "needs-approval";
-  if (runStatus === "running" || runStatus === "pending") return "thinking";
-  if (runStatus === "paused") {
-    // Distinguish the pause reason from the authoritative `run.paused` event
-    // rather than inferring solely from the approval list (BUG-12): an approval
-    // pause is `needs-approval` even in the brief window before the approval row
-    // is fetched; only an input pause is `waiting` (the user should reply).
-    return hasApproval ? "needs-approval" : "waiting";
-  }
-  if (runStatus === "failed" || thread.status === "failed") return "failed";
-  return "idle";
 }

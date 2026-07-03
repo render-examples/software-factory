@@ -39,9 +39,7 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
   const { providers, baseUrl, oauthStore } = deps;
   const doFetch: typeof fetch = deps.fetchImpl ?? fetch;
 
-  // GET /oauth/:provider/authorize — initiate the OAuth flow for the caller.
-  // The userId comes from auth and is bound into the signed state, so a caller
-  // can only connect a provider to their own account (CR-D1).
+  // userId is bound into the signed state so a caller can only connect their own account (CR-D1).
   app.get("/oauth/:provider/authorize", async (c) => {
     const provider = c.req.param("provider");
     const config = providers.get(provider);
@@ -62,7 +60,6 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
     return c.redirect(`${config.authorizeUrl}?${params.toString()}`);
   });
 
-  // GET /oauth/:provider/callback — exchange code for tokens, persist encrypted
   app.get("/oauth/:provider/callback", async (c) => {
     const provider = c.req.param("provider");
     const code = c.req.query("code");
@@ -106,8 +103,7 @@ export function oauthRoutes(deps: OAuthRouteDeps) {
     return c.json({ status: "connected", provider, userId: verified.userId });
   });
 
-  // DELETE /oauth/:provider — revoke the caller's stored connection. userId is
-  // from auth, so a caller can only revoke their own connection (CR-D1).
+  // userId is from auth, so a caller can only revoke their own connection (CR-D1).
   app.delete("/oauth/:provider", async (c) => {
     const provider = c.req.param("provider");
     if (!providers.has(provider)) {
@@ -184,14 +180,10 @@ async function exchangeCode(
   return json;
 }
 
-// --- Token encryption helpers (re-exported AES-256-GCM from the store) ---
-
 /** @deprecated import `encrypt` from `@render-agents/store`. Kept for back-compat. */
 export const encryptToken = encrypt;
 /** @deprecated import `decrypt` from `@render-agents/store`. Kept for back-compat. */
 export const decryptToken = decrypt;
-
-// --- HMAC-signed state (constant-time verification) ---
 
 interface StatePayload {
   provider: string;

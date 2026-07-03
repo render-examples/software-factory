@@ -10,7 +10,6 @@ import { TraceView } from "../components/Trace";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { EventLog } from "./EventLog";
 import { Messages } from "./Messages";
-import type { Approval } from "../api/types";
 
 type Lens = "trace" | "events" | "messages";
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -20,12 +19,8 @@ export function RunDetailView({ route }: { route: Route }) {
   const lens = (route.query.get("lens") as Lens) ?? "trace";
   const [reloadKey, setReloadKey] = useState(0);
 
-  const { data: run, error, loading } = useAsync(() => client.getRun(runId!), [runId, reloadKey]);
-  const { data: spanData } = useAsync(() => client.getSpans(runId!), [runId, reloadKey]);
-  const { data: pending, reload: reloadApprovals } = useAsync(
-    () => client.listInputs("pending", undefined, "approval", runId),
-    [runId, reloadKey],
-  );
+  const { data: view, error, loading } = useAsync(() => client.getRunView(runId!), [runId, reloadKey]);
+  const run = view?.run;
 
   const live = run ? !TERMINAL.has(run.status) : false;
 
@@ -40,8 +35,8 @@ export function RunDetailView({ route }: { route: Route }) {
     return () => { clearTimeout(timer); close(); };
   }, [runId, live]);
 
-  const agentCosts = useMemo(() => perAgentCost(spanData?.spans ?? []), [spanData]);
-  const runApprovals: Approval[] = pending?.approvals ?? [];
+  const agentCosts = useMemo(() => perAgentCost(view?.spans ?? []), [view?.spans]);
+  const runApprovals = view?.approvals ?? [];
 
   if (!runId) return <div className="panel">No run selected.</div>;
   if (loading && !run) return <div className="panel"><Spinner /> loading run…</div>;
@@ -85,7 +80,7 @@ export function RunDetailView({ route }: { route: Route }) {
         {runApprovals.length > 0 && (
           <div style={{ marginBottom: 10 }}>
             {runApprovals.map((a) => (
-              <ApprovalCard key={a.id} approval={a} showRunLink={false} onResolved={() => { reloadApprovals(); setReloadKey((k) => k + 1); }} />
+              <ApprovalCard key={a.id} approval={a} showRunLink={false} onResolved={() => setReloadKey((k) => k + 1)} />
             ))}
           </div>
         )}

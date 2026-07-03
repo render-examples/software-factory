@@ -7,9 +7,7 @@ import type { JobStatus } from "../api/types";
 
 const JOB_ORDER: JobStatus[] = ["queued", "running", "done", "failed", "dead"];
 
-// Operational surface for the platform's maintenance endpoints: chat-lane queue
-// depth (Lane B), the stranded-run reaper (E6), and event/run retention. Each
-// action maps to an existing authed admin route.
+// Maintenance surface: chat-lane queue depth (Lane B), stranded-run reaper (E6), retention.
 export function OpsView() {
   const toast = useToast();
   const { data, error, loading, reload } = useAsync(() => client.adminJobs(), []);

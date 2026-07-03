@@ -6,9 +6,11 @@ import { getPrincipal, canAccess } from "../auth.js";
 
 /** Upper bound on a single `/runs` page (CR-22). */
 const MAX_LIST_LIMIT = 100;
+const MAX_EVENT_LIMIT = 500;
 /** Valid `?status=` filter values (CR-22). */
 const RUN_STATUS_LIST = ["pending", "running", "paused", "completed", "failed", "cancelled"] as const;
 const RUN_STATUSES = new Set<string>(RUN_STATUS_LIST);
+const EVENT_CATEGORIES = new Set(["lifecycle", "message", "tool", "step", "model", "input", "delegation", "context"]);
 
 /**
  * Core run-facing routes: dispatch, list, inspect, cancel.
@@ -28,6 +30,21 @@ export function runRoutes(deps: {
     const run = await store.getRun(id);
     return run && canAccess(run.userId, getPrincipal(c)) ? run : undefined;
   };
+  const toApproval = (input: Awaited<ReturnType<RunStore["getInputs"]>>[number]) => ({
+    id: input.inputRequestId,
+    runId: input.runId,
+    kind: input.kind,
+    toolName: input.toolName,
+    input: input.input,
+    prompt: input.prompt,
+    value: input.value,
+    agentName: input.agentName,
+    status: input.status,
+    requestedAt: input.requestedAt,
+    resolvedAt: input.resolvedAt,
+    providedBy: input.providedBy,
+    reason: input.reason,
+  });
 
   app.post("/workflows/:name", async (c) => {
     const principal = getPrincipal(c);
@@ -146,6 +163,35 @@ export function runRoutes(deps: {
     return c.json({ ...run, aggregateCostUsd, pauseReason });
   });
 
+  app.get("/runs/:id/view", async (c) => {
+    const id = c.req.param("id");
+    const run = await loadOwnedRun(c, id);
+    if (!run) {
+      return c.json({ error: `Run "${id}" not found` }, 404);
+    }
+    const [aggregateCostUsd, spans, inputs] = await Promise.all([
+      aggregateRunCost(store, id),
+      store.listSpans(id),
+      store.getInputs(id),
+    ]);
+    let pauseReason: "input" | undefined;
+    if (run.status === "paused") {
+      const events = await store.events.read(id);
+      for (let i = events.length - 1; i >= 0; i--) {
+        const p = events[i].payload;
+        if (p.type === "run.paused") { pauseReason = p.reason; break; }
+      }
+    }
+    const approvals = inputs
+      .filter((input) => input.status === "pending" && input.kind === "approval")
+      .map(toApproval);
+    return c.json({
+      run: { ...run, aggregateCostUsd, pauseReason },
+      spans,
+      approvals,
+    });
+  });
+
   app.get("/runs/:id/spans", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -185,8 +231,30 @@ export function runRoutes(deps: {
     if (!parsedSeq.ok) {
       return c.json({ error: parsedSeq.error }, 400);
     }
+    const category = c.req.query("category");
+    if (category !== undefined && !EVENT_CATEGORIES.has(category)) {
+      return c.json({ error: `invalid category "${category}"` }, 400);
+    }
+    const parsedLimit = parsePositiveInt(c.req.query("limit"), "limit");
+    if (!parsedLimit.ok) {
+      return c.json({ error: parsedLimit.error }, 400);
+    }
+    const q = c.req.query("q")?.trim().toLowerCase();
     const fromSeq = parsedSeq.value && parsedSeq.value > 0 ? parsedSeq.value : undefined;
-    const events = await store.events.read(id, fromSeq);
+    let events = await store.events.read(id, fromSeq);
+    if (category) {
+      events = events.filter((e) => e.category === category);
+    }
+    if (q) {
+      events = events.filter((e) => {
+        const hay = `${e.type} ${e.agentName ?? ""} ${JSON.stringify(e.payload)}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    const limit = Math.min(parsedLimit.value ?? MAX_EVENT_LIMIT, MAX_EVENT_LIMIT);
+    if (events.length > limit) {
+      events = events.slice(0, limit);
+    }
     return c.json({ events });
   });
 
@@ -214,5 +282,16 @@ function parseNonNegativeInt(
   if (!/^\d+$/.test(raw)) return { ok: false, error: `${label} must be a non-negative integer` };
   const n = Number(raw);
   if (!Number.isSafeInteger(n)) return { ok: false, error: `${label} is out of range` };
+  return { ok: true, value: n };
+}
+
+function parsePositiveInt(
+  raw: string | undefined,
+  label: string,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw.trim() === "") return { ok: true, value: undefined };
+  if (!/^\d+$/.test(raw)) return { ok: false, error: `${label} must be a positive integer` };
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) return { ok: false, error: `${label} must be a positive integer` };
   return { ok: true, value: n };
 }
