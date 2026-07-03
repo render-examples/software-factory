@@ -77,7 +77,7 @@ Terminal-turn detection is based on content (`tool_use` presence), not provider 
 For each tool call:
 
 1. idempotency lookup (`ctx.appliedToolResult`),
-2. approval gate (`ctx.requestApproval`) if required,
+2. input gate (`ctx.requestInput`) if required,
 3. tool lookup by mounted name,
 4. input schema validation,
 5. emit `tool.called`,
@@ -94,20 +94,19 @@ Behavior details:
 
 ## HITL Pause and Resume
 
-Pauses happen via `RunPaused` and logged `run.paused` with reason:
-
-- `approval`: gated tool awaiting decision,
-- `input`: tool awaiting user input.
+Pauses happen via `RunPaused` and logged `run.paused` with reason `input`.
+`run.paused.pendingInputIds` identifies the unresolved request(s), and each
+request carries a kind (`approval` or `message`) on `input.requested`.
 
 Resume model:
 
-- Resolve event appended (`approval.resolved` or `message.user`),
+- Resolve event appended (`input.provided` or `message.user`),
 - run is re-driven with same `runId`,
 - idempotency + event replay reconstruct state.
 
-Approval mode behavior in `InProcessRunContext`:
+Approval-kind input behavior in `InProcessRunContext`:
 
-- default dev/test: auto-approve (emits `approval.auto`),
+- default dev/test: auto-approve (emits `input.auto`),
 - strict mode: prompt on TTY or pause in non-interactive environments.
 - in production (`NODE_ENV=production`), strict behavior is fail-safe unless explicitly disabled.
 

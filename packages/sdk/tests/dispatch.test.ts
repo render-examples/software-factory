@@ -76,7 +76,7 @@ describe("workflowTaskHandler return contract", () => {
   });
 
   it("returns a paused summary when the handler parks (HITL) instead of throwing", async () => {
-    const drive = async () => { throw new RunPaused("r2", "approval", ["req-1"]); };
+    const drive = async () => { throw new RunPaused("r2", "input", ["req-1"]); };
     const result = await workflowTaskHandler({ workflow: "wf", runId: "r2" }, makeWorkflows(drive));
     expect(result).toEqual({ runId: "r2", status: "paused" });
   });

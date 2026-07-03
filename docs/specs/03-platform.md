@@ -13,7 +13,7 @@ This layer describes the durable substrate (store + gateway) as currently implem
 The platform is event-first:
 
 - canonical log: `run_events`,
-- read models: maintained projections (`runs`, `spans`, `run_messages`, `messages`, `tool_calls`, `workflow_steps`, `approval_requests`),
+- read models: maintained projections (`runs`, `spans`, `run_messages`, `messages`, `tool_calls`, `workflow_steps`, `input_requests`),
 - operational tables: `threads`, `oauth_connections`, `schedules`, `run_jobs`.
 
 Event append path:
@@ -73,20 +73,20 @@ Threads are durable conversation containers:
 Busy behavior:
 
 - running/pending turn -> `409 thread busy`,
-- paused for approval -> `409` until approval resolution,
-- paused for input -> message is accepted and resumes paused run.
+- paused with pending approval-kind input -> `409` until that input is provided,
+- paused with pending message-kind input -> message is accepted and resumes paused run.
 
 ---
 
-## Approvals
+## Input Requests
 
-Approval state is event-sourced:
+HITL input state is event-sourced:
 
-- request: `approval.requested`,
-- resolve: `approval.resolved`,
-- auto path: `approval.auto`.
+- request: `input.requested`,
+- resolve: `input.provided`,
+- auto path: `input.auto`.
 
-Gateway list route (`GET /approvals`) reads from approval projection with optional status and thread filtering.
+Gateway list route (`GET /inputs`) reads from input projection with optional status/kind/thread filtering.
 
 Resolution writes events and triggers replay-driven resume.
 
@@ -118,6 +118,22 @@ Both can dispatch workflows; they occupy separate route namespaces:
 - `/webhooks/:name`
 - `/connectors/:key`
 
+These routes are **public** (outside the operator API-key middleware, via the
+`isPublicPath` carve-out) — the inbound signature is the authentication. The
+gateway enforces each adapter/connector's declarative `verify` policy here:
+
+- the raw body is read once, then verification runs **before** `match`/`parse`/
+  `handle` and dispatch — constant-time signature comparison over the raw bytes,
+  plus a replay window for timestamped schemes,
+- a failed or missing-secret verification returns `401` and never dispatches,
+- a **missing** `verify` is fail-closed: rejected in production, warn-allowed in
+  dev (`webhookVerifyRequired`, env `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY`),
+- `verify: "none"` is an explicit opt-out.
+
+Built-in schemes are `github`, `slack`, `stripe`, `standard-webhooks`, and
+generic `hmac` (`packages/gateway/src/verify.ts`; config helpers in
+`@render-agents/sdk`).
+
 ---
 
 ## Schedules
@@ -140,7 +156,7 @@ Primary route groups are implemented in `packages/gateway/src/routes`:
 - runs: list/detail/events/spans/tool calls/cancel/workflow dispatch,
 - streams: run/thread/global SSE,
 - threads: create/list/detail/message delivery,
-- HITL: approvals and `/runs/:id/input`,
+- HITL: `/inputs`, `/inputs/:id/provide`, and `/runs/:id/input`,
 - OAuth: authorize/callback/revoke,
 - schedules: CRUD + tick endpoint,
 - webhooks/connectors,

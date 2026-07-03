@@ -23,7 +23,7 @@ export function RunDetailView({ route }: { route: Route }) {
   const { data: run, error, loading } = useAsync(() => client.getRun(runId!), [runId, reloadKey]);
   const { data: spanData } = useAsync(() => client.getSpans(runId!), [runId, reloadKey]);
   const { data: pending, reload: reloadApprovals } = useAsync(
-    () => client.listApprovals("pending"),
+    () => client.listInputs("pending", undefined, "approval"),
     [runId, reloadKey],
   );
 

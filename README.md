@@ -1,6 +1,6 @@
 # render-agents
 
-Build production-grade AI agents on Render with markdown-first authoring, durable orchestration, and built-in ops.
+A framework for building production-grade AI agents on Render with markdown-first authoring, durable orchestration, and built-in ops.
 
 `render-agents` gives you a full platform for agent systems:
 

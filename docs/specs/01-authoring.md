@@ -144,6 +144,31 @@ Key authoring contract:
 
 ---
 
+## Webhooks and Connectors
+
+Inbound integration surfaces are public routes (a third party can't present the
+operator API key), so the request **signature is the authentication**. Each
+carries a declarative `verify` policy the gateway enforces over the raw body
+*before* routing or dispatch.
+
+- **Webhooks**: default-exported from `webhooks/*.ts` as
+  `{ name, verify?, match(req), parse(req) }`.
+- **Connectors**: package-contributed `ConnectorSpec`
+  (`{ key, name, verify?, handle(req, ctx) }`) from a tool's `connectors` export.
+
+`verify` accepts a built-in scheme factory — `githubVerify()`, `slackVerify()`,
+`stripeVerify()`, `standardWebhooksVerify()`, or generic
+`hmacVerify({ header, secretEnv, … })` (all from `@render-agents/sdk`; secrets
+referenced by env-var name, never inlined) — or `"none"` to opt out explicitly.
+Timestamped schemes (slack/stripe/standard-webhooks) also enforce a replay window.
+
+Omitting `verify` is **fail-closed**: the request is rejected (`401`) in
+production and warn-allowed in dev (see `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` in
+[`04-operations.md`](./04-operations.md)). Enforcement runs before
+`match`/`parse`/`handle`, so an unverified request never reaches a workflow.
+
+---
+
 ## Hooks and Runners
 
 - Hooks are discovered from `hooks/` and passed to `createRuntime({ hooks })`.

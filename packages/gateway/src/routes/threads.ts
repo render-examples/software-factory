@@ -37,16 +37,6 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return awaitResume ? p : Promise.resolve();
   };
 
-  /** The reason of a run's most recent `run.paused`, if any. */
-  const lastPauseReason = async (runId: string): Promise<"approval" | "input" | undefined> => {
-    const events = await store.events.read(runId);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const p = events[i].payload;
-      if (p.type === "run.paused") return p.reason;
-    }
-    return undefined;
-  };
-
   // POST /threads — create + persist a thread owned by the caller
   app.post("/threads", async (c) => {
     const principal = getPrincipal(c);
@@ -123,15 +113,26 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       if (active.status === "running" || active.status === "pending") {
         return c.json({ error: "Thread is busy (active run mid-turn)", runId: active.id }, 409);
       }
-      // Paused: only an input-pause accepts a user message. An approval-pause
-      // must be resolved via the approvals API — delivering a message there would
-      // just replay and re-pause.
-      const reason = await lastPauseReason(active.id);
-      if (reason === "approval") {
+      // Paused: route by pending input kind. Approval gates must be satisfied via
+      // the dedicated inputs API; message input can be provided by posting here.
+      const pending = (await store.getInputs(active.id)).filter((input) => input.status === "pending");
+      const pendingApproval = pending.find((input) => input.kind === "approval");
+      const pendingMessage = pending.find((input) => input.kind === "message");
+      if (pendingApproval) {
         return c.json({
-          error: "Run is paused awaiting approval; resolve it via POST /approvals/:id/resolve",
+          error: "Run is paused awaiting approval; resolve it via POST /inputs/:id/provide",
           runId: active.id,
         }, 409);
+      }
+      if (pendingMessage) {
+        await store.events.append(
+          buildEventRecord(active.id, {
+            type: "input.provided",
+            inputRequestId: pendingMessage.inputRequestId,
+            kind: "message",
+            value: body.content,
+          }),
+        );
       }
       await store.events.append(
         buildEventRecord(active.id, {

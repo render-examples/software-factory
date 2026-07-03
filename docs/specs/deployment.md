@@ -37,6 +37,7 @@ config in markdown frontmatter, project metadata in `package.json`, deploy in
 | `PORT` | Gateway listen port | `startGateway` |
 | `RENDER_AGENTS_API_KEY` | Gateway bearer auth (constant-time) | `apiKeyAuth` |
 | `RENDER_AGENTS_STRICT_APPROVAL` | Require human approval for gated tools | run context |
+| `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` | Require inbound webhook/connector signature `verify` (default on in production) | `checkWebhookAuth` |
 | `RENDER_AGENTS_ENCRYPTION_KEY` | AES-256-GCM key for OAuth tokens at rest + HMAC state | store crypto / OAuth routes |
 | `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` | In-container signal: child `agent.task()` chaining via `runTask` | `isWorkflowsEnvironment` |
 | `RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG` | Gateway root-trigger signal: select the Render dispatcher to `startTask` workflow roots (Lane A), even outside a Workflows container | `isRootTriggerEnvironment` |
@@ -61,7 +62,7 @@ Storage growth is bounded by a **two-domain** cleanup (`runRetention` →
 `RunStore.cleanup`), run daily via the cron service (or any scheduler hitting
 `POST /admin/retention`):
 
-- **Event-detail** (`run_events` + `spans`/`run_messages`/`tool_calls`/`workflow_steps`/`approval_requests`):
+- **Event-detail** (`run_events` + `spans`/`run_messages`/`tool_calls`/`workflow_steps`/`input_requests`):
   trimmed for **terminal** runs older than `RENDER_AGENTS_EVENT_RETENTION_DAYS` (30).
 - **Run-summary** (`runs`): deleted for terminal runs older than `RENDER_AGENTS_RUN_RETENTION_DAYS` (90).
 - **Never trimmed:** non-terminal runs (running/paused/pending) regardless of age;

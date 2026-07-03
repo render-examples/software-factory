@@ -127,19 +127,17 @@ function Conversation({ threadId }: { threadId: string }) {
       }
 
       // Pending approvals for this thread, scoped server-side (one request).
-      const mine = (await client.listApprovals("pending", threadId)).approvals;
+      const mine = (await client.listInputs("pending", threadId, "approval")).approvals;
       setApprovals(mine);
 
       let runStatus: RunStatus | undefined;
-      let pauseReason: "approval" | "input" | undefined;
       if (activeRunId.current) {
         try {
           const run = await client.getRun(activeRunId.current);
           runStatus = run.status;
-          pauseReason = run.pauseReason;
         } catch { /* */ }
       }
-      const next = deriveStatus(t, runStatus, pauseReason, mine.length > 0);
+      const next = deriveStatus(t, runStatus, mine.length > 0);
       setStatus(next);
       if (next !== "thinking") setLiveTool(null);
       // Drop the transient stream buffer only when a *new* canonical assistant
@@ -352,7 +350,6 @@ function StatusLine({ status }: { status: ChatStatus }) {
 function deriveStatus(
   thread: Thread,
   runStatus: RunStatus | undefined,
-  pauseReason: "approval" | "input" | undefined,
   hasApproval: boolean,
 ): ChatStatus {
   if (hasApproval) return "needs-approval";
@@ -362,7 +359,7 @@ function deriveStatus(
     // rather than inferring solely from the approval list (BUG-12): an approval
     // pause is `needs-approval` even in the brief window before the approval row
     // is fetched; only an input pause is `waiting` (the user should reply).
-    return pauseReason === "approval" ? "needs-approval" : "waiting";
+    return hasApproval ? "needs-approval" : "waiting";
   }
   if (runStatus === "failed" || thread.status === "failed") return "failed";
   return "idle";

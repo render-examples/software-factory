@@ -20,9 +20,9 @@ const EVENT_CATEGORY: Record<RunEvent["type"], EventCategory> = {
   "step.started": "step",
   "step.completed": "step",
   "llm.call": "model",
-  "approval.requested": "approval",
-  "approval.resolved": "approval",
-  "approval.auto": "approval",
+  "input.requested": "input",
+  "input.provided": "input",
+  "input.auto": "input",
   "subagent.spawned": "delegation",
   "context.compacted": "context",
 };

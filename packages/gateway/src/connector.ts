@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Logger } from "@render-agents/store";
+import type { WebhookVerify } from "@render-agents/sdk";
 
 export interface WebhookMatch {
   workflow: string;
@@ -16,6 +17,12 @@ export interface ConnectorContext {
 export interface ConnectorSpec {
   readonly key: string;
   readonly name: string;
+  /**
+   * Inbound-signature verification policy, enforced by the gateway before the
+   * request is dispatched. Omit and it is fail-closed (rejected in production);
+   * set `"none"` to explicitly opt out. See {@link WebhookVerify}.
+   */
+  readonly verify?: WebhookVerify;
   handle(req: Request, ctx: ConnectorContext): Promise<WebhookMatch | null>;
 }
 

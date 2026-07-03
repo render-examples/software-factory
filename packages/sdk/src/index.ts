@@ -72,7 +72,7 @@ export type {
   MountedTools,
   ToolRegistry,
   SkillRegistry,
-  ApprovalResult,
+  InputResult,
   RunContext,
   AgentRunner,
   ToolSchema,
@@ -125,6 +125,25 @@ export type {
   WebhookMatch,
 } from "./workflow.js";
 export { workflow, bindWorkflow } from "./workflow.js";
+
+export type {
+  WebhookVerify,
+  HmacVerify,
+  GitHubVerify,
+  SlackVerify,
+  StripeVerify,
+  StandardWebhooksVerify,
+  NoVerify,
+  SignatureEncoding,
+  HmacAlgorithm,
+} from "./webhook-verify.js";
+export {
+  hmacVerify,
+  githubVerify,
+  slackVerify,
+  stripeVerify,
+  standardWebhooksVerify,
+} from "./webhook-verify.js";
 
 export {
   InProcessDispatcher,

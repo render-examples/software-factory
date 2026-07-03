@@ -33,7 +33,7 @@ Build the keystone: the append-only event log and the **projection-fold framewor
   - `spans` (folded from span-producing `*.started`/`*.completed` events carrying `spanId`/`parentSpanId`).
   - `tool_calls` (idempotency index: keyed by `idempotencyKey`, records canonical terminal `tool.result`).
   - `workflow_steps` (memoized `step.completed` by `(runId, name)`).
-  - `approval_requests` (folded from `approval.requested`/`approval.resolved`).
+  - `approval_requests` (folded from `input.requested`/`input.provided`).
 - **`RunStore` read surface** over those projections: `getRun`, `listRuns`, `getMessages`, `listSpans`, `getStepResult`, `getToolResult`, plus `init()`/`close()`.
 - **`idempotencyKey(runId, suffix)`** helper (`SHA-256`) used by both the tool-call key and dispatch key.
 - **Provider-placeholder exclusion:** transport-only `tool_result` placeholders must not be folded into the `tool_calls` idempotency projection or counted as applied (see [Execution → HITL](../specs/02-execution.md#hitl-pause--resume) and [Tool dispatch](../specs/02-execution.md#tool-dispatch)).

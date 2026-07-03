@@ -83,8 +83,8 @@ export interface AgentOutput<T = unknown> {
 
 export interface PausedResult {
   status: "paused";
-  reason: "approval" | "input";
-  pendingApprovalIds?: string[];
+  reason: "input";
+  pendingInputIds?: string[];
 }
 
 export type AgentResult<T = unknown> =
@@ -93,15 +93,15 @@ export type AgentResult<T = unknown> =
 
 export class RunPaused extends Error {
   readonly runId: string;
-  readonly reason: "approval" | "input";
-  readonly pendingApprovalIds?: string[];
+  readonly reason: "input";
+  readonly pendingInputIds?: string[];
 
-  constructor(runId: string, reason: "approval" | "input", pendingApprovalIds?: string[]) {
+  constructor(runId: string, reason: "input", pendingInputIds?: string[]) {
     super(`Run ${runId} paused: ${reason}`);
     this.name = "RunPaused";
     this.runId = runId;
     this.reason = reason;
-    this.pendingApprovalIds = pendingApprovalIds;
+    this.pendingInputIds = pendingInputIds;
   }
 }
 

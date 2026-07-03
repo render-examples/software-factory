@@ -19,7 +19,7 @@ It is intentionally implementation-focused and does not define product behavior 
 | Chat worker execution lane | `@render-agents/sdk` | `src/worker.ts`, `src/submit.ts` |
 | Markdown/frontmatter loading and validation | `@render-agents/sdk` | `src/loader/*` |
 | Agent loop behavior | `@render-agents/engine` | `src/default-runner.ts` |
-| Run context (approval, cancel, history, OAuth, deltas) | `@render-agents/engine` | `src/run-context.ts` |
+| Run context (input gating, cancel, history, OAuth, deltas) | `@render-agents/engine` | `src/run-context.ts` |
 | Tool mounting and MCP sources | `@render-agents/engine` | `src/tool-impl.ts`, `src/mcp-client.ts` |
 | Context compaction | `@render-agents/engine` | `src/context-manager-impl.ts` |
 | Event taxonomy and append contracts | `@render-agents/store` | `src/events.ts` |

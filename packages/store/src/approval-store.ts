@@ -7,7 +7,7 @@ export interface ApprovalRequest {
   status: "pending" | "approved" | "denied";
   requestedAt: string;
   resolvedAt?: string;
-  resolvedBy?: string;
+  providedBy?: string;
   reason?: string;
 }
 
@@ -15,5 +15,5 @@ export interface ApprovalStore {
   createRequest(req: ApprovalRequest): Promise<void>;
   getRequest(id: string): Promise<ApprovalRequest | undefined>;
   listPending(runId: string): Promise<ApprovalRequest[]>;
-  resolve(id: string, decision: { approved: boolean; resolvedBy?: string; reason?: string }): Promise<void>;
+  resolve(id: string, decision: { approved: boolean; providedBy?: string; reason?: string }): Promise<void>;
 }

@@ -70,21 +70,23 @@ export const client = {
     return api(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
   },
 
-  listApprovals(
-    status?: "pending" | "approved" | "denied" | "all",
+  listInputs(
+    status?: "pending" | "approved" | "denied" | "provided" | "all",
     threadId?: string,
+    kind?: "approval" | "message",
   ): Promise<{ approvals: Approval[] }> {
     const q = new URLSearchParams();
     if (status) q.set("status", status);
     if (threadId) q.set("threadId", threadId);
+    if (kind) q.set("kind", kind);
     const qs = q.toString();
-    return api(`/approvals${qs ? `?${qs}` : ""}`);
+    return api<{ inputs: Approval[] }>(`/inputs${qs ? `?${qs}` : ""}`).then((r) => ({ approvals: r.inputs }));
   },
-  resolveApproval(
+  provideInput(
     id: string,
-    body: { approved: boolean; resolvedBy?: string; reason?: string },
-  ): Promise<{ resolved: boolean; approvalId: string; runId: string }> {
-    return api(`/approvals/${encodeURIComponent(id)}/resolve`, {
+    body: { approved?: boolean; value?: unknown; content?: string; providedBy?: string; reason?: string },
+  ): Promise<{ provided: boolean; inputId: string; runId: string }> {
+    return api(`/inputs/${encodeURIComponent(id)}/provide`, {
       method: "POST",
       body: JSON.stringify(body),
     });

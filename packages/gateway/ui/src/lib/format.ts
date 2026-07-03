@@ -68,9 +68,9 @@ export function summarizeEvent(type: string, payload: Record<string, unknown>): 
       const u = payload.usage as { inputTokens?: number; outputTokens?: number } | undefined;
       return `${payload.model} · ${u?.inputTokens ?? 0}/${u?.outputTokens ?? 0} tok · ${payload.stopReason}`;
     }
-    case "approval.requested": return `${payload.toolName} (${payload.approvalRequestId})`;
-    case "approval.resolved": return `${payload.approved ? "approved" : "denied"}${payload.resolvedBy ? ` by ${payload.resolvedBy}` : ""}${payload.reason ? ` — ${payload.reason}` : ""}`;
-    case "approval.auto": return `auto-approved ${payload.toolName}`;
+    case "input.requested": return `${payload.toolName} (${payload.inputRequestId})`;
+    case "input.provided": return `${payload.approved ? "approved" : "denied"}${payload.providedBy ? ` by ${payload.providedBy}` : ""}${payload.reason ? ` — ${payload.reason}` : ""}`;
+    case "input.auto": return `auto-approved ${payload.toolName}`;
     case "subagent.spawned": return `${payload.agentName} → ${String(payload.childRunId ?? "").slice(0, 8)}`;
     case "context.compacted": return `${payload.strategy}: ${payload.beforeTokens}→${payload.afterTokens} tok`;
     default: return truncate(pretty(payload), 70);
