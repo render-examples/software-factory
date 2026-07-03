@@ -1,6 +1,38 @@
-import type { Channel } from "@render-agents/sdk";
+import type { Channel, ChannelMatch } from "@render-agents/sdk";
 import { githubVerify } from "@render-agents/sdk";
 import { normalizeGitHubEvent } from "../src/lib/github-events.js";
+
+// GitHub redelivers a webhook (manual "Redeliver" or automatic retry on
+// timeout/5xx) using the SAME `x-github-delivery` id — unlike Slack, there's
+// no separate "this is a retry" header to key off of. Without de-duping,
+// a redelivered `issues`/`pull_request` event starts a second run (a second
+// PR, duplicate comments, etc.). Track recently seen delivery ids and ack a
+// duplicate without reprocessing (mirrors the Slack reference channel's
+// retry de-dupe in `match`). In-memory + TTL-bounded: sufficient for a
+// single-process demo; a multi-replica deployment needs a shared/durable
+// dedupe store instead.
+const SEEN_DELIVERY_TTL_MS = 10 * 60 * 1000;
+const seenDeliveries = new Map<string, number>();
+
+function isDuplicateDelivery(deliveryId: string | null): boolean {
+  if (!deliveryId) return false;
+  const now = Date.now();
+  for (const [id, ts] of seenDeliveries) {
+    if (now - ts > SEEN_DELIVERY_TTL_MS) seenDeliveries.delete(id);
+  }
+  if (seenDeliveries.has(deliveryId)) return true;
+  seenDeliveries.set(deliveryId, now);
+  return false;
+}
+
+function ackDuplicate(): ChannelMatch {
+  return {
+    ack: new Response(JSON.stringify({ ok: true, duplicate: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  };
+}
 
 // Auto-discovered at POST /channels/github. A channel is the single inbound/
 // outbound message surface. Inbound channels are NOT behind the operator API key
@@ -23,6 +55,9 @@ const channel: Channel = {
   match(req: Request) {
     const event = req.headers.get("x-github-event");
     if (event === "issues" || event === "issue_comment" || event === "pull_request") {
+      if (isDuplicateDelivery(req.headers.get("x-github-delivery"))) {
+        return ackDuplicate();
+      }
       return { event };
     }
     return null;

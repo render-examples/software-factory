@@ -24,6 +24,21 @@ import { createPool, type PoolConfig } from "./db.js";
 const NOTIFY_CHANNEL = "run_events";
 
 /**
+ * Postgres's `jsonb` type rejects a literal NUL byte inside a JSON string
+ * value ("unsupported Unicode escape sequence", SQLSTATE 22P05) — a hard
+ * Postgres limitation, not something callers can be expected to avoid (a
+ * diff, tool output, or chat message can legitimately contain `\u0000`
+ * upstream). `JSON.stringify` only ever emits `\u0000` as this escaped
+ * 6-character sequence inside a string value — never as JSON structure — so
+ * stripping it post-serialization is safe and keeps the rest of the payload
+ * intact. Use this instead of `JSON.stringify` for every value bound to a
+ * `jsonb` column.
+ */
+function jsonbStringify(value: unknown): string {
+  return JSON.stringify(value).replace(/\\u0000/g, "");
+}
+
+/**
  * Postgres-backed event log. `append` is a single transaction that:
  * 1. Assigns a gap-free seq via `next_event_seq(run_id)`
  * 2. Inserts the event into `run_events`
@@ -152,7 +167,7 @@ export class PgEventLogStore implements EventLogStore {
           stored.agentName ?? null,
           stored.spanId ?? null,
           stored.parentSpanId ?? null,
-          JSON.stringify(stored.payload),
+          jsonbStringify(stored.payload),
           stored.version,
         ],
       );
@@ -302,7 +317,7 @@ export class PgEventLogStore implements EventLogStore {
           [
             rec.runId,
             rec.agentName ?? "",
-            p.input !== undefined ? JSON.stringify(p.input) : null,
+            p.input !== undefined ? jsonbStringify(p.input) : null,
             p.trigger ?? null,
             rec.ts,
             p.threadId ?? null,
@@ -331,7 +346,7 @@ export class PgEventLogStore implements EventLogStore {
       case "run.completed":
         await client.query(
           `UPDATE runs SET status = 'completed', result = $2, finished_at = $3 WHERE id = $1`,
-          [rec.runId, p.result !== undefined ? JSON.stringify(p.result) : null, rec.ts],
+          [rec.runId, p.result !== undefined ? jsonbStringify(p.result) : null, rec.ts],
         );
         break;
 
@@ -379,7 +394,7 @@ export class PgEventLogStore implements EventLogStore {
           `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
            VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", kind, p.input !== undefined ? JSON.stringify(p.input) : null, JSON.stringify(attributes), rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", kind, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify(attributes), rec.ts],
         );
         break;
       }
@@ -387,7 +402,7 @@ export class PgEventLogStore implements EventLogStore {
       case "run.completed":
         await client.query(
           `UPDATE spans SET status = 'ok', output = $2, finished_at = $3 WHERE id = $1`,
-          [spanId, p.result !== undefined ? JSON.stringify(p.result) : null, rec.ts],
+          [spanId, p.result !== undefined ? jsonbStringify(p.result) : null, rec.ts],
         );
         break;
 
@@ -410,7 +425,7 @@ export class PgEventLogStore implements EventLogStore {
           `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
            VALUES ($1, $2, $3, $4, $5, 'tool', 'running', $6, $7, $8)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? JSON.stringify(p.input) : null, JSON.stringify({ toolName: p.name }), rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify({ toolName: p.name }), rec.ts],
         );
         break;
 
@@ -430,7 +445,7 @@ export class PgEventLogStore implements EventLogStore {
           [
             spanId,
             p.result.isError ? "error" : "ok",
-            p.result.isError ? p.result.content : JSON.stringify(p.result.content),
+            p.result.isError ? p.result.content : jsonbStringify(p.result.content),
             rec.ts,
             p.name,
             !p.result.isError,
@@ -443,14 +458,14 @@ export class PgEventLogStore implements EventLogStore {
           `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, attributes, started_at)
            VALUES ($1, $2, $3, $4, $5, 'step', 'running', $6, $7)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, JSON.stringify({ step: p.name }), rec.ts],
+          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, jsonbStringify({ step: p.name }), rec.ts],
         );
         break;
 
       case "step.completed":
         await client.query(
           `UPDATE spans SET status = 'ok', output = $2, finished_at = $3 WHERE id = $1`,
-          [spanId, p.result !== undefined ? JSON.stringify(p.result) : null, rec.ts],
+          [spanId, p.result !== undefined ? jsonbStringify(p.result) : null, rec.ts],
         );
         break;
 
@@ -461,7 +476,7 @@ export class PgEventLogStore implements EventLogStore {
            ON CONFLICT (id) DO NOTHING`,
           [
             spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.model,
-            JSON.stringify({
+            jsonbStringify({
               usage: p.usage,
               costUsd: p.costUsd,
               stopReason: p.stopReason,
@@ -502,7 +517,7 @@ export class PgEventLogStore implements EventLogStore {
           `INSERT INTO tool_calls (id, run_id, idempotency_key, tool_name, input, status, started_at)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
            ON CONFLICT (run_id, idempotency_key) DO NOTHING`,
-          [p.toolCallId, rec.runId, idemKey, p.name, JSON.stringify(p.input), rec.ts],
+          [p.toolCallId, rec.runId, idemKey, p.name, jsonbStringify(p.input), rec.ts],
         );
         break;
       }
@@ -548,7 +563,7 @@ export class PgEventLogStore implements EventLogStore {
       `INSERT INTO run_messages (id, run_id, agent_name, seq, role, content, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (id) DO NOTHING`,
-      [rec.id, rec.runId, agentName ?? "", rec.seq, role, JSON.stringify(content), rec.ts],
+      [rec.id, rec.runId, agentName ?? "", rec.seq, role, jsonbStringify(content), rec.ts],
     );
   }
 
@@ -559,7 +574,7 @@ export class PgEventLogStore implements EventLogStore {
       `INSERT INTO workflow_steps (run_id, name, result, created_at)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (run_id, name) DO NOTHING`,
-      [rec.runId, p.name, JSON.stringify(p.result), rec.ts],
+      [rec.runId, p.name, jsonbStringify(p.result), rec.ts],
     );
   }
 
@@ -576,7 +591,7 @@ export class PgEventLogStore implements EventLogStore {
             rec.runId,
             p.kind,
             p.toolName ?? null,
-            p.input !== undefined ? JSON.stringify(p.input) : null,
+            p.input !== undefined ? jsonbStringify(p.input) : null,
             p.prompt ?? null,
             rec.agentName ?? "",
             rec.ts,
@@ -596,7 +611,7 @@ export class PgEventLogStore implements EventLogStore {
             rec.ts,
             p.providedBy ?? null,
             p.reason ?? null,
-            p.value !== undefined ? JSON.stringify(p.value) : null,
+            p.value !== undefined ? jsonbStringify(p.value) : null,
           ],
         );
         break;
@@ -849,7 +864,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
        ON CONFLICT (id) DO NOTHING`,
       [
         thread.id, thread.userId ?? null,
-        thread.metadata !== undefined ? JSON.stringify(thread.metadata) : null,
+        thread.metadata !== undefined ? jsonbStringify(thread.metadata) : null,
         thread.status, thread.title ?? null, thread.createdAt, thread.updatedAt,
       ],
     );
@@ -870,7 +885,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     if (patch.status !== undefined) add("status", patch.status);
     if (patch.title !== undefined) add("title", patch.title);
     if (patch.userId !== undefined) add("user_id", patch.userId);
-    if (patch.metadata !== undefined) add("metadata", JSON.stringify(patch.metadata));
+    if (patch.metadata !== undefined) add("metadata", jsonbStringify(patch.metadata));
     params.push(new Date().toISOString());
     sets.push(`updated_at = $${params.length}`);
     if (sets.length === 1) return; // only updated_at → nothing meaningful
@@ -910,7 +925,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
        ON CONFLICT (id) DO NOTHING`,
       [
         s.id, s.workflow, s.cronExpression,
-        s.input !== undefined ? JSON.stringify(s.input) : null,
+        s.input !== undefined ? jsonbStringify(s.input) : null,
         s.enabled, s.userId ?? null, s.lastRunId ?? null, s.lastRunAt ?? null, s.createdAt, s.updatedAt,
       ],
     );
@@ -931,7 +946,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
     if (patch.workflow !== undefined) add("workflow", patch.workflow);
     if (patch.cronExpression !== undefined) add("cron_expression", patch.cronExpression);
-    if (patch.input !== undefined) add("input", JSON.stringify(patch.input));
+    if (patch.input !== undefined) add("input", jsonbStringify(patch.input));
     if (patch.enabled !== undefined) add("enabled", patch.enabled);
     if (patch.lastRunId !== undefined) add("last_run_id", patch.lastRunId);
     if (patch.lastRunAt !== undefined) add("last_run_at", patch.lastRunAt);
