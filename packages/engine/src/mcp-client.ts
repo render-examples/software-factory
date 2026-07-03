@@ -282,7 +282,7 @@ class HttpMcpConnection implements McpConnection {
         headers: { "mcp-session-id": this.sessionId, ...(this.headersFn?.() ?? {}) },
       });
     } catch {
-      // ignore
+      // best-effort
     }
   }
 }

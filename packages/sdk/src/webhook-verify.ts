@@ -1,14 +1,11 @@
 /**
  * Declarative inbound-signature verification for channels.
  *
- * Inbound channel routes are public (a third party can't present the operator
- * API key), so the *signature is the authentication*. This module is the
- * authored, declarative surface: a channel sets `verify` and the
- * gateway enforces it — computing the expected signature over the raw request
- * body and rejecting mismatches with 401 *before* the request is routed or
- * dispatched. The runtime that executes these schemes lives in
- * `@render-agents/gateway` (`verify.ts`); this file is pure config (no crypto),
- * so it is safe to import from authored project code.
+ * Inbound channel routes are public, so the *signature is the authentication*.
+ * A channel sets `verify` and the gateway enforces it — computing the expected
+ * signature over the raw body and rejecting mismatches with 401 before the
+ * request is routed. The runtime that executes these schemes lives in
+ * `@render-agents/gateway` (`verify.ts`); this file is pure config (no crypto).
  *
  * Secrets are referenced by env-var *name* and read at request time — they are
  * never inlined into a `verify` config object.

@@ -18,7 +18,6 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
   const app = new Hono();
   const { store, threadStore, deltaBus } = deps;
 
-  // GET /runs/:id/stream — SSE of a single run's events + live token deltas
   app.get("/runs/:id/stream", async (c) => {
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
@@ -26,11 +25,15 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
       return c.json({ error: `Run "${runId}" not found` }, 404);
     }
 
-    const fromSeq = Number(c.req.query("seq") ?? c.req.header("Last-Event-ID") ?? "0");
+    const parsedSeq = parseNonNegativeInt(c.req.query("seq") ?? c.req.header("Last-Event-ID"), "seq");
+    if (!parsedSeq.ok) {
+      return c.json({ error: parsedSeq.error }, 400);
+    }
+    const fromSeq = parsedSeq.value;
 
     return streamSSE(c, async (stream) => {
       // Catch-up: replay existing durable events from the requested seq.
-      const existing = await store.events.read(runId, fromSeq > 0 ? fromSeq : undefined);
+      const existing = await store.events.read(runId, fromSeq && fromSeq > 0 ? fromSeq : undefined);
       for (const event of existing) {
         await writeEvent(stream, event.category, event.payload, String(event.seq));
       }
@@ -58,7 +61,6 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
           }
           const event = item.value;
           await writeEvent(stream, event.category, event.payload, String(event.seq));
-          // Close when the run reaches a terminal state.
           if (event.payload.type === "run.completed" ||
               event.payload.type === "run.failed" ||
               event.payload.type === "run.cancelled") {
@@ -72,17 +74,12 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
     });
   });
 
-  // GET /events/stream — global live tail across ALL runs (operator rail). No
-  // token deltas here: the rail counts runs/approvals, not assistant text.
-  //
-  // Live-tail only by design (no connect-time replay): a global replay of the
-  // whole log would be unbounded, and the operator UI already refetches counts
-  // via REST on (re)connect, so the tail only needs to carry *new* events. The
-  // SSE `id` is composite (`runId:seq`) so a reconnecting client can still
-  // de-dupe reliably — per-run `seq` alone collides across runs (BUG-07).
+  // Global tail (operator rail), no token deltas since it only counts
+  // runs/approvals. Live-tail only by design: a full replay would be
+  // unbounded, and the UI refetches counts via REST on (re)connect. SSE id is
+  // composite (runId:seq) since per-run seq alone collides across runs (BUG-07).
   app.get("/events/stream", async (c) => {
-    // The global tail exposes every run's events — operators only (CR-D1). End
-    // users stream their own runs/threads via the scoped endpoints.
+    // Exposes every run's events — operators only (CR-D1).
     if (getPrincipal(c).role !== "operator") {
       return c.json({ error: "forbidden" }, 403);
     }
@@ -112,21 +109,16 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
         }
       } finally {
         c.req.raw.signal.removeEventListener("abort", onClose);
-        // Abort the tail on any exit (client disconnect, write error) so the
-        // Postgres LISTEN connection is released promptly — the run/thread streams
-        // already do this; the global stream must too (CR-21).
+        // Abort on any exit so the Postgres LISTEN connection releases promptly (CR-21).
         controller.abort();
       }
     });
   });
 
-  // GET /threads/:id/stream — thread stream spanning all runs + live token deltas
   app.get("/threads/:id/stream", async (c) => {
     const threadId = c.req.param("id");
-    // Ownership (CR-D1): operators may tail any thread; an end user may tail only
-    // a thread they own. A thread known purely via the event log (workflow/system
-    // thread) has NO owner row — a non-operator is denied outright rather than
-    // allowed to read an arbitrary thread's events (closes the no-row bypass).
+    // A thread known only via the event log has no owner row, so a non-operator
+    // is denied outright rather than allowed to read an arbitrary thread (CR-D1).
     const principal = getPrincipal(c);
     if (principal.role !== "operator") {
       const thread = threadStore ? await threadStore.getThread(threadId) : undefined;
@@ -134,24 +126,20 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
         return c.json({ error: `Thread "${threadId}" not found` }, 404);
       }
     }
-    // Reconnect cursor is a composite `runId:seq` (see below); the numeric `seq`
-    // query is unused for the thread stream since per-run seq is ambiguous here.
+    // Composite runId:seq cursor; numeric seq is unused here since per-run seq is ambiguous.
     const lastEventId = c.req.header("Last-Event-ID") ?? c.req.query("cursor") ?? undefined;
 
     return streamSSE(c, async (stream) => {
-      // Catch-up replay so a (re)connecting client converges on the full thread
-      // history instead of only seeing events after it happened to connect
-      // (BUG-07). Events span multiple runs, so each carries a composite
-      // `runId:seq` SSE id; the client resumes from its `Last-Event-ID`.
+      // Catch-up replay so a reconnecting client converges on full thread
+      // history; composite runId:seq id since events span multiple runs (BUG-07).
       const history = await store.events.readThread(threadId);
       const cid = (e: { runId: string; seq: number }) => `${e.runId}:${e.seq}`;
       let resumeFrom = 0;
       if (lastEventId && lastEventId.includes(":")) {
         const idx = history.findIndex((e) => cid(e) === lastEventId);
-        if (idx >= 0) resumeFrom = idx + 1; // resume strictly after the last-seen event
+        if (idx >= 0) resumeFrom = idx + 1;
       }
-      // Track the catch-up ids so the live tail can drop the small overlap of
-      // events appended between the history snapshot and the tail subscription.
+      // Track catch-up ids so the live tail can drop the overlap with the history snapshot.
       const replayed = new Set<string>();
       for (let i = resumeFrom; i < history.length; i++) {
         const e = history[i];
@@ -178,8 +166,7 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
           const event = item.value;
           const id = cid(event);
           if (!overlapCleared) {
-            // Once a live event isn't part of the catch-up set, the overlap is
-            // past — every later event is new, so stop tracking (bounds memory).
+            // Once an event isn't in the catch-up set, overlap is past; stop tracking (bounds memory).
             if (replayed.has(id)) continue;
             overlapCleared = true;
             replayed.clear();
@@ -271,4 +258,15 @@ async function* mergeEventsAndDeltas(
 
 function isTerminal(status: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function parseNonNegativeInt(
+  raw: string | undefined,
+  label: string,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw.trim() === "") return { ok: true, value: undefined };
+  if (!/^\d+$/.test(raw)) return { ok: false, error: `${label} must be a non-negative integer` };
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n)) return { ok: false, error: `${label} is out of range` };
+  return { ok: true, value: n };
 }

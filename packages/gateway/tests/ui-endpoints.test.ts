@@ -76,3 +76,16 @@ describe("UI read endpoints — GET /connections", () => {
     expect(mine.providers).toEqual([{ provider: "github", connected: true, scopes: ["repo"], expiresAt: undefined }]);
   });
 });
+
+describe("UI shell hardening headers", () => {
+  it("serves /ui with CSP and browser security headers", async () => {
+    const runtime = await createTestRuntime();
+    const app = createGatewayApp({ runtime, disableAuth: true });
+    const res = await app.request("/ui");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+});

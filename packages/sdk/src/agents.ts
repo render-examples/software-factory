@@ -29,7 +29,6 @@ export interface Agent {
 }
 
 export async function loadAgents(dir?: string, runtime?: AgentRuntime): Promise<AgentSet> {
-  // `dir` is the project root containing agents/, tools/, skills/ (see loader).
   const projectDir = dir ?? ".";
   const inert = await loadAgentsFromDir(projectDir);
   const definitions = inert.all().map((a) => a.definition);
@@ -115,18 +114,14 @@ export async function resumeRun<T = unknown>(
   const run = await runtime.store.getRun(runId);
   if (!run) throw new Error(`resumeRun: run "${runId}" not found`);
   if (run.status !== "paused") {
-    // Only paused runs are resumable. A completed run is returned as-is; any
-    // other state (running/failed/cancelled) is a caller error.
     if (run.status === "completed") {
       return { status: "completed", text: "", data: run.result as T, usage: { inputTokens: 0, outputTokens: 0 } };
     }
     throw new Error(`resumeRun: run "${runId}" is not resumable (status: ${run.status})`);
   }
 
-  // The agent name is the run's workflow label (set from the run.started event's
-  // agentName when an *agent* run is started). HITL pauses happen inside agent
-  // runs, so this resolves to a loaded agent; a paused workflow-root (not part of
-  // the in-process model) would fail here with a clear error.
+  // Agent name is the run's workflow label. HITL pauses happen inside agent
+  // runs; a paused workflow-root would fail here with a clear error.
   const agentName = run.workflow;
   const definition = runtime.agentDefinitions.get(agentName);
   if (!definition) {

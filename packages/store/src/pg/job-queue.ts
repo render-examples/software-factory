@@ -31,8 +31,8 @@ interface JobTailSub {
 }
 
 export class PgJobQueue implements JobQueue {
-  // Shared LISTEN multiplexer (CR-07): one `run_jobs` LISTEN connection fans out
-  // wake signals to all `tail()` subscribers, instead of one connection each.
+  // One shared `run_jobs` LISTEN connection fans wake signals out to all
+  // tail() subscribers, instead of one connection each.
   private tailListenClient: pg.PoolClient | null = null;
   private tailListening: Promise<void> | null = null;
   private readonly tailSubs = new Set<JobTailSub>();

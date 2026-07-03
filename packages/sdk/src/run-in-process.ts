@@ -103,8 +103,8 @@ export function runAgentInProcess<T = unknown>(
     deltaBus: deps.deltaBus,
   });
 
-  // The scope descendants inherit: the enclosing scope if set, otherwise this
-  // run becomes the scope root for the subtree it spawns.
+  // Descendants inherit the enclosing scope if set, else this run becomes
+  // the scope root for the subtree it spawns.
   const childCancelScopeId = opts?.cancelScopeId ?? runId;
 
   if (definition.subagents && definition.subagents.length > 0) {

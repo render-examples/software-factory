@@ -140,8 +140,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const opts = args.yes ? optionsFromArgs(args) : await runWizard(args);
 
-  // Validate the name and confine the target to cwd — an unvalidated name like
-  // `../../x` or an absolute path would otherwise escape the intended parent (CR-27).
+  // Confine target to cwd — an unvalidated name could escape the intended parent (CR-27).
   const nameError = validateProjectName(opts.name);
   if (nameError) throw new Error(nameError);
   const cwd = resolve(process.cwd());
@@ -162,8 +161,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   console.log(`  ${run} dev\n`);
 }
 
-// Execute when run as a CLI (not when imported by tests). Use pathToFileURL so
-// paths with spaces / Windows drive letters compare correctly (CR-30).
+// Run only as a CLI, not when imported by tests; pathToFileURL handles spaces/drive letters (CR-30).
 const isMain = (() => {
   try {
     return process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;

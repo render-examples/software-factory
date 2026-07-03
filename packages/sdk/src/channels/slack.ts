@@ -1,19 +1,15 @@
-// Slack — the reference platform channel (P4). One module owning Slack's inbound
-// (Events API) and outbound (`chat.postMessage`) sides, built entirely on the
-// generic `Channel` contract: no engine internals, just verify + match + parse +
-// deliver. Drop a `channels/slack.ts` that default-exports `slackChannel({...})`
-// and the gateway mounts it at `POST /channels/slack`.
+// Slack — the reference platform channel (P4), built entirely on the generic
+// `Channel` contract: verify + match + parse + deliver, no engine internals.
 //
-// Inbound: `verify: slackVerify()` (the gateway checks the `v0=` HMAC over the raw
-// body before this runs). `match` answers Slack's one-time `url_verification`
-// handshake, filters to the events we act on (guarding against our own bot's posts
-// to avoid loops), and de-dupes Slack's at-least-once retries. `parse` normalizes
-// an event into a turn, keying the conversation so re-entrant messages continue
-// the same thread.
+// Inbound: `verify: slackVerify()` (gateway checks the `v0=` HMAC first).
+// `match` answers the one-time `url_verification` handshake, filters to events
+// we act on (loop guard against our own bot's posts), and de-dupes Slack's
+// at-least-once retries. `parse` normalizes an event into a turn, keying the
+// conversation so re-entrant messages continue the same thread.
 //
-// Outbound: `deliver` posts the reply back with `chat.postMessage`, threading it
-// under the originating message (channels) or sending it flat (DMs). This is the
-// "minimal formatting mapping" — plain text in/out; Block Kit is deferred.
+// Outbound: `deliver` posts via `chat.postMessage`, threading under the
+// originating message (channels) or flat (DMs). Plain text in/out; Block Kit
+// is deferred.
 
 import type { Channel, ChannelDeliverContext, ChannelInboundEvent, ChannelMatch, ChannelTarget } from "../channel.js";
 import { slackVerify } from "../webhook-verify.js";
@@ -123,9 +119,7 @@ export function slackChannel(opts: SlackChannelOptions = {}): Channel {
         };
       }
 
-      // 2. De-dupe Slack's at-least-once retries (it resends if we're slow): ack
-      //    fast without reprocessing. Run creation is idempotent per conversation
-      //    anyway, but this avoids the needless 409/duplicate.
+      // 2. De-dupe Slack's at-least-once retries: ack fast without reprocessing.
       if (req.headers.get("x-slack-retry-num")) return { ack: ack200() };
 
       // 3. A real event we act on → proceed to parse/dispatch.
@@ -133,8 +127,7 @@ export function slackChannel(opts: SlackChannelOptions = {}): Channel {
         return { event: body.event.type };
       }
 
-      // 4. A valid Slack delivery we don't act on (bot echo, unsupported subtype):
-      //    ack 200 so Slack considers it handled and stops retrying.
+      // 4. Valid delivery we don't act on: ack 200 so Slack stops retrying.
       return { ack: ack200() };
     },
 
@@ -167,9 +160,8 @@ export function slackChannel(opts: SlackChannelOptions = {}): Channel {
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify(payload),
       });
-      // Slack returns HTTP 200 with `{ ok: false, error }` on logical failures, so
-      // check both. Throwing requeues the deliver job (at-least-once → the reaper/
-      // backoff + dead-letter budget bound retries of a permanent failure).
+      // Slack returns HTTP 200 with `{ ok: false, error }` on logical failures.
+      // Throwing requeues the deliver job (bounded by the reaper/backoff budget).
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
         throw new Error(`slackChannel.deliver: chat.postMessage failed (${data.error ?? `http ${res.status}`})`);

@@ -28,11 +28,10 @@ export interface SubmitRootRunOptions {
  * - `inline` → run it now (`driveInline`); no queue or runner involved.
  * - `queue`  → enqueue a durable job (a `runWorker` claims and drives it).
  *
- * The caller is responsible for recording the run's opening event(s) (e.g.
- * `run.started`, and for agents `message.user`) in the log **before** calling
- * this, so the run exists and is identical regardless of mode — the job is only
- * ever a pointer (D10), and the inline drive relies on the runner's
- * `hasStarted()` guard to avoid duplicating those opening events.
+ * Caller must record the run's opening event(s) (`run.started`, and for
+ * agents `message.user`) in the log **before** calling this, so the run is
+ * identical regardless of mode — the job is only ever a pointer (D10), and
+ * inline drive relies on `hasStarted()` to avoid duplicating those events.
  */
 export async function submitRootRun(runtime: AgentRuntime, opts: SubmitRootRunOptions): Promise<void> {
   if (runtime.executionMode === "queue") {

@@ -65,6 +65,11 @@ describe("gateway HITL — provide resumes the paused run", () => {
     const body = await res.json();
     expect(body).toMatchObject({ provided: true, runId });
 
+    // Audit actor comes from auth (not a caller-provided field).
+    const events = await runtime.store.events.read(runId);
+    const provided = events.find((e) => e.payload.type === "input.provided");
+    expect(provided?.payload).toMatchObject({ providedBy: "operator" });
+
     // The run completed and the gated tool actually ran.
     expect(invoked).toBe(1);
     const run = await runtime.store.getRun(runId);

@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { bootstrapFromQuery, getOperator, login, setOperator, whoami } from "../api/auth";
+import { getOperator, login, setOperator, whoami } from "../api/auth";
 
 /**
  * First-load gate. Exchanges the API key for a signed, httpOnly session cookie
  * via `/ui/login` (the raw key never lives in JS or a URL), then renders the app.
  * On boot it resolves the current session with `/whoami`, so a returning operator
- * with a valid cookie skips the form. A `?key=` bootstrap auto-logs-in and strips.
+ * with a valid cookie skips the form.
  */
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<"checking" | "in" | "out">("checking");
@@ -17,7 +17,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     let live = true;
     (async () => {
-      await bootstrapFromQuery();
       const who = await whoami();
       if (live) setState(who ? "in" : "out");
     })();

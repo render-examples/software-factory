@@ -360,14 +360,11 @@ export class DefaultRunner implements AgentRunner {
     let lastText = extractText(finalContent);
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      // Try parsing the existing text first (model may have already produced valid JSON)
       const parsed = tryParseJson(lastText, schema);
       if (parsed.valid) {
         return { text: lastText, data: parsed.data, usage: state.usage };
       }
 
-      // If first attempt and text isn't JSON, do a schema-constrained completion
-      // On retries, feed the validation error back
       state.iterations += 1;
       if (state.iterations > budget.maxIterations) throw new Error("maxIterations reached");
 

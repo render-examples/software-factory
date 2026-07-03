@@ -7,7 +7,8 @@ import { getPrincipal, canAccess } from "../auth.js";
 /** Upper bound on a single `/runs` page (CR-22). */
 const MAX_LIST_LIMIT = 100;
 /** Valid `?status=` filter values (CR-22). */
-const RUN_STATUSES = new Set(["pending", "running", "paused", "completed", "failed", "cancelled"]);
+const RUN_STATUS_LIST = ["pending", "running", "paused", "completed", "failed", "cancelled"] as const;
+const RUN_STATUSES = new Set<string>(RUN_STATUS_LIST);
 
 /**
  * Core run-facing routes: dispatch, list, inspect, cancel.
@@ -28,7 +29,6 @@ export function runRoutes(deps: {
     return run && canAccess(run.userId, getPrincipal(c)) ? run : undefined;
   };
 
-  // POST /workflows/:name — dispatch a workflow run (owned by the caller)
   app.post("/workflows/:name", async (c) => {
     const principal = getPrincipal(c);
     const name = c.req.param("name");
@@ -48,25 +48,21 @@ export function runRoutes(deps: {
       return c.json({ error: "input is required and must be non-empty" }, 400);
     }
 
-    // Stamp ownership so the caller can see their own dispatched run.
     const run = await workflow.dispatch(body.input, body.trigger, { userId: principal.userId });
     return c.json(run, 202);
   });
 
-  // GET /runs — list runs with keyset pagination
   app.get("/runs", async (c) => {
     const workflow = c.req.query("workflow");
     const statusRaw = c.req.query("status");
-    // Validate status against the known set so a typo returns 400 rather than
-    // silently yielding an empty list (CR-22).
+    // Validate against the known set so a typo 400s instead of silently empty (CR-22).
     if (statusRaw !== undefined && !RUN_STATUSES.has(statusRaw)) {
       return c.json({ error: `invalid status "${statusRaw}"` }, 400);
     }
     const status = statusRaw as import("@render-agents/store").RunStatus | undefined;
     const threadId = c.req.query("threadId");
     const before = c.req.query("before");
-    // Clamp limit to a sane maximum and reject non-finite/negative input so a
-    // caller can't request an unbounded/NaN page (CR-22).
+    // Clamp to a sane max and reject non-finite/negative input (CR-22).
     const rawLimit = c.req.query("limit");
     let limit: number | undefined;
     if (rawLimit !== undefined) {
@@ -76,15 +72,13 @@ export function runRoutes(deps: {
       }
       limit = Math.min(Math.floor(n), MAX_LIST_LIMIT);
     }
-    // Default to top-level roots so the list isn't cluttered with workflow
-    // fan-out / subagent child runs; pass roots=false to include them. A chat
-    // thread's turns are themselves roots, so `threadId` + roots-only lets the UI
-    // derive a thread's active run (the one non-terminal turn) without the data
-    // model carrying a UI-shaped `currentRunId`.
+    // Default to top-level roots (excludes fan-out/subagent children); a
+    // thread's turns are themselves roots, so threadId + roots-only lets the UI
+    // derive the active run without a UI-shaped currentRunId field.
     const roots = c.req.query("roots") !== "false";
 
-    // Tenant scoping: operators (shared key) see all by default and may filter
-    // with ?userId; end users are always confined to their own runs (CR-D1).
+    // Operators see all by default and may filter with ?userId; end users are
+    // always confined to their own runs (CR-D1).
     const principal = getPrincipal(c);
     const userId = principal.role === "operator" ? c.req.query("userId") : principal.userId;
 
@@ -92,8 +86,36 @@ export function runRoutes(deps: {
     return c.json({ runs });
   });
 
-  // GET /runs/:id/children — child runs spawned by this run (workflow fan-out
-  // or subagents), for cross-run trace stitching in the operator UI.
+  app.get("/runs/counts", async (c) => {
+    const workflow = c.req.query("workflow");
+    const threadId = c.req.query("threadId");
+    const roots = c.req.query("roots") !== "false";
+    const principal = getPrincipal(c);
+    const userId = principal.role === "operator" ? c.req.query("userId") : principal.userId;
+
+    const buckets = await Promise.all(
+      RUN_STATUS_LIST.map((status) =>
+        store.listRuns({
+          workflow,
+          threadId,
+          userId,
+          roots,
+          status: status as import("@render-agents/store").RunStatus,
+        }),
+      ),
+    );
+    const counts = {
+      pending: buckets[0].length,
+      running: buckets[1].length,
+      paused: buckets[2].length,
+      completed: buckets[3].length,
+      failed: buckets[4].length,
+      cancelled: buckets[5].length,
+    };
+    return c.json({ counts, active: counts.running + counts.paused });
+  });
+
+  // Child runs (fan-out/subagents), for cross-run trace stitching in the operator UI.
   app.get("/runs/:id/children", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -104,7 +126,6 @@ export function runRoutes(deps: {
     return c.json({ runs });
   });
 
-  // GET /runs/:id — run details (+ all-in cost incl. subagent descendants)
   app.get("/runs/:id", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -112,9 +133,8 @@ export function runRoutes(deps: {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
     const aggregateCostUsd = await aggregateRunCost(store, id);
-    // Surface *why* a run is paused (approval vs input) so clients don't have to
-    // infer it from the approval list — the authoritative signal is the last
-    // `run.paused` event's reason (BUG-12). Only computed for a paused run.
+    // Surface why a run is paused (approval vs input) from the authoritative
+    // last run.paused event, rather than inferring it from the approval list (BUG-12).
     let pauseReason: "input" | undefined;
     if (run.status === "paused") {
       const events = await store.events.read(id);
@@ -126,7 +146,6 @@ export function runRoutes(deps: {
     return c.json({ ...run, aggregateCostUsd, pauseReason });
   });
 
-  // GET /runs/:id/spans — span tree for a run
   app.get("/runs/:id/spans", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -137,7 +156,6 @@ export function runRoutes(deps: {
     return c.json({ spans });
   });
 
-  // GET /runs/:id/tool-calls — tool calls + results
   app.get("/runs/:id/tool-calls", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -155,8 +173,7 @@ export function runRoutes(deps: {
     return c.json({ toolCalls });
   });
 
-  // GET /runs/:id/events — the ordered raw event log for a run (debug lens).
-  // Convenience read for the operator UI's event-log inspector; the same data is
+  // Convenience read for the operator UI's event-log inspector; same data is
   // otherwise reconstructable from the SSE stream's catch-up replay.
   app.get("/runs/:id/events", async (c) => {
     const id = c.req.param("id");
@@ -164,12 +181,15 @@ export function runRoutes(deps: {
     if (!run) {
       return c.json({ error: `Run "${id}" not found` }, 404);
     }
-    const fromSeq = c.req.query("seq") ? Number(c.req.query("seq")) : undefined;
+    const parsedSeq = parseNonNegativeInt(c.req.query("seq"), "seq");
+    if (!parsedSeq.ok) {
+      return c.json({ error: parsedSeq.error }, 400);
+    }
+    const fromSeq = parsedSeq.value && parsedSeq.value > 0 ? parsedSeq.value : undefined;
     const events = await store.events.read(id, fromSeq);
     return c.json({ events });
   });
 
-  // POST /runs/:id/cancel — cancel a running or paused run
   app.post("/runs/:id/cancel", async (c) => {
     const id = c.req.param("id");
     const run = await loadOwnedRun(c, id);
@@ -184,4 +204,15 @@ export function runRoutes(deps: {
   });
 
   return app;
+}
+
+function parseNonNegativeInt(
+  raw: string | undefined,
+  label: string,
+): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw.trim() === "") return { ok: true, value: undefined };
+  if (!/^\d+$/.test(raw)) return { ok: false, error: `${label} must be a non-negative integer` };
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n)) return { ok: false, error: `${label} is out of range` };
+  return { ok: true, value: n };
 }
