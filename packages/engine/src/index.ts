@@ -32,7 +32,7 @@ export type {
 } from "./tool.js";
 
 export type {
-  ApprovalResult,
+  InputResult,
   RunContext,
   AgentRunner,
 } from "./context.js";

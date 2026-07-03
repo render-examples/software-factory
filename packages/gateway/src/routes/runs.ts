@@ -115,7 +115,7 @@ export function runRoutes(deps: {
     // Surface *why* a run is paused (approval vs input) so clients don't have to
     // infer it from the approval list — the authoritative signal is the last
     // `run.paused` event's reason (BUG-12). Only computed for a paused run.
-    let pauseReason: "approval" | "input" | undefined;
+    let pauseReason: "input" | undefined;
     if (run.status === "paused") {
       const events = await store.events.read(id);
       for (let i = events.length - 1; i >= 0; i--) {

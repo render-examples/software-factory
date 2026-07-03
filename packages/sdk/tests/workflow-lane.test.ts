@@ -205,7 +205,7 @@ describe("workflow lane (Lane A) — dispatchRoot", () => {
     let approved = false;
     const wf = workflow(async (ctx) => {
       // First drive parks (HITL); after the approval resolves, re-trigger completes.
-      if (!approved) throw new RunPaused(ctx.runId, "approval", ["a1"]);
+      if (!approved) throw new RunPaused(ctx.runId, "input", ["a1"]);
       return "done";
     });
     bindWorkflow(wf, "wf", runtime);

@@ -53,26 +53,26 @@ describe("operator routes — cross-run children", () => {
   });
 });
 
-describe("operator routes — approvals status filter", () => {
-  it("GET /approvals?status= filters pending vs resolved history", async () => {
+describe("operator routes — inputs status filter", () => {
+  it("GET /inputs?status= filters pending vs resolved history", async () => {
     const runtime = await createTestRuntime();
     await runtime.store.events.append(buildEventRecord("A", { type: "run.started" }));
-    await runtime.store.events.append(buildEventRecord("A", { type: "approval.requested", approvalRequestId: "ap-A", toolName: "github", input: {} }));
+    await runtime.store.events.append(buildEventRecord("A", { type: "input.requested", inputRequestId: "ap-A", kind: "approval", toolName: "github", input: {} }));
     await runtime.store.events.append(buildEventRecord("B", { type: "run.started" }));
-    await runtime.store.events.append(buildEventRecord("B", { type: "approval.requested", approvalRequestId: "ap-B", toolName: "deploy", input: {} }));
-    await runtime.store.events.append(buildEventRecord("B", { type: "approval.resolved", approvalRequestId: "ap-B", approved: true, resolvedBy: "alice", reason: "lgtm" }));
+    await runtime.store.events.append(buildEventRecord("B", { type: "input.requested", inputRequestId: "ap-B", kind: "approval", toolName: "deploy", input: {} }));
+    await runtime.store.events.append(buildEventRecord("B", { type: "input.provided", inputRequestId: "ap-B", kind: "approval", approved: true, providedBy: "alice", reason: "lgtm" }));
 
     const app = createGatewayApp({ runtime, disableAuth: true });
 
-    const pending = await (await app.request("/approvals")).json();
-    expect(pending.approvals.map((a: { id: string }) => a.id)).toEqual(["ap-A"]);
+    const pending = await (await app.request("/inputs")).json();
+    expect(pending.inputs.map((a: { id: string }) => a.id)).toEqual(["ap-A"]);
 
-    const approved = await (await app.request("/approvals?status=approved")).json();
-    expect(approved.approvals).toHaveLength(1);
-    expect(approved.approvals[0]).toMatchObject({ id: "ap-B", status: "approved", resolvedBy: "alice", reason: "lgtm" });
+    const approved = await (await app.request("/inputs?status=approved")).json();
+    expect(approved.inputs).toHaveLength(1);
+    expect(approved.inputs[0]).toMatchObject({ id: "ap-B", status: "approved", providedBy: "alice", reason: "lgtm" });
 
-    const all = await (await app.request("/approvals?status=all")).json();
-    expect(all.approvals).toHaveLength(2);
+    const all = await (await app.request("/inputs?status=all")).json();
+    expect(all.inputs).toHaveLength(2);
   });
 });
 

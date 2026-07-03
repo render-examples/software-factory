@@ -2,10 +2,10 @@ import type { RunEvent, Message, Logger, Tracer, ContentBlock, ToolResult } from
 import type { MountedTools, OAuthTokens } from "./tool.js";
 import type { AgentDefinition, AgentInput, AgentOutput } from "./agent.js";
 
-export type ApprovalResult =
+export type InputResult =
   | { approved: true }
   | { approved: false; reason?: string }
-  | { status: "pending"; approvalRequestId: string };
+  | { status: "pending"; inputRequestId: string };
 
 export interface RunContext {
   readonly signal: AbortSignal;
@@ -30,7 +30,7 @@ export interface RunContext {
    * test doubles need not implement it.
    */
   disposeTools?(): Promise<void>;
-  requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult>;
+  requestInput(toolName: string, input: unknown, toolCallId: string): Promise<InputResult>;
   awaitInput(): Promise<ContentBlock[]>;
   emit(event: RunEvent): Promise<void>;
   /**

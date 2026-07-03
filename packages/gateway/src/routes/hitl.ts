@@ -4,9 +4,10 @@ import { buildEventRecord } from "@render-agents/store";
 import { getPrincipal, canAccess } from "../auth.js";
 
 /**
- * HITL routes: list pending approvals, resolve them, and resume paused runs.
+ * HITL routes: list pending input requests, provide values/decisions, and resume
+ * paused runs.
  *
- * Resolving an approval / delivering input appends the resolution event and then
+ * Providing input appends the resolution event and then
  * re-drives the paused run via `resume(runId)` so the loop continues from the
  * logged state (resume-by-replay). `resume` is awaited so the response reflects
  * the post-resume state; errors are isolated so a resume failure doesn't mask
@@ -25,103 +26,119 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return awaitResume ? p : Promise.resolve();
   };
 
-  // GET /approvals — list approvals (read directly from the projection). Defaults
-  // to pending (the operator action queue); `?status=approved|denied` powers the
-  // UI's resolved-history tab, and `?status=all` returns every approval.
-  app.get("/approvals", async (c) => {
+  // GET /inputs — list input requests (read from the projection). Defaults to
+  // pending approvals (`kind=approval`) to power the operator action queue.
+  app.get("/inputs", async (c) => {
     const principal = getPrincipal(c);
-    const q = c.req.query("status");
+    const statusQ = c.req.query("status");
+    const kindQ = c.req.query("kind");
     const threadId = c.req.query("threadId");
     const opts =
-      !q ? { status: "pending" as const } : q === "all" ? undefined : { status: q as "pending" | "approved" | "denied" };
-    let records = await store.listApprovals(opts);
-    // Tenant scoping: an approval belongs to whoever owns its run. Operators see
-    // all; end users only see approvals for their own runs (CR-D1).
+      !statusQ && !kindQ
+        ? { status: "pending" as const, kind: "approval" as const }
+        : {
+            status: statusQ === "all" || !statusQ ? undefined : (statusQ as "pending" | "approved" | "denied" | "provided"),
+            kind: kindQ ? (kindQ as "approval" | "message") : undefined,
+          };
+    let records = await store.listInputs(opts);
+    // Tenant scoping: an input request belongs to whoever owns its run.
     if (principal.role !== "operator") {
       const owned = await Promise.all(
-        records.map(async (a) => {
-          const run = await store.getRun(a.runId).catch(() => undefined);
-          return run && canAccess(run.userId, principal) ? a : null;
+        records.map(async (input) => {
+          const run = await store.getRun(input.runId).catch(() => undefined);
+          return run && canAccess(run.userId, principal) ? input : null;
         }),
       );
-      records = owned.filter((a): a is (typeof records)[number] => a != null);
+      records = owned.filter((input): input is (typeof records)[number] => input != null);
     }
-    // Optional thread scoping. Approvals carry only a runId, so resolve each
+    // Optional thread scoping. Inputs carry only a runId, so resolve each
     // run's threadId server-side — one round trip for the caller instead of the
-    // UI fanning out a getRun per approval. The candidate set (usually pending)
+    // UI fanning out a getRun per input. The candidate set (usually pending)
     // is small, so the per-run lookups are cheap.
     if (threadId) {
       const matches = await Promise.all(
-        records.map(async (a) => {
-          const run = await store.getRun(a.runId).catch(() => undefined);
-          return run?.threadId === threadId ? a : null;
+        records.map(async (input) => {
+          const run = await store.getRun(input.runId).catch(() => undefined);
+          return run?.threadId === threadId ? input : null;
         }),
       );
-      records = matches.filter((a): a is (typeof records)[number] => a != null);
+      records = matches.filter((input): input is (typeof records)[number] => input != null);
     }
-    const approvals = records.map((a) => ({
-      id: a.approvalRequestId,
-      runId: a.runId,
-      toolName: a.toolName,
-      input: a.input,
-      agentName: a.agentName,
-      status: a.status,
-      requestedAt: a.requestedAt,
-      resolvedAt: a.resolvedAt,
-      resolvedBy: a.resolvedBy,
-      reason: a.reason,
+    const inputs = records.map((input) => ({
+      id: input.inputRequestId,
+      runId: input.runId,
+      kind: input.kind,
+      toolName: input.toolName,
+      input: input.input,
+      prompt: input.prompt,
+      value: input.value,
+      agentName: input.agentName,
+      status: input.status,
+      requestedAt: input.requestedAt,
+      resolvedAt: input.resolvedAt,
+      providedBy: input.providedBy,
+      reason: input.reason,
     }));
-    return c.json({ approvals });
+    return c.json({ inputs });
   });
 
-  // POST /approvals/:id/resolve — approve or deny
-  app.post("/approvals/:id/resolve", async (c) => {
-    const approvalId = c.req.param("id");
-    let body: { approved: boolean; resolvedBy?: string; reason?: string } = { approved: true };
+  // POST /inputs/:id/provide — provide an input value/decision
+  app.post("/inputs/:id/provide", async (c) => {
+    const inputId = c.req.param("id");
+    let body: { approved?: boolean; value?: unknown; content?: string; providedBy?: string; reason?: string } = {};
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    if (typeof body.approved !== "boolean") {
-      return c.json({ error: "approved (boolean) is required" }, 400);
-    }
-
-    // Find the run containing this approval via the projection (any status).
-    const all = await store.listApprovals();
-    const target = all.find((a) => a.approvalRequestId === approvalId);
+    const all = await store.listInputs();
+    const target = all.find((input) => input.inputRequestId === inputId);
     if (!target) {
-      return c.json({ error: `Approval "${approvalId}" not found` }, 404);
+      return c.json({ error: `Input "${inputId}" not found` }, 404);
     }
-    // Ownership: the caller must be able to access the approval's run (CR-D1).
     const ownerRun = await store.getRun(target.runId).catch(() => undefined);
     if (!ownerRun || !canAccess(ownerRun.userId, getPrincipal(c))) {
-      return c.json({ error: `Approval "${approvalId}" not found` }, 404);
+      return c.json({ error: `Input "${inputId}" not found` }, 404);
     }
     if (target.status !== "pending") {
-      return c.json({ error: `Approval "${approvalId}" already ${target.status}` }, 409);
+      return c.json({ error: `Input "${inputId}" already ${target.status}` }, 409);
     }
-    const targetRunId = target.runId;
+    if (target.kind === "approval" && typeof body.approved !== "boolean") {
+      return c.json({ error: "approved (boolean) is required for approval inputs" }, 400);
+    }
+    const value = target.kind === "message" ? (body.value ?? body.content) : undefined;
+    if (target.kind === "message" && value === undefined) {
+      return c.json({ error: "value (or content) is required for message inputs" }, 400);
+    }
 
-    // Emit resolution event
+    const targetRunId = target.runId;
     await store.events.append(
       buildEventRecord(targetRunId, {
-        type: "approval.resolved",
-        approvalRequestId: approvalId,
-        approved: body.approved,
-        resolvedBy: body.resolvedBy,
+        type: "input.provided",
+        inputRequestId: inputId,
+        kind: target.kind,
+        approved: target.kind === "approval" ? body.approved : undefined,
+        value,
+        providedBy: body.providedBy,
         reason: body.reason,
       }),
     );
+    if (target.kind === "message") {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      await store.events.append(
+        buildEventRecord(targetRunId, {
+          type: "message.user",
+          content: [{ type: "text", text }],
+        }),
+      );
+    }
 
-    // Re-drive the paused run now that the approval is resolved.
     await driveResume(targetRunId);
-
-    return c.json({ resolved: true, approvalId, runId: targetRunId });
+    return c.json({ provided: true, inputId, runId: targetRunId });
   });
 
-  // POST /runs/:id/input — resume a paused run with user input
+  // POST /runs/:id/input — convenience route to provide pending input on a run
   app.post("/runs/:id/input", async (c) => {
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
@@ -132,61 +149,54 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
       return c.json({ error: `Run "${runId}" is not paused (status: ${run.status})` }, 409);
     }
 
-    let body: { content?: string; approved?: boolean; approvalId?: string; resolvedBy?: string; reason?: string } = {};
+    let body: { content?: string; inputId?: string; approved?: boolean; value?: unknown; providedBy?: string; reason?: string } = {};
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    // Route by pause reason: check last run.paused event
-    const events = await store.events.read(runId);
-    const lastPause = [...events].reverse().find((e) => e.payload.type === "run.paused");
-    const reason = lastPause?.payload.type === "run.paused" ? lastPause.payload.reason : undefined;
-
-    if (reason === "input") {
-      if (!body.content) {
-        return c.json({ error: "content is required for input-paused runs" }, 400);
-      }
+    const pending = (await store.getInputs(runId)).filter((input) => input.status === "pending");
+    if (pending.length === 0) {
+      return c.json({ error: `Run "${runId}" has no pending input requests` }, 409);
+    }
+    const target =
+      (body.inputId ? pending.find((input) => input.inputRequestId === body.inputId) : undefined)
+      ?? (body.content !== undefined ? pending.find((input) => input.kind === "message") : undefined)
+      ?? pending[0];
+    if (!target) {
+      return c.json({ error: `Input "${body.inputId}" not found for run "${runId}"` }, 404);
+    }
+    const value = target.kind === "message" ? (body.value ?? body.content) : undefined;
+    if (target.kind === "message" && value === undefined) {
+      return c.json({ error: "content (or value) is required for message inputs" }, 400);
+    }
+    if (target.kind === "approval" && body.approved === undefined) {
+      return c.json({ error: "approved is required for approval inputs" }, 400);
+    }
+    await store.events.append(
+      buildEventRecord(runId, {
+        type: "input.provided",
+        inputRequestId: target.inputRequestId,
+        kind: target.kind,
+        approved: target.kind === "approval" ? body.approved : undefined,
+        value,
+        providedBy: body.providedBy,
+        reason: body.reason,
+      }),
+    );
+    if (target.kind === "message") {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
       await store.events.append(
         buildEventRecord(runId, {
           type: "message.user",
-          content: [{ type: "text", text: body.content }],
+          content: [{ type: "text", text }],
         }),
       );
-      await driveResume(runId);
-      return c.json({ resumed: true, runId, via: "message" });
     }
+    await driveResume(runId);
+    return c.json({ resumed: true, runId, via: target.kind });
 
-    if (reason === "approval") {
-      if (!body.approvalId) {
-        return c.json({ error: "approvalId is required for approval-paused runs" }, 400);
-      }
-      // Validate the approval exists, is still pending, and belongs to THIS run
-      // before recording a resolution — don't blindly append an approval.resolved
-      // for an arbitrary/foreign/already-resolved id (CR-10).
-      const approvals = await store.listApprovals();
-      const approval = approvals.find((a) => a.approvalRequestId === body.approvalId);
-      if (!approval || approval.runId !== runId) {
-        return c.json({ error: `Approval "${body.approvalId}" not found for run "${runId}"` }, 404);
-      }
-      if (approval.status !== "pending") {
-        return c.json({ error: `Approval "${body.approvalId}" already ${approval.status}` }, 409);
-      }
-      await store.events.append(
-        buildEventRecord(runId, {
-          type: "approval.resolved",
-          approvalRequestId: body.approvalId,
-          approved: body.approved ?? true,
-          resolvedBy: body.resolvedBy,
-          reason: body.reason,
-        }),
-      );
-      await driveResume(runId);
-      return c.json({ resumed: true, runId, via: "approval" });
-    }
-
-    return c.json({ error: `Unknown pause reason` }, 400);
   });
 
   return app;

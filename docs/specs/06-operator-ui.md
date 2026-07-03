@@ -14,7 +14,7 @@ The operator UI is a control surface for:
 
 - starting work (chat and workflow dispatch),
 - monitoring runs and traces,
-- resolving approvals,
+- resolving input requests (primarily approval-kind requests),
 - managing schedules and OAuth connections,
 - running maintenance operations.
 
@@ -74,9 +74,9 @@ Behavior:
 
 - left pane conversation list + right pane transcript,
 - one run per message turn in a thread,
-- inline pending approval cards,
+- inline pending input cards for approval-kind requests,
 - live `text.delta` rendering for current turn,
-- composer disabled while thinking **and** while approval is pending,
+- composer disabled while thinking **and** while an approval-kind input is pending,
 - input pause keeps composer enabled for resume-by-message.
 
 ## Runs
@@ -93,7 +93,7 @@ Behavior:
 - child-run stitching via `/runs/:id/children`,
 - cancel action for active runs.
 
-## Approvals
+## Approvals (Input Kind = `approval`)
 
 File:
 
@@ -138,7 +138,7 @@ UI relies on existing gateway routes:
 - runs: `/runs`, `/runs/:id`, `/runs/:id/spans`, `/runs/:id/events`, `/runs/:id/children`, `/runs/:id/cancel`
 - workflows: `/workflows`, `/workflows/:name`
 - threads/chat: `/threads`, `/threads/:id`, `/threads/:id/messages`, `/threads/:id/stream`
-- approvals: `/approvals`, `/approvals/:id/resolve`, `/runs/:id/input`
+- HITL inputs: `/inputs`, `/inputs/:id/provide`, `/runs/:id/input`
 - schedules: `/schedules*`, `/admin/schedules/tick`
 - ops: `/admin/jobs`, `/admin/retention`, `/admin/runs/reap`
 - oauth: `/connections`, `/oauth/:provider/*`

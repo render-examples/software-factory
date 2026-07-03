@@ -472,7 +472,7 @@ describeWithPg("retention cleanup parity", () => {
     await seed(`${tag}-fresh`, daysAgo(2));         // untouched
     // ancient active run — never trimmed
     await pgStore.events.append(buildEventRecord(`${tag}-active`, { type: "run.started", input: "x" }, { agentName: AGENT, ts: daysAgo(300) }));
-    await pgStore.events.append(buildEventRecord(`${tag}-active`, { type: "run.paused", reason: "approval" }, { agentName: AGENT, ts: daysAgo(300) }));
+    await pgStore.events.append(buildEventRecord(`${tag}-active`, { type: "run.paused", reason: "input" }, { agentName: AGENT, ts: daysAgo(300) }));
 
     const res = await pgStore.cleanup({ eventRetentionDays: 30, runRetentionDays: 90, now });
     expect(res.eventDetailTrimmed).toBeGreaterThanOrEqual(2);

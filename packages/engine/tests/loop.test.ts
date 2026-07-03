@@ -340,7 +340,7 @@ describe("DefaultRunner — control signals", () => {
     expect(toolMsg?.content[0]).toMatchObject({ type: "tool_result", isError: true });
   });
 
-  it("auto-approves a gated tool and records approval.auto", async () => {
+  it("auto-approves a gated tool and records input.auto", async () => {
     const store = createMemoryStore();
     let invoked = 0;
     const tool: Tool = {
@@ -362,6 +362,6 @@ describe("DefaultRunner — control signals", () => {
 
     await runner.run(agent, "go", makeCtx(store, agent, "r1", { tools: new Map([["deploy", tool]]) }));
     expect(invoked).toBe(1);
-    expect(await types(store, "r1")).toContain("approval.auto");
+    expect(await types(store, "r1")).toContain("input.auto");
   });
 });

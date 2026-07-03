@@ -101,14 +101,14 @@ describe("DefaultRunner — strict HITL pause & resume (M1)", () => {
 
     expect(invoked).toBe(0);
     const afterPause = await types(store, "r1");
-    expect(afterPause).toContain("approval.requested");
+    expect(afterPause).toContain("input.requested");
     expect(afterPause).toContain("run.paused");
     expect(afterPause).not.toContain("tool.result");
 
     // Gateway resolves the approval.
-    const approvalId = idempotencyKey("r1", "approval:tc1");
+    const approvalId = idempotencyKey("r1", "input:approval:tc1");
     await store.events.append(
-      buildEventRecord("r1", { type: "approval.resolved", approvalRequestId: approvalId, approved: true }, { agentName: "tester" }),
+      buildEventRecord("r1", { type: "input.provided", inputRequestId: approvalId, kind: "approval", approved: true }, { agentName: "tester" }),
     );
 
     // Resume: same runId, the loop replays and runs the now-approved tool.
@@ -136,9 +136,9 @@ describe("DefaultRunner — strict HITL pause & resume (M1)", () => {
     ];
 
     // Pre-resolve as denied before running.
-    const approvalId = idempotencyKey("r1", "approval:tc1");
+    const approvalId = idempotencyKey("r1", "input:approval:tc1");
     await store.events.append(
-      buildEventRecord("r1", { type: "approval.resolved", approvalRequestId: approvalId, approved: false, reason: "nope" }, { agentName: "tester" }),
+      buildEventRecord("r1", { type: "input.provided", inputRequestId: approvalId, kind: "approval", approved: false, reason: "nope" }, { agentName: "tester" }),
     );
 
     const out = await new DefaultRunner(mockModel(responses)).run(agent, "go", makeCtx(store, agent, "r1", new Map([["deploy", tool]])));

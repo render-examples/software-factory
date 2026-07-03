@@ -97,7 +97,7 @@ function bindAgent(definition: AgentDefinition, runtime: AgentRuntime): Agent {
  * Resume a paused agent run (HITL pause → out-of-band approval/input → resume).
  *
  * The pause is recorded in the event log (`run.paused`) and the resolution
- * (`approval.resolved` / a new `message.user`) is appended out-of-band by the
+ * (`input.provided` / a new `message.user`) is appended out-of-band by the
  * gateway. Resuming re-invokes the agent loop with the **same** runId: the
  * runner's `hasStarted()` guard skips the opening events and its
  * pending-tool-use replay dispatches the now-unblocked tool calls, driving the
@@ -156,7 +156,7 @@ export async function resumeRun<T = unknown>(
     return { status: "completed", ...output };
   } catch (err) {
     if (err instanceof RunPaused) {
-      return { status: "paused", reason: err.reason, pendingApprovalIds: err.pendingApprovalIds };
+      return { status: "paused", reason: err.reason, pendingInputIds: err.pendingInputIds };
     }
     throw err;
   }

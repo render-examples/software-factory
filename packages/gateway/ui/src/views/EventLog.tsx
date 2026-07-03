@@ -6,7 +6,7 @@ import { ErrorBanner, Spinner, Empty, CopyButton } from "../components/ui";
 import type { EventCategory, RunEventRecord } from "../api/types";
 
 const CATS: (EventCategory | "all")[] = [
-  "all", "lifecycle", "message", "tool", "model", "step", "approval", "delegation", "context",
+  "all", "lifecycle", "message", "tool", "model", "step", "input", "delegation", "context",
 ];
 
 interface TaggedEvent extends RunEventRecord {

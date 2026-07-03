@@ -59,22 +59,25 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     PRIMARY KEY (run_id, name)
 );
 
--- Approval requests
-CREATE TABLE IF NOT EXISTS approval_requests (
+-- Input requests
+CREATE TABLE IF NOT EXISTS input_requests (
     id           TEXT PRIMARY KEY,
     run_id       TEXT NOT NULL REFERENCES runs(id),
-    tool_name    TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    tool_name    TEXT,
     tool_input   JSONB,
+    prompt       TEXT,
+    value        JSONB,
     agent_name   TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'pending',
     requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at  TIMESTAMPTZ,
-    resolved_by  TEXT,
+    provided_by  TEXT,
     reason       TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_approvals_run_id ON approval_requests(run_id);
-CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_requests(status);
+CREATE INDEX IF NOT EXISTS idx_inputs_run_id ON input_requests(run_id);
+CREATE INDEX IF NOT EXISTS idx_inputs_status ON input_requests(status);
 
 -- Schedules
 CREATE TABLE IF NOT EXISTS schedules (

@@ -107,7 +107,10 @@ describe("gateway workflow lane (Lane A) — trigger, don't execute at the gatew
       buildEventRecord(runId, { type: "run.started", input: {}, trigger: "api", spanKind: "workflow" }, { agentName: "wf", spanId: runId }),
     );
     await runtime.store.events.append(
-      buildEventRecord(runId, { type: "run.paused", reason: "input" }, { agentName: "wf", spanId: runId }),
+      buildEventRecord(runId, { type: "input.requested", inputRequestId: "msg-1", kind: "message", prompt: "awaiting input" }, { agentName: "wf", spanId: runId }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.paused", reason: "input", pendingInputIds: ["msg-1"] }, { agentName: "wf", spanId: runId }),
     );
     expect((await runtime.store.getRun(runId))?.status).toBe("paused");
 
@@ -314,8 +317,8 @@ describe("gateway queue mode — durable resume", () => {
       expect(toolRuns).toBe(0);
 
       // Operator resolves the approval → enqueues a durable resume job.
-      const approvalId = idempotencyKey(runId, "approval:tc1");
-      const resolveRes = await app.request(`/approvals/${approvalId}/resolve`, {
+      const approvalId = idempotencyKey(runId, "input:approval:tc1");
+      const resolveRes = await app.request(`/inputs/${approvalId}/provide`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approved: true }),
       });
       expect(resolveRes.status).toBe(200);

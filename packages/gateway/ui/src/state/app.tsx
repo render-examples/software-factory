@@ -30,7 +30,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Promise.all([
       client.listRuns({ status: "running", limit: 200 }).catch(() => ({ runs: [] })),
       client.listRuns({ status: "paused", limit: 200 }).catch(() => ({ runs: [] })),
-      client.listApprovals("pending").catch(() => ({ approvals: [] })),
+      client.listInputs("pending", undefined, "approval").catch(() => ({ approvals: [] })),
     ]).then(([running, paused, approvals]) => {
       setActiveRuns(running.runs.length + paused.runs.length);
       setPendingApprovals(approvals.approvals.length);
@@ -52,7 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const close = openSSE("/events/stream", (msg) => {
       const ev = msg.data as unknown as GlobalEvent;
       setLastEvent(ev);
-      if (msg.category === "lifecycle" || msg.category === "approval") scheduleRefresh();
+      if (msg.category === "lifecycle" || msg.category === "input") scheduleRefresh();
     });
     return close;
   }, [refreshCounts, scheduleRefresh]);

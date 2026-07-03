@@ -8,16 +8,19 @@ import type { ThreadMessage } from "./thread-store.js";
  * Wave 0 (the gateway consumes it later), but maintained here so the log stays
  * the single source of truth for approval state.
  */
-export interface ApprovalProjectionRecord {
-  approvalRequestId: string;
+export interface InputRequestProjectionRecord {
+  inputRequestId: string;
   runId: string;
-  toolName: string;
-  input: unknown;
+  kind: "approval" | "message";
+  toolName?: string;
+  input?: unknown;
+  prompt?: string;
+  value?: unknown;
   agentName?: string;
-  status: "pending" | "approved" | "denied";
+  status: "pending" | "approved" | "denied" | "provided";
   requestedAt: string;
   resolvedAt?: string;
-  resolvedBy?: string;
+  providedBy?: string;
   reason?: string;
 }
 
@@ -34,7 +37,7 @@ export interface ProjectionSnapshot {
   spans: SpanRecord[];
   toolResults: Record<string, ToolResult>;
   steps: Record<string, unknown>;
-  approvals: ApprovalProjectionRecord[];
+  inputs: InputRequestProjectionRecord[];
 }
 
 function round(n: number): number {
@@ -52,7 +55,7 @@ function flattenContent(content: ContentBlock[]): string {
 
 /**
  * The projection-fold framework. Every read model (runs, messages, spans,
- * tool-calls, steps, approvals) is a pure fold of the append-only event log.
+ * tool-calls, steps, inputs) is a pure fold of the append-only event log.
  * `apply` is the only mutation; no projection is ever written directly.
  */
 export class Projections {
@@ -63,7 +66,7 @@ export class Projections {
   private spans = new Map<string, Map<string, SpanRecord>>();
   private toolResults = new Map<string, Map<string, ToolResult>>();
   private steps = new Map<string, Map<string, { value: unknown }>>();
-  private approvals = new Map<string, Map<string, ApprovalProjectionRecord>>();
+  private inputs = new Map<string, Map<string, InputRequestProjectionRecord>>();
 
   apply(rec: RunEventRecord): void {
     this.foldRuns(rec);
@@ -71,7 +74,7 @@ export class Projections {
     this.foldSpans(rec);
     this.foldToolCalls(rec);
     this.foldSteps(rec);
-    this.foldApprovals(rec);
+    this.foldInputs(rec);
   }
 
   private ensureRun(rec: RunEventRecord): RunRecord {
@@ -327,28 +330,31 @@ export class Projections {
     this.steps.set(rec.runId, map);
   }
 
-  private foldApprovals(rec: RunEventRecord): void {
+  private foldInputs(rec: RunEventRecord): void {
     const p = rec.payload;
-    const map = this.approvals.get(rec.runId) ?? new Map<string, ApprovalProjectionRecord>();
+    const map = this.inputs.get(rec.runId) ?? new Map<string, InputRequestProjectionRecord>();
     switch (p.type) {
-      case "approval.requested":
-        map.set(p.approvalRequestId, {
-          approvalRequestId: p.approvalRequestId,
+      case "input.requested":
+        map.set(p.inputRequestId, {
+          inputRequestId: p.inputRequestId,
           runId: rec.runId,
+          kind: p.kind,
           toolName: p.toolName,
           input: p.input,
+          prompt: p.prompt,
           agentName: rec.agentName,
           status: "pending",
           requestedAt: rec.ts,
         });
-        this.approvals.set(rec.runId, map);
+        this.inputs.set(rec.runId, map);
         break;
-      case "approval.resolved": {
-        const a = map.get(p.approvalRequestId);
+      case "input.provided": {
+        const a = map.get(p.inputRequestId);
         if (a) {
-          a.status = p.approved ? "approved" : "denied";
+          a.status = a.kind === "approval" ? (p.approved ? "approved" : "denied") : "provided";
+          a.value = p.value;
           a.resolvedAt = rec.ts;
-          a.resolvedBy = p.resolvedBy;
+          a.providedBy = p.providedBy;
           a.reason = p.reason;
         }
         break;
@@ -438,8 +444,8 @@ export class Projections {
     return this.toolResults.get(runId)?.get(toolCallId);
   }
 
-  getApprovals(runId: string): ApprovalProjectionRecord[] {
-    return [...(this.approvals.get(runId)?.values() ?? [])].map(a => ({ ...a }));
+  getInputs(runId: string): InputRequestProjectionRecord[] {
+    return [...(this.inputs.get(runId)?.values() ?? [])].map(a => ({ ...a }));
   }
 
   /**
@@ -461,13 +467,14 @@ export class Projections {
       .map(m => ({ ...m }));
   }
 
-  /** All approvals across every run, newest request first, optional status filter. */
-  listApprovals(opts?: { status?: "pending" | "approved" | "denied"; limit?: number }): ApprovalProjectionRecord[] {
-    let rows: ApprovalProjectionRecord[] = [];
-    for (const map of this.approvals.values()) {
+  /** All input requests across every run, newest request first, optional status filter. */
+  listInputs(opts?: { status?: "pending" | "approved" | "denied" | "provided"; kind?: "approval" | "message"; limit?: number }): InputRequestProjectionRecord[] {
+    let rows: InputRequestProjectionRecord[] = [];
+    for (const map of this.inputs.values()) {
       for (const a of map.values()) rows.push({ ...a });
     }
     if (opts?.status) rows = rows.filter(a => a.status === opts.status);
+    if (opts?.kind) rows = rows.filter(a => a.kind === opts.kind);
     rows.sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : a.requestedAt > b.requestedAt ? -1 : 0));
     if (opts?.limit !== undefined) rows = rows.slice(0, opts.limit);
     return rows;
@@ -475,7 +482,7 @@ export class Projections {
 
   /**
    * Trim event-detail projections for a run (spans, run_messages, tool_calls,
-   * steps, approvals). The human-facing thread transcript is intentionally
+   * steps, inputs). The human-facing thread transcript is intentionally
    * preserved (kept with the thread per the retention policy).
    */
   trimEventDetail(runId: string): void {
@@ -483,7 +490,7 @@ export class Projections {
     this.spans.delete(runId);
     this.toolResults.delete(runId);
     this.steps.delete(runId);
-    this.approvals.delete(runId);
+    this.inputs.delete(runId);
   }
 
   /** Delete a run summary (the `runs` row). */
@@ -498,7 +505,7 @@ export class Projections {
       spans: this.listSpans(runId),
       toolResults: Object.fromEntries(this.toolResults.get(runId) ?? new Map()),
       steps: Object.fromEntries([...(this.steps.get(runId) ?? new Map())].map(([k, v]) => [k, v.value])),
-      approvals: this.getApprovals(runId),
+      inputs: this.getInputs(runId),
     };
   }
 }

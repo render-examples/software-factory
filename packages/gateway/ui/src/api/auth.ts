@@ -4,7 +4,7 @@
 // cookie — so the raw key never lives in JS (XSS-safe) or in a URL. Every request
 // and EventSource rides that same-origin cookie automatically; there is no bearer
 // token stored client-side. The operator name is a self-entered handle sent as
-// `resolvedBy` for the audit trail — a display convenience, not an access boundary.
+// `providedBy` for the audit trail — a display convenience, not an access boundary.
 
 const OPERATOR = "render-agents-operator";
 

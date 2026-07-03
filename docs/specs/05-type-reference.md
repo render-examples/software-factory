@@ -52,6 +52,12 @@ Authoritative file: `packages/sdk/src/index.ts`
 - `defineMcpSource`
 - `defineHook`
 
+### Webhook/connector verification
+
+- config types: `WebhookVerify` (+ `HmacVerify`, `GitHubVerify`, `SlackVerify`, `StripeVerify`, `StandardWebhooksVerify`, `NoVerify`, `SignatureEncoding`, `HmacAlgorithm`)
+- factories: `hmacVerify`, `githubVerify`, `slackVerify`, `stripeVerify`, `standardWebhooksVerify`
+- `WebhookAdapter` carries an optional `verify` (physically defined with `WebhookMatch` in `packages/sdk/src/webhook-verify.ts` + `workflow.ts`)
+
 ### Testing subpath
 
 Authoritative file: `packages/sdk/src/testing.ts`
@@ -114,13 +120,14 @@ Authoritative file: `packages/store/src/index.ts`
 
 - `RunStore`, `RunRecord`, `RunStatus`
 - `SpanRecord`, `SpanKind`, `SpanStatus`, `Tracer`
-- `ListRunsOptions`, `ListApprovalsOptions`
+- `ListRunsOptions`, `ListInputsOptions`
+- input projection contracts (`InputRequestProjectionRecord`, `RunStore.getInputs`, `RunStore.listInputs`)
 - `TERMINAL_STATUSES`
 
 ### Operational persistence
 
 - `ThreadStore`, `Thread`, `ThreadMessage`
-- `ApprovalStore`, `ApprovalRequest`
+- `ApprovalStore`, `ApprovalRequest` (approval-specific helper contracts; main HITL read surface is `RunStore` inputs)
 - `OAuthStore`, `OAuthConnection`, `RefreshedTokens`
 - `ScheduleStore`, `ScheduleRecord`
 
@@ -152,7 +159,8 @@ Authoritative file: `packages/gateway/src/index.ts`
 - `createGatewayApp`, `startGateway`, `GatewayOptions`
 - route builders (`runRoutes`, `streamRoutes`, `threadRoutes`, `hitlRoutes`, `oauthRoutes`, `webhookRoutes`, `uiRoutes`)
 - auth middleware (`apiKeyAuth`)
-- connector contracts (`ConnectorSpec`, `ConnectorContext`, `loadConnectors`)
+- connector contracts (`ConnectorSpec` — with optional `verify` — `ConnectorContext`, `loadConnectors`)
+- webhook verification runtime (`verifyWebhookRequest`, `webhookVerifyRequired`, `checkWebhookAuth`, `REQUIRE_WEBHOOK_VERIFY_ENV`; `VerifyContext`, `VerifyResult`, `WebhookAuthCheck`); re-exports the `@render-agents/sdk` verify config helpers for connector authors
 - OAuth route contracts (`OAuthProviderConfig`, `OAuthRouteDeps`, `buildRefresher`)
 - trace-tree helpers (`buildSpanTree`, `flattenTree`, `perAgentCost`, `formatCost`, `formatDuration`)
 
