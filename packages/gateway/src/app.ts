@@ -93,6 +93,17 @@ export function createGatewayApp(opts: GatewayOptions) {
     );
   }
 
+  // Last-resort safety net: an uncaught exception anywhere in a route handler
+  // (e.g. a store/driver failure that wasn't anticipated) must still return a
+  // structured JSON error instead of Hono's bare-text 500, so API/channel
+  // callers always get a parseable response. The real error is logged
+  // server-side with a correlation id; callers get an opaque message.
+  app.onError((err, c) => {
+    const errorId = randomUUID();
+    console.error(`[render-agents] unhandled error (${errorId}) on ${c.req.method} ${c.req.path}:`, err);
+    return c.json({ error: "internal server error", errorId }, 500);
+  });
+
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   // UI shell registered before auth middleware so it stays unauthenticated.
