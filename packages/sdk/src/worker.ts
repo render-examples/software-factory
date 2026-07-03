@@ -4,6 +4,7 @@ import { TERMINAL_STATUSES } from "@render-agents/store";
 import { RunPaused } from "@render-agents/engine";
 import type { AgentRuntime } from "./runtime.js";
 import { resumeRun, driveAgentTurn } from "./agents.js";
+import { deliverForRun } from "./channel-delivery.js";
 
 /**
  * The warm chat worker (Lane B). It claims interactive agent-turn / resume jobs
@@ -70,6 +71,23 @@ export function buildJobProcessor(runtime: AgentRuntime): JobProcessor {
   const store = runtime.store;
 
   return async (job: JobRecord): Promise<void> => {
+    // Outbound delivery: the run is (intentionally) terminal, so this runs BEFORE
+    // the cancel check + terminal gate below — which would otherwise complete the
+    // job without delivering. `deliverForRun` is idempotent (skips redelivery).
+    if (job.kind === "deliver") {
+      try {
+        await deliverForRun(runtime, job.runId);
+        await queue.complete(job.id);
+      } catch (err) {
+        await queue.fail(job.id, {
+          requeue: true,
+          backoffMs: backoffMs(job.attempts),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
     // A run cancelled while still queued is settled without driving it.
     if (await runtime.cancelStore.isCancelled(job.runId)) {
       await queue.complete(job.id);
@@ -142,6 +160,10 @@ async function driveByKind(job: JobRecord, runtime: AgentRuntime): Promise<void>
       await resumeRun(job.runId, runtime);
       return;
     }
+    case "deliver":
+      // Delivery is handled ahead of driveByKind in the processor (it must bypass
+      // the terminal gate); reaching here would be a routing bug.
+      throw new Error(`runWorker: "deliver" job reached driveByKind`);
     default: {
       const exhaustive: never = job.kind;
       throw new Error(`runWorker: unknown job kind "${String(exhaustive)}"`);
@@ -158,7 +180,63 @@ async function driveByKind(job: JobRecord, runtime: AgentRuntime): Promise<void>
  */
 export function runWorker(runtime: AgentRuntime, opts?: RunWorkerOptions): WorkerHandle {
   const processor = buildJobProcessor(runtime);
-  return runWorkerLoop(runtime.jobQueue, processor, { ...opts, store: runtime.store });
+  const claim = runWorkerLoop(runtime.jobQueue, processor, { ...opts, store: runtime.store });
+
+  // No channels configured → no outbound delivery producer (zero cost).
+  if (runtime.channels.size === 0) return claim;
+
+  // Outbound delivery producer (lane-agnostic): tail the shared event log and, on
+  // a terminal channel-bound run, enqueue a `deliver` job that the claim loop
+  // drains via `deliverForRun`. Every run — Lane A (workflow host) or Lane B
+  // (this worker) — completes to the same log, so one tail covers both.
+  const ac = new AbortController();
+  if (opts?.signal) {
+    if (opts.signal.aborted) ac.abort();
+    else opts.signal.addEventListener("abort", () => ac.abort(), { once: true });
+  }
+  const produce = runDeliveryProducer(runtime, ac.signal, opts?.onError);
+  return {
+    stop: async () => { ac.abort(); await Promise.all([claim.stop(), produce]); },
+    get done() { return Promise.all([claim.done, produce]).then(() => undefined); },
+  };
+}
+
+/**
+ * Watch the event log for terminal channel-bound runs and enqueue a `deliver`
+ * job for each (idempotent by explicit job id). Post-commit by construction — a
+ * `tail` only sees committed events — so it never races a run's own commit.
+ */
+async function runDeliveryProducer(
+  runtime: AgentRuntime,
+  signal: AbortSignal,
+  onError?: (err: unknown, job?: JobRecord) => void,
+): Promise<void> {
+  const store = runtime.store;
+  try {
+    for await (const event of store.events.tail({}, signal)) {
+      // Deliver on completion (the reply) and on pause (the input prompt, HITL).
+      if (event.payload.type !== "run.completed" && event.payload.type !== "run.paused") continue;
+      try {
+        const run = await store.getRun(event.runId);
+        if (!run?.channel || !run.externalConversationId) continue;
+        if (!runtime.channels.get(run.channel)?.deliver) continue; // inbound-only channel
+        // Per-event job id (`seq` is gap-free per run): completion and each pause
+        // enqueue distinct deliver jobs, while a tail replay of the same event is
+        // idempotent. Deliver jobs are exempt from the per-run active index, so
+        // they coexist with the run's still-active turn job.
+        await runtime.jobQueue.enqueue({
+          id: `deliver:${event.runId}:${event.seq}`,
+          runId: event.runId,
+          kind: "deliver",
+          priority: 150,
+        });
+      } catch (err) {
+        onError?.(err);
+      }
+    }
+  } catch (err) {
+    if (!signal.aborted) onError?.(err);
+  }
 }
 
 interface LoopOptions extends RunWorkerOptions {

@@ -19,10 +19,9 @@ import {
   slackVerify,
   stripeVerify,
   standardWebhooksVerify,
-  type WebhookAdapter,
+  type Channel,
   type WorkflowDefinition,
 } from "@render-agents/sdk";
-import type { ConnectorSpec } from "../src/index.js";
 
 // --- helpers -------------------------------------------------------------
 
@@ -42,6 +41,7 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     agentDefinitions: new Map(),
     workflows: new Map(),
     toolSources: new Map(),
+    channels: new Map(),
     threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
     oauthStore: store as unknown as GatewayOptions["runtime"]["oauthStore"],
     scheduleStore: store as unknown as GatewayOptions["runtime"]["scheduleStore"],
@@ -62,8 +62,7 @@ function recordingWorkflows() {
 }
 
 async function buildApp(opts: {
-  webhooks?: Map<string, WebhookAdapter>;
-  connectors?: Map<string, ConnectorSpec>;
+  channels?: Map<string, Channel>;
   workflows: Map<string, WorkflowDefinition>;
 }) {
   const store = createMemoryStore();
@@ -71,8 +70,7 @@ async function buildApp(opts: {
   return createGatewayApp({
     runtime: makeTestRuntime(store),
     disableAuth: true,
-    webhooks: opts.webhooks,
-    connectors: opts.connectors,
+    channels: opts.channels,
     workflows: opts.workflows,
   });
 }
@@ -209,28 +207,28 @@ describe("webhookVerifyRequired", () => {
   });
 });
 
-// --- route-level: enforcement + dispatch-gating --------------------------
+// --- route-level: channels enforce verification before dispatch ----------
 
-describe("webhook routes — verification enforcement", () => {
+describe("channel routes — verification enforcement", () => {
   const body = JSON.stringify({ pull_request: { diff_url: "https://x" } });
 
-  function ghAdapter(verify: WebhookAdapter["verify"]): WebhookAdapter {
+  function ghChannel(verify: Channel["verify"]): Channel {
     return {
-      name: "github",
+      target: { workflow: "code-review", trigger: "github.pull_request" },
       verify,
-      match: () => ({ workflow: "code-review", trigger: "github.pull_request" }),
-      parse: async (req) => ({ raw: await req.text() }),
+      match: () => ({ event: "pull_request" }),
+      parse: async (req) => ({ conversationId: "pr-1", input: { raw: await req.text() } }),
     };
   }
 
   async function post(app: Awaited<ReturnType<typeof buildApp>>, headers: Record<string, string>) {
-    return app.request("/webhooks/github", { method: "POST", headers, body });
+    return app.request("/channels/github", { method: "POST", headers, body });
   }
 
   it("dispatches (202) on a valid GitHub signature", async () => {
     setEnv("GITHUB_WEBHOOK_SECRET", "s3cr3t");
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter(githubVerify())]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel(githubVerify())]]), workflows });
     const res = await post(app, { "x-hub-signature-256": githubSignature("s3cr3t", body) });
     expect(res.status).toBe(202);
     expect(dispatched).toHaveLength(1);
@@ -239,7 +237,7 @@ describe("webhook routes — verification enforcement", () => {
   it("rejects (401) a bad signature and never dispatches", async () => {
     setEnv("GITHUB_WEBHOOK_SECRET", "s3cr3t");
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter(githubVerify())]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel(githubVerify())]]), workflows });
     const res = await post(app, { "x-hub-signature-256": "sha256=deadbeef" });
     expect(res.status).toBe(401);
     expect(dispatched).toHaveLength(0);
@@ -248,7 +246,7 @@ describe("webhook routes — verification enforcement", () => {
   it("rejects (401) when the configured secret env is missing", async () => {
     setEnv("GITHUB_WEBHOOK_SECRET", undefined);
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter(githubVerify())]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel(githubVerify())]]), workflows });
     const res = await post(app, { "x-hub-signature-256": githubSignature("s3cr3t", body) });
     expect(res.status).toBe(401);
     expect(dispatched).toHaveLength(0);
@@ -256,7 +254,7 @@ describe("webhook routes — verification enforcement", () => {
 
   it('allows (202) an unsigned request when verify is "none"', async () => {
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter("none")]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel("none")]]), workflows });
     const res = await post(app, {});
     expect(res.status).toBe(202);
     expect(dispatched).toHaveLength(1);
@@ -265,7 +263,7 @@ describe("webhook routes — verification enforcement", () => {
   it("is fail-closed: no `verify` → 401 in production", async () => {
     setEnv("NODE_ENV", "production");
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter(undefined)]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel(undefined)]]), workflows });
     const res = await post(app, {});
     expect(res.status).toBe(401);
     expect(dispatched).toHaveLength(0);
@@ -274,37 +272,9 @@ describe("webhook routes — verification enforcement", () => {
   it("no `verify` → allowed in dev (with a warning)", async () => {
     setEnv("NODE_ENV", "development");
     const { workflows, dispatched } = recordingWorkflows();
-    const app = await buildApp({ webhooks: new Map([["github", ghAdapter(undefined)]]), workflows });
+    const app = await buildApp({ channels: new Map([["github", ghChannel(undefined)]]), workflows });
     const res = await post(app, {});
     expect(res.status).toBe(202);
-    expect(dispatched).toHaveLength(1);
-  });
-
-  it("enforces verification on connectors too", async () => {
-    setEnv("GITHUB_WEBHOOK_SECRET", "s3cr3t");
-    const { workflows, dispatched } = recordingWorkflows();
-    const connector: ConnectorSpec = {
-      key: "github",
-      name: "GitHub",
-      verify: githubVerify(),
-      handle: async () => ({ workflow: "code-review", trigger: "github.push" }),
-    };
-    const app = await buildApp({ connectors: new Map([["github", connector]]), workflows });
-
-    const denied = await app.request("/connectors/github", {
-      method: "POST",
-      headers: { "x-hub-signature-256": "sha256=deadbeef" },
-      body,
-    });
-    expect(denied.status).toBe(401);
-    expect(dispatched).toHaveLength(0);
-
-    const ok = await app.request("/connectors/github", {
-      method: "POST",
-      headers: { "x-hub-signature-256": githubSignature("s3cr3t", body) },
-      body,
-    });
-    expect(ok.status).toBe(202);
     expect(dispatched).toHaveLength(1);
   });
 });

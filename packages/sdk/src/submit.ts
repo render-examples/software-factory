@@ -5,7 +5,7 @@ import type { AgentRuntime } from "./runtime.js";
  * Chat-lane priority (lower = claimed first). A `resume` unblocks a human who is
  * already waiting mid-conversation (HITL), so it preempts fresh `agent` turns.
  */
-const JOB_PRIORITY: Record<JobKind, number> = { resume: 50, agent: 100 };
+const JOB_PRIORITY: Record<JobKind, number> = { resume: 50, agent: 100, deliver: 150 };
 
 export interface SubmitRootRunOptions {
   runId: string;

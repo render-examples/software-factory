@@ -74,8 +74,8 @@ export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
   // workflows/
   set("workflows/code-review/index.ts", codeReviewWorkflow());
 
-  // webhooks/ + hooks/
-  set("webhooks/github.ts", githubWebhook());
+  // channels/ + hooks/
+  set("channels/github.ts", githubChannel());
   set("hooks/audit.ts", auditHook());
 
   // entrypoints — one per service in the two-lane topology:
@@ -142,7 +142,7 @@ function tsconfig(): string {
         noEmit: true,
         resolveJsonModule: true,
       },
-      include: ["src", "workflows", "tools", "webhooks", "hooks"],
+      include: ["src", "workflows", "tools", "channels", "hooks"],
       exclude: ["node_modules"],
     },
     null,
@@ -346,32 +346,41 @@ function codeReviewWorkflow(): string {
   ].join("\n");
 }
 
-// --- webhooks / hooks ---
+// --- channels / hooks ---
 
-function githubWebhook(): string {
+function githubChannel(): string {
   return [
     `import { githubVerify } from "@render-agents/sdk";`,
+    `import type { Channel } from "@render-agents/sdk";`,
     "",
-    "// Auto-discovered at POST /webhooks/github. Inbound webhooks are NOT behind the",
-    "// operator API key (third parties can't send it) — the signature IS the",
-    "// authentication. The declarative `verify` makes the gateway check the GitHub",
-    "// HMAC signature (over the raw body, using GITHUB_WEBHOOK_SECRET) BEFORE this",
-    "// adapter runs — fail-closed in production — so `match`/`parse` can trust it.",
-    "export default {",
-    `  name: "github",`,
+    "// Auto-discovered at POST /channels/github. A channel is the single inbound/",
+    "// outbound message surface. Inbound channels are NOT behind the operator API",
+    "// key (third parties can't send it) — the signature IS the authentication. The",
+    "// declarative `verify` makes the gateway check the GitHub HMAC signature (over",
+    "// the raw body, using GITHUB_WEBHOOK_SECRET) BEFORE this channel runs —",
+    "// fail-closed in production — so `match`/`parse` can trust it. This channel is",
+    "// inbound-only (no `deliver`); add a `deliver` to reply back to GitHub.",
+    "const channel: Channel = {",
+    `  target: { workflow: "code-review" },`,
     "  verify: githubVerify(), // reads GITHUB_WEBHOOK_SECRET",
     "  match(req: Request) {",
     `    const event = req.headers.get("x-github-event");`,
-    `    return event === "pull_request" ? { workflow: "code-review", trigger: "github.pull_request" } : null;`,
+    `    return event === "pull_request" ? { event } : null;`,
     "  },",
     "  async parse(req: Request) {",
     "    const raw = await req.text();",
-    "    const body = JSON.parse(raw) as { pull_request?: { diff_url?: string } };",
+    "    const body = JSON.parse(raw) as { pull_request?: { diff_url?: string; number?: number } };",
     "    // NOTE: diff_url is a URL, not the patch. Fetch it (with a token) in",
     "    // production to pass real diff content to the review workflow.",
-    `    return { diff: body.pull_request?.diff_url ?? "" };`,
+    "    return {",
+    "      conversationId: `pull-${body.pull_request?.number ?? 0}`,",
+    `      input: { diff: body.pull_request?.diff_url ?? "" },`,
+    `      target: { workflow: "code-review", trigger: "github.pull_request" },`,
+    "    };",
     "  },",
     "};",
+    "",
+    "export default channel;",
   ].join("\n");
 }
 
@@ -397,21 +406,18 @@ function auditHook(): string {
 function serverEntry(): string {
   return [
     `import { loadProject } from "@render-agents/sdk";`,
-    `import { startGateway, loadConnectors } from "@render-agents/gateway";`,
+    `import { startGateway } from "@render-agents/gateway";`,
     "",
-    "// The project root holds the convention directories (agents/, tools/, …).",
-    "// `loadProject` discovers + wires runtime/agents/workflows/webhooks; connectors",
-    "// live in the gateway package (the SDK can't depend on it), so load them here.",
+    "// The project root holds the convention directories (agents/, tools/,",
+    "// channels/, …). `loadProject` discovers + wires runtime/agents/workflows/channels.",
     `const root = new URL("..", import.meta.url).pathname;`,
     "",
-    "const { runtime, workflows, webhooks } = await loadProject(root);",
-    "const connectors = await loadConnectors(root);",
+    "const { runtime, workflows, channels } = await loadProject(root);",
     "",
     "const { port } = await startGateway({",
     "  runtime,",
     "  workflows,",
-    "  webhooks,",
-    "  connectors,",
+    "  channels,",
     `  defaultWorkflow: "code-review",`,
     `  defaultAgent: "assistant", // conversational threads`,
     "});",
@@ -850,7 +856,7 @@ function readme(opts: ScaffoldOptions): string {
     "- `tools/` — local + MCP tool sources",
     "- `skills/` — progressive-disclosure skill docs",
     "- `workflows/` — orchestration (`code-review`)",
-    "- `webhooks/`, `hooks/` — triggers + event middleware",
+    "- `channels/`, `hooks/` — message surfaces + event middleware",
     "- `src/server.ts` — gateway (web) entrypoint",
     "- `src/worker.ts` — chat worker (drains the run queue, drives interactive turns)",
     "- `src/workflows.ts` — Render Workflows host (durable pipelines)",

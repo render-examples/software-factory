@@ -1,28 +1,30 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { CancelStore, RunRecord } from "@render-agents/store";
 import { runRetention, reapRuns, buildEventRecord } from "@render-agents/store";
-import type { AgentRuntime, WorkflowDefinition } from "@render-agents/sdk";
-import { resumeRun, submitRootRun, driveAgentTurn, RunPaused } from "@render-agents/sdk";
+import type { AgentRuntime, WorkflowDefinition, Channel } from "@render-agents/sdk";
+import { resumeRun, submitRootRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-agents/sdk";
 import {
   apiKeyAuth,
   defaultPublicPath,
   allowsQueryKey,
   getPrincipal,
+  requireOperator,
   DEFAULT_OPERATOR_ID,
   bearerKeyResolver,
   type AuthResolver,
 } from "./auth.js";
 import { buildCookieConfig, registerLoginRoutes, wrapWithSession } from "./ui-session.js";
+import { issueStreamToken, verifyStreamToken } from "./stream-token.js";
 import { runRoutes } from "./routes/runs.js";
 import { streamRoutes } from "./routes/stream.js";
 import { threadRoutes } from "./routes/threads.js";
 import { hitlRoutes } from "./routes/hitl.js";
 import { oauthRoutes, buildRefresher, type OAuthProviderConfig } from "./routes/oauth.js";
-import { webhookRoutes, type WebhookAdapter } from "./routes/webhooks.js";
+import { channelRoutes } from "./routes/channels.js";
 import { scheduleRoutes } from "./routes/schedules.js";
 import { uiRoutes } from "./routes/ui.js";
-import type { ConnectorSpec } from "./connector.js";
 
 export interface GatewayOptions {
   runtime: AgentRuntime;
@@ -38,8 +40,8 @@ export interface GatewayOptions {
   defaultAgent?: string;
   baseUrl?: string;
   oauthProviders?: Map<string, OAuthProviderConfig>;
-  webhooks?: Map<string, WebhookAdapter>;
-  connectors?: Map<string, ConnectorSpec>;
+  /** Inbound/outbound message surfaces (Slack/GitHub/…), mounted at `POST /channels/:id`. */
+  channels?: Map<string, Channel>;
   /**
    * Resume driver for paused runs. Defaults to the in-process `resumeRun` over
    * the provided runtime. Injectable for tests / a workflow-service dispatch.
@@ -125,7 +127,7 @@ export function createGatewayApp(opts: GatewayOptions) {
     // Auth middleware on all routes except health + the UI shell/login. Carve-outs
     // baked into the middleware (not route ordering) so they survive refactors:
     //   - `isPublicPath`: OAuth callback (authed by signed `state`) and inbound
-    //     webhooks/connectors (authed by adapter signatures) — CR-01.
+    //     channels (authed by the channel's signature policy) — CR-01.
     //   - `allowQueryKey`: SSE + OAuth authorize only, since EventSource / full-page
     //     navigations can't set headers; rejected elsewhere so the key can't leak
     //     via logs/history/Referer (CR-05).
@@ -136,12 +138,26 @@ export function createGatewayApp(opts: GatewayOptions) {
         operatorUserId,
         isPublicPath: (p) => defaultPublicPath(p) || p === "/ui/login" || p === "/ui/logout",
         allowQueryKey: allowsQueryKey,
+        // Per-user SSE credential: verify `?token=` (minted at POST /auth/stream-token)
+        // with the same secret the cookie session uses.
+        streamTokenResolver: (t) => verifyStreamToken(t, cookieCfg.secret),
       }),
     );
   }
 
+  // Control plane is operator-only: every `/admin/*` route (retention, run
+  // reaper, queue depth, schedule tick) is gated here at one choke point, so a
+  // per-user principal can never drive global maintenance (CR-D1). Registered
+  // after the auth middleware (principal is set) and before the admin routes.
+  app.use("/admin/*", requireOperator());
+
   // Who am I — lets the UI check auth state (cookie is httpOnly, unreadable by JS).
   app.get("/whoami", (c) => c.json(getPrincipal(c)));
+
+  // Mint a short-lived per-user stream token for SSE. The caller authenticates
+  // normally (JWT/cookie/bearer) here, then opens EventSource(...?token=...) — the
+  // one way to carry a per-user identity onto a connection that can't set headers.
+  app.post("/auth/stream-token", (c) => c.json(issueStreamToken(getPrincipal(c), cookieCfg.secret)));
 
   const store = runtime.store;
   // Cancellation is cooperative: the loop polls `runtime.cancelStore` each
@@ -266,11 +282,21 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   const awaitResume = opts.awaitResume ?? false;
 
+  // Drive a resume to rest. Inline mode drives in-process (submitRootRun awaits
+  // the inline resume), so we await it there too — the channel route can then
+  // deliver the completed reply in the same request. Queue mode enqueues a
+  // `resume` job (awaited only when `awaitResume` is set, e.g. tests); the
+  // worker's delivery producer handles the reply out of band.
+  const driveResume = async (runId: string): Promise<void> => {
+    const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
+    if (awaitResume || runtime.executionMode === "inline") await p;
+  };
+
   // Open a new chat turn for a thread (Lane B): each user message is its own
   // short run, joined to the thread by `threadId`; multi-turn memory comes from
   // the thread transcript (not a parked run). A turn completes normally — only
   // HITL *within* the turn parks (RunPaused), which is expected, not an error.
-  const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string }): Promise<void> => {
+  const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string; channel?: string; externalConversationId?: string; trigger?: string }): Promise<void> => {
     // Record the opening turn in the log up front (both modes): the run row is
     // the job's FK target and carries input/identity, and the runner's
     // hasStarted() guard then drives without duplicating these events. This keeps
@@ -279,7 +305,7 @@ export function createGatewayApp(opts: GatewayOptions) {
     await store.events.append(
       buildEventRecord(
         o.runId,
-        { type: "run.started", input, trigger: "thread_message", threadId: o.threadId, userId: o.userId, agentVersion: def?.version, model: def?.model.model },
+        { type: "run.started", input, trigger: o.trigger ?? "thread_message", threadId: o.threadId, userId: o.userId, agentVersion: def?.version, model: def?.model.model, channel: o.channel, externalConversationId: o.externalConversationId },
         { agentName, spanId: o.runId },
       ),
     );
@@ -301,6 +327,81 @@ export function createGatewayApp(opts: GatewayOptions) {
         }
       },
     });
+  };
+
+  // Handle an inbound message on a channel conversation (agent-target channels).
+  // The thread id is derived deterministically from (channel, conversationId), so
+  // re-entrant messages reuse the same thread and two concurrent first-messages
+  // converge on ONE (the one-active-run index then serializes them into a clean
+  // 202 + 409). If the conversation's run is paused awaiting a `message` input
+  // (HITL), the message SATISFIES it and resumes; otherwise a new channel-bound
+  // turn starts. Multi-turn memory comes from the thread transcript.
+  const handleChannelMessage = async (
+    agentName: string,
+    input: unknown,
+    binding: { channel: string; conversationId: string; user?: string },
+  ): Promise<{ runId: string; threadId: string; status: 200 | 202 | 409; body: Record<string, unknown> }> => {
+    const threadId = idempotencyKey(binding.channel, binding.conversationId);
+    if (!(await runtime.threadStore.getThread(threadId))) {
+      const now = new Date().toISOString();
+      await runtime.threadStore.createThread({
+        id: threadId,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+        metadata: { channel: binding.channel, externalConversationId: binding.conversationId, externalUser: binding.user },
+      });
+    }
+    const text = typeof input === "string" ? input : (JSON.stringify(input) ?? "");
+
+    // Continue an in-flight conversation: satisfy a pending message-input (HITL)
+    // on the active run and resume it, or reject if it's busy / awaiting approval.
+    const active = (await store.listRuns({ threadId, limit: 50 })).find(
+      (r) => r.status === "running" || r.status === "paused" || r.status === "pending",
+    );
+    if (active) {
+      if (active.status !== "paused") {
+        return { runId: active.id, threadId, status: 409, body: { error: "Conversation is busy (a turn is in flight)", runId: active.id } };
+      }
+      const pending = (await store.getInputs(active.id)).filter((i) => i.status === "pending");
+      // Approval gates need an explicit approve/deny — a free-text channel reply
+      // can't satisfy them; resolve those via the inputs API.
+      if (pending.some((i) => i.kind === "approval")) {
+        return { runId: active.id, threadId, status: 409, body: { error: "Run is paused awaiting approval; resolve it via the inputs API", runId: active.id } };
+      }
+      const pendingMessage = pending.find((i) => i.kind === "message");
+      if (pendingMessage) {
+        await store.events.append(
+          buildEventRecord(active.id, { type: "input.provided", inputRequestId: pendingMessage.inputRequestId, kind: "message", value: text }),
+        );
+      }
+      await store.events.append(
+        buildEventRecord(active.id, { type: "message.user", content: [{ type: "text", text }] }),
+      );
+      await driveResume(active.id);
+      return { runId: active.id, threadId, status: 200, body: { runId: active.id, channel: binding.channel, delivered: true } };
+    }
+
+    // No active run → a new channel-bound turn (binding stamped so the mapping
+    // folds and outbound delivery can find the surface).
+    const runId = randomUUID();
+    try {
+      await startAgentRun(agentName, text, {
+        runId,
+        threadId,
+        channel: binding.channel,
+        externalConversationId: binding.conversationId,
+        trigger: `channel.${binding.channel}`,
+      });
+    } catch (err) {
+      // DB-level guard (a concurrent first-message that slipped past the soft
+      // check above): the one-active-run index rejects the second `run.started`.
+      if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
+        return { runId, threadId, status: 409, body: { error: "Conversation is busy (a turn is in flight)" } };
+      }
+      throw err;
+    }
+    return { runId, threadId, status: 202, body: { runId, channel: binding.channel, agent: agentName, threadId } };
   };
 
   // Thread routes
@@ -338,13 +439,20 @@ export function createGatewayApp(opts: GatewayOptions) {
     }));
   }
 
-  // Webhook + connector routes
-  if ((opts.webhooks && opts.webhooks.size > 0) || (opts.connectors && opts.connectors.size > 0)) {
-    app.route("/", webhookRoutes({
-      webhooks: opts.webhooks ?? new Map(),
-      connectors: opts.connectors ?? new Map(),
-      workflows: wf,
-    }));
+  // Channel routes (inbound message surfaces): POST /channels/:id. Channels are
+  // attached to the runtime (populated by loadProject); an explicit `opts.channels`
+  // override is seeded onto it so the inbound routes AND the outbound delivery
+  // path resolve the same set. Public routes — the channel's declarative
+  // signature policy is the authentication (fail-closed via `checkWebhookAuth`).
+  if (opts.channels) for (const [id, ch] of opts.channels) runtime.channels.set(id, ch);
+  if (runtime.channels.size > 0) {
+    // In `inline` mode there is no worker to run the delivery producer, so the run
+    // is already terminal when the channel route returns — deliver inline. In
+    // `queue` mode the worker's producer + `deliver` job handle it out of band.
+    const deliver = runtime.executionMode === "inline"
+      ? (runId: string) => deliverForRun(runtime, runId)
+      : undefined;
+    app.route("/", channelRoutes({ channels: runtime.channels, workflows: wf, handleChannelMessage, deliver }));
   }
 
   return app;

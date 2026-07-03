@@ -123,13 +123,14 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
   // GET /threads/:id/stream — thread stream spanning all runs + live token deltas
   app.get("/threads/:id/stream", async (c) => {
     const threadId = c.req.param("id");
-    // Ownership: only the thread owner (or an operator) may tail it (CR-D1).
-    // Only enforce when a thread metadata row exists — threads known purely via
-    // the event log (workflow/system threads) have no owner to check against, and
-    // operators see everything regardless.
-    if (threadStore) {
-      const thread = await threadStore.getThread(threadId);
-      if (thread && !canAccess(thread.userId, getPrincipal(c))) {
+    // Ownership (CR-D1): operators may tail any thread; an end user may tail only
+    // a thread they own. A thread known purely via the event log (workflow/system
+    // thread) has NO owner row — a non-operator is denied outright rather than
+    // allowed to read an arbitrary thread's events (closes the no-row bypass).
+    const principal = getPrincipal(c);
+    if (principal.role !== "operator") {
+      const thread = threadStore ? await threadStore.getThread(threadId) : undefined;
+      if (!thread || !canAccess(thread.userId, principal)) {
         return c.json({ error: `Thread "${threadId}" not found` }, 404);
       }
     }

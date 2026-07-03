@@ -53,7 +53,7 @@ describe("buildFileMap", () => {
       "tools/github/index.ts", "tools/linear/index.ts",
       "skills/security-patterns/SKILL.md",
       "workflows/code-review/index.ts",
-      "webhooks/github.ts", "hooks/audit.ts",
+      "channels/github.ts", "hooks/audit.ts",
       "src/server.ts", "src/worker.ts",
     ]) {
       expect(files.has(expected), `missing ${expected}`).toBe(true);

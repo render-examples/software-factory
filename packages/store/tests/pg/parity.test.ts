@@ -285,6 +285,54 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
   });
 });
 
+describeWithPg("channel conversation mapping parity", () => {
+  let pgStore: PgRunStore;
+  let memStore: ReturnType<typeof createMemoryStore>;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+    memStore = createMemoryStore();
+  });
+  afterAll(async () => { await pgStore.close(); });
+
+  it("folds run.started channel binding + resolveConversation identically", async () => {
+    const tag = `chan-${Date.now()}`;
+    const threadId = `${tag}-t`;
+    const convId = `C:${tag}`;
+    const now = new Date().toISOString();
+
+    for (const store of [pgStore, memStore]) {
+      // Thread must exist before a run references it (pg FK).
+      await store.createThread({ id: threadId, status: "active", createdAt: now, updatedAt: now });
+      // First turn establishes the thread; it must complete before the second
+      // starts (one-active-run-per-thread unique index in Postgres).
+      await store.events.append(buildEventRecord(`${tag}-r1`, { type: "run.started", threadId, channel: "slack", externalConversationId: convId }, { agentName: AGENT, spanId: `${tag}-r1` }));
+      await store.events.append(buildEventRecord(`${tag}-r1`, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: `${tag}-r1` }));
+      // Second turn reuses the thread; the last-run pointer advances.
+      await store.events.append(buildEventRecord(`${tag}-r2`, { type: "run.started", threadId, channel: "slack", externalConversationId: convId }, { agentName: AGENT, spanId: `${tag}-r2` }));
+    }
+
+    // The run record carries the binding identically.
+    expect((await pgStore.getRun(`${tag}-r1`))?.channel).toBe("slack");
+    expect((await memStore.getRun(`${tag}-r1`))?.channel).toBe("slack");
+    expect((await pgStore.getRun(`${tag}-r1`))?.externalConversationId).toBe(convId);
+    expect((await memStore.getRun(`${tag}-r1`))?.externalConversationId).toBe(convId);
+
+    // The mapping resolves identically: same thread, last run advanced to r2.
+    const pgConv = await pgStore.resolveConversation("slack", convId);
+    const memConv = await memStore.resolveConversation("slack", convId);
+    expect(pgConv?.threadId).toBe(threadId);
+    expect(memConv?.threadId).toBe(threadId);
+    expect(pgConv?.lastRunId).toBe(`${tag}-r2`);
+    expect(memConv?.lastRunId).toBe(`${tag}-r2`);
+
+    // An unbound conversation → undefined in both.
+    expect(await pgStore.resolveConversation("slack", `missing-${tag}`)).toBeUndefined();
+    expect(await memStore.resolveConversation("slack", `missing-${tag}`)).toBeUndefined();
+  });
+});
+
 describeWithPg("threads — metadata, run thread_id, and transcript parity", () => {
   let pgStore: PgRunStore;
   let memStore: ReturnType<typeof createMemoryStore>;
@@ -510,6 +558,52 @@ describeWithPg("retention cleanup parity", () => {
     expect(sched).toBeDefined();
     expect(sched?.lastRunId).toBeUndefined(); // SET NULL
     await pgStore.deleteSchedule(tag);
+  });
+});
+
+describeWithPg("schedule tenant scoping parity", () => {
+  let pgStore: PgRunStore;
+  let memStore: ReturnType<typeof createMemoryStore>;
+
+  beforeAll(async () => {
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    await pgStore.init();
+    memStore = createMemoryStore();
+  });
+  afterAll(async () => { await pgStore.close(); });
+
+  it("stamps + filters schedule userId identically (memory + pg)", async () => {
+    const tag = `sched-tenant-${Date.now()}`;
+    const now = new Date().toISOString();
+    const mk = (suffix: string, userId?: string) => ({
+      id: `${tag}-${suffix}`, workflow: "code-review", cronExpression: "* * * * *",
+      enabled: true, userId, createdAt: now, updatedAt: now,
+    });
+    for (const store of [pgStore, memStore]) {
+      await store.createSchedule(mk("a1", "alice"));
+      await store.createSchedule(mk("a2", "alice"));
+      await store.createSchedule(mk("b1", "bob"));
+      await store.createSchedule(mk("none")); // unowned (operator/legacy)
+    }
+    const ids = (arr: { id: string }[]) => arr.map((s) => s.id).filter((id) => id.startsWith(tag)).sort();
+
+    // The per-tenant filter returns identical sets across stores.
+    const pgAlice = ids(await pgStore.listSchedules({ userId: "alice" }));
+    expect(pgAlice).toEqual([`${tag}-a1`, `${tag}-a2`]);
+    expect(ids(await memStore.listSchedules({ userId: "alice" }))).toEqual(pgAlice);
+
+    // userId round-trips through getSchedule in both stores.
+    expect((await pgStore.getSchedule(`${tag}-b1`))?.userId).toBe("bob");
+    expect((await memStore.getSchedule(`${tag}-b1`))?.userId).toBe("bob");
+
+    // An unowned schedule is excluded from a tenant filter but present unfiltered.
+    expect(ids(await pgStore.listSchedules({ userId: "alice" }))).not.toContain(`${tag}-none`);
+    expect(ids(await pgStore.listSchedules())).toContain(`${tag}-none`);
+    expect(ids(await memStore.listSchedules())).toContain(`${tag}-none`);
+
+    for (const store of [pgStore, memStore]) {
+      for (const s of ["a1", "a2", "b1", "none"]) await store.deleteSchedule(`${tag}-${s}`);
+    }
   });
 });
 

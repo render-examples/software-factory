@@ -23,6 +23,7 @@ const EVENT_CATEGORY: Record<RunEvent["type"], EventCategory> = {
   "input.requested": "input",
   "input.provided": "input",
   "input.auto": "input",
+  "channel.delivered": "lifecycle",
   "subagent.spawned": "delegation",
   "context.compacted": "context",
 };

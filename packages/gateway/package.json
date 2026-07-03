@@ -34,6 +34,7 @@
     "@render-agents/sdk": "workspace:*",
     "@render-agents/store": "workspace:*",
     "hono": "^4.12.27",
+    "jose": "^6.2.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",

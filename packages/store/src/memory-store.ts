@@ -9,7 +9,7 @@ import type {
 import { categoryOf } from "./categories.js";
 import { isTransientEvent } from "./events.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, ChannelConversation } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
@@ -244,6 +244,10 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
     return this.projections.listInputs(opts);
   }
 
+  async resolveConversation(channel: string, externalConversationId: string): Promise<ChannelConversation | undefined> {
+    return this.projections.resolveConversation(channel, externalConversationId);
+  }
+
   async cleanup(opts: RetentionOptions): Promise<RetentionResult> {
     const now = (opts.now ?? new Date()).getTime();
     const eventHorizon = now - opts.eventRetentionDays * 86_400_000;
@@ -346,8 +350,9 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
     this.schedules.delete(id);
   }
 
-  async listSchedules(): Promise<ScheduleRecord[]> {
+  async listSchedules(opts?: { userId?: string }): Promise<ScheduleRecord[]> {
     return [...this.schedules.values()]
+      .filter((s) => opts?.userId === undefined || s.userId === opts.userId)
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
       .map((s) => ({ ...s }));
   }

@@ -27,7 +27,7 @@ export interface TokenUsage {
 
 export type RunEvent =
   // lifecycle
-  | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; threadId?: string; userId?: string; model?: string; spanKind?: "agent" | "workflow" }
+  | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; threadId?: string; userId?: string; model?: string; spanKind?: "agent" | "workflow"; channel?: string; externalConversationId?: string }
   | { type: "run.completed"; result?: unknown }
   | { type: "run.failed"; error: string }
   | { type: "run.paused"; reason: "input"; pendingInputIds?: string[] }
@@ -49,6 +49,10 @@ export type RunEvent =
   | { type: "input.requested"; inputRequestId: string; kind: "approval" | "message"; toolName?: string; input?: unknown; prompt?: string }
   | { type: "input.provided"; inputRequestId: string; kind: "approval" | "message"; approved?: boolean; value?: unknown; providedBy?: string; reason?: string }
   | { type: "input.auto"; kind: "approval" | "message"; toolName?: string }
+  // channel (outbound delivery marker — a channel-bound run's reply OR a pending
+  // input prompt was pushed to its surface; the idempotency guard for redelivery.
+  // `inputRequestId` present → an input prompt (HITL); absent → a final reply.)
+  | { type: "channel.delivered"; channel: string; externalConversationId?: string; inputRequestId?: string }
   // delegation
   | { type: "subagent.spawned"; agentName: string; childRunId: string; toolCallId: string }
   // context

@@ -58,6 +58,10 @@ export interface RunRecord {
   threadId?: string;
   userId?: string;
   agentVersion?: string;
+  /** External channel this run was triggered from (for outbound delivery + resume mapping). */
+  channel?: string;
+  /** The channel's conversation id (Slack `channel:ts`, GitHub issue #, …). */
+  externalConversationId?: string;
   /**
    * Span this run hangs off in its parent run, when spawned by another run
    * (workflow `.task()`/`.run()` fan-out, or an LLM subagent). Undefined for
@@ -97,6 +101,19 @@ export interface ListRunsOptions {
   roots?: boolean;
 }
 
+/**
+ * A mapping from an external channel conversation to a render-agents thread,
+ * folded from `run.started`. This is the channel "continuation token": it lets a
+ * re-entrant inbound message resume the same thread, and lets outbound delivery
+ * address the surface a run came from.
+ */
+export interface ChannelConversation {
+  channel: string;
+  externalConversationId: string;
+  threadId?: string;
+  lastRunId: string;
+}
+
 export interface RunStore {
   init(): Promise<void>;
   readonly events: EventLogStore;
@@ -124,6 +141,12 @@ export interface RunStore {
   getInputs(runId: string): Promise<InputRequestProjectionRecord[]>;
   /** Folded input requests across all runs, optionally filtered by status/kind. */
   listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]>;
+  /**
+   * Resolve the render-agents conversation bound to an external channel
+   * conversation — `(channel, externalConversationId)` → the thread + last run,
+   * folded from `run.started`. Returns `undefined` when nothing is bound yet.
+   */
+  resolveConversation(channel: string, externalConversationId: string): Promise<ChannelConversation | undefined>;
   /**
    * Two-domain retention cleanup. Trims event-detail (run_events + detail
    * projections) for terminal runs older than the event horizon, and deletes

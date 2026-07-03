@@ -33,9 +33,9 @@ Authoritative file: `packages/sdk/src/index.ts`
 
 ### Loader utilities
 
-- `loadProject`, `LoadedProject`, `LoadProjectOptions` (one call: runtime + agents + workflows + webhooks)
+- `loadProject`, `LoadedProject`, `LoadProjectOptions` (one call: runtime + agents + workflows + channels)
 - `loadWorkflows`
-- `loadWebhooks`
+- `loadChannels`
 - `loadToolSources`
 - `loadHooks`
 - `loadRunners`
@@ -52,11 +52,12 @@ Authoritative file: `packages/sdk/src/index.ts`
 - `defineMcpSource`
 - `defineHook`
 
-### Webhook/connector verification
+### Channels + inbound verification
 
-- config types: `WebhookVerify` (+ `HmacVerify`, `GitHubVerify`, `SlackVerify`, `StripeVerify`, `StandardWebhooksVerify`, `NoVerify`, `SignatureEncoding`, `HmacAlgorithm`)
+- `Channel`, `ChannelInboundEvent`, `ChannelDeliverContext`, `ChannelTarget`, `ChannelMatch` (`packages/sdk/src/channel.ts`) — the single inbound/outbound message surface (replaces `WebhookAdapter`/`ConnectorSpec`); a channel's `verify` reuses the config below. `Channel.match` may be sync or async (`ChannelMatch | Promise<ChannelMatch>`). The `ChannelConversation` mapping + `RunStore.resolveConversation` bind a surface conversation to a thread.
+- built-in channels: `slackChannel` (+ `SlackChannelOptions`) in `packages/sdk/src/channels/slack.ts` — the Slack reference adapter (Events API in, `chat.postMessage` out).
+- config types: `WebhookVerify` (+ `HmacVerify`, `GitHubVerify`, `SlackVerify`, `StripeVerify`, `StandardWebhooksVerify`, `NoVerify`, `SignatureEncoding`, `HmacAlgorithm`) in `packages/sdk/src/webhook-verify.ts`
 - factories: `hmacVerify`, `githubVerify`, `slackVerify`, `stripeVerify`, `standardWebhooksVerify`
-- `WebhookAdapter` carries an optional `verify` (physically defined with `WebhookMatch` in `packages/sdk/src/webhook-verify.ts` + `workflow.ts`)
 
 ### Testing subpath
 
@@ -157,10 +158,11 @@ Authoritative file: `packages/store/src/index.ts`
 Authoritative file: `packages/gateway/src/index.ts`
 
 - `createGatewayApp`, `startGateway`, `GatewayOptions`
-- route builders (`runRoutes`, `streamRoutes`, `threadRoutes`, `hitlRoutes`, `oauthRoutes`, `webhookRoutes`, `uiRoutes`)
-- auth middleware (`apiKeyAuth`)
-- connector contracts (`ConnectorSpec` — with optional `verify` — `ConnectorContext`, `loadConnectors`)
-- webhook verification runtime (`verifyWebhookRequest`, `webhookVerifyRequired`, `checkWebhookAuth`, `REQUIRE_WEBHOOK_VERIFY_ENV`; `VerifyContext`, `VerifyResult`, `WebhookAuthCheck`); re-exports the `@render-agents/sdk` verify config helpers for connector authors
+- route builders (`runRoutes`, `streamRoutes`, `threadRoutes`, `hitlRoutes`, `oauthRoutes`, `channelRoutes`, `uiRoutes`)
+- auth: `apiKeyAuth` middleware; `Principal`, `AuthResolver`, `ApiKeyAuthOptions` types; resolvers `bearerKeyResolver`, `jwtAuthResolver` (+ `JwtAuthOptions`), `composeResolvers`; ownership helpers `canAccess`, `getPrincipal`
+- per-user SSE stream tokens (`issueStreamToken`, `verifyStreamToken`, `DEFAULT_STREAM_TOKEN_TTL_MS`)
+- channel contract re-export (`Channel` + `ChannelInboundEvent`/`ChannelDeliverContext`/`ChannelTarget` from `@render-agents/sdk`; mounted via `channelRoutes`)
+- inbound verification runtime (`verifyWebhookRequest`, `webhookVerifyRequired`, `checkWebhookAuth`, `REQUIRE_WEBHOOK_VERIFY_ENV`; `VerifyContext`, `VerifyResult`, `WebhookAuthCheck`); re-exports the `@render-agents/sdk` verify config helpers for channel authors
 - OAuth route contracts (`OAuthProviderConfig`, `OAuthRouteDeps`, `buildRefresher`)
 - trace-tree helpers (`buildSpanTree`, `flattenTree`, `perAgentCost`, `formatCost`, `formatDuration`)
 

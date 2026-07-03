@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { ConnectorSpec, ConnectorContext, WebhookMatch } from "../src/index.js";
 import { createGatewayApp } from "../src/index.js";
 import type { GatewayOptions } from "../src/index.js";
+import type { Channel } from "@render-agents/sdk";
 import { createMemoryStore, MemoryCancelStore, MemoryJobQueue, MemoryDeltaBus, buildEventRecord, type RunStore } from "@render-agents/store";
 
 /**
@@ -24,6 +24,7 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
     agentDefinitions: new Map(),
     workflows: new Map(),
     toolSources: new Map(),
+    channels: new Map(),
     threadStore: store as unknown as GatewayOptions["runtime"]["threadStore"],
     oauthStore: store as unknown as GatewayOptions["runtime"]["oauthStore"],
     scheduleStore: store as unknown as GatewayOptions["runtime"]["scheduleStore"],
@@ -32,15 +33,13 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
 }
 
 describe("@render-agents/gateway", () => {
-  it("ConnectorSpec type is assignable", () => {
-    const spec: ConnectorSpec = {
-      key: "github",
-      name: "GitHub",
-      handle: async (_req: Request, _ctx: ConnectorContext): Promise<WebhookMatch | null> => {
-        return { workflow: "code-review", trigger: "push" };
-      },
+  it("Channel type is assignable", () => {
+    const channel: Channel = {
+      target: { workflow: "code-review", trigger: "github.pull_request" },
+      match: () => ({ event: "pull_request" }),
+      parse: async () => ({ conversationId: "pr-1", input: { ok: true } }),
     };
-    expect(spec.key).toBe("github");
+    expect("workflow" in channel.target && channel.target.workflow).toBe("code-review");
   });
 
   it("health endpoint returns ok without auth", async () => {
