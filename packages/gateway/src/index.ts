@@ -11,6 +11,31 @@ export { oauthRoutes, buildRefresher, encryptToken, decryptToken } from "./route
 export type { OAuthProviderConfig, OAuthRouteDeps } from "./routes/oauth.js";
 export { webhookRoutes } from "./routes/webhooks.js";
 export type { WebhookAdapter } from "./routes/webhooks.js";
+export {
+  verifyWebhookRequest,
+  webhookVerifyRequired,
+  checkWebhookAuth,
+  REQUIRE_WEBHOOK_VERIFY_ENV,
+} from "./verify.js";
+export type { VerifyContext, VerifyResult, WebhookAuthCheck } from "./verify.js";
+// Convenience re-exports so connector/webhook authors can import config helpers
+// from the gateway package they already depend on.
+export type {
+  WebhookVerify,
+  HmacVerify,
+  GitHubVerify,
+  SlackVerify,
+  StripeVerify,
+  StandardWebhooksVerify,
+  NoVerify,
+} from "@render-agents/sdk";
+export {
+  hmacVerify,
+  githubVerify,
+  slackVerify,
+  stripeVerify,
+  standardWebhooksVerify,
+} from "@render-agents/sdk";
 export { uiRoutes } from "./routes/ui.js";
 export { buildSpanTree, flattenTree, perAgentCost, spanCostUsd, formatCost, formatDuration } from "./ui/trace.js";
 export type { SpanLike, SpanNode } from "./ui/trace.js";

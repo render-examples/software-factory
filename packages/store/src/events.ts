@@ -4,7 +4,7 @@ export type EventCategory =
   | "tool"
   | "step"
   | "model"
-  | "approval"
+  | "input"
   | "delegation"
   | "context";
 
@@ -30,7 +30,7 @@ export type RunEvent =
   | { type: "run.started"; trigger?: string; input?: unknown; agentVersion?: string; threadId?: string; userId?: string; model?: string; spanKind?: "agent" | "workflow" }
   | { type: "run.completed"; result?: unknown }
   | { type: "run.failed"; error: string }
-  | { type: "run.paused"; reason: "approval" | "input"; pendingApprovalIds?: string[] }
+  | { type: "run.paused"; reason: "input"; pendingInputIds?: string[] }
   | { type: "run.cancelled" }
   // message
   | { type: "message.user"; content: ContentBlock[] }
@@ -45,10 +45,10 @@ export type RunEvent =
   | { type: "step.completed"; name: string; result: unknown }
   // model
   | { type: "llm.call"; model: string; usage: TokenUsage; costUsd: number; stopReason: string; latencyMs: number }
-  // approval
-  | { type: "approval.requested"; approvalRequestId: string; toolName: string; input: unknown }
-  | { type: "approval.resolved"; approvalRequestId: string; approved: boolean; resolvedBy?: string; reason?: string }
-  | { type: "approval.auto"; toolName: string }
+  // input
+  | { type: "input.requested"; inputRequestId: string; kind: "approval" | "message"; toolName?: string; input?: unknown; prompt?: string }
+  | { type: "input.provided"; inputRequestId: string; kind: "approval" | "message"; approved?: boolean; value?: unknown; providedBy?: string; reason?: string }
+  | { type: "input.auto"; kind: "approval" | "message"; toolName?: string }
   // delegation
   | { type: "subagent.spawned"; agentName: string; childRunId: string; toolCallId: string }
   // context

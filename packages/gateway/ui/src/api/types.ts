@@ -5,7 +5,7 @@ export type RunStatus = "pending" | "running" | "paused" | "completed" | "failed
 export type SpanKind = "workflow" | "agent" | "llm" | "tool" | "step";
 export type SpanStatus = "running" | "ok" | "error";
 export type EventCategory =
-  | "lifecycle" | "message" | "tool" | "step" | "model" | "approval" | "delegation" | "context";
+  | "lifecycle" | "message" | "tool" | "step" | "model" | "input" | "delegation" | "context";
 
 export interface RunRecord {
   id: string;
@@ -28,7 +28,7 @@ export interface RunDetail extends RunRecord {
   /** All-in cost incl. subagent descendants (server-aggregated). */
   aggregateCostUsd: number;
   /** Why the run is paused, when it is: an approval gate vs. an input request. */
-  pauseReason?: "approval" | "input";
+  pauseReason?: "input";
 }
 
 export interface SpanRecord {
@@ -70,13 +70,16 @@ export interface RunEventRecord {
 export interface Approval {
   id: string;
   runId: string;
-  toolName: string;
+  kind: "approval" | "message";
+  toolName?: string;
   input: unknown;
-  agentName: string;
-  status: "pending" | "approved" | "denied";
+  value?: unknown;
+  prompt?: string;
+  agentName?: string;
+  status: "pending" | "approved" | "denied" | "provided";
   requestedAt: string;
   resolvedAt?: string;
-  resolvedBy?: string;
+  providedBy?: string;
   reason?: string;
 }
 

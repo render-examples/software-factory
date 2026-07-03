@@ -51,6 +51,7 @@ Operationally important env vars:
 | `RENDER_AGENTS_ENCRYPTION_KEY` | OAuth token encryption + signing secret |
 | `RENDER_AGENTS_COOKIE_SECRET` | Optional explicit cookie-signing secret for UI session |
 | `RENDER_AGENTS_STRICT_APPROVAL` | Toggle strict approval in non-production |
+| `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` | Require inbound webhook/connector signature verification (default on in production) |
 | `RENDER_AGENTS_EVENT_RETENTION_DAYS` | Event-detail retention horizon |
 | `RENDER_AGENTS_RUN_RETENTION_DAYS` | Run-summary retention horizon |
 | `RENDER_AGENTS_RUN_STALE_MS` | Stale-root threshold for reaper |
@@ -62,7 +63,8 @@ Auth behavior notes:
 
 - protected routes return `401` when key resolution fails,
 - UI can authenticate via `/ui/login` cookie session when UI is enabled,
-- SSE supports query key on allowlisted paths.
+- SSE supports query key on allowlisted paths,
+- inbound webhook/connector routes are public but signature-verified via each adapter's `verify` (fail-closed in production; see `01-authoring.md`).
 
 ---
 

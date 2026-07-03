@@ -326,7 +326,7 @@ describe("buildJobProcessor — agent/resume routing + D3 reconciliation", () =>
 
       // Operator resolves the approval out-of-band, then a resume job is enqueued.
       await runtime.store.events.append(
-        buildEventRecord(runId, { type: "approval.resolved", approvalRequestId: idempotencyKey(runId, "approval:tc1"), approved: true }, { agentName: "deployer" }),
+        buildEventRecord(runId, { type: "input.provided", inputRequestId: idempotencyKey(runId, "input:approval:tc1"), kind: "approval", approved: true }, { agentName: "deployer" }),
       );
       const job = await runtime.jobQueue.enqueue({ runId, kind: "resume" });
 

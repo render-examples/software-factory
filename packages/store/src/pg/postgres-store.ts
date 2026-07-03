@@ -9,8 +9,8 @@ import type {
 } from "../events.js";
 import { EventRejectedError, buildEventRecord } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
-import type { ApprovalProjectionRecord } from "../projections.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
+import type { InputRequestProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
 import type { ScheduleRecord, ScheduleStore } from "../schedule-store.js";
@@ -168,7 +168,7 @@ export class PgEventLogStore implements EventLogStore {
       await this.foldToolCalls(client, stored);
       await this.foldRunMessages(client, stored);
       await this.foldWorkflowSteps(client, stored);
-      await this.foldApprovals(client, stored);
+      await this.foldInputs(client, stored);
       await this.foldThreadMessages(client, stored);
 
       // Pointer NOTIFY (small payload, avoids 8KB limit)
@@ -557,27 +557,41 @@ export class PgEventLogStore implements EventLogStore {
     );
   }
 
-  private async foldApprovals(client: PoolClient, rec: RunEventRecord): Promise<void> {
+  private async foldInputs(client: PoolClient, rec: RunEventRecord): Promise<void> {
     const p = rec.payload;
     switch (p.type) {
-      case "approval.requested":
+      case "input.requested":
         await client.query(
-          `INSERT INTO approval_requests (id, run_id, tool_name, tool_input, agent_name, status, requested_at)
-           VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+          `INSERT INTO input_requests (id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 'pending', $8)
            ON CONFLICT (id) DO NOTHING`,
           [
-            p.approvalRequestId, rec.runId, p.toolName,
-            JSON.stringify(p.input), rec.agentName ?? "", rec.ts,
+            p.inputRequestId,
+            rec.runId,
+            p.kind,
+            p.toolName ?? null,
+            p.input !== undefined ? JSON.stringify(p.input) : null,
+            p.prompt ?? null,
+            rec.agentName ?? "",
+            rec.ts,
           ],
         );
         break;
-      case "approval.resolved":
+      case "input.provided":
         await client.query(
-          `UPDATE approval_requests SET
-             status = CASE WHEN $2 THEN 'approved' ELSE 'denied' END,
-             resolved_at = $3, resolved_by = $4, reason = $5
+          `UPDATE input_requests SET
+             status = CASE WHEN kind = 'approval' THEN CASE WHEN $2 THEN 'approved' ELSE 'denied' END ELSE 'provided' END,
+             value = $6,
+             resolved_at = $3, provided_by = $4, reason = $5
            WHERE id = $1`,
-          [p.approvalRequestId, p.approved, rec.ts, p.resolvedBy ?? null, p.reason ?? null],
+          [
+            p.inputRequestId,
+            p.approved ?? false,
+            rec.ts,
+            p.providedBy ?? null,
+            p.reason ?? null,
+            p.value !== undefined ? JSON.stringify(p.value) : null,
+          ],
         );
         break;
     }
@@ -768,27 +782,32 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     };
   }
 
-  async getApprovals(runId: string): Promise<ApprovalProjectionRecord[]> {
+  async getInputs(runId: string): Promise<InputRequestProjectionRecord[]> {
     const res = await this.pool.query<PgApprovalRow>(
-      `SELECT id, run_id, tool_name, tool_input, agent_name, status, requested_at, resolved_at, resolved_by, reason
-       FROM approval_requests WHERE run_id = $1 ORDER BY requested_at`,
+      `SELECT id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at, resolved_at, provided_by, reason
+       FROM input_requests WHERE run_id = $1 ORDER BY requested_at`,
       [runId],
     );
     return res.rows.map(mapApprovalRow);
   }
 
-  async listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]> {
+  async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {
     const params: unknown[] = [];
-    let where = "";
+    const filters: string[] = [];
     if (opts?.status) {
       params.push(opts.status);
-      where = `WHERE status = $${params.length}`;
+      filters.push(`status = $${params.length}`);
     }
+    if (opts?.kind) {
+      params.push(opts.kind);
+      filters.push(`kind = $${params.length}`);
+    }
+    const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
     const limitClause = opts?.limit !== undefined ? `LIMIT $${params.length + 1}` : "";
     if (opts?.limit !== undefined) params.push(opts.limit);
     const res = await this.pool.query<PgApprovalRow>(
-      `SELECT id, run_id, tool_name, tool_input, agent_name, status, requested_at, resolved_at, resolved_by, reason
-       FROM approval_requests ${where} ORDER BY requested_at DESC ${limitClause}`,
+      `SELECT id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at, resolved_at, provided_by, reason
+       FROM input_requests ${where} ORDER BY requested_at DESC ${limitClause}`,
       params,
     );
     return res.rows.map(mapApprovalRow);
@@ -1004,7 +1023,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
   /** Delete event-detail rows for the given runs. `messages` (transcript) is preserved. */
   private async deleteDetail(client: PoolClient, runIds: string[]): Promise<void> {
-    for (const table of ["spans", "run_messages", "tool_calls", "workflow_steps", "approval_requests", "run_events"]) {
+    for (const table of ["spans", "run_messages", "tool_calls", "workflow_steps", "input_requests", "run_events"]) {
       await client.query(`DELETE FROM ${table} WHERE run_id = ANY($1)`, [runIds]);
     }
   }
@@ -1166,13 +1185,16 @@ interface PgRunRow {
 interface PgApprovalRow {
   id: string;
   run_id: string;
-  tool_name: string;
+  kind: "approval" | "message";
+  tool_name: string | null;
   tool_input: unknown;
+  prompt: string | null;
+  value: unknown;
   agent_name: string | null;
   status: string;
   requested_at: Date;
   resolved_at: Date | null;
-  resolved_by: string | null;
+  provided_by: string | null;
   reason: string | null;
 }
 
@@ -1322,17 +1344,20 @@ function mapScheduleRow(row: PgScheduleRow): ScheduleRecord {
   };
 }
 
-function mapApprovalRow(row: PgApprovalRow): ApprovalProjectionRecord {
+function mapApprovalRow(row: PgApprovalRow): InputRequestProjectionRecord {
   return {
-    approvalRequestId: row.id,
+    inputRequestId: row.id,
     runId: row.run_id,
-    toolName: row.tool_name,
+    kind: row.kind,
+    toolName: row.tool_name ?? undefined,
     input: coerceJson(row.tool_input),
+    prompt: row.prompt ?? undefined,
+    value: coerceJson(row.value),
     agentName: row.agent_name ?? undefined,
-    status: row.status as ApprovalProjectionRecord["status"],
+    status: row.status as InputRequestProjectionRecord["status"],
     requestedAt: row.requested_at.toISOString(),
     resolvedAt: row.resolved_at?.toISOString(),
-    resolvedBy: row.resolved_by ?? undefined,
+    providedBy: row.provided_by ?? undefined,
     reason: row.reason ?? undefined,
   };
 }

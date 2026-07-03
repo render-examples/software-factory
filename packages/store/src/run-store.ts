@@ -1,10 +1,11 @@
 import type { EventLogStore, ToolResult } from "./events.js";
 import type { Message } from "./messages.js";
 import type { SpanKind, SpanStatus } from "./tracer.js";
-import type { ApprovalProjectionRecord } from "./projections.js";
+import type { InputRequestProjectionRecord } from "./projections.js";
 
-export interface ListApprovalsOptions {
-  status?: "pending" | "approved" | "denied";
+export interface ListInputsOptions {
+  status?: "pending" | "approved" | "denied" | "provided";
+  kind?: "approval" | "message";
   limit?: number;
 }
 
@@ -119,10 +120,10 @@ export interface RunStore {
   listSpans(runId: string): Promise<SpanRecord[]>;
   getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined>;
   getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;
-  /** Folded approval requests for a single run. */
-  getApprovals(runId: string): Promise<ApprovalProjectionRecord[]>;
-  /** Folded approval requests across all runs, optionally filtered by status. */
-  listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]>;
+  /** Folded input requests for a single run. */
+  getInputs(runId: string): Promise<InputRequestProjectionRecord[]>;
+  /** Folded input requests across all runs, optionally filtered by status/kind. */
+  listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]>;
   /**
    * Two-domain retention cleanup. Trims event-detail (run_events + detail
    * projections) for terminal runs older than the event horizon, and deletes

@@ -12,11 +12,11 @@ describe("@render-agents/engine", () => {
   });
 
   it("RunPaused is a proper Error subclass", () => {
-    const err = new RunPaused("run-1", "approval", ["req-1"]);
+    const err = new RunPaused("run-1", "input", ["req-1"]);
     expect(err).toBeInstanceOf(Error);
     expect(err.runId).toBe("run-1");
-    expect(err.reason).toBe("approval");
-    expect(err.pendingApprovalIds).toEqual(["req-1"]);
+    expect(err.reason).toBe("input");
+    expect(err.pendingInputIds).toEqual(["req-1"]);
   });
 
   it("MODEL_PRICING contains known models", () => {

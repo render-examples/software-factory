@@ -16,6 +16,7 @@ import type {
 import { RunPaused, RunCancelled } from "@render-agents/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
+import type { WebhookVerify } from "./webhook-verify.js";
 import { runAgentInProcess } from "./run-in-process.js";
 
 export interface WorkflowOptions {
@@ -377,7 +378,7 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
       // `paused` — resumable by replay — rather than failing. Record run.paused
       // on the root so projections and the queue see a settled (non-crashed)
       // state, then rethrow so the runner marks the job done (not requeued).
-      await emit({ type: "run.paused", reason: err.reason, pendingApprovalIds: err.pendingApprovalIds });
+      await emit({ type: "run.paused", reason: err.reason, pendingInputIds: err.pendingInputIds });
       throw err;
     }
     // Only emit run.failed if it hasn't been emitted already (e.g. by a step failure)
@@ -558,10 +559,16 @@ function inlineWorkflowDispatcher(runtime: AgentRuntime): NonNullable<AgentRunti
   };
 }
 
-// --- Webhook adapter types (unchanged, re-exported) ---
+// --- Webhook adapter types (re-exported) ---
 
 export interface WebhookAdapter {
   readonly name: string;
+  /**
+   * Inbound-signature verification policy, enforced by the gateway before the
+   * request is routed or dispatched. Omit and it is fail-closed (rejected in
+   * production); set `"none"` to explicitly opt out. See {@link WebhookVerify}.
+   */
+  readonly verify?: WebhookVerify;
   match(req: Request): WebhookMatch | null;
   parse(req: Request): Promise<unknown>;
 }

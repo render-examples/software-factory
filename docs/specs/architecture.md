@@ -15,7 +15,7 @@ run_events  ──fold──▶  runs        (status, cost, trigger, thread_id)
             ──fold──▶  messages    (human-facing thread transcript)
             ──fold──▶  tool_calls  (idempotency index)
             ──fold──▶  workflow_steps (ctx.step memoization)
-            ──fold──▶  approval_requests (HITL state)
+            ──fold──▶  input_requests (HITL state)
 ```
 
 `events.append` is the single write path: it assigns a gap-free `seq`, folds the
@@ -63,10 +63,10 @@ the workflow service build the runtime identically.
 
 ## HITL & resume
 
-A gated tool emits `approval.requested` + `run.paused` and the loop unwinds. An
-operator resolves it out-of-band (`POST /approvals/:id/resolve`); the gateway then
+A gated tool emits `input.requested` + `run.paused` and the loop unwinds. An
+operator resolves it out-of-band (`POST /inputs/:id/provide`); the gateway then
 **re-drives** the run (`resumeRun`) — the loop's `hasStarted()` guard + pending-tool
-replay continue from the logged state. Resolved approvals and applied tool results
+replay continue from the logged state. Resolved inputs and applied tool results
 short-circuit on replay, so resume is idempotent.
 
 ## Threads

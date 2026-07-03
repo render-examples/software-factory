@@ -1,7 +1,7 @@
 import type { EventCategory } from "./types";
 
 const CATEGORIES: EventCategory[] = [
-  "lifecycle", "message", "tool", "step", "model", "approval", "delegation", "context",
+  "lifecycle", "message", "tool", "step", "model", "input", "delegation", "context",
 ];
 
 export interface StreamMessage {

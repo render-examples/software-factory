@@ -277,13 +277,13 @@ export class DefaultRunner implements AgentRunner {
 
     // 2. Approval gate.
     if (requiresApproval(agent, name)) {
-      const approval = await ctx.requestApproval(name, toolUse.input, toolCallId);
-      if ("status" in approval) {
-        throw new RunPaused(ctx.runId, "approval", [approval.approvalRequestId]);
+      const inputGate = await ctx.requestInput(name, toolUse.input, toolCallId);
+      if ("status" in inputGate) {
+        throw new RunPaused(ctx.runId, "input", [inputGate.inputRequestId]);
       }
-      if (approval.approved === false) {
+      if (inputGate.approved === false) {
         const denied: ToolResult = {
-          content: `Tool call denied${approval.reason ? `: ${approval.reason}` : ""}`,
+          content: `Tool call denied${inputGate.reason ? `: ${inputGate.reason}` : ""}`,
           isError: true,
         };
         // Canonical error result; no `tool.called` is emitted for a denied call.

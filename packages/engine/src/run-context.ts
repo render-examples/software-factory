@@ -19,7 +19,7 @@ import type { ModelSpec } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
 import type { MountedTools, Tool, ToolSource, OAuthTokens } from "./tool.js";
-import type { RunContext, ApprovalResult } from "./context.js";
+import type { RunContext, InputResult } from "./context.js";
 
 /** Refreshes a provider's tokens (provided by the composition root that knows token endpoints). */
 export type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>;
@@ -336,17 +336,17 @@ export class InProcessRunContext implements RunContext {
    * request:
    * 1. Already resolved in the log → return that decision (approved/denied).
    * 2. Pre-approved tool-call id (in-process resume convenience) → approve.
-   * 3. Auto-approve (default) → emit `approval.auto`, auditable.
+   * 3. Auto-approve (default) → emit `input.auto`, auditable.
    * 4. Strict + already requested (pending) → re-pause without a duplicate request.
-   * 5. Strict + first encounter → emit `approval.requested` + `run.paused`, pause.
+   * 5. Strict + first encounter → emit `input.requested` + `run.paused`, pause.
    * 6. Strict + interactive TTY → prompt directly.
    */
-  async requestApproval(toolName: string, input: unknown, toolCallId: string): Promise<ApprovalResult> {
-    const approvalId = idempotencyKey(this.runId, `approval:${toolCallId}`);
+  async requestInput(toolName: string, input: unknown, toolCallId: string): Promise<InputResult> {
+    const inputRequestId = idempotencyKey(this.runId, `input:approval:${toolCallId}`);
 
     // 1. Resolved already? Honor the recorded decision.
-    const state = await this.approvalState(approvalId);
-    if (state.resolved) {
+    const state = await this.inputState(inputRequestId);
+    if (state.resolved && state.approved !== undefined) {
       return state.approved ? { approved: true } : { approved: false, reason: state.reason };
     }
 
@@ -365,7 +365,7 @@ export class InProcessRunContext implements RunContext {
 
     // 3. Auto-approve (default).
     if (!strict) {
-      await this.emit({ type: "approval.auto", toolName });
+      await this.emit({ type: "input.auto", kind: "approval", toolName });
       return { approved: true };
     }
 
@@ -373,12 +373,13 @@ export class InProcessRunContext implements RunContext {
     if (process.stdin?.isTTY && !state.requested) {
       const approved = await promptYesNo(`Approve tool call "${toolName}"? (y/n) `);
       if (approved) {
-        await this.emit({ type: "approval.auto", toolName });
+        await this.emit({ type: "input.auto", kind: "approval", toolName });
         return { approved: true };
       }
       await this.emit({
-        type: "approval.resolved",
-        approvalRequestId: approvalId,
+        type: "input.provided",
+        inputRequestId,
+        kind: "approval",
         approved: false,
         reason: "denied at prompt",
       });
@@ -387,35 +388,54 @@ export class InProcessRunContext implements RunContext {
 
     // 4./5. Non-interactive: request once (if not already), then pause.
     if (!state.requested) {
-      await this.emit({ type: "approval.requested", approvalRequestId: approvalId, toolName, input });
+      await this.emit({ type: "input.requested", inputRequestId, kind: "approval", toolName, input });
     }
-    await this.emit({ type: "run.paused", reason: "approval", pendingApprovalIds: [approvalId] });
-    return { status: "pending", approvalRequestId: approvalId };
+    await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [inputRequestId] });
+    return { status: "pending", inputRequestId };
   }
 
-  /** Fold approval events from the log for a specific approval id. */
-  private async approvalState(approvalId: string): Promise<{ requested: boolean; resolved: boolean; approved: boolean; reason?: string }> {
+  /** Fold input events from the log for a specific input request id. */
+  private async inputState(inputRequestId: string): Promise<{ requested: boolean; resolved: boolean; approved?: boolean; value?: unknown; reason?: string }> {
     const events = await this.store.events.read(this.runId);
     let requested = false;
     let resolved = false;
-    let approved = false;
+    let approved: boolean | undefined;
+    let value: unknown;
     let reason: string | undefined;
     for (const e of events) {
       const p = e.payload;
-      if (p.type === "approval.requested" && p.approvalRequestId === approvalId) {
+      if (p.type === "input.requested" && p.inputRequestId === inputRequestId) {
         requested = true;
-      } else if (p.type === "approval.resolved" && p.approvalRequestId === approvalId) {
+      } else if (p.type === "input.provided" && p.inputRequestId === inputRequestId) {
         resolved = true;
         approved = p.approved;
+        value = p.value;
         reason = p.reason;
       }
     }
-    return { requested, resolved, approved, reason };
+    return { requested, resolved, approved, value, reason };
   }
 
   async awaitInput(): Promise<ContentBlock[]> {
-    await this.emit({ type: "run.paused", reason: "input" });
-    throw new RunPaused(this.runId, "input");
+    const inputRequestId = idempotencyKey(this.runId, "input:message");
+    const state = await this.inputState(inputRequestId);
+    if (state.resolved) {
+      if (Array.isArray(state.value)) {
+        return state.value as ContentBlock[];
+      }
+      const text = typeof state.value === "string" ? state.value : state.value === undefined ? "" : JSON.stringify(state.value);
+      return [{ type: "text", text }];
+    }
+    if (!state.requested) {
+      await this.emit({
+        type: "input.requested",
+        inputRequestId,
+        kind: "message",
+        prompt: "awaiting user input",
+      });
+    }
+    await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [inputRequestId] });
+    throw new RunPaused(this.runId, "input", [inputRequestId]);
   }
 
   private spanCorrelation(event: RunEvent): { spanId: string; parentSpanId?: string } | undefined {

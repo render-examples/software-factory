@@ -20,29 +20,29 @@ async function emit(
   await store.events.append(buildEventRecord(runId, event, { agentName: AGENT, ...meta }));
 }
 
-describe("approvals read-surface", () => {
-  it("getApprovals folds per-run; listApprovals spans runs with status filter", async () => {
+describe("input requests read-surface", () => {
+  it("getInputs folds per-run; listInputs spans runs with status/kind filter", async () => {
     const store = createMemoryStore();
     // run A: one pending approval
     await emit(store, "A", { type: "run.started" });
-    await emit(store, "A", { type: "approval.requested", approvalRequestId: "ap-A", toolName: "github", input: { x: 1 } });
+    await emit(store, "A", { type: "input.requested", inputRequestId: "ap-A", kind: "approval", toolName: "github", input: { x: 1 } });
     // run B: one approval, later resolved (approved)
     await emit(store, "B", { type: "run.started" });
-    await emit(store, "B", { type: "approval.requested", approvalRequestId: "ap-B", toolName: "deploy", input: {} });
-    await emit(store, "B", { type: "approval.resolved", approvalRequestId: "ap-B", approved: true, resolvedBy: "alice" });
+    await emit(store, "B", { type: "input.requested", inputRequestId: "ap-B", kind: "approval", toolName: "deploy", input: {} });
+    await emit(store, "B", { type: "input.provided", inputRequestId: "ap-B", kind: "approval", approved: true, providedBy: "alice" });
 
-    const aprA = await store.getApprovals("A");
+    const aprA = await store.getInputs("A");
     expect(aprA).toHaveLength(1);
-    expect(aprA[0]).toMatchObject({ approvalRequestId: "ap-A", runId: "A", status: "pending", toolName: "github" });
+    expect(aprA[0]).toMatchObject({ inputRequestId: "ap-A", runId: "A", status: "pending", toolName: "github" });
 
-    const pending = await store.listApprovals({ status: "pending" });
-    expect(pending.map((a) => a.approvalRequestId)).toEqual(["ap-A"]);
+    const pending = await store.listInputs({ status: "pending", kind: "approval" });
+    expect(pending.map((a) => a.inputRequestId)).toEqual(["ap-A"]);
 
-    const approved = await store.listApprovals({ status: "approved" });
-    expect(approved.map((a) => a.approvalRequestId)).toEqual(["ap-B"]);
-    expect(approved[0].resolvedBy).toBe("alice");
+    const approved = await store.listInputs({ status: "approved", kind: "approval" });
+    expect(approved.map((a) => a.inputRequestId)).toEqual(["ap-B"]);
+    expect(approved[0].providedBy).toBe("alice");
 
-    const all = await store.listApprovals();
+    const all = await store.listInputs({ kind: "approval" });
     expect(all).toHaveLength(2);
   });
 });
@@ -87,7 +87,7 @@ describe("reapStaleRuns (E6) — stranded Lane A roots", () => {
       buildEventRecord("paused", { type: "run.started", input: {} }, { agentName: "wf", spanId: "paused", ts: ts(60 * 60_000) }),
     );
     await store.events.append(
-      buildEventRecord("paused", { type: "run.paused", reason: "approval", pendingApprovalIds: ["a1"] }, { agentName: "wf", ts: ts(60 * 60_000) }),
+      buildEventRecord("paused", { type: "run.paused", reason: "input", pendingInputIds: ["a1"] }, { agentName: "wf", ts: ts(60 * 60_000) }),
     );
     await store.events.append(
       buildEventRecord("done", { type: "run.started", input: {} }, { agentName: "wf", spanId: "done", ts: ts(60 * 60_000) }),
@@ -203,7 +203,7 @@ describe("retention cleanup", () => {
     await seedRun(store, "fresh", daysAgo(5));      // < both → untouched
     // An active (paused) run that is ancient must never be trimmed.
     await store.events.append(buildEventRecord("active", { type: "run.started", input: "x" }, { agentName: AGENT, ts: daysAgo(200) }));
-    await store.events.append(buildEventRecord("active", { type: "run.paused", reason: "approval" }, { agentName: AGENT, ts: daysAgo(200) }));
+    await store.events.append(buildEventRecord("active", { type: "run.paused", reason: "input" }, { agentName: AGENT, ts: daysAgo(200) }));
 
     const res = await store.cleanup({ eventRetentionDays: 30, runRetentionDays: 90, now });
     expect(res).toEqual({ eventDetailTrimmed: 2, runsDeleted: 1 });

@@ -9,12 +9,12 @@ import type {
 import { categoryOf } from "./categories.js";
 import { isTransientEvent } from "./events.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListApprovalsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
 import type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";
-import type { ApprovalProjectionRecord } from "./projections.js";
+import type { InputRequestProjectionRecord } from "./projections.js";
 import { Projections, type ProjectionSnapshot } from "./projections.js";
 
 /** Thrown by `append` when an `EventInterceptor` vetoes an event pre-commit. */
@@ -236,12 +236,12 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
     return this.projections.getToolResult(runId, toolCallId);
   }
 
-  async getApprovals(runId: string): Promise<ApprovalProjectionRecord[]> {
-    return this.projections.getApprovals(runId);
+  async getInputs(runId: string): Promise<InputRequestProjectionRecord[]> {
+    return this.projections.getInputs(runId);
   }
 
-  async listApprovals(opts?: ListApprovalsOptions): Promise<ApprovalProjectionRecord[]> {
-    return this.projections.listApprovals(opts);
+  async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {
+    return this.projections.listInputs(opts);
   }
 
   async cleanup(opts: RetentionOptions): Promise<RetentionResult> {

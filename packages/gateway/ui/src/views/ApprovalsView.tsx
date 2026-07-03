@@ -13,13 +13,16 @@ export function ApprovalsView() {
   const { lastEvent, refreshCounts } = useApp();
 
   const { data, error, loading, reload } = useAsync(async () => {
-    if (tab === "pending") return (await client.listApprovals("pending")).approvals;
-    const [a, d] = await Promise.all([client.listApprovals("approved"), client.listApprovals("denied")]);
+    if (tab === "pending") return (await client.listInputs("pending", undefined, "approval")).approvals;
+    const [a, d] = await Promise.all([
+      client.listInputs("approved", undefined, "approval"),
+      client.listInputs("denied", undefined, "approval"),
+    ]);
     return [...a.approvals, ...d.approvals].sort((x, y) => (y.resolvedAt ?? "").localeCompare(x.resolvedAt ?? ""));
   }, [tab]);
 
   useEffect(() => {
-    if (lastEvent?.category === "approval") {
+    if (lastEvent?.category === "input") {
       const t = setTimeout(reload, 300);
       return () => clearTimeout(t);
     }
@@ -64,7 +67,7 @@ function ResolvedRow({ approval }: { approval: Approval }) {
         <b className="mono">{approval.toolName}</b>
         <span className="chip">{approval.agentName}</span>
         <span className="spacer" />
-        {approval.resolvedBy && <span className="muted">by {approval.resolvedBy}</span>}
+        {approval.providedBy && <span className="muted">by {approval.providedBy}</span>}
         <span className="faint">{relativeTime(approval.resolvedAt)}</span>
         <a href={`#/runs/${approval.runId}`} onClick={(e) => { e.preventDefault(); navigate(`runs/${approval.runId}`); }}>run {approval.runId.slice(0, 8)}</a>
       </div>

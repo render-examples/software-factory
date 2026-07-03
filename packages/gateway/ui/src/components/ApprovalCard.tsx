@@ -8,7 +8,7 @@ import { useToast } from "./Toaster";
 import type { Approval } from "../api/types";
 
 /** Approve / deny / comment card. The comment is the resolve `reason`, persisted
- *  on the approval.resolved event (per spec — no standalone annotation). */
+ *  on the input.provided event (per spec — no standalone annotation). */
 export function ApprovalCard({
   approval, onResolved, showRunLink = true,
 }: {
@@ -27,12 +27,12 @@ export function ApprovalCard({
     setBusy(approved ? "approve" : "deny");
     setErr(null);
     try {
-      await client.resolveApproval(approval.id, {
+      await client.provideInput(approval.id, {
         approved,
-        resolvedBy: operator || undefined,
+        providedBy: operator || undefined,
         reason: comment.trim() || undefined,
       });
-      toast.success(`${approval.toolName} ${approved ? "approved" : "denied"}`);
+      toast.success(`${approval.toolName ?? "input"} ${approved ? "approved" : "denied"}`);
       onResolved?.();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

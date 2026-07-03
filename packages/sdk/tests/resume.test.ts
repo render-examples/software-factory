@@ -50,14 +50,14 @@ describe("resumeRun — HITL resume driver (M1)", () => {
     expect(invoked).toBe(0);
     let run = await runtime.store.getRun(runId);
     expect(run?.status).toBe("paused");
-    const pending = await runtime.store.listApprovals({ status: "pending" });
+    const pending = await runtime.store.listInputs({ status: "pending", kind: "approval" });
     expect(pending).toHaveLength(1);
     expect(pending[0].runId).toBe(runId);
 
     // Operator resolves the approval out-of-band (as the gateway would).
-    const approvalId = idempotencyKey(runId, "approval:tc1");
+    const approvalId = idempotencyKey(runId, "input:approval:tc1");
     await runtime.store.events.append(
-      buildEventRecord(runId, { type: "approval.resolved", approvalRequestId: approvalId, approved: true }, { agentName: "deployer" }),
+      buildEventRecord(runId, { type: "input.provided", inputRequestId: approvalId, kind: "approval", approved: true }, { agentName: "deployer" }),
     );
 
     // Resume drives the loop from the logged state.

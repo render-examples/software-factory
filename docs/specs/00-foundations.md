@@ -15,7 +15,7 @@ This document is the overview of the `render-agents` monorepo. It defines packag
 - Workflows are TypeScript handlers in `workflows/*/index.ts`.
 - Runtime execution is shared across local dev and production via `createRuntime()`.
 - Durable state lives in Postgres (or memory in dev/tests), centered on an append-only event log.
-- The gateway provides threads, approvals, OAuth, scheduling, and SSE.
+- The gateway provides threads, input-request HITL (approval/message kinds), OAuth, scheduling, and SSE.
 
 The implementation is in five runtime packages plus one scaffolder:
 
@@ -24,7 +24,7 @@ The implementation is in five runtime packages plus one scaffolder:
 | `@render-agents/sdk` | Public composition API: runtime creation, loading, workflow binding, dispatch, worker |
 | `@render-agents/engine` | Agent loop, tool runtime, model clients, context compaction, run context |
 | `@render-agents/store` | Event log, projections, Postgres/memory stores, queues, delta bus, retention |
-| `@render-agents/gateway` | HTTP/API layer, auth, threads, approvals, OAuth, schedules, SSE, UI serving |
+| `@render-agents/gateway` | HTTP/API layer, auth, threads, HITL input routes, OAuth, schedules, SSE, UI serving |
 | `create-render-agents` | Project generator (`npm create`) and deployment blueprint |
 
 ---
@@ -46,7 +46,7 @@ The following modules are the practical ownership boundaries to use when editing
 ### `@render-agents/engine`
 
 - `src/default-runner.ts`: core agent loop.
-- `src/run-context.ts`: event emission, approvals, cancellation checks, thread history, OAuth, deltas.
+- `src/run-context.ts`: event emission, input gating, cancellation checks, thread history, OAuth, deltas.
 - `src/tool-impl.ts`: `defineTool`, `defineMcpSource`, `ToolEnvironment`.
 - `src/subagent-source.ts`: dynamic `subagents__*` tools and delegation limits.
 - `src/context-manager-impl.ts`: auto compaction implementation.
@@ -94,7 +94,7 @@ The following modules are the practical ownership boundaries to use when editing
 
 4. **Event log as canonical runtime history**
    - `run_events` is the durable source of truth.
-   - `runs`, `spans`, `messages`, approvals, tool calls, and steps are projections.
+   - `runs`, `spans`, `messages`, input requests, tool calls, and steps are projections.
 
 5. **Composition-root runtime**
    - `createRuntime()` wires store/model/dispatcher/runners/hooks once.
@@ -105,7 +105,7 @@ The following modules are the practical ownership boundaries to use when editing
    - Approval gates (`requireApproval`) are enforced at dispatch time.
 
 7. **Pause/resume by replay**
-   - Approval and input pauses become `run.paused`.
+   - All external-input pauses become `run.paused` with reason `input`.
    - Resume re-drives from logged state; no ad hoc checkpoint state.
 
 8. **Observability from the same event stream**
