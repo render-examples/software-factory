@@ -27,6 +27,34 @@ const CONTENT_TYPES: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+const UI_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+].join("; ");
+
+const SECURITY_HEADERS = {
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+} as const;
+
+function withUiHeaders(extra: Record<string, string> = {}, includeCsp = false): Record<string, string> {
+  return {
+    ...SECURITY_HEADERS,
+    ...(includeCsp ? { "Content-Security-Policy": UI_CSP } : {}),
+    ...extra,
+  };
+}
+
 async function readFromUiDirs(relative: string): Promise<Buffer | null> {
   for (const dir of UI_DIRS) {
     try {
@@ -58,21 +86,25 @@ export function uiRoutes() {
   app.get("/ui/assets/:file", async (c) => {
     const file = c.req.param("file");
     // Guard against path traversal — assets are flat, hashed filenames.
-    if (file.includes("..") || file.includes("/")) return c.text("not found", 404);
+    if (file.includes("..") || file.includes("/")) return c.text("not found", 404, withUiHeaders());
     const body = await readFromUiDirs(join("assets", file));
-    if (body === null) return c.text("not found", 404);
+    if (body === null) return c.text("not found", 404, withUiHeaders());
     const type = CONTENT_TYPES[extname(file)] ?? "application/octet-stream";
     // Copy into a standalone Uint8Array view for Hono's body type (binary-safe).
-    return c.body(new Uint8Array(body), 200, {
+    return c.body(new Uint8Array(body), 200, withUiHeaders({
       "Content-Type": type,
       "Cache-Control": "public, max-age=31536000, immutable",
-    });
+    }));
   });
 
   // Shell + SPA client-side routing fallback.
   const serveShell = async (c: Context) => {
     const html = await readFromUiDirs("index.html");
-    return c.html(html ? html.toString("utf8") : NOT_BUILT_HTML);
+    return c.html(
+      html ? html.toString("utf8") : NOT_BUILT_HTML,
+      200,
+      withUiHeaders({ "Cache-Control": "no-store" }, true),
+    );
   };
   app.get("/ui", serveShell);
   app.get("/ui/*", serveShell);

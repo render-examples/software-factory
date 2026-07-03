@@ -61,8 +61,7 @@ describe("buildFileMap", () => {
   });
 
   it("ships an all-in-Docker stack (Dockerfile + full-stack compose with optional worker)", () => {
-    // Dockerfile install/run commands honor the chosen package manager (CR-29):
-    // this project is pnpm, so the CMD uses pnpm (not a hardcoded npm).
+    // pnpm project, so CMD uses pnpm not a hardcoded npm (CR-29).
     expect(files.get("Dockerfile")).toContain('CMD ["pnpm", "start"]');
     expect(files.get("Dockerfile")).toContain("RUN pnpm install");
     const compose = files.get("docker-compose.yaml")!;
@@ -89,9 +88,7 @@ describe("buildFileMap", () => {
 
   it("runs from source (tsx) so markdown convention dirs resolve in production", () => {
     const pkg = JSON.parse(files.get("package.json")!);
-    // Production runs via tsx — not `node dist/...` — because agents/skills are
-    // markdown (uncompiled); running from source keeps the project root as the
-    // discovery root. (Regression guard for the dist/runtime mismatch.)
+    // Regression guard: production runs via tsx, not `node dist/...`.
     expect(pkg.scripts.start).toBe("tsx src/server.ts");
     expect(pkg.scripts.worker).toBe("tsx src/worker.ts");
     expect(pkg.scripts.build).toBe("tsc --noEmit");
@@ -118,12 +115,9 @@ describe("buildFileMap", () => {
 
   it("configures the gateway for the two-lane deploy (queue mode + Render Workflows trigger) (BUG-03/04)", () => {
     const y = files.get("render.yaml")!;
-    // Chat lane drains via the warm worker rather than driving inline on the gateway.
     expect(y).toContain("key: RENDER_AGENTS_EXECUTION_MODE");
     expect(y).toContain("value: queue");
-    // Workflow lane trigger config: slug points at the workflows service; the API
-    // key is operator-provided (sync: false) so the gateway falls back to
-    // in-process until it's set.
+    // API key is operator-provided (sync: false); gateway falls back in-process until set.
     expect(y).toContain("key: RENDER_API_KEY");
     expect(y).toContain("key: RENDER_WORKFLOW_SLUG");
     expect(y).toContain("value: demo-workflows");

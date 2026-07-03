@@ -3,23 +3,13 @@
 // The API key is exchanged once at `/ui/login` for a signed, httpOnly session
 // cookie — so the raw key never lives in JS (XSS-safe) or in a URL. Every request
 // and EventSource rides that same-origin cookie automatically; there is no bearer
-// token stored client-side. The operator name is a self-entered handle sent as
-// `providedBy` for the audit trail — a display convenience, not an access boundary.
+// token stored client-side. The operator name is a local UI preference only.
 
 const OPERATOR = "render-agents-operator";
 
 export interface Whoami {
   userId: string;
   role: string;
-}
-
-/** Exchange a `?key=` bootstrap (e.g. a bookmarked link) for a session, then
- *  strip it from the URL so it doesn't linger in history/logs (CR-19). */
-export async function bootstrapFromQuery(): Promise<void> {
-  const key = new URLSearchParams(location.search).get("key");
-  if (!key) return;
-  await login(key.trim());
-  stripQueryParam("key");
 }
 
 /** POST the key to `/ui/login`; on success the server sets the session cookie. */
@@ -57,16 +47,4 @@ export function getOperator(): string {
 
 export function setOperator(name: string): void {
   localStorage.setItem(OPERATOR, name.trim());
-}
-
-function stripQueryParam(name: string): void {
-  try {
-    const url = new URL(location.href);
-    if (url.searchParams.has(name)) {
-      url.searchParams.delete(name);
-      history.replaceState(null, "", url.toString());
-    }
-  } catch {
-    /* ignore */
-  }
 }

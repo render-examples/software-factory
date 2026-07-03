@@ -75,6 +75,16 @@ describe("gateway threads — conversational (interactive agent) memory", () => 
 });
 
 describe("gateway threads — end-to-end", () => {
+  it("rejects invalid JSON when creating a thread", async () => {
+    const { app } = await buildApp();
+    const res = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("creates a thread, dispatches a thread run, and folds the transcript", async () => {
     const { app, runtime } = await buildApp();
 
@@ -138,6 +148,39 @@ describe("gateway threads — end-to-end", () => {
       body: JSON.stringify({ content: "second turn" }),
     });
     expect(res.status).toBe(409);
+  });
+
+  it("GET /threads/:id/view returns consolidated active-run and approval state", async () => {
+    const { app, runtime } = await buildApp();
+    const createRes = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const thread = await createRes.json();
+    const runId = "view-run-1";
+
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.started", threadId: thread.id, input: "hello" }, { spanId: runId, agentName: "chat" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "message.user", content: [{ type: "text", text: "hello" }] }, { agentName: "chat" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "input.requested", inputRequestId: "ap-view", kind: "approval", toolName: "deploy", input: {} }, { spanId: runId, agentName: "chat" }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.paused", reason: "input", pendingInputIds: ["ap-view"] }, { spanId: runId, agentName: "chat" }),
+    );
+
+    const res = await app.request(`/threads/${thread.id}/view`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.thread.id).toBe(thread.id);
+    expect(body.activeRun).toMatchObject({ id: runId, status: "paused" });
+    expect(body.approvals).toHaveLength(1);
+    expect(body.approvals[0]).toMatchObject({ id: "ap-view", runId, status: "pending", kind: "approval" });
+    expect(body.messages.some((m: { role: string }) => m.role === "user")).toBe(true);
   });
 
   // E4: the soft sequential-turn check can be lost to a genuine race (two

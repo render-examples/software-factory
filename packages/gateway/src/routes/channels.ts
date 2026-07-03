@@ -2,14 +2,65 @@ import { Hono } from "hono";
 import type { WorkflowDefinition, Channel } from "@render-agents/sdk";
 import { checkWebhookAuth } from "../verify.js";
 
-// Canonical Channel type lives in `@render-agents/sdk`; re-exported so importers
-// of `./routes/channels.js` can grab it here too.
+// Re-exported from @render-agents/sdk so importers of this module can grab it too.
 export type { Channel };
+
+const MAX_CHANNEL_BODY_BYTES_ENV = "RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES";
+const DEFAULT_MAX_CHANNEL_BODY_BYTES = 1_000_000;
+
+function maxChannelBodyBytesFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MAX_CHANNEL_BODY_BYTES_ENV];
+  if (!raw) return DEFAULT_MAX_CHANNEL_BODY_BYTES;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_CHANNEL_BODY_BYTES;
+  return Math.floor(n);
+}
 
 /** Rebuild a body-readable Request from buffered bytes (the raw body is read once
  *  for signature verification, which locks the original stream). */
 function rebuildRequest(url: string, headers: Headers, body: string): Request {
   return new Request(url, { method: "POST", headers, body });
+}
+
+async function readRawBodyLimited(
+  req: Request,
+  maxBytes: number,
+): Promise<{ ok: true; rawBody: string } | { ok: false; status: 413 | 400; error: string }> {
+  const declared = req.headers.get("content-length");
+  if (declared) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > maxBytes) {
+      return { ok: false, status: 413, error: `payload too large (max ${maxBytes} bytes)` };
+    }
+  }
+  if (!req.body) return { ok: true, rawBody: "" };
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel("payload too large"); } catch { /* no-op */ }
+        return { ok: false, status: 413, error: `payload too large (max ${maxBytes} bytes)` };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, status: 400, error: "failed to read request body" };
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, rawBody: new TextDecoder().decode(bytes) };
 }
 
 /**
@@ -45,6 +96,7 @@ export function channelRoutes(deps: {
 }) {
   const app = new Hono();
   const { channels, workflows, handleChannelMessage, deliver } = deps;
+  const maxBodyBytes = maxChannelBodyBytesFromEnv();
 
   // Best-effort inline delivery: a delivery failure must not fail the inbound ack
   // (the run already ran); the worker path is the one with real retries.
@@ -64,9 +116,12 @@ export function channelRoutes(deps: {
       return c.json({ error: `Channel "${id}" not found` }, 404);
     }
 
-    // Read the raw body once (verification needs the exact bytes; this locks the
-    // original request stream, so downstream reads use rebuilt Requests).
-    const rawBody = await c.req.raw.text();
+    // Verification needs exact bytes and locks the stream; downstream reads use rebuilt Requests.
+    const body = await readRawBodyLimited(c.req.raw, maxBodyBytes);
+    if (!body.ok) {
+      return c.json({ error: body.error }, body.status);
+    }
+    const rawBody = body.rawBody;
     const headers = c.req.raw.headers;
     const url = c.req.raw.url;
 
@@ -80,8 +135,7 @@ export function channelRoutes(deps: {
     if (!matched) {
       return c.json({ error: "Channel did not match" }, 400);
     }
-    // A provider handshake (e.g. Slack `url_verification`) answers inline without
-    // starting a run.
+    // Provider handshake (e.g. Slack url_verification) answers inline without starting a run.
     if ("ack" in matched) {
       return matched.ack;
     }
@@ -94,8 +148,7 @@ export function channelRoutes(deps: {
       if (!workflow) {
         return c.json({ error: `Target workflow "${target.workflow}" not found` }, 404);
       }
-      // Stamp the channel binding so the run records its originating surface (for
-      // outbound delivery) and the (channel, conversationId) mapping folds.
+      // Stamp the binding so the run records its origin for outbound delivery.
       const run = await workflow.dispatch(event.input, target.trigger ?? `channel.${id}`, {
         channel: id,
         externalConversationId: event.conversationId,
@@ -105,9 +158,7 @@ export function channelRoutes(deps: {
     }
 
     // Agent-target channels bind to a thread keyed by (channel, conversationId),
-    // so a re-entrant inbound message continues the same conversation — satisfying
-    // a pending HITL input, or starting a new turn (multi-turn memory via the
-    // thread transcript).
+    // so a re-entrant message continues the conversation.
     if (!handleChannelMessage) {
       return c.json({ error: "agent-target channels require a chat-enabled gateway" }, 501);
     }
@@ -116,7 +167,6 @@ export function channelRoutes(deps: {
       conversationId: event.conversationId,
       user: event.user,
     });
-    // Inline: deliver the reply (on completion) or the input prompt (on pause) now.
     // Idempotent + best-effort; a no-op in queue mode (the producer handles it).
     await runDeliver(res.runId);
     return c.json(res.body, res.status);

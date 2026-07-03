@@ -72,11 +72,9 @@ export function apiKeyAuth(options: ApiKeyAuthOptions = {}) {
     if (isPublicPath(path)) return next();
 
     let principal = await resolver(c.req.raw);
-    // SSE / authorize fallback: EventSource and full-page navigations can't set
-    // an Authorization header, so accept a query credential on the allowlisted
-    // paths only (CR-05). A per-user stream token (`?token=`) is preferred — it
-    // carries the caller's own identity — falling back to the shared operator key
-    // (`?key=`) for the console. Cookie sessions ride EventSource for free.
+    // EventSource/full-page nav can't set an Authorization header, so accept a
+    // query credential on allowlisted paths only (CR-05): per-user stream token
+    // preferred, falling back to the shared operator key.
     if (!principal && allowQueryKey(path)) {
       const token = c.req.query("token");
       if (token && options.streamTokenResolver) {

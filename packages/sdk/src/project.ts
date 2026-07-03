@@ -57,8 +57,7 @@ export async function loadProject(root: string, opts?: LoadProjectOptions): Prom
   const runtime = await createRuntime({ ...opts?.runtime, toolSources, extraRunners, hooks });
   const agents = await loadAgents(root, runtime);
   const [workflows, channels] = await Promise.all([loadWorkflows(root, runtime), loadChannels(root)]);
-  // Publish channels onto the runtime so the outbound delivery path (worker /
-  // inline) can resolve a run's channel by id — mirroring agents/workflows.
+  // Publish channels so outbound delivery can resolve a run's channel by id.
   for (const [id, channel] of channels) runtime.channels.set(id, channel);
   return { runtime, agents, workflows, channels };
 }

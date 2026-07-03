@@ -79,11 +79,11 @@ export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
     sharedBody = sharedParsed.body;
   } catch (e: unknown) {
     if (e instanceof Error && "code" in e && (e as NodeJS.ErrnoException).code === "ENOENT") {
-      // _shared.md not present — optional
+      // optional file, not present
     } else if (e instanceof Error && e.name === "LoadError") {
       throw e;
     } else if (e instanceof Error && "code" in e) {
-      // Other fs error, skip
+      // other fs error, skip
     } else {
       throw e;
     }
@@ -121,10 +121,8 @@ export async function loadAgentsFromDir(dir: string): Promise<AgentSet> {
       item.key,
     );
 
-    // Subagent delegation tools (`subagents__<name>`) are mounted at run time
-    // from the `subagents` field, not `tools[]`, but they are gateable by HITL
-    // (D6). Include them in the approval-validation set so
-    // `requireApproval: [subagents__researcher]` is accepted (BUG-09).
+    // Subagent tools are mounted from `subagents`, not `tools[]`, but must be
+    // included here so `requireApproval: [subagents__researcher]` validates.
     const subagentToolIds = (frontmatter.subagents ?? []).map((s) => `subagents__${s}`);
     validateApprovalRefs(
       frontmatter.permissions?.requireApproval,

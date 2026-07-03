@@ -49,9 +49,7 @@ export type RunEvent =
   | { type: "input.requested"; inputRequestId: string; kind: "approval" | "message"; toolName?: string; input?: unknown; prompt?: string }
   | { type: "input.provided"; inputRequestId: string; kind: "approval" | "message"; approved?: boolean; value?: unknown; providedBy?: string; reason?: string }
   | { type: "input.auto"; kind: "approval" | "message"; toolName?: string }
-  // channel (outbound delivery marker — a channel-bound run's reply OR a pending
-  // input prompt was pushed to its surface; the idempotency guard for redelivery.
-  // `inputRequestId` present → an input prompt (HITL); absent → a final reply.)
+  // channel: idempotency guard for redelivery. inputRequestId present → HITL prompt; absent → final reply.
   | { type: "channel.delivered"; channel: string; externalConversationId?: string; inputRequestId?: string }
   // delegation
   | { type: "subagent.spawned"; agentName: string; childRunId: string; toolCallId: string }

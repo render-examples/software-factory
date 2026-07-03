@@ -27,8 +27,7 @@ export function decrypt(ciphertext: string, key: Buffer): string {
   const iv = Buffer.from(parts[0], "hex");
   const tag = Buffer.from(parts[1], "hex");
   const encrypted = Buffer.from(parts[2], "hex");
-  // Validate lengths up front so malformed input yields a stable error rather
-  // than an opaque low-level crypto exception (CR-03).
+  // Validate lengths so malformed input yields a stable error, not an opaque crypto exception.
   if (iv.length !== 12) throw new Error("Invalid encrypted token: IV must be 12 bytes");
   if (tag.length !== 16) throw new Error("Invalid encrypted token: auth tag must be 16 bytes");
   const decipher = createDecipheriv(ALGORITHM, key, iv);

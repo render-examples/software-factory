@@ -39,10 +39,8 @@ export async function applyMigrations(pool: Pool): Promise<string[]> {
   try {
     await client.query("SELECT pg_advisory_lock($1::bigint)", [MIGRATION_LOCK_ID]);
     try {
-      // Version ledger (CR-25): run each migration at most once so future
-      // non-idempotent migrations are safe. Existing deployments transition
-      // cleanly — the ledger starts empty, every current file is IF-NOT-EXISTS,
-      // so re-running them once to backfill the ledger is a no-op.
+      // Version ledger: run each migration at most once so future non-idempotent
+      // migrations are safe; backfilling it once against IF-NOT-EXISTS files is a no-op.
       await client.query(
         `CREATE TABLE IF NOT EXISTS schema_migrations (
            name TEXT PRIMARY KEY,
@@ -72,9 +70,7 @@ export async function applyMigrations(pool: Pool): Promise<string[]> {
 }
 
 function loadMigrationSql(name: string): string {
-  // Resolve from both src and dist layouts:
-  // src/pg/migrations.ts → ../../sql/<name>
-  // dist/pg/migrations.js → ../../sql/<name>
+  // Resolve from both src and dist layouts.
   const candidates = [
     join(HERE, "..", "..", "sql", name),
     join(HERE, "..", "sql", name),

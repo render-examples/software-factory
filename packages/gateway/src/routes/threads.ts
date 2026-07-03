@@ -31,20 +31,35 @@ export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
   const { store, threadStore, workflows, defaultWorkflow, defaultAgent, startAgentRun, resume, awaitResume } = deps;
 
+  const toApproval = (input: Awaited<ReturnType<RunStore["getInputs"]>>[number]) => ({
+    id: input.inputRequestId,
+    runId: input.runId,
+    kind: input.kind,
+    toolName: input.toolName,
+    input: input.input,
+    prompt: input.prompt,
+    value: input.value,
+    agentName: input.agentName,
+    status: input.status,
+    requestedAt: input.requestedAt,
+    resolvedAt: input.resolvedAt,
+    providedBy: input.providedBy,
+    reason: input.reason,
+  });
+
   const driveResume = (runId: string): Promise<void> => {
     if (!resume) return Promise.resolve();
     const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
     return awaitResume ? p : Promise.resolve();
   };
 
-  // POST /threads — create + persist a thread owned by the caller
   app.post("/threads", async (c) => {
     const principal = getPrincipal(c);
     let body: { metadata?: Record<string, unknown>; title?: string } = {};
     try {
       body = await c.req.json();
     } catch {
-      body = {};
+      return c.json({ error: "Invalid JSON body" }, 400);
     }
 
     const now = new Date().toISOString();
@@ -62,7 +77,6 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return c.json(thread, 201);
   });
 
-  // GET /threads — the caller's threads (operators see all; users see their own)
   app.get("/threads", async (c) => {
     const principal = getPrincipal(c);
     const threads = await threadStore.listThreads(
@@ -71,7 +85,6 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return c.json({ threads });
   });
 
-  // GET /threads/:id — thread metadata + transcript (ownership-scoped)
   app.get("/threads/:id", async (c) => {
     const principal = getPrincipal(c);
     const id = c.req.param("id");
@@ -84,7 +97,34 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return c.json({ thread, messages });
   });
 
-  // POST /threads/:id/messages — deliver a message to a thread
+  // Consolidated chat-view payload to avoid N+1 fetches.
+  app.get("/threads/:id/view", async (c) => {
+    const principal = getPrincipal(c);
+    const id = c.req.param("id");
+    const thread = await threadStore.getThread(id);
+    if (!thread || !canAccess(thread.userId, principal)) {
+      return c.json({ error: `Thread "${id}" not found` }, 404);
+    }
+    const [messages, runs] = await Promise.all([
+      threadStore.getThreadMessages(id),
+      store.listRuns({ threadId: id, limit: 50 }),
+    ]);
+    const activeRun = runs.find(
+      (r) => r.status === "pending" || r.status === "running" || r.status === "paused",
+    );
+    const approvals = activeRun
+      ? (await store.getInputs(activeRun.id))
+          .filter((input) => input.status === "pending" && input.kind === "approval")
+          .map(toApproval)
+      : [];
+    return c.json({
+      thread,
+      messages,
+      activeRun: activeRun ? { id: activeRun.id, status: activeRun.status } : null,
+      approvals,
+    });
+  });
+
   app.post("/threads/:id/messages", async (c) => {
     const principal = getPrincipal(c);
     const threadId = c.req.param("id");
@@ -113,8 +153,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       if (active.status === "running" || active.status === "pending") {
         return c.json({ error: "Thread is busy (active run mid-turn)", runId: active.id }, 409);
       }
-      // Paused: route by pending input kind. Approval gates must be satisfied via
-      // the dedicated inputs API; message input can be provided by posting here.
+      // Approval gates must be satisfied via the inputs API; message input can be posted here.
       const pending = (await store.getInputs(active.id)).filter((input) => input.status === "pending");
       const pendingApproval = pending.find((input) => input.kind === "approval");
       const pendingMessage = pending.find((input) => input.kind === "message");
@@ -144,20 +183,16 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       return c.json({ runId: active.id, delivered: true }, 200);
     }
 
-    // No active run — open a NEW run for this turn (Lane B, new-run-per-turn). A
-    // conversational `defaultAgent` (interactive) is preferred: each message is
-    // its own short run joined to the thread by `threadId`, and multi-turn memory
-    // comes from the thread transcript (not a parked run). The warm chat worker
-    // (queue) or the gateway itself (inline) drives the turn.
+    // No active run: open a new run for this turn. A conversational
+    // defaultAgent is preferred, each message its own short run joined to the
+    // thread; multi-turn memory comes from the thread transcript, not a parked run.
     if (defaultAgent && startAgentRun) {
       const runId = randomUUID();
       try {
         await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: thread.userId });
       } catch (err) {
-        // DB-level guard (concurrent message that slipped past the soft check
-        // above): the partial unique index on one-active-run-per-thread rejects
-        // the second `run.started`. Translate to a clean 409 like the workflow
-        // path below, instead of leaking a 500.
+        // DB-level guard: partial unique index on one-active-run-per-thread
+        // rejects a concurrent second run.started; translate to a clean 409.
         if (isUniqueViolation(err)) {
           return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
         }
@@ -182,7 +217,6 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       );
       return c.json({ runId: run.id, dispatched: true }, 202);
     } catch (err) {
-      // DB-level guard (race that slipped past the soft check above).
       if (isUniqueViolation(err)) {
         return c.json({ error: "Thread is busy (active run mid-turn)" }, 409);
       }

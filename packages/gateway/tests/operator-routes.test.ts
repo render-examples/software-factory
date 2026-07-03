@@ -21,6 +21,7 @@ describe("operator routes — per-run event log", () => {
     expect(events[0].seq).toBe(1);
 
     expect((await app.request("/runs/missing/events")).status).toBe(404);
+    expect((await app.request(`/runs/${runId}/events?seq=nan`)).status).toBe(400);
   });
 });
 
@@ -76,6 +77,48 @@ describe("operator routes — inputs status filter", () => {
   });
 });
 
+describe("operator routes — counters", () => {
+  it("GET /runs/counts returns status buckets and active total", async () => {
+    const runtime = await createTestRuntime();
+    await runtime.store.events.append(buildEventRecord("running-run", { type: "run.started" }, { spanId: "running-run" }));
+    await runtime.store.events.append(buildEventRecord("paused-run", { type: "run.started" }, { spanId: "paused-run" }));
+    await runtime.store.events.append(buildEventRecord("paused-run", { type: "run.paused", reason: "input", pendingInputIds: ["ap-1"] }, { spanId: "paused-run" }));
+    await runtime.store.events.append(buildEventRecord("done-run", { type: "run.started" }, { spanId: "done-run" }));
+    await runtime.store.events.append(buildEventRecord("done-run", { type: "run.completed", result: "ok" }, { spanId: "done-run" }));
+
+    const app = createGatewayApp({ runtime, disableAuth: true });
+    const res = await app.request("/runs/counts");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.counts.running).toBe(1);
+    expect(body.counts.paused).toBe(1);
+    expect(body.counts.completed).toBe(1);
+    expect(body.active).toBe(2);
+  });
+
+  it("GET /inputs supports runId filter and /inputs/counts reports pending approvals", async () => {
+    const runtime = await createTestRuntime();
+    await runtime.store.events.append(buildEventRecord("A", { type: "run.started" }, { spanId: "A" }));
+    await runtime.store.events.append(buildEventRecord("A", { type: "input.requested", inputRequestId: "ap-A", kind: "approval", toolName: "github", input: {} }, { spanId: "A" }));
+    await runtime.store.events.append(buildEventRecord("B", { type: "run.started" }, { spanId: "B" }));
+    await runtime.store.events.append(buildEventRecord("B", { type: "input.requested", inputRequestId: "ap-B", kind: "approval", toolName: "deploy", input: {} }, { spanId: "B" }));
+    await runtime.store.events.append(buildEventRecord("B", { type: "input.provided", inputRequestId: "ap-B", kind: "approval", approved: true }));
+
+    const app = createGatewayApp({ runtime, disableAuth: true });
+
+    const runScoped = await (await app.request("/inputs?status=all&runId=A")).json();
+    expect(runScoped.inputs.map((a: { id: string }) => a.id)).toEqual(["ap-A"]);
+
+    const pendingCounts = await (await app.request("/inputs/counts")).json();
+    expect(pendingCounts.pendingApprovals).toBe(1);
+    expect(pendingCounts.count).toBe(1);
+
+    const resolvedCounts = await (await app.request("/inputs/counts?status=all&kind=approval&runId=B")).json();
+    expect(resolvedCounts.count).toBe(1);
+    expect(resolvedCounts.pendingApprovals).toBe(0);
+  });
+});
+
 describe("operator routes — token-delta streaming (D13)", () => {
   it("GET /runs/:id/stream merges transient text.delta frames from the DeltaBus", async () => {
     const runtime = await createTestRuntime();
@@ -113,6 +156,18 @@ describe("operator routes — token-delta streaming (D13)", () => {
 
     ac.abort();
     await reader.cancel().catch(() => {});
+  });
+});
+
+describe("operator routes — stream cursor validation", () => {
+  it("rejects a malformed run stream cursor", async () => {
+    const runtime = await createTestRuntime();
+    const runId = "stream-seq-validation";
+    await runtime.store.events.append(buildEventRecord(runId, { type: "run.started", trigger: "api" }));
+    const app = createGatewayApp({ runtime, disableAuth: true });
+
+    expect((await app.request(`/runs/${runId}/stream?seq=nope`)).status).toBe(400);
+    expect((await app.request(`/runs/${runId}/stream`, { headers: { "Last-Event-ID": "run-a:1" } })).status).toBe(400);
   });
 });
 

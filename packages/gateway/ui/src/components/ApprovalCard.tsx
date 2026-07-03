@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { client } from "../api/client";
-import { useApp } from "../state/app";
 import { navigate } from "../state/router";
 import { relativeTime, truncate, pretty } from "../lib/format";
 import { Json } from "./ui";
@@ -16,7 +15,6 @@ export function ApprovalCard({
   onResolved?: () => void;
   showRunLink?: boolean;
 }) {
-  const { operator } = useApp();
   const toast = useToast();
   const [comment, setComment] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -29,7 +27,6 @@ export function ApprovalCard({
     try {
       await client.provideInput(approval.id, {
         approved,
-        providedBy: operator || undefined,
         reason: comment.trim() || undefined,
       });
       toast.success(`${approval.toolName ?? "input"} ${approved ? "approved" : "denied"}`);

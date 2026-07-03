@@ -97,10 +97,7 @@ export class AutoCompactionStrategy implements CompactionStrategy {
     const olderMessages = messages.slice(0, recentStart);
     const recentMessages = messages.slice(recentStart);
 
-    // Drop redundant superseded tool outputs
     const dedupedOlder = dropSupersededToolOutputs(olderMessages);
-
-    // Summarize older messages
     const summaryText = await this.summarize(dedupedOlder, modelSpec);
 
     const summaryMessage: Message = {

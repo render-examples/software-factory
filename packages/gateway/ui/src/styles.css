@@ -325,12 +325,14 @@ pre.json {
 .convo-item.active { background: var(--bg-2); border-color: var(--border); }
 .convo-title { font-size: 0.82rem; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .convo-meta { display: flex; align-items: center; gap: 0.5rem; font-size: 11px; }
+.convo-back { display: none; }
 /* On narrow screens, collapse to a single pane: show the list, or the active convo. */
 @media (max-width: 720px) {
   .chat-layout .convo-list { width: 100%; flex-basis: 100%; }
   .chat-layout.has-active .convo-list { display: none; }
   .chat-layout .convo-main { display: none; }
   .chat-layout.has-active .convo-main { display: flex; }
+  .convo-back { display: inline-flex; }
 }
 .chat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .chat .scroll { flex: 1; overflow: auto; padding: 1rem 1.25rem; }

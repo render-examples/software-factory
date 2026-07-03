@@ -103,6 +103,13 @@ export interface ThreadMessage {
   createdAt: string;
 }
 
+export interface ThreadView {
+  thread: Thread;
+  messages: ThreadMessage[];
+  activeRun: { id: string; status: RunStatus } | null;
+  approvals: Approval[];
+}
+
 export interface ScheduleRecord {
   id: string;
   workflow: string;
@@ -131,6 +138,16 @@ export type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
 export interface JobsSnapshot {
   counts: Record<JobStatus, number>;
   backlog: number;
+}
+
+export interface RunCounts {
+  counts: Record<RunStatus, number>;
+  active: number;
+}
+
+export interface InputCounts {
+  count: number;
+  pendingApprovals: number;
 }
 
 export interface RetentionResult {
