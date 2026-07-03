@@ -62,7 +62,6 @@ export function buildSubagentToolSource(
             ? (rawInput as Record<string, unknown>).input ?? rawInput
             : rawInput;
 
-          // Depth check
           const childDepth = opts.currentDepth + 1;
           if (childDepth > limits.maxDepth) {
             return {
@@ -72,7 +71,6 @@ export function buildSubagentToolSource(
             };
           }
 
-          // Fanout check
           const currentFanout = await opts.getFanoutCount();
           if (currentFanout >= limits.maxFanout) {
             return {
@@ -90,7 +88,6 @@ export function buildSubagentToolSource(
               toolCallId: ctx.toolCallId ?? "",
             });
 
-            // Return structured data if available, otherwise text
             if (result.data !== undefined) {
               return { content: JSON.stringify(result.data) };
             }

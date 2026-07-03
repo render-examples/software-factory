@@ -71,9 +71,9 @@ export function buildJobProcessor(runtime: AgentRuntime): JobProcessor {
   const store = runtime.store;
 
   return async (job: JobRecord): Promise<void> => {
-    // Outbound delivery: the run is (intentionally) terminal, so this runs BEFORE
-    // the cancel check + terminal gate below — which would otherwise complete the
-    // job without delivering. `deliverForRun` is idempotent (skips redelivery).
+    // Outbound delivery: runs BEFORE the cancel/terminal gate below (the run is
+    // intentionally terminal), else the gate would complete the job without
+    // delivering. `deliverForRun` is idempotent (skips redelivery).
     if (job.kind === "deliver") {
       try {
         await deliverForRun(runtime, job.runId);
@@ -94,9 +94,8 @@ export function buildJobProcessor(runtime: AgentRuntime): JobProcessor {
       return;
     }
 
-    // Terminal gate: if the run already reached a terminal state (e.g. a crash
-    // between `run.completed` and `complete()`, then re-claimed), the job is done
-    // — never re-drive a settled run.
+    // Terminal gate: if the run already reached a terminal state (e.g. crash
+    // between `run.completed` and `complete()`, then re-claimed), never re-drive.
     const pre = await store.getRun(job.runId);
     if (pre && TERMINAL_STATUSES.has(pre.status)) {
       await queue.complete(job.id);
@@ -112,10 +111,9 @@ export function buildJobProcessor(runtime: AgentRuntime): JobProcessor {
         await queue.complete(job.id);
         return;
       }
-      // The driver threw. If the run nonetheless recorded a terminal state
-      // (a handler that emitted `run.failed`) or parked, honor it (D3: no
-      // re-run). Otherwise it is a genuine crash/transient → requeue with
-      // backoff for crash recovery (bounded by the delivery budget).
+      // Driver threw. If the run nonetheless recorded terminal/paused state,
+      // honor it (D3: no re-run). Otherwise it's a genuine crash/transient →
+      // requeue with backoff, bounded by the delivery budget.
       const after = await store.getRun(job.runId);
       if (after && (TERMINAL_STATUSES.has(after.status) || after.status === "paused")) {
         await queue.complete(job.id);
@@ -139,16 +137,12 @@ async function driveByKind(job: JobRecord, runtime: AgentRuntime): Promise<void>
     case "agent": {
       const run = await runtime.store.getRun(job.runId);
       if (!run) {
-        // The gateway records `run.started` before enqueue, so a missing run row
-        // is a contract violation (or the run was deleted out-of-band). Fail
-        // loudly (→ retry/backoff → dead-letter) rather than silently marking the
-        // job complete, which would hide the anomaly (CR-14).
+        // Gateway records `run.started` before enqueue, so a missing run row is
+        // a contract violation. Fail loudly (retry/backoff/dead-letter) rather
+        // than silently completing, which would hide the anomaly (CR-14).
         throw new Error(`agent job "${job.id}": run "${job.runId}" not found`);
       }
-      // Contract: the gateway records the opening turn (`run.started` +
-      // `message.user`) before enqueue — the run row satisfies the job's FK and
-      // the runner's hasStarted() guard then drives without duplicating them.
-      // The root turn runs warm IN-PROCESS here (low latency); only `agent.task()`
+      // Root turn runs warm in-process here (low latency); only `agent.task()`
       // children offload to Render via the dispatcher.
       await driveAgentTurn(runtime, job.runId);
       return;
@@ -161,8 +155,8 @@ async function driveByKind(job: JobRecord, runtime: AgentRuntime): Promise<void>
       return;
     }
     case "deliver":
-      // Delivery is handled ahead of driveByKind in the processor (it must bypass
-      // the terminal gate); reaching here would be a routing bug.
+      // Delivery is handled ahead of driveByKind (must bypass the terminal
+      // gate); reaching here would be a routing bug.
       throw new Error(`runWorker: "deliver" job reached driveByKind`);
     default: {
       const exhaustive: never = job.kind;
@@ -185,10 +179,9 @@ export function runWorker(runtime: AgentRuntime, opts?: RunWorkerOptions): Worke
   // No channels configured → no outbound delivery producer (zero cost).
   if (runtime.channels.size === 0) return claim;
 
-  // Outbound delivery producer (lane-agnostic): tail the shared event log and, on
-  // a terminal channel-bound run, enqueue a `deliver` job that the claim loop
-  // drains via `deliverForRun`. Every run — Lane A (workflow host) or Lane B
-  // (this worker) — completes to the same log, so one tail covers both.
+  // Outbound delivery producer (lane-agnostic): tail the shared event log and,
+  // on a terminal channel-bound run, enqueue a `deliver` job the claim loop
+  // drains via `deliverForRun`. Both lanes complete to the same log.
   const ac = new AbortController();
   if (opts?.signal) {
     if (opts.signal.aborted) ac.abort();
@@ -214,16 +207,15 @@ async function runDeliveryProducer(
   const store = runtime.store;
   try {
     for await (const event of store.events.tail({}, signal)) {
-      // Deliver on completion (the reply) and on pause (the input prompt, HITL).
+      // Deliver on completion (reply) and pause (HITL input prompt).
       if (event.payload.type !== "run.completed" && event.payload.type !== "run.paused") continue;
       try {
         const run = await store.getRun(event.runId);
         if (!run?.channel || !run.externalConversationId) continue;
         if (!runtime.channels.get(run.channel)?.deliver) continue; // inbound-only channel
-        // Per-event job id (`seq` is gap-free per run): completion and each pause
-        // enqueue distinct deliver jobs, while a tail replay of the same event is
-        // idempotent. Deliver jobs are exempt from the per-run active index, so
-        // they coexist with the run's still-active turn job.
+        // Per-event job id (`seq` gap-free per run) keeps tail replay idempotent;
+        // deliver jobs are exempt from the per-run active index so they coexist
+        // with the run's still-active turn job.
         await runtime.jobQueue.enqueue({
           id: `deliver:${event.runId}:${event.seq}`,
           runId: event.runId,
@@ -268,8 +260,8 @@ export function runWorkerLoop(
 
   const inflight = new Set<Promise<void>>();
 
-  // Single-slot wake: set just before awaiting, fired by NOTIFY / reaper / a
-  // freed slot. A missed wake (fired before registration) is covered by the poll.
+  // Single-slot wake: set just before awaiting, fired by NOTIFY/reaper/freed
+  // slot. A missed wake (fired before registration) is covered by the poll.
   let wakeResolve: (() => void) | null = null;
   const wake = (): void => {
     const r = wakeResolve;

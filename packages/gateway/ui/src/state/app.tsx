@@ -28,12 +28,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshCounts = useCallback(() => {
     Promise.all([
-      client.listRuns({ status: "running", limit: 200 }).catch(() => ({ runs: [] })),
-      client.listRuns({ status: "paused", limit: 200 }).catch(() => ({ runs: [] })),
-      client.listInputs("pending", undefined, "approval").catch(() => ({ approvals: [] })),
-    ]).then(([running, paused, approvals]) => {
-      setActiveRuns(running.runs.length + paused.runs.length);
-      setPendingApprovals(approvals.approvals.length);
+      client.runCounts().catch(() => ({ active: 0 })),
+      client.inputCounts({ status: "pending", kind: "approval" }).catch(() => ({ pendingApprovals: 0 })),
+    ]).then(([runs, inputs]) => {
+      setActiveRuns(runs.active);
+      setPendingApprovals(inputs.pendingApprovals);
     });
   }, []);
 

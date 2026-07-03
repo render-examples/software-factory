@@ -1,7 +1,7 @@
 import type {
   Approval, RunDetail, RunEventRecord, RunRecord, ScheduleRecord,
   SpanRecord, Thread, ThreadMessage, ToolCallEntry, RunStatus,
-  WorkflowInfo, ConnectionInfo, JobsSnapshot, RetentionResult, ReapResult,
+  WorkflowInfo, ConnectionInfo, JobsSnapshot, RetentionResult, ReapResult, RunCounts, InputCounts, ThreadView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -74,17 +74,40 @@ export const client = {
     status?: "pending" | "approved" | "denied" | "provided" | "all",
     threadId?: string,
     kind?: "approval" | "message",
+    runId?: string,
   ): Promise<{ approvals: Approval[] }> {
     const q = new URLSearchParams();
     if (status) q.set("status", status);
     if (threadId) q.set("threadId", threadId);
     if (kind) q.set("kind", kind);
+    if (runId) q.set("runId", runId);
     const qs = q.toString();
     return api<{ inputs: Approval[] }>(`/inputs${qs ? `?${qs}` : ""}`).then((r) => ({ approvals: r.inputs }));
   },
+  runCounts(params: { workflow?: string; threadId?: string } = {}): Promise<RunCounts> {
+    const q = new URLSearchParams();
+    if (params.workflow) q.set("workflow", params.workflow);
+    if (params.threadId) q.set("threadId", params.threadId);
+    const qs = q.toString();
+    return api(`/runs/counts${qs ? `?${qs}` : ""}`);
+  },
+  inputCounts(params: {
+    status?: "pending" | "approved" | "denied" | "provided" | "all";
+    threadId?: string;
+    kind?: "approval" | "message";
+    runId?: string;
+  } = {}): Promise<InputCounts> {
+    const q = new URLSearchParams();
+    if (params.status) q.set("status", params.status);
+    if (params.threadId) q.set("threadId", params.threadId);
+    if (params.kind) q.set("kind", params.kind);
+    if (params.runId) q.set("runId", params.runId);
+    const qs = q.toString();
+    return api(`/inputs/counts${qs ? `?${qs}` : ""}`);
+  },
   provideInput(
     id: string,
-    body: { approved?: boolean; value?: unknown; content?: string; providedBy?: string; reason?: string },
+    body: { approved?: boolean; value?: unknown; content?: string; reason?: string },
   ): Promise<{ provided: boolean; inputId: string; runId: string }> {
     return api(`/inputs/${encodeURIComponent(id)}/provide`, {
       method: "POST",
@@ -98,6 +121,9 @@ export const client = {
   },
   getThread(id: string): Promise<{ thread: Thread; messages: ThreadMessage[] }> {
     return api(`/threads/${encodeURIComponent(id)}`);
+  },
+  getThreadView(id: string): Promise<ThreadView> {
+    return api(`/threads/${encodeURIComponent(id)}/view`);
   },
   createThread(body: { title?: string; userId?: string } = {}): Promise<Thread> {
     return api(`/threads`, { method: "POST", body: JSON.stringify(body) });

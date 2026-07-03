@@ -139,6 +139,8 @@ export interface RunStore {
   getToolResult(runId: string, toolCallId: string): Promise<ToolResult | undefined>;
   /** Folded input requests for a single run. */
   getInputs(runId: string): Promise<InputRequestProjectionRecord[]>;
+  /** One folded input request by id (for targeted resolve/provide lookups). */
+  getInputById?(inputRequestId: string): Promise<InputRequestProjectionRecord | undefined>;
   /** Folded input requests across all runs, optionally filtered by status/kind. */
   listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]>;
   /**

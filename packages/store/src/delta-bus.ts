@@ -1,18 +1,13 @@
 /**
- * The transient token-delta bus (D13) — the *streaming* side channel that lives
- * entirely OUTSIDE the event log. Token-level `text.delta`s are high-frequency,
- * ephemeral, and valueless as history, so they are never appended to
- * `run_events`, never folded into a projection, and never retained. The durable
- * `message.assistant` event (emitted once per turn) remains the single source of
- * truth; deltas are a pure live-preview layer that a reconnecting client simply
- * skips (it refetches the canonical transcript instead).
+ * Transient token-delta bus — a streaming side channel living entirely outside
+ * the event log. `text.delta`s are high-frequency, ephemeral, and never
+ * appended/folded/retained; the durable `message.assistant` event remains the
+ * source of truth, and a reconnecting client just refetches the transcript.
  *
  * Two implementations mirror the store/queue pattern:
  * - `MemoryDeltaBus` — in-process fan-out (local dev / `inline` mode, tests).
- * - `PgDeltaBus` — Postgres `LISTEN/NOTIFY` on a dedicated channel, so the warm
- *   worker (generation) and the gateway (SSE) can live in different processes
- *   (D12). Payloads are small and carried inline (well under the NOTIFY limit);
- *   nothing is persisted.
+ * - `PgDeltaBus` — Postgres `LISTEN/NOTIFY` so generation and gateway (SSE)
+ *   can live in different processes; nothing is persisted.
  */
 
 /** A single coalesced token-delta for a run's in-flight assistant turn. */

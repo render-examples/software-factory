@@ -1,28 +1,22 @@
 /**
  * The durable job queue (control plane). A job is a POINTER to a run plus a
- * `kind` telling the runner what to do with it; the run's identity/input live in
- * the event log (D10). The gateway enqueues; a runner claims via an atomic
- * `SELECT ... FOR UPDATE SKIP LOCKED` (Postgres) or an in-process critical
+ * `kind` telling the runner what to do with it; run identity/input live in the
+ * event log. The gateway enqueues; a runner claims via an atomic
+ * `SELECT ... FOR UPDATE SKIP LOCKED` (Postgres) or in-process critical
  * section (memory) and drives the root run / resume.
  *
- * Separation of concerns:
- * - `maxAttempts` here is the *delivery* budget — a crash-loop guard so a job
- *   that kills its runner every time eventually dead-letters for operator
- *   attention. It is NOT the workflow logic-retry count.
- * - D3's "a failed handler is not silently re-run" is the *runner's*
- *   responsibility: on a terminal `run.failed`/`run.completed`/`run.cancelled`
- *   the runner calls `complete()` (never `fail({ requeue })`), so a genuinely
- *   failed handler is never re-driven. Only an interrupted run (no terminal
- *   event) is re-driven, and resume-by-replay makes that idempotent.
+ * `maxAttempts` is the *delivery* (crash-loop) budget, not a workflow
+ * logic-retry count. On a terminal run.failed/completed/cancelled the runner
+ * calls `complete()` (never `fail({ requeue })`), so a genuinely failed
+ * handler is never re-driven — only an interrupted run is, idempotently.
  */
 
 /**
  * What a claimed job tells the warm chat worker (Lane B) to drive. Durable
- * pipelines (Lane A) do not use `run_jobs` — Render Workflows is their queue —
- * so there is no `workflow` kind here.
- * - `agent`   — one interactive chat turn (new run per message, thread-scoped memory).
- * - `resume`  — re-drive a paused chat run after HITL within a turn resolves.
- * - `deliver` — push a completed channel-bound run's reply back to its surface (outbound).
+ * pipelines (Lane A) don't use `run_jobs` — Render Workflows is their queue.
+ * - `agent`   — one interactive chat turn (new run per message).
+ * - `resume`  — re-drive a paused chat run after HITL resolves.
+ * - `deliver` — push a completed channel-bound run's reply to its surface.
  */
 export type JobKind = "agent" | "resume" | "deliver";
 

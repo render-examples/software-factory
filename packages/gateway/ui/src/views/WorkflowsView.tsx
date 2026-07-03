@@ -115,15 +115,18 @@ function WorkflowRuns({ workflow }: { workflow: string }) {
         <Empty>No runs for this workflow yet.</Empty>
       ) : (
         <table>
-          <thead><tr><th>Status</th><th>Trigger</th><th style={{ textAlign: "right" }}>Cost</th><th>Duration</th><th>Started</th></tr></thead>
+          <thead><tr><th>Status</th><th>Trigger</th><th style={{ textAlign: "right" }}>Cost</th><th>Duration</th><th>Started</th><th></th></tr></thead>
           <tbody>
             {runs.map((r) => (
-              <tr key={r.id} onClick={() => navigate(`runs/${r.id}`)}>
+              <tr key={r.id} style={{ cursor: "default" }}>
                 <td><StatusBadge status={r.status} /></td>
                 <td className="muted">{r.trigger ?? "—"}</td>
                 <td className="num">{formatCost(r.totalCostUsd)}</td>
                 <td className="mono">{formatDuration(r.startedAt, r.finishedAt)}</td>
                 <td className="muted" title={r.startedAt}>{relativeTime(r.startedAt)}</td>
+                <td style={{ textAlign: "right" }}>
+                  <button className="ghost" onClick={() => navigate(`runs/${r.id}`)}>open</button>
+                </td>
               </tr>
             ))}
           </tbody>

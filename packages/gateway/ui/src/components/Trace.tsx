@@ -89,6 +89,27 @@ function NodeMeta({ span }: { span: SpanNode }) {
   return null;
 }
 
+function ChildRunTrace({
+  childRunId,
+  depthOffset,
+  reloadKey,
+}: {
+  childRunId: string;
+  depthOffset: number;
+  reloadKey?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="detail" style={{ paddingLeft: `${depthOffset * 16 + 22}px` }}>
+      <div className="row">
+        <div className="faint">child run · {childRunId.slice(0, 8)}</div>
+        <button className="ghost" onClick={() => setOpen((v) => !v)}>{open ? "hide trace" : "load trace"}</button>
+      </div>
+      {open && <TraceView runId={childRunId} depthOffset={depthOffset + 1} reloadKey={reloadKey} />}
+    </div>
+  );
+}
+
 function SpanNodeView({
   span, toolIO, childRunsBySpanId, defaultOpen, reloadKey = 0,
 }: {
@@ -127,10 +148,7 @@ function SpanNodeView({
             </div>
           )}
           {childRunIds.map((childRunId) => (
-            <div key={childRunId} className="detail" style={{ paddingLeft: `${span.depth * 16 + 22}px` }}>
-              <div className="faint">child run · {childRunId.slice(0, 8)}</div>
-              <TraceView runId={childRunId} depthOffset={span.depth + 1} reloadKey={reloadKey} />
-            </div>
+            <ChildRunTrace key={childRunId} childRunId={childRunId} depthOffset={span.depth} reloadKey={reloadKey} />
           ))}
           {span.children.map((c) => (
             <SpanNodeView key={c.id} span={c} toolIO={toolIO} childRunsBySpanId={childRunsBySpanId} defaultOpen={startOpen} reloadKey={reloadKey} />
@@ -175,10 +193,7 @@ export function TraceView({ runId, reloadKey = 0, depthOffset = 0 }: { runId: st
         <SpanNodeView key={n.id} span={n} toolIO={derived.toolIO} childRunsBySpanId={derived.childRunsBySpanId} defaultOpen reloadKey={reloadKey} />
       ))}
       {derived.orphanRunIds.map((childRunId) => (
-        <div key={childRunId} className="detail" style={{ paddingLeft: `${depthOffset * 16 + 22}px` }}>
-          <div className="faint">child run · {childRunId.slice(0, 8)}</div>
-          <TraceView runId={childRunId} depthOffset={depthOffset + 1} reloadKey={reloadKey} />
-        </div>
+        <ChildRunTrace key={childRunId} childRunId={childRunId} depthOffset={depthOffset} reloadKey={reloadKey} />
       ))}
     </div>
   );

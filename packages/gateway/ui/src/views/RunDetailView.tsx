@@ -23,7 +23,7 @@ export function RunDetailView({ route }: { route: Route }) {
   const { data: run, error, loading } = useAsync(() => client.getRun(runId!), [runId, reloadKey]);
   const { data: spanData } = useAsync(() => client.getSpans(runId!), [runId, reloadKey]);
   const { data: pending, reload: reloadApprovals } = useAsync(
-    () => client.listInputs("pending", undefined, "approval"),
+    () => client.listInputs("pending", undefined, "approval", runId),
     [runId, reloadKey],
   );
 
@@ -41,7 +41,7 @@ export function RunDetailView({ route }: { route: Route }) {
   }, [runId, live]);
 
   const agentCosts = useMemo(() => perAgentCost(spanData?.spans ?? []), [spanData]);
-  const runApprovals: Approval[] = (pending?.approvals ?? []).filter((a) => a.runId === runId);
+  const runApprovals: Approval[] = pending?.approvals ?? [];
 
   if (!runId) return <div className="panel">No run selected.</div>;
   if (loading && !run) return <div className="panel"><Spinner /> loading run…</div>;

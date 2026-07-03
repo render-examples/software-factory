@@ -128,6 +128,37 @@ describe("channels — inbound conversation mapping (P2)", () => {
     expect(conv?.threadId).toBeUndefined();
     expect(conv?.lastRunId).toBe(body.runId);
   });
+
+  it("rejects an oversized inbound payload with 413", async () => {
+    const prev = process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES;
+    process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES = "64";
+    try {
+      const runtime = await createTestRuntime();
+      const channel: Channel = {
+        target: { workflow: "review" },
+        verify: "none",
+        match: () => ({ event: "pr" }),
+        parse: async () => ({ conversationId: "pr-9", input: {} }),
+      };
+      const wf = workflow(async () => "ok");
+      bindWorkflow(wf, "review", runtime);
+      const app = createGatewayApp({
+        runtime,
+        workflows: new Map<string, WorkflowDefinition>([["review", wf]]),
+        channels: new Map([["gh", channel]]),
+        disableAuth: true,
+      });
+      const res = await app.request("/channels/gh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: "x", text: "x".repeat(200) }),
+      });
+      expect(res.status).toBe(413);
+    } finally {
+      if (prev === undefined) delete process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES;
+      else process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES = prev;
+    }
+  });
 });
 
 describe("channels — HITL over a channel (P5)", () => {

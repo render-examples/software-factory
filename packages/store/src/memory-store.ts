@@ -71,8 +71,7 @@ export class MemoryEventLogStore implements EventLogStore {
 
     const events = this.byRun.get(record.runId) ?? [];
     const expected = events.length + 1;
-    // `append` assigns the seq. If the caller pinned one (e.g. a test), it must
-    // match the next gap-free position — duplicates / out-of-order are rejected.
+    // If the caller pinned a seq (e.g. a test), it must match the next gap-free position.
     if (record.seq && record.seq !== expected) {
       throw new Error(
         `seq out of order for run ${record.runId}: expected ${expected}, got ${record.seq}`,
@@ -164,9 +163,8 @@ export class MemoryEventLogStore implements EventLogStore {
     const copy = { ...rec, payload: { ...rec.payload } };
     for (const sub of this.subscribers) {
       if (sub.filter.runId && sub.filter.runId !== rec.runId) continue;
-      // Thread-scoped tail (chat lane, D12): match events of any run in the thread.
-      // The run→thread mapping is learned from `run.started`, so a thread stream
-      // opened before a turn starts still picks up that turn's run.
+      // Thread-scoped tail: run→thread mapping is learned from run.started, so a
+      // stream opened before a turn starts still picks up that turn's run.
       if (sub.filter.threadId && !sub.filter.runId) {
         if (this.runThread.get(rec.runId) !== sub.filter.threadId) continue;
       }
@@ -238,6 +236,10 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
 
   async getInputs(runId: string): Promise<InputRequestProjectionRecord[]> {
     return this.projections.getInputs(runId);
+  }
+
+  async getInputById(inputRequestId: string): Promise<InputRequestProjectionRecord | undefined> {
+    return this.projections.getInputById(inputRequestId);
   }
 
   async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {

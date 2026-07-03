@@ -65,7 +65,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
               value={operator}
               placeholder="operator name"
               aria-label="Operator name"
-              title="Sent as providedBy on approvals; used as the OAuth user id"
+              title="Local display name preference"
               onChange={(e) => setOperator(e.target.value)}
             />
             <div className="footer-row">

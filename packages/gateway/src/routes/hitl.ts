@@ -26,6 +26,24 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return awaitResume ? p : Promise.resolve();
   };
 
+  const loadInputById = async (inputRequestId: string) => {
+    if (typeof store.getInputById === "function") {
+      return store.getInputById(inputRequestId);
+    }
+    const all = await store.listInputs();
+    return all.find((input) => input.inputRequestId === inputRequestId);
+  };
+
+  const newRunCache = () => {
+    const cache = new Map<string, Awaited<ReturnType<RunStore["getRun"]>>>();
+    return async (runId: string) => {
+      if (!cache.has(runId)) {
+        cache.set(runId, await store.getRun(runId).catch(() => undefined));
+      }
+      return cache.get(runId);
+    };
+  };
+
   // GET /inputs — list input requests (read from the projection). Defaults to
   // pending approvals (`kind=approval`) to power the operator action queue.
   app.get("/inputs", async (c) => {
@@ -33,6 +51,7 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     const statusQ = c.req.query("status");
     const kindQ = c.req.query("kind");
     const threadId = c.req.query("threadId");
+    const runId = c.req.query("runId");
     const opts =
       !statusQ && !kindQ
         ? { status: "pending" as const, kind: "approval" as const }
@@ -43,22 +62,27 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     let records = await store.listInputs(opts);
     // Tenant scoping: an input request belongs to whoever owns its run.
     if (principal.role !== "operator") {
+      const loadRun = newRunCache();
       const owned = await Promise.all(
         records.map(async (input) => {
-          const run = await store.getRun(input.runId).catch(() => undefined);
+          const run = await loadRun(input.runId);
           return run && canAccess(run.userId, principal) ? input : null;
         }),
       );
       records = owned.filter((input): input is (typeof records)[number] => input != null);
+    }
+    if (runId) {
+      records = records.filter((input) => input.runId === runId);
     }
     // Optional thread scoping. Inputs carry only a runId, so resolve each
     // run's threadId server-side — one round trip for the caller instead of the
     // UI fanning out a getRun per input. The candidate set (usually pending)
     // is small, so the per-run lookups are cheap.
     if (threadId) {
+      const loadRun = newRunCache();
       const matches = await Promise.all(
         records.map(async (input) => {
-          const run = await store.getRun(input.runId).catch(() => undefined);
+          const run = await loadRun(input.runId);
           return run?.threadId === threadId ? input : null;
         }),
       );
@@ -82,23 +106,65 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return c.json({ inputs });
   });
 
+  // GET /inputs/counts — lightweight counters for dashboard badges.
+  app.get("/inputs/counts", async (c) => {
+    const principal = getPrincipal(c);
+    const statusQ = c.req.query("status");
+    const kindQ = c.req.query("kind");
+    const threadId = c.req.query("threadId");
+    const runId = c.req.query("runId");
+    const opts =
+      !statusQ && !kindQ
+        ? { status: "pending" as const, kind: "approval" as const }
+        : {
+            status: statusQ === "all" || !statusQ ? undefined : (statusQ as "pending" | "approved" | "denied" | "provided"),
+            kind: kindQ ? (kindQ as "approval" | "message") : undefined,
+          };
+    let records = await store.listInputs(opts);
+    if (principal.role !== "operator") {
+      const loadRun = newRunCache();
+      const owned = await Promise.all(
+        records.map(async (input) => {
+          const run = await loadRun(input.runId);
+          return run && canAccess(run.userId, principal) ? input : null;
+        }),
+      );
+      records = owned.filter((input): input is (typeof records)[number] => input != null);
+    }
+    if (runId) {
+      records = records.filter((input) => input.runId === runId);
+    }
+    if (threadId) {
+      const loadRun = newRunCache();
+      const matches = await Promise.all(
+        records.map(async (input) => {
+          const run = await loadRun(input.runId);
+          return run?.threadId === threadId ? input : null;
+        }),
+      );
+      records = matches.filter((input): input is (typeof records)[number] => input != null);
+    }
+    const pendingApprovals = records.filter((input) => input.kind === "approval" && input.status === "pending").length;
+    return c.json({ count: records.length, pendingApprovals });
+  });
+
   // POST /inputs/:id/provide — provide an input value/decision
   app.post("/inputs/:id/provide", async (c) => {
     const inputId = c.req.param("id");
-    let body: { approved?: boolean; value?: unknown; content?: string; providedBy?: string; reason?: string } = {};
+    const actor = getPrincipal(c);
+    let body: { approved?: boolean; value?: unknown; content?: string; reason?: string } = {};
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const all = await store.listInputs();
-    const target = all.find((input) => input.inputRequestId === inputId);
+    const target = await loadInputById(inputId);
     if (!target) {
       return c.json({ error: `Input "${inputId}" not found` }, 404);
     }
     const ownerRun = await store.getRun(target.runId).catch(() => undefined);
-    if (!ownerRun || !canAccess(ownerRun.userId, getPrincipal(c))) {
+    if (!ownerRun || !canAccess(ownerRun.userId, actor)) {
       return c.json({ error: `Input "${inputId}" not found` }, 404);
     }
     if (target.status !== "pending") {
@@ -120,7 +186,7 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
         kind: target.kind,
         approved: target.kind === "approval" ? body.approved : undefined,
         value,
-        providedBy: body.providedBy,
+        providedBy: actor.userId,
         reason: body.reason,
       }),
     );
@@ -140,16 +206,17 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
 
   // POST /runs/:id/input — convenience route to provide pending input on a run
   app.post("/runs/:id/input", async (c) => {
+    const actor = getPrincipal(c);
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
-    if (!run || !canAccess(run.userId, getPrincipal(c))) {
+    if (!run || !canAccess(run.userId, actor)) {
       return c.json({ error: `Run "${runId}" not found` }, 404);
     }
     if (run.status !== "paused") {
       return c.json({ error: `Run "${runId}" is not paused (status: ${run.status})` }, 409);
     }
 
-    let body: { content?: string; inputId?: string; approved?: boolean; value?: unknown; providedBy?: string; reason?: string } = {};
+    let body: { content?: string; inputId?: string; approved?: boolean; value?: unknown; reason?: string } = {};
     try {
       body = await c.req.json();
     } catch {
@@ -181,7 +248,7 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
         kind: target.kind,
         approved: target.kind === "approval" ? body.approved : undefined,
         value,
-        providedBy: body.providedBy,
+        providedBy: actor.userId,
         reason: body.reason,
       }),
     );

@@ -39,9 +39,8 @@ interface EventTailSub {
 export class PgEventLogStore implements EventLogStore {
   private interceptor?: EventInterceptor;
 
-  // Shared LISTEN multiplexer (CR-07): a single `run_events` LISTEN connection
-  // per store instance fans out NOTIFY pointers to all `tail()` subscribers in
-  // memory, so N SSE clients add ONE DB connection — not N (pool exhaustion).
+  // Single shared `run_events` LISTEN connection fans out to all tail()
+  // subscribers, so N SSE clients add ONE DB connection, not N.
   private tailListenClient: pg.PoolClient | null = null;
   private tailListening: Promise<void> | null = null;
   private readonly tailSubs = new Set<EventTailSub>();
@@ -83,8 +82,7 @@ export class PgEventLogStore implements EventLogStore {
   }
 
   private async stopTailListening(): Promise<void> {
-    // A subscriber may have arrived after the caller's size check; keep the
-    // shared connection alive if so.
+    // A subscriber may have arrived after the caller's size check; keep alive if so.
     if (this.tailSubs.size > 0) return;
     const client = this.tailListenClient;
     this.tailListenClient = null;
@@ -119,8 +117,7 @@ export class PgEventLogStore implements EventLogStore {
     try {
       await client.query("BEGIN");
 
-      // Ensure the run row exists (FK target for run_events).
-      // Uses an ON CONFLICT no-op so it's safe to call on every append.
+      // Ensure run row exists (FK target); ON CONFLICT no-op is safe on every append.
       await client.query(
         `INSERT INTO runs (id, workflow, status, started_at)
          VALUES ($1, $2, 'pending', $3)
@@ -128,7 +125,6 @@ export class PgEventLogStore implements EventLogStore {
         [record.runId, record.agentName ?? "", record.ts],
       );
 
-      // Assign gap-free seq
       const seqRes = await client.query<{ next_event_seq: string }>(
         "SELECT next_event_seq($1) AS next_event_seq",
         [record.runId],
@@ -143,7 +139,6 @@ export class PgEventLogStore implements EventLogStore {
         type: record.payload.type,
       };
 
-      // Insert canonical event
       await client.query(
         `INSERT INTO run_events (id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -162,7 +157,6 @@ export class PgEventLogStore implements EventLogStore {
         ],
       );
 
-      // Fold projections within same transaction
       await this.foldRuns(client, stored);
       await this.foldSpans(client, stored);
       await this.foldToolCalls(client, stored);
@@ -171,7 +165,7 @@ export class PgEventLogStore implements EventLogStore {
       await this.foldInputs(client, stored);
       await this.foldThreadMessages(client, stored);
 
-      // Pointer NOTIFY (small payload, avoids 8KB limit)
+      // Pointer-only NOTIFY payload avoids the 8KB limit
       await client.query(
         `SELECT pg_notify($1, $2)`,
         [NOTIFY_CHANNEL, JSON.stringify({ runId: stored.runId, seq })],
@@ -240,9 +234,8 @@ export class PgEventLogStore implements EventLogStore {
       return false;
     };
 
-    // Subscribe to the shared LISTEN multiplexer instead of opening a dedicated
-    // connection per tail (CR-07). Each subscriber gets its own pointer queue;
-    // filtering + event reads still happen per-subscriber below.
+    // Subscribe to the shared LISTEN multiplexer; each gets its own pointer
+    // queue, with filtering/event reads happening per-subscriber below.
     const sub: EventTailSub = { queue: [], wake: null };
     const subs = this.tailSubs;
     const ensureListening = () => this.ensureTailListening();
@@ -284,10 +277,8 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
     switch (p.type) {
       case "run.started":
-        // Keep the event log self-sufficient (D10): a `run.started` carrying a
-        // threadId must be appendable even when the thread row wasn't created
-        // out-of-band, so the `runs.thread_id` FK holds. Idempotent minimal
-        // insert mirrors the memory store, which has no such constraint (CR-09).
+        // D10: event log must stay self-sufficient, so a run.started with a
+        // threadId can append even if the thread row wasn't created out-of-band.
         if (p.threadId) {
           await client.query(
             `INSERT INTO threads (id, user_id, created_at, updated_at)
@@ -322,9 +313,8 @@ export class PgEventLogStore implements EventLogStore {
             p.externalConversationId ?? null,
           ],
         );
-        // Channel conversation mapping (the continuation token): the first run on
-        // a conversation establishes the thread; later turns keep it and advance
-        // the last-run pointer. No FK on last_run_id — the mapping outlives runs.
+        // First run on a conversation establishes the thread; later turns keep it
+        // and advance last_run_id. No FK on last_run_id — mapping outlives runs.
         if (p.channel && p.externalConversationId) {
           await client.query(
             `INSERT INTO channel_conversations (channel, external_conversation_id, thread_id, last_run_id, created_at, updated_at)
@@ -364,7 +354,7 @@ export class PgEventLogStore implements EventLogStore {
         break;
 
       case "llm.call":
-        // Round to 1e-12 to match the in-memory fold and keep parity stable.
+        // Round to 1e-12 to match the in-memory fold for parity.
         await client.query(
           `UPDATE runs SET total_cost_usd = round((total_cost_usd + $2)::numeric, 12) WHERE id = $1`,
           [rec.runId, p.costUsd],
@@ -425,8 +415,7 @@ export class PgEventLogStore implements EventLogStore {
         break;
 
       case "tool.result":
-        // Set status + close, and fold the spec's tool-span attributes
-        // (toolName, ok, latencyMs computed from the span's start).
+        // Close the span and fold toolName/ok/latencyMs attributes.
         await client.query(
           `UPDATE spans SET
              status = $2,
@@ -485,8 +474,7 @@ export class PgEventLogStore implements EventLogStore {
             rec.ts,
           ],
         );
-        // Accumulate model / iteration count / token usage onto the parent
-        // agent span (mirrors the memory fold) so it carries the required attrs.
+        // Accumulate model/iterations/usage onto the parent agent span (mirrors memory fold).
         if (rec.parentSpanId) {
           await client.query(
             `UPDATE spans SET attributes = coalesce(attributes, '{}'::jsonb) || jsonb_build_object(
@@ -619,7 +607,6 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
     if (p.type !== "message.user" && p.type !== "message.assistant") return;
 
-    // Thread messages require a thread_id on the run. Look it up.
     const runRes = await client.query<{ thread_id: string | null }>(
       "SELECT thread_id FROM runs WHERE id = $1",
       [rec.runId],
@@ -627,7 +614,6 @@ export class PgEventLogStore implements EventLogStore {
     const threadId = runRes.rows[0]?.thread_id;
     if (!threadId) return;
 
-    // Flatten content blocks to plain text for the human-facing transcript
     const contentText = flattenContent(p.content);
 
     await client.query(
@@ -698,13 +684,13 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       conditions.push(`parent_span_id IS NULL`);
     }
     if (opts?.before) {
-      // Keyset pagination: runs started before the cursor run's started_at
+      // Keyset pagination on the cursor run's started_at
       conditions.push(`started_at < (SELECT started_at FROM runs WHERE id = $${paramIdx++})`);
       params.push(opts.before);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    // Parity with the in-memory store: no limit ⇒ return all matching runs.
+    // No limit ⇒ return all matching runs (parity with in-memory store).
     const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
     const finalParams = opts?.limit !== undefined ? [...params, opts.limit] : params;
 
@@ -720,9 +706,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async listChildRuns(runId: string): Promise<RunRecord[]> {
-    // Children hang off a span within the parent run. Workflow `.task()`/`.run()`
-    // fan-out points at the parent's root span (id === runId); LLM subagents
-    // point at a tool-call span. Match either via the parent's span set.
+    // Children hang off a span in the parent run: workflow fan-out points at the
+    // root span (id === runId), LLM subagents at a tool-call span. Match either.
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
               thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
@@ -749,9 +734,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async getThreadAgentMessages(threadId: string, agentName: string): Promise<Message[]> {
-    // Fold model-visible history across every run in the thread, ordered by run
-    // start (then seq) so the current turn's messages sort last — the chat lane's
-    // new-run-per-turn memory.
+    // Folds history across every run in the thread, ordered by run start (then
+    // seq), for the chat lane's new-run-per-turn memory.
     const res = await this.pool.query<{ role: string; content: unknown }>(
       `SELECT rm.role, rm.content
        FROM run_messages rm
@@ -807,6 +791,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       [runId],
     );
     return res.rows.map(mapApprovalRow);
+  }
+
+  async getInputById(inputRequestId: string): Promise<InputRequestProjectionRecord | undefined> {
+    const res = await this.pool.query<PgApprovalRow>(
+      `SELECT id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at, resolved_at, provided_by, reason
+       FROM input_requests WHERE id = $1`,
+      [inputRequestId],
+    );
+    return res.rows.length > 0 ? mapApprovalRow(res.rows[0]) : undefined;
   }
 
   async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {
@@ -985,7 +978,6 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     try {
       await client.query("BEGIN");
 
-      // Event-detail domain: terminal runs older than the event horizon.
       const detail = await client.query<{ id: string }>(
         `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
         [TERMINAL, eventHorizon],
@@ -995,7 +987,6 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
         await this.deleteDetail(client, detailIds);
       }
 
-      // Run-summary domain: terminal runs older than the run horizon.
       const summary = await client.query<{ id: string }>(
         `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
         [TERMINAL, runHorizon],
@@ -1004,7 +995,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       if (summaryIds.length > 0) {
         // Detail may still exist if runHorizon < eventHorizon; clear it first (FK).
         await this.deleteDetail(client, summaryIds);
-        // Null schedule provenance refs (FK), then delete the summaries.
+        // Null schedule refs before deleting summaries (FK).
         await client.query(`UPDATE schedules SET last_run_id = NULL WHERE last_run_id = ANY($1)`, [summaryIds]);
         await client.query(`DELETE FROM runs WHERE id = ANY($1)`, [summaryIds]);
       }
@@ -1023,11 +1014,9 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const now = opts.now ?? new Date();
     const horizon = new Date(now.getTime() - opts.staleMs).toISOString();
 
-    // Lane A roots only: non-terminal, with no active queue job (Lane B is
-    // reclaimed/re-driven by the job queue's own reaper, never failed here), and
-    // silent past the horizon. "Silent" = the run's most recent event predates
-    // the horizon — a progressing workflow keeps appending events, resetting the
-    // clock, so only genuinely stranded roots match.
+    // Lane A roots only: non-terminal, no active queue job (Lane B is reclaimed
+    // by the job queue's own reaper, never failed here), silent past the
+    // horizon (most recent event predates it — progress resets the clock).
     const res = await this.pool.query<{ id: string }>(
       `SELECT r.id
          FROM runs r
@@ -1045,8 +1034,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
     const runIds: string[] = [];
     for (const { id } of res.rows) {
-      // Re-check before appending so a run that settled in the (tiny) window
-      // between the scan and now is never flipped from terminal to failed.
+      // Re-check so a run that settled in the tiny scan-to-now window isn't flipped to failed.
       const run = await this.getRun(id);
       if (!run || (run.status !== "running" && run.status !== "pending")) continue;
       await this.events.append(
@@ -1110,11 +1098,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     return res.rows.map((r) => mapOAuthRow(r, key));
   }
 
-  /** In-process single-flight for token refresh, keyed by `${userId}:${provider}`
-   *  (parity with the memory store). Concurrent refreshers in the same process
-   *  share one refresh — fewer redundant provider calls and fewer connections
-   *  holding the row lock. Cross-process coordination is the `FOR UPDATE` lock
-   *  in `doRefreshConnection` (CR-08). */
+  /** In-process single-flight for token refresh, keyed by `${userId}:${provider}`.
+   *  Cross-process coordination uses the `FOR UPDATE` lock in `doRefreshConnection`. */
   private readonly refreshLocks = new Map<string, Promise<OAuthConnection | undefined>>();
 
   async refreshConnection(

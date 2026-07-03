@@ -18,10 +18,7 @@ export interface ScaffoldOptions {
   apiKeyEnv: string;
   /** Include a local Postgres compose file + DATABASE_URL guidance. */
   withPostgres: boolean;
-  /**
-   * Version range for the generated project's `@render-agents/*` deps. Defaults
-   * to a caret range; the smoke test passes `file:` paths to the local packages.
-   */
+  /** Version range for generated `@render-agents/*` deps; smoke test uses `file:` paths. */
   renderAgentsVersion?: string;
 }
 
@@ -50,46 +47,35 @@ export function buildFileMap(opts: ScaffoldOptions): Map<string, string> {
   set("render.yaml", renderYaml(opts));
   if (opts.withPostgres) set("compose.yaml", composeYaml());
 
-  // "Everything in Docker" path: a Dockerfile for the app + a full-stack compose
-  // (Postgres + gateway, optional worker). Always emitted — it bundles its own
-  // Postgres, independent of the host-dev `compose.yaml` above.
+  // Full-stack Docker path (Postgres + gateway); bundles its own Postgres,
+  // independent of the host-dev `compose.yaml` above.
   set("Dockerfile", dockerfile(opts));
   set(".dockerignore", dockerignore());
   set("docker-compose.yaml", dockerComposeYaml(opts));
 
-  // agents/
   set("agents/_shared.md", sharedAgent(opts));
   set("agents/security.md", securityAgent());
   set("agents/performance.md", performanceAgent());
   set("agents/judge.md", judgeAgent());
   set("agents/assistant.md", assistantAgent());
 
-  // tools/
   set("tools/github/index.ts", githubTool());
   set("tools/linear/index.ts", linearTool());
 
-  // skills/
   set("skills/security-patterns/SKILL.md", securitySkill());
 
-  // workflows/
   set("workflows/code-review/index.ts", codeReviewWorkflow());
 
-  // channels/ + hooks/
   set("channels/github.ts", githubChannel());
   set("hooks/audit.ts", auditHook());
 
-  // entrypoints — one per service in the two-lane topology:
-  //   server.ts    → gateway (web): front door + SSE stream multiplexer
-  //   worker.ts    → chat worker: drains run_jobs, drives interactive turns warm
-  //   workflows.ts → workflows host: Render Workflows task handlers (durable lane)
+  // Two-lane topology: server (gateway/SSE), worker (chat, drains run_jobs), workflows (durable lane)
   set("src/server.ts", serverEntry());
   set("src/worker.ts", chatWorkerEntry());
   set("src/workflows.ts", workflowsHostEntry());
 
   return files;
 }
-
-// --- top-level files ---
 
 function packageJson(opts: ScaffoldOptions, v: string): string {
   return JSON.stringify(
@@ -100,22 +86,17 @@ function packageJson(opts: ScaffoldOptions, v: string): string {
       type: "module",
       engines: { node: ">=20" },
       scripts: {
-        // `build` typechecks; agents/skills are markdown (not compiled), so the
-        // app runs from source via tsx in both dev and production — the project
-        // root then holds every convention dir (agents/, tools/, workflows/, …).
+        // agents/skills are markdown, not compiled; app runs from source via tsx.
         build: "tsc --noEmit",
         dev: "tsx watch src/server.ts",
         start: "tsx src/server.ts",
-        // Chat worker (Lane B): drains the Postgres run_jobs queue.
-        worker: "tsx src/worker.ts",
-        // Workflows host (Lane A): Render Workflows task handlers.
-        workflows: "tsx src/workflows.ts",
+        worker: "tsx src/worker.ts", // Lane B: drains run_jobs
+        workflows: "tsx src/workflows.ts", // Lane A: Render Workflows tasks
       },
       dependencies: {
         "@render-agents/sdk": v,
         "@render-agents/gateway": v,
-        // Render Workflows runtime: the workflows host registers tasks against it,
-        // and the gateway resolves it at runtime to trigger Lane A roots (D5).
+        // Workflows host registers tasks against this; gateway triggers Lane A roots (D5).
         "@renderinc/sdk": "^0.6.0",
         tsx: "^4.0.0",
       },
@@ -179,8 +160,6 @@ function envExample(opts: ScaffoldOptions): string {
   ].join("\n");
 }
 
-// --- agents ---
-
 function sharedAgent(opts: ScaffoldOptions): string {
   return [
     "---",
@@ -226,10 +205,8 @@ function performanceAgent(): string {
 function judgeAgent(): string {
   return [
     "---",
-    // `medium` (sonnet) rather than `large` (opus): agents that combine a `large`
-    // model with a structured `output` schema hit the runner's structured-output
-    // retry, which some large models reject ("does not support assistant message
-    // prefill"). Sonnet handles it; keep structured-output agents on `medium`.
+    // `large` models can reject the structured-output retry's assistant-message
+    // prefill; `medium` (sonnet) handles it, so keep structured agents on it.
     "model: medium",
     "description: Makes the final approve/reject decision",
     "output:",
@@ -260,14 +237,11 @@ function assistantAgent(): string {
   ].join("\n");
 }
 
-// --- tools ---
-
 function githubTool(): string {
   return [
     `import { defineTool } from "@render-agents/sdk";`,
     "",
-    "// A sample local tool. Real implementations call the GitHub API using the",
-    "// caller's OAuth token via ctx.connection(\"github\").",
+    "// Sample tool; real implementations call the GitHub API via ctx.connection(\"github\").",
     "export default defineTool({",
     `  name: "github",`,
     `  description: "Post a review comment on the pull request",`,
@@ -282,7 +256,7 @@ function githubTool(): string {
     "    const { body } = input as { body: string };",
     `    const conn = await ctx.connection("github");`,
     "    ctx.logger.info(\"github.comment\", { hasToken: !!conn });",
-    "    // Stub: echo the action. Wire to the GitHub API in production.",
+    "    // Stub — wire to the GitHub API in production.",
     "    return `Posted comment: ${body}`;",
     "  },",
     "});",
@@ -293,8 +267,7 @@ function linearTool(): string {
   return [
     `import { defineMcpSource } from "@render-agents/sdk";`,
     "",
-    "// Example MCP-backed tool source. Resolved lazily — only connects when an",
-    "// agent references it. Point it at your MCP server (stdio or http).",
+    "// Resolved lazily — only connects when an agent references it.",
     "export default defineMcpSource({",
     `  name: "linear",`,
     `  transport: "http",`,
@@ -302,8 +275,6 @@ function linearTool(): string {
     "});",
   ].join("\n");
 }
-
-// --- skills ---
 
 function securitySkill(): string {
   return [
@@ -318,14 +289,11 @@ function securitySkill(): string {
   ].join("\n");
 }
 
-// --- workflows ---
-
 function codeReviewWorkflow(): string {
   return [
     `import { workflow } from "@render-agents/sdk";`,
     "",
-    "// The default example: fan out to security + performance reviewers as",
-    "// isolated tasks, then a judge makes the final structured decision via a",
+    "// Fans out to security + performance reviewers, then a judge decides via a",
     "// memoized step. Inside a handler, always use ctx.agents (run-scoped).",
     "export default workflow({ name: \"code-review\" }, async (ctx) => {",
     "  const input = ctx.input as { diff?: string; message?: string } | string;",
@@ -346,20 +314,15 @@ function codeReviewWorkflow(): string {
   ].join("\n");
 }
 
-// --- channels / hooks ---
-
 function githubChannel(): string {
   return [
     `import { githubVerify } from "@render-agents/sdk";`,
     `import type { Channel } from "@render-agents/sdk";`,
     "",
-    "// Auto-discovered at POST /channels/github. A channel is the single inbound/",
-    "// outbound message surface. Inbound channels are NOT behind the operator API",
-    "// key (third parties can't send it) — the signature IS the authentication. The",
-    "// declarative `verify` makes the gateway check the GitHub HMAC signature (over",
-    "// the raw body, using GITHUB_WEBHOOK_SECRET) BEFORE this channel runs —",
-    "// fail-closed in production — so `match`/`parse` can trust it. This channel is",
-    "// inbound-only (no `deliver`); add a `deliver` to reply back to GitHub.",
+    "// Auto-discovered at POST /channels/github. Inbound channels bypass the operator",
+    "// API key — the `verify` HMAC check (GITHUB_WEBHOOK_SECRET) IS the auth, run",
+    "// before this channel so `match`/`parse` can trust it. Inbound-only; add",
+    "// `deliver` to reply back to GitHub.",
     "const channel: Channel = {",
     `  target: { workflow: "code-review" },`,
     "  verify: githubVerify(), // reads GITHUB_WEBHOOK_SECRET",
@@ -370,8 +333,7 @@ function githubChannel(): string {
     "  async parse(req: Request) {",
     "    const raw = await req.text();",
     "    const body = JSON.parse(raw) as { pull_request?: { diff_url?: string; number?: number } };",
-    "    // NOTE: diff_url is a URL, not the patch. Fetch it (with a token) in",
-    "    // production to pass real diff content to the review workflow.",
+    "    // NOTE: diff_url is a URL, not the patch — fetch it (with a token) in production.",
     "    return {",
     "      conversationId: `pull-${body.pull_request?.number ?? 0}`,",
     `      input: { diff: body.pull_request?.diff_url ?? "" },`,
@@ -388,8 +350,7 @@ function auditHook(): string {
   return [
     `import { defineHook } from "@render-agents/sdk";`,
     "",
-    "// Hooks observe (and may transform/veto) matching events before commit.",
-    "// `on` selects event types/categories; `handle` runs per matching event.",
+    "// Observes (and may transform/veto) matching events before commit.",
     "export default defineHook({",
     `  name: "audit",`,
     `  on: ["tool.called"],`,
@@ -401,15 +362,12 @@ function auditHook(): string {
   ].join("\n");
 }
 
-// --- entrypoints ---
-
 function serverEntry(): string {
   return [
     `import { loadProject } from "@render-agents/sdk";`,
     `import { startGateway } from "@render-agents/gateway";`,
     "",
-    "// The project root holds the convention directories (agents/, tools/,",
-    "// channels/, …). `loadProject` discovers + wires runtime/agents/workflows/channels.",
+    "// loadProject discovers + wires runtime/agents/workflows/channels from the project root.",
     `const root = new URL("..", import.meta.url).pathname;`,
     "",
     "const { runtime, workflows, channels } = await loadProject(root);",
@@ -427,10 +385,8 @@ function serverEntry(): string {
 
 function chatWorkerEntry(): string {
   return [
-    "// Chat worker (Lane B). A long-lived, warm process that drains the Postgres",
-    "// `run_jobs` queue and drives interactive agent turns + HITL resumes IN-PROCESS",
-    "// for low latency (no per-message container cold start). Shares the database",
-    "// with the gateway; scale horizontally by running more instances.",
+    "// Chat worker (Lane B): warm process draining run_jobs, driving turns + HITL",
+    "// resumes in-process for low latency. Shares the DB; scale horizontally.",
     `import { loadProject, runWorker } from "@render-agents/sdk";`,
     "",
     `const root = new URL("..", import.meta.url).pathname;`,
@@ -448,16 +404,11 @@ function chatWorkerEntry(): string {
 
 function workflowsHostEntry(): string {
   return [
-    "// Workflows host (Lane A). Registers the plan-tiered Render Workflows tasks that",
-    "// back the durable lane:",
-    "//   workflow@<plan>  — workflow roots (bound to workflowTaskHandler)",
-    "//   agent@<plan>     — isolated agent.task() children (bound to agentTaskHandler)",
-    "// one pair per plan referenced across the loaded agents (plus the default).",
-    "// Handlers resolve definitions by NAME; only JSON crosses the task boundary",
-    "// (no closures). Deployed on Render, the SDK auto-starts the task server when",
-    "// RENDER_SDK_SOCKET_PATH is set. For local dev, run under the Render CLI's local",
-    "// task server (`render workflows dev -- <your workflows script>`) and set",
-    "// RENDER_USE_LOCAL_DEV=true on the gateway/worker so they trigger these tasks.",
+    "// Workflows host (Lane A): registers plan-tiered Render Workflows tasks for",
+    "// the durable lane (workflow@<plan>, agent@<plan>), one pair per plan used.",
+    "// Handlers resolve definitions by name; only JSON crosses the task boundary.",
+    "// SDK auto-starts the task server when RENDER_SDK_SOCKET_PATH is set; for",
+    "// local dev use the Render CLI's local task server + RENDER_USE_LOCAL_DEV=true.",
     `import { task } from "@renderinc/sdk/workflows";`,
     "import {",
     "  loadProject,",
@@ -470,15 +421,11 @@ function workflowsHostEntry(): string {
     "",
     `const root = new URL("..", import.meta.url).pathname;`,
     "",
-    "// Native cross-container chaining. Inside a Render Workflows task container,",
-    "// `agent.task()` child dispatch must go over the container's local task socket",
-    "// (a *native subtask*), NOT a top-level HTTP `runTask` to api.render.com. The",
-    "// HTTP path leaves Render unaware the parent is awaiting the child, so the",
-    "// parent container is suspended mid-fan-out and the root strands at",
-    "// `run.started` (children finish, root never resumes). Calling the registered",
-    "// `agent@<plan>` task wrapper routes over the socket via the SDK's task context;",
-    "// we capture those wrappers below. The stock HTTP path stays as the fallback",
-    "// (local dev / when not executing inside a task container).",
+    "// Inside a task container, agent.task() must dispatch over the container's",
+    "// local task socket (native subtask), not top-level HTTP — else the parent",
+    "// suspends mid-fan-out and the root strands at run.started. Registered",
+    "// `agent@<plan>` wrappers route over the socket; captured below. HTTP stays",
+    "// as fallback (local dev / outside a task container).",
     "const nativeAgentTasks = new Map<string, (input: AgentTaskInput) => Promise<AgentOutput>>();",
     "",
     "class NativeChainingDispatcher extends RenderWorkflowsDispatcher {",
@@ -502,17 +449,14 @@ function workflowsHostEntry(): string {
     "  }",
     "}",
     "",
-    '// Slug for the HTTP fallback path; native chaining needs no slug. Provisioned',
-    "// as RENDER_WORKFLOW_SLUG in render.yaml (points at the workflows service).",
+    "// Slug for HTTP fallback only; provisioned as RENDER_WORKFLOW_SLUG in render.yaml.",
     'const dispatcher = new NativeChainingDispatcher({ workflowSlug: process.env.RENDER_WORKFLOW_SLUG ?? "default" });',
     "const { runtime, workflows } = await loadProject(root, { runtime: { dispatcher } });",
     "",
     "const getDefinition = (name: string) => runtime.agentDefinitions.get(name);",
     "",
-    "// Register one task per referenced plan tier. Render binds the compute tier at",
-    "// task-definition time, so per-agent compute comes from selecting the matching",
-    "// `agent@<plan>` task; the handlers resolve definitions by name. We keep each",
-    "// `agent@<plan>` wrapper so the dispatcher can invoke it as a native subtask.",
+    "// One task per referenced plan tier (Render binds compute at task-definition",
+    "// time); keep each agent@<plan> wrapper for native subtask invocation.",
     "const plans = computeRequiredPlans([...runtime.agentDefinitions.values()]);",
     "for (const plan of plans) {",
     "  const agentTask = task(",
@@ -528,16 +472,14 @@ function workflowsHostEntry(): string {
     "",
     "const taskNames = plans.flatMap((p) => [`agent@${p}`, `workflow@${p}`]).join(\", \");",
     "",
-    "// In a Render Workflows environment (deployed, or the CLI local-dev server) the",
-    "// SDK auto-starts the task server when RENDER_SDK_SOCKET_PATH is set and keeps",
-    "// the process alive serving runs — nothing else to do here.",
+    "// In a Render Workflows environment, the SDK auto-starts the task server and",
+    "// keeps the process alive serving runs — nothing else to do here.",
     "const underRenderRuntime = !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);",
     "if (underRenderRuntime) {",
     "  console.log(`workflows host serving Render Workflows tasks: ${taskNames}`);",
     "} else {",
-    "  // No Render runtime detected: validate the image loaded and idle so the",
-    "  // container stays up (in-process demo). A referenced interval keeps the event",
-    "  // loop alive without an unsettled top-level await (which Node exits on).",
+    "  // No Render runtime: stay up idle for the demo. Interval keeps the event",
+    "  // loop alive (avoids Node exiting on an unsettled top-level await).",
     "  console.log(",
     "    `workflows host ready (idle; no Render Workflows runtime — set RENDER_USE_LOCAL_DEV or run under \\`render workflows dev\\`). ` +",
     "      `${runtime.agentDefinitions.size} agents, ${workflows.size} workflows, tasks: ${taskNames}`,",
@@ -553,17 +495,13 @@ function workflowsHostEntry(): string {
   ].join("\n");
 }
 
-// --- deploy ---
-
 function renderYaml(opts: ScaffoldOptions): string {
   const build = `${pmInstall(opts.packageManager)} && ${pmRun(opts.packageManager, "build")}`;
   const run = (script: string) => pmRun(opts.packageManager, script);
   return [
-    "# Canonical render-agents deployment (two-lane model):",
-    "#   gateway (web)      — front door + SSE stream multiplexer; triggers both lanes",
-    "#   chat-worker (worker) — warm; drains run_jobs, drives interactive chat turns",
-    "#   workflows (worker)   — Render Workflows host for durable pipelines (Lane A)",
-    "# plus Postgres + retention/schedule crons. See the @render-agents docs.",
+    "# Two-lane deployment: gateway (web, triggers both lanes), chat-worker (warm,",
+    "# drains run_jobs), workflows (Render Workflows host, Lane A), plus Postgres",
+    "# + retention/schedule crons. See the @render-agents docs.",
     "databases:",
     `  - name: ${opts.name}-db`,
     "    plan: basic-256mb",
@@ -585,15 +523,11 @@ function renderYaml(opts: ScaffoldOptions): string {
     "        generateValue: true",
     "      - key: RENDER_AGENTS_ENCRYPTION_KEY",
     "        generateValue: true",
-    // Route root runs/resumes through the durable queue so the warm chat worker
-    // (below) drives interactive turns — not the gateway inline (BUG-03).
+    // Routes runs through the durable queue so the warm chat worker drives them, not the gateway inline.
     "      - key: RENDER_AGENTS_EXECUTION_MODE",
     "        value: queue",
-    // Trigger the workflow lane (Lane A) through Render Workflows rather than an
-    // in-process drive: the dispatcher auto-selects only when BOTH vars are
-    // present (BUG-04). RENDER_API_KEY is a Render API token — left `sync: false`
-    // (empty) so the gateway safely drives workflow roots in-process until you
-    // paste a token, at which point it upgrades to the Workflows host below.
+    // Dispatcher auto-selects the workflow lane only when both vars are set;
+    // RENDER_API_KEY left sync:false so it falls back in-process until pasted.
     "      - key: RENDER_API_KEY",
     "        sync: false",
     "      - key: RENDER_WORKFLOW_SLUG",
@@ -601,8 +535,7 @@ function renderYaml(opts: ScaffoldOptions): string {
     `      - key: ${opts.apiKeyEnv}`,
     "        sync: false",
     "",
-    "  # Chat lane (Lane B): a warm, long-lived worker that drains the Postgres",
-    "  # run_jobs queue and drives interactive turns in-process. Scale via numInstances.",
+    "  # Chat lane (Lane B): warm worker draining run_jobs. Scale via numInstances.",
     "  - type: worker",
     `    name: ${opts.name}-chat-worker`,
     "    runtime: node",
@@ -614,16 +547,14 @@ function renderYaml(opts: ScaffoldOptions): string {
     "        fromDatabase:",
     `          name: ${opts.name}-db`,
     "          property: connectionString",
-    "      # Must match the gateway's key: all lanes share one Postgres and must",
-    "      # decrypt the same OAuth tokens at rest (else connections break).",
+    "      # Must match the gateway's key: all lanes share one Postgres/OAuth-token encryption.",
     "      - key: RENDER_AGENTS_ENCRYPTION_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_ENCRYPTION_KEY }`,
     `      - key: ${opts.apiKeyEnv}`,
     "        sync: false",
     "",
-    "  # Workflow lane (Lane A): the Render Workflows host. Registers the",
-    "  # workflow@<plan> + agent@<plan> task handlers; Render provisions isolated,",
-    "  # scale-to-zero containers per run and acts as the durable queue.",
+    "  # Workflow lane (Lane A): Render Workflows host; registers workflow@<plan> +",
+    "  # agent@<plan> tasks; Render provisions isolated, scale-to-zero containers.",
     "  - type: worker",
     `    name: ${opts.name}-workflows`,
     "    runtime: node",
@@ -635,8 +566,7 @@ function renderYaml(opts: ScaffoldOptions): string {
     "        fromDatabase:",
     `          name: ${opts.name}-db`,
     "          property: connectionString",
-    "      # Must match the gateway's key: all lanes share one Postgres and must",
-    "      # decrypt the same OAuth tokens at rest (else connections break).",
+    "      # Must match the gateway's key: all lanes share one Postgres/OAuth-token encryption.",
     "      - key: RENDER_AGENTS_ENCRYPTION_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_ENCRYPTION_KEY }`,
     `      - key: ${opts.apiKeyEnv}`,
@@ -656,9 +586,8 @@ function renderYaml(opts: ScaffoldOptions): string {
     "      - key: RENDER_AGENTS_API_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
     "",
-    "  # Per-minute tick that fires any due runtime-managed schedules",
-    "  # (created via POST /schedules). Remove this if you only trigger via",
-    "  # webhooks / the HTTP API and don't use the schedule store.",
+    "  # Per-minute tick firing due runtime-managed schedules (POST /schedules).",
+    "  # Remove if you only trigger via webhooks/HTTP API.",
     "  - type: cron",
     `    name: ${opts.name}-schedules`,
     "    runtime: node",
@@ -672,9 +601,8 @@ function renderYaml(opts: ScaffoldOptions): string {
     "      - key: RENDER_AGENTS_API_KEY",
     `        fromService: { type: web, name: ${opts.name}-gateway, envVarKey: RENDER_AGENTS_API_KEY }`,
     "",
-    "  # Stranded-run reaper: fails Lane A roots whose hand-off to the workflows",
-    "  # host was accepted but never progressed (host died / task lost), so they",
-    "  # don't sit `running` forever. Horizon: RENDER_AGENTS_RUN_STALE_MS (15m).",
+    "  # Stranded-run reaper: fails Lane A roots whose workflows hand-off never",
+    "  # progressed, so they don't sit `running` forever (RENDER_AGENTS_RUN_STALE_MS).",
     "  - type: cron",
     `    name: ${opts.name}-reaper`,
     "    runtime: node",

@@ -42,12 +42,9 @@ export interface CreateJobQueueOptions extends PoolConfig {
 }
 
 /**
- * Auto-detecting job-queue factory, mirroring `createStore`. The queue and the
- * run store MUST share one database (jobs reference runs), so the backend is
- * derived from the provided store: a `PgRunStore` yields a Postgres queue
- * sharing the store's pool; any other store yields an in-memory queue. Pass an
- * explicit `pool`/`type` to override, or omit the store to fall back to
- * `DATABASE_URL` env detection.
+ * Auto-detecting job-queue factory. Queue and run store MUST share one
+ * database (jobs reference runs), so backend derives from the given store: a
+ * `PgRunStore` yields a Postgres queue sharing its pool; otherwise in-memory.
  */
 export function createJobQueue(opts?: CreateJobQueueOptions & { store?: RunStore }): JobQueue {
   if (opts?.pool) return new PgJobQueue(opts.pool);
@@ -76,10 +73,9 @@ export interface CreateDeltaBusOptions extends PoolConfig {
 }
 
 /**
- * Auto-detecting transient delta-bus factory, mirroring `createJobQueue`. The
- * Postgres bus shares the run store's pool (its `LISTEN/NOTIFY` runs on the same
- * database); any non-Postgres store yields the in-memory bus. Deltas are never
- * persisted — the backend choice only affects cross-process fan-out (D12/D13).
+ * Auto-detecting transient delta-bus factory. Postgres bus shares the run
+ * store's pool for LISTEN/NOTIFY; deltas are never persisted, so backend
+ * choice only affects cross-process fan-out.
  */
 export function createDeltaBus(opts?: CreateDeltaBusOptions & { store?: RunStore }): DeltaBus {
   if (opts?.pool) return new PgDeltaBus(opts.pool);
@@ -106,12 +102,9 @@ export interface CreateCancelStoreOptions extends PoolConfig {
 }
 
 /**
- * Auto-detecting cancel-store factory, mirroring `createJobQueue`. Cooperative
- * cancellation only works when the writer (gateway cancel route) and the reader
- * (the agent loop's per-iteration `isCancelled` poll) share one store, so the
- * backend is derived from the run store: a `PgRunStore` yields a `PgCancelStore`
- * sharing the store's pool (the request is a `runs.status = 'cancelled'` write
- * the loop reads back); any other store yields an in-memory cancel store.
+ * Auto-detecting cancel-store factory. Writer (cancel route) and reader
+ * (agent loop's `isCancelled` poll) must share one store, so backend derives
+ * from the run store: `PgRunStore` yields a `PgCancelStore` on the same pool.
  */
 export function createCancelStore(opts?: CreateCancelStoreOptions & { store?: RunStore }): CancelStore {
   if (opts?.pool) return new PgCancelStore(opts.pool);

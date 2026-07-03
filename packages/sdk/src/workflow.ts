@@ -120,30 +120,22 @@ export function workflow(
           userId: dispatchOpts?.userId,
           channel: dispatchOpts?.channel,
           externalConversationId: dispatchOpts?.externalConversationId,
-          // The root of a workflow run is a `workflow`-kind span, not an agent:
-          // the handler orchestrates (steps + agent dispatches) and is not itself
-          // an agent invocation. Agent runs it dispatches nest under this span.
+          // Root span is `workflow`-kind, not agent: the handler orchestrates
+          // (steps + agent dispatches); child agent runs nest under this span.
           spanKind: "workflow",
         }, { agentName: boundName, spanId: runId }),
       );
 
-      // `run.started` above created the run row and recorded input/trigger/
-      // identity (D10). Now trigger Lane A (the workflow lane) via the
-      // dispatcher's root seam — fire-and-forget. The dispatcher decides where
-      // the root executes (sprint 01-Q): `RenderWorkflowsDispatcher` triggers a
-      // durable `startTask` and returns immediately (the run stays `running`);
-      // `InProcessDispatcher` drives `wf.drive(runId)` in-process to a resting
-      // state (dev/test). There is no `run_jobs` row for workflows — Render is
-      // the durable queue.
+      // Trigger Lane A (workflow lane) via the dispatcher's root seam,
+      // fire-and-forget: `RenderWorkflowsDispatcher` starts a durable task and
+      // returns immediately; `InProcessDispatcher` drives to rest in-process
+      // (dev/test). No `run_jobs` row for workflows — Render is the queue.
       const dispatcher = boundRuntime.dispatcher;
       if (dispatcher?.dispatchRoot) {
-        // Fail-fast (E6, mode 1): the root run row is already `running`. If the
-        // hand-off to Lane A throws synchronously (e.g. the workflows host /
-        // task server is down → connection refused), the run would otherwise be
-        // stranded `running` forever. Record `run.failed` so the run is terminal
-        // and the caller sees the failure instead of a stuck run. (Mode 2 — the
-        // host accepts the trigger but never completes it — is caught by the
-        // run reaper, `reapStaleRuns`.)
+        // Fail-fast (E6): if hand-off to Lane A throws synchronously (host
+        // down), record `run.failed` instead of leaving the run stuck
+        // `running` forever. (Host-accepts-but-never-completes case is
+        // caught separately by the run reaper.)
         try {
           await dispatcher.dispatchRoot({ workflow: boundName, runId, plan: resolvedOpts.plan });
         } catch (err) {
@@ -165,9 +157,8 @@ export function workflow(
           };
         }
       } else {
-        // No root-capable dispatcher (a narrow/custom dispatcher): drive in-proc.
-        // Terminal/paused state is recorded by executeHandler; never throw out of
-        // dispatch (the outcome is read from the returned RunRecord).
+        // No root-capable dispatcher: drive in-proc. executeHandler records
+        // terminal/paused state; never throw out of dispatch.
         try {
           await definition.drive(runId);
         } catch {
@@ -193,9 +184,9 @@ export function workflow(
           `Call bindWorkflow(definition, runtime) before drive.`,
         );
       }
-      // The run already exists (the gateway emitted `run.started` at enqueue);
-      // recover the orchestration inputs from it. The handler is replay-safe, so
-      // a re-drive after a crash resumes from memoized steps.
+      // Run already exists (gateway emitted `run.started` at enqueue); recover
+      // orchestration inputs from it. Handler is replay-safe, so a re-drive
+      // after a crash resumes from memoized steps.
       const run = await boundRuntime.store.getRun(runId);
       if (!run) {
         throw new Error(`Workflow "${boundName}" drive: run "${runId}" not found`);
@@ -213,7 +204,7 @@ export function workflow(
     },
   };
 
-  // Attach binding metadata for the runtime to wire up
+  // Binding metadata for the runtime to wire up
   (definition as WorkflowDefinitionInternal).__bind = (name: string, runtime: AgentRuntime) => {
     boundName = name;
     boundRuntime = runtime;
@@ -232,8 +223,7 @@ export interface WorkflowDefinitionInternal extends WorkflowDefinition {
  */
 export function bindWorkflow(def: WorkflowDefinition, name: string, runtime: AgentRuntime): void {
   (def as WorkflowDefinitionInternal).__bind(name, runtime);
-  // Register in the runtime's workflow registry so the in-process root
-  // dispatcher (`dispatchRoot`) and HITL resume routing can resolve it by name.
+  // Register so dispatchRoot and HITL resume routing can resolve it by name.
   runtime.workflows.set(name, def);
 }
 
@@ -264,10 +254,9 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     }
   }
 
-  // Span correlation so the trace tree is a faithful projection: the workflow
-  // root span (opened on run.started, spanId = runId) is closed by the terminal
-  // lifecycle event, and each `ctx.step` becomes a `step`-kind span nested under
-  // it. Step span ids are deterministic per name so handler replay reuses them.
+  // Trace tree: workflow root span (spanId = runId) closes on the terminal
+  // lifecycle event; each `ctx.step` is a `step`-kind span nested under it.
+  // Step span ids are deterministic per name so replay reuses them.
   const spanFor = (event: RunEvent): { spanId?: string; parentSpanId?: string } => {
     switch (event.type) {
       case "run.completed":
@@ -289,10 +278,9 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     );
   };
 
-  // Cooperative cancellation (E3): cancelling the workflow root flips its status
-  // via the cancel store. Poll it at orchestration boundaries so the handler
-  // stops launching/awaiting work and records a terminal `run.cancelled` instead
-  // of running to completion and overwriting the cancelled status.
+  // Cooperative cancellation (E3): poll the cancel store at orchestration
+  // boundaries so the handler stops and records `run.cancelled` instead of
+  // running to completion and overwriting the cancelled status.
   const throwIfCancelled = async (): Promise<void> => {
     if (await runtime.cancelStore.isCancelled(runId)) throw new RunCancelled(runId);
   };
@@ -304,9 +292,8 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     if (!terminal) await emit({ type: "run.cancelled" });
   };
 
-  // Per-agent call ordinals make child run ids deterministic so a handler
-  // replay (after crash/pause) re-dispatches to the same child run and reuses
-  // its memoized result instead of duplicating work.
+  // Per-agent call ordinals make child run ids deterministic so replay
+  // re-dispatches to the same child run and reuses its memoized result.
   const callOrdinals = new Map<string, number>();
   const nextOrdinal = (name: string): number => {
     const n = callOrdinals.get(name) ?? 0;
@@ -333,12 +320,10 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
       }
       usedStepNames.add(name);
 
-      // Memoization: return stored result on re-execution
       if (completedSteps.has(name)) {
         return completedSteps.get(name) as T;
       }
 
-      // Don't start new work if the root was cancelled.
       await throwIfCancelled();
 
       await emit({ type: "step.started", name });
@@ -348,8 +333,8 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
         completedSteps.set(name, result);
         return result;
       } catch (err) {
-        // A child run parking the handler (HITL) unwinds through the step but is
-        // not a step failure — let it propagate so the root parks as paused.
+        // HITL park unwinds through the step but isn't a step failure —
+        // propagate so the root parks as paused.
         if (err instanceof RunPaused) throw err;
         await emit({
           type: "run.failed",
@@ -363,8 +348,8 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
   try {
     await throwIfCancelled();
     const result = await handler(ctx);
-    // Honor a cancel that landed while the handler was finishing: prefer the
-    // terminal `run.cancelled` over `run.completed` so cancellation isn't lost.
+    // Honor a cancel that landed while finishing: prefer `run.cancelled`
+    // over `run.completed` so cancellation isn't lost.
     if (await runtime.cancelStore.isCancelled(runId)) {
       await emitCancelledOnce();
       return;
@@ -372,21 +357,18 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     await emit({ type: "run.completed", result });
   } catch (err) {
     if (err instanceof RunCancelled) {
-      // The handler unwound because the root (or its scope) was cancelled.
-      // Record the terminal `run.cancelled` and rethrow so the task layer
-      // settles it as cancelled (not failed), mirroring the RunPaused contract.
+      // Root (or its scope) was cancelled; record terminal state and rethrow
+      // so the task layer settles it as cancelled, not failed.
       await emitCancelledOnce();
       throw err;
     }
     if (err instanceof RunPaused) {
-      // A child run paused (awaiting approval/input). The workflow root parks as
-      // `paused` — resumable by replay — rather than failing. Record run.paused
-      // on the root so projections and the queue see a settled (non-crashed)
-      // state, then rethrow so the runner marks the job done (not requeued).
+      // A child paused (awaiting approval/input); park the root as `paused`
+      // (resumable by replay) and rethrow so the runner marks the job done.
       await emit({ type: "run.paused", reason: err.reason, pendingInputIds: err.pendingInputIds });
       throw err;
     }
-    // Only emit run.failed if it hasn't been emitted already (e.g. by a step failure)
+    // Avoid double-emitting run.failed if a step failure already emitted it
     const events = await store.events.read(runId);
     const alreadyFailed = events.some(e => e.payload.type === "run.failed");
     if (!alreadyFailed) {
@@ -451,18 +433,13 @@ function createRunScopedAgent(
       return resolveScopedDefinition(name, runtime);
     },
     // `.run()` executes in-process within the workflow's span tree; `.task()`
-    // dispatches an isolated (durable, memoized) child run. Both use a
-    // deterministic child run id derived from the parent run + call ordinal so
-    // workflow replay is idempotent. Thread/user identity propagates so a thread
-    // spans every run it triggers (transcript + thread SSE).
+    // dispatches an isolated durable child run. Both derive a deterministic
+    // child run id from parent + call ordinal for replay idempotency.
     async run<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       const def = resolveScopedDefinition(name, runtime);
       const childRunId = opts?.runId ?? idempotencyKey(parentRunId, `run:${name}:${nextOrdinal(name)}`);
-      // Cancel cascade (E3): don't launch (or, on return, don't keep driving) a
-      // child once the workflow root is cancelled — unwind the handler instead.
+      // Cancel cascade (E3): don't launch a child once the root is cancelled.
       if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(childRunId, parentRunId);
-      // Replay idempotency: a child that already completed on a prior drive
-      // returns its memoized result rather than re-entering the model loop.
       const memo = await memoizedChildOutput<T>(runtime, childRunId);
       if (memo) return memo;
       const out = await runAgentInProcess<T>(def, input, {
@@ -494,7 +471,6 @@ function createRunScopedAgent(
       const dispatcher = runtime.dispatcher ?? inlineWorkflowDispatcher(runtime);
       const runId = opts?.runId ?? idempotencyKey(parentRunId, `task:${name}:${nextOrdinal(name)}`);
       if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(runId, parentRunId);
-      // Replay idempotency: a completed child task is memoized (see run()).
       const memo = await memoizedChildOutput<T>(runtime, runId);
       if (memo) return memo;
       const out = await dispatcher.dispatch(name, input, {

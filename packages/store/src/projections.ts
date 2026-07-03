@@ -69,6 +69,7 @@ export class Projections {
   private toolResults = new Map<string, Map<string, ToolResult>>();
   private steps = new Map<string, Map<string, { value: unknown }>>();
   private inputs = new Map<string, Map<string, InputRequestProjectionRecord>>();
+  private inputById = new Map<string, InputRequestProjectionRecord>();
 
   apply(rec: RunEventRecord): void {
     this.foldRuns(rec);
@@ -115,8 +116,7 @@ export class Projections {
           this.channelConversations.set(key, {
             channel: p.channel,
             externalConversationId: p.externalConversationId,
-            // The thread is established by the first run on this conversation and
-            // stays stable across subsequent turns; the last run always advances.
+            // Thread established by the first run, stable across later turns.
             threadId: existing?.threadId ?? p.threadId,
             lastRunId: rec.runId,
           });
@@ -241,8 +241,7 @@ export class Projections {
           // Workflow root span: orchestration, not an agent invocation.
           open("workflow", rec.agentName ?? "run", p.input, { workflow: rec.agentName, trigger: p.trigger });
         } else {
-          // Agent root span. `model`/`usage`/`iterations` accumulate from the
-          // run's `llm.call` events (see below) for the spec's required attrs.
+          // model/usage/iterations accumulate from llm.call events below.
           open("agent", rec.agentName ?? "run", p.input, {
             agentName: rec.agentName,
             agentVersion: p.agentVersion,
@@ -306,8 +305,7 @@ export class Projections {
             "gen_ai.response.finish_reasons": [p.stopReason],
           },
         });
-        // Accumulate model / iteration count / token usage onto the parent
-        // agent span so it carries the spec's required agent-span attributes.
+        // Accumulate model/iterations/usage onto the parent agent span.
         const parent = rec.parentSpanId ? runSpans.get(rec.parentSpanId) : undefined;
         if (parent && parent.kind === "agent") {
           const a = (parent.attributes ?? {}) as Record<string, unknown>;
@@ -329,9 +327,8 @@ export class Projections {
 
   private foldToolCalls(rec: RunEventRecord): void {
     const p = rec.payload;
-    // Only canonical terminal `tool.result` events populate the idempotency
-    // index. Provider transport placeholders ride inside `message.tool` content
-    // blocks (never `tool.result` events), so they are excluded by construction.
+    // Only canonical `tool.result` events populate this index; provider
+    // transport placeholders ride in `message.tool` content, excluded by construction.
     if (p.type !== "tool.result") return;
     const map = this.toolResults.get(rec.runId) ?? new Map<string, ToolResult>();
     map.set(p.toolCallId, p.result);
@@ -362,6 +359,7 @@ export class Projections {
           status: "pending",
           requestedAt: rec.ts,
         });
+        this.inputById.set(p.inputRequestId, map.get(p.inputRequestId)!);
         this.inputs.set(rec.runId, map);
         break;
       case "input.provided": {
@@ -464,6 +462,12 @@ export class Projections {
     return [...(this.inputs.get(runId)?.values() ?? [])].map(a => ({ ...a }));
   }
 
+  /** One input request by id. */
+  getInputById(inputRequestId: string): InputRequestProjectionRecord | undefined {
+    const row = this.inputById.get(inputRequestId);
+    return row ? { ...row } : undefined;
+  }
+
   /**
    * The human-facing transcript for a thread, ordered chronologically by
    * (createdAt, runId, seq). With new-run-per-turn (chat lane) a thread spans
@@ -508,6 +512,10 @@ export class Projections {
    * preserved (kept with the thread per the retention policy).
    */
   trimEventDetail(runId: string): void {
+    const inputs = this.inputs.get(runId);
+    if (inputs) {
+      for (const id of inputs.keys()) this.inputById.delete(id);
+    }
     this.messages.delete(runId);
     this.spans.delete(runId);
     this.toolResults.delete(runId);

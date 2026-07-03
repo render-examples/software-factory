@@ -232,16 +232,11 @@ function buildRunnerRegistry(
 }
 
 /**
- * Detect whether a Render Workflows dispatcher should be used. Returns a
- * dispatcher for production, undefined for local dev/test.
- *
- * Two distinct Render signals select it (sprint 01-Q, open question #2):
- * - `isWorkflowsEnvironment()` — an in-container socket for child `agent.task()`
- *   chaining (`runTask`).
- * - `isRootTriggerEnvironment()` — the REST client config (`RENDER_API_KEY` +
- *   `RENDER_WORKFLOW_SLUG`) used by the gateway to *trigger roots* (`startTask`),
- *   even though the gateway is not itself a Workflows container.
- * Either one means "drive the workflow lane through Render, not in-process".
+ * Detect whether a Render Workflows dispatcher should be used (production) vs
+ * undefined (local dev/test). Either signal means "drive through Render":
+ * - `isWorkflowsEnvironment()` — in-container socket for child `agent.task()`.
+ * - `isRootTriggerEnvironment()` — REST client config for the gateway to
+ *   trigger roots (`startTask`) without itself being a Workflows container.
  */
 function detectDispatcher(): TaskDispatcher | undefined {
   if (!isWorkflowsEnvironment() && !isRootTriggerEnvironment()) return undefined;
@@ -268,37 +263,27 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
   );
   const hooks = buildHookRegistry(opts?.hooks ?? []);
   const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing, opts?.extraRunners);
-  // Cooperative cancellation store: share the run store's Postgres pool when
-  // available (so the gateway's `runs.status = 'cancelled'` write is read back by
-  // the loop's per-iteration poll), in-memory otherwise. The gateway defaults its
-  // cancel route to this same instance (BUG-01) so a cancel request is observed.
+  // Shares the run store's Postgres pool when available so cancel writes are
+  // read back by the loop's poll; gateway defaults its cancel route to this
+  // same instance (BUG-01).
   const cancelStore = opts?.cancelStore ?? createCancelStore({ store });
-  // Durable control-plane queue: shares the run store's pool in Postgres mode,
-  // in-memory otherwise. Consumed by the runner (Phase 2) and gateway enqueue.
   const jobQueue = opts?.jobQueue ?? createJobQueue({ store });
-  // Transient streaming side-channel (D13): shares the store's Postgres pool for
-  // cross-process NOTIFY, in-memory otherwise. Never persists.
+  // Transient streaming side-channel (D13): never persists.
   const deltaBus = opts?.deltaBus ?? createDeltaBus({ store });
   const executionMode: ExecutionMode =
     opts?.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
   const agentDefinitions = new Map<string, AgentDefinition>();
-  // Populated later by bindWorkflow/loadWorkflows; the in-process root dispatcher
-  // closes over this reference so a workflow registered after createRuntime is
-  // still resolvable at dispatchRoot time.
+  // Populated later by bindWorkflow/loadWorkflows; dispatchRoot closes over
+  // this reference so late-registered workflows stay resolvable.
   const workflows = new Map<string, WorkflowDefinition>();
   const toolSources = opts?.toolSources ?? new Map();
-  // Populated later by loadProject (like agentDefinitions/workflows); the
-  // outbound delivery path resolves a run's channel from this map.
+  // Populated later by loadProject; outbound delivery resolves a run's channel here.
   const channels = opts?.channels ?? new Map<string, Channel>();
-  // Shared instances so the dispatcher and any later registrations (e.g. the
-  // gateway populating refreshers from provider configs) see the same objects.
   const oauthStore = asOAuthStore(store);
   const oauthRefreshers = opts?.oauthRefreshers ?? new Map<string, OAuthRefresher>();
 
-  // `.task()` always runs through a dispatcher: the Render Workflows dispatcher
-  // in production, otherwise an in-process dispatcher that provides identical
-  // observable behavior (events/spans/output + idempotent re-dispatch) minus
-  // container isolation. Tests can still pass an explicit dispatcher override.
+  // `.task()` always runs through a dispatcher: Render Workflows in production,
+  // else an in-process one with identical observable behavior minus isolation.
   const dispatcher = opts?.dispatcher
     ?? (opts?.autoDetectDispatcher === false ? undefined : detectDispatcher())
     ?? new InProcessDispatcher({
@@ -316,7 +301,6 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       deltaBus,
     });
 
-  // Inject hook interceptor into the store's append pipeline
   if (hooks.ids().length > 0 && "setInterceptor" in store) {
     const consoleLogger = { debug: () => {}, info: () => {}, warn: console.warn, error: console.error };
     const interceptor = buildHookInterceptor(hooks, consoleLogger, (name) => process.env[name]);

@@ -1,16 +1,14 @@
 // Channels — the single inbound/outbound message surface (supersedes the old
 // `webhooks/` + `connectors/` concepts). A channel is the edge adapter between
-// an external platform and an agent/workflow: it verifies + normalizes an
-// inbound event into a turn, and (optionally) delivers the reply back out.
+// an external platform and an agent/workflow: verifies + normalizes an inbound
+// event into a turn, and (optionally) delivers the reply back out.
 //
-// Discovered by convention from `channels/*.ts` (default export a `Channel`;
-// the file stem is the channel id) via `loadChannels`, mounted by the gateway
-// at `POST /channels/:id`, and attached to the runtime (`runtime.channels`) so
-// the outbound-delivery path can resolve `deliver` by channel id.
+// Discovered from `channels/*.ts` (default export a `Channel`; file stem is
+// the channel id) via `loadChannels`, mounted by the gateway at
+// `POST /channels/:id`, and attached to `runtime.channels` for outbound lookup.
 //
-// Inbound verification reuses the declarative `WebhookVerify` surface (the one
-// piece that survives the webhooks→channels merge). An inbound-only channel
-// (no `deliver`) is exactly a fire-and-forget trigger — the former webhook.
+// Inbound verification reuses the declarative `WebhookVerify` surface. An
+// inbound-only channel (no `deliver`) is a fire-and-forget trigger (the former webhook).
 
 import type { Logger } from "@render-agents/store";
 import type { OAuthTokens } from "@render-agents/engine";
@@ -35,8 +33,7 @@ export type ChannelMatch = { ack: Response } | { event: string } | null;
 export interface ChannelInboundEvent {
   /**
    * Stable id of the conversation on the external surface (Slack `channel:ts`,
-   * GitHub issue number, email thread id). Used to bind the run to a
-   * conversation so re-entrant messages resume it and replies are addressable.
+   * GitHub issue number, email thread id) so re-entrant messages resume it.
    */
   conversationId: string;
   /** Normalized user message / workflow input. */
@@ -51,17 +48,12 @@ export interface ChannelInboundEvent {
 export interface ChannelDeliverContext {
   /** The external conversation to reply into (from the run's channel binding). */
   conversationId: string;
-  /**
-   * The assembled outbound message. For a final reply it's the assistant text +
-   * structured result; for an input prompt (see `input`) it's the question /
-   * approval prompt text.
-   */
+  /** Outbound message: assistant text + result for a final reply, or the
+   *  question/approval prompt text for an input prompt (see `input`). */
   message: { text: string; data?: unknown };
   /**
-   * Present when the run PAUSED awaiting human input (HITL) rather than completing
-   * — so the channel can render an approval (e.g. buttons) or a question. The
-   * human's next inbound message on this conversation satisfies it. Absent for a
-   * final reply.
+   * Present when the run PAUSED awaiting human input (HITL); the channel can
+   * render an approval/question. The next inbound message satisfies it.
    */
   input?: { inputRequestId: string; kind: "approval" | "message"; prompt?: string; toolName?: string };
   /** Read a (never-inlined) secret by env-var name. */
@@ -74,20 +66,18 @@ export interface ChannelDeliverContext {
 /**
  * A channel: one module owning a surface's inbound + (optional) outbound.
  *
- * - `match` cheaply decides routing from the raw request; return `null` to 400
- *   (not for this channel), or `{ ack }` to answer a provider handshake (e.g.
- *   Slack `url_verification`) without starting a run. It MAY be async: platforms
- *   that route on the request *body* (e.g. Slack's `type`/event discriminators)
- *   need to read it, so `match` can return a `Promise`.
+ * - `match` decides routing from the raw request; `null` to 400, or `{ ack }`
+ *   to answer a provider handshake without starting a run. May be async since
+ *   some platforms route on the request body.
  * - `parse` normalizes a *verified* request into a `ChannelInboundEvent`.
- * - `deliver` pushes a completed reply back to the surface. OMIT it for an
- *   inbound-only channel (a fire-and-forget workflow trigger — the old webhook).
+ * - `deliver` pushes a completed reply back. Omit for an inbound-only channel
+ *   (fire-and-forget trigger — the old webhook).
  */
 export interface Channel {
   /**
-   * Optional identifier for logging/metadata. The authoritative id — used for
-   * the `POST /channels/:id` mount and outbound-delivery lookup — is the
-   * discovered filename (`channels/slack.ts` → "slack"), regardless of this field.
+   * Optional identifier for logging/metadata. The authoritative id (used for
+   * the `POST /channels/:id` mount and delivery lookup) is the discovered
+   * filename (`channels/slack.ts` → "slack"), regardless of this field.
    */
   readonly id?: string;
   /** Default routing target for inbound events on this surface. */

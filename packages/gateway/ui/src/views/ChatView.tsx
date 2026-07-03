@@ -110,33 +110,16 @@ function Conversation({ threadId }: { threadId: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const { thread: t, messages: m } = await client.getThread(threadId);
+      const view = await client.getThreadView(threadId);
+      const { thread: t, messages: m } = view;
       setThread(t);
       setMessages(m);
-      // Derive the thread's active run client-side (rather than the data model
-      // carrying a UI-shaped `currentRunId`): the thread's turns are root runs,
-      // and at most one is non-terminal at a time (enforced by the store's
-      // partial unique index). Only seed when we don't already have one — an
-      // in-session turn sets `activeRunId` when it starts.
-      if (!activeRunId.current) {
-        const { runs } = await client.listRuns({ threadId, limit: 20 });
-        const active = runs.find(
-          (r) => r.status === "pending" || r.status === "running" || r.status === "paused",
-        );
-        if (active) activeRunId.current = active.id;
-      }
-
-      // Pending approvals for this thread, scoped server-side (one request).
-      const mine = (await client.listInputs("pending", threadId, "approval")).approvals;
+      // Consolidated thread view returns the active run + pending approvals so
+      // refreshes don't fan out to listRuns/listInputs/getRun each cycle.
+      activeRunId.current = view.activeRun?.id;
+      const mine = view.approvals;
       setApprovals(mine);
-
-      let runStatus: RunStatus | undefined;
-      if (activeRunId.current) {
-        try {
-          const run = await client.getRun(activeRunId.current);
-          runStatus = run.status;
-        } catch { /* */ }
-      }
+      const runStatus: RunStatus | undefined = view.activeRun?.status;
       const next = deriveStatus(t, runStatus, mine.length > 0);
       setStatus(next);
       if (next !== "thinking") setLiveTool(null);
@@ -150,12 +133,6 @@ function Conversation({ threadId }: { threadId: string }) {
       if (latestAssistant && latestAssistant.id !== lastAssistantId.current) {
         lastAssistantId.current = latestAssistant.id;
         setStreamingText("");
-      }
-      // Once the active turn reaches a terminal state, forget it so the next
-      // refresh re-resolves the thread's active run — otherwise Stop and SSE
-      // scoping keep targeting a completed run (CR-20).
-      if (runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled") {
-        activeRunId.current = undefined;
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setErr("Thread not found.");
@@ -245,6 +222,9 @@ function Conversation({ threadId }: { threadId: string }) {
   return (
     <div className="chat">
       <div className="topbar" style={{ borderTop: "none" }}>
+        <button className="ghost convo-back" onClick={() => navigate("chat")} aria-label="Back to conversations">
+          back to conversations
+        </button>
         <b>{thread?.title || "Conversation"}</b>
         <span className="chip mono">{threadId.slice(0, 8)}</span>
         <StatusLine status={status} />
