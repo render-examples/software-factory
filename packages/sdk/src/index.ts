@@ -24,6 +24,7 @@ export type {
   SpanRecord,
   ListRunsOptions,
   RunStore,
+  ChannelConversation,
   CancelStore,
   ScheduleRecord,
   ScheduleStore,
@@ -111,7 +112,7 @@ export { createRuntime } from "./runtime.js";
 
 export type { AgentSet, Agent } from "./agents.js";
 export { loadAgents, resumeRun, driveAgentTurn } from "./agents.js";
-export { loadWorkflows, loadWebhooks, loadToolSources, loadHooks, loadRunners } from "./loader/load-project.js";
+export { loadWorkflows, loadChannels, loadToolSources, loadHooks, loadRunners } from "./loader/load-project.js";
 
 export { loadProject } from "./project.js";
 export type { LoadProjectOptions, LoadedProject } from "./project.js";
@@ -121,10 +122,14 @@ export type {
   WorkflowContext,
   WorkflowDefinition,
   WorkflowDispatchOptions,
-  WebhookAdapter,
-  WebhookMatch,
 } from "./workflow.js";
 export { workflow, bindWorkflow } from "./workflow.js";
+
+export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget, ChannelMatch } from "./channel.js";
+
+// Built-in reference channels (platform adapters authored on the Channel contract).
+export { slackChannel } from "./channels/slack.js";
+export type { SlackChannelOptions } from "./channels/slack.js";
 
 export type {
   WebhookVerify,
@@ -161,6 +166,8 @@ export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 
 export { runWorker, runWorkerLoop, buildJobProcessor } from "./worker.js";
 export type { RunWorkerOptions, WorkerHandle, JobProcessor } from "./worker.js";
+
+export { deliverForRun } from "./channel-delivery.js";
 
 export { submitRootRun } from "./submit.js";
 export type { SubmitRootRunOptions } from "./submit.js";

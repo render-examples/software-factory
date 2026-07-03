@@ -46,10 +46,11 @@ Operationally important env vars:
 |---|---|
 | `DATABASE_URL` | Select Postgres store/queue/delta/cancel backends |
 | `PORT` | Gateway port |
-| `RENDER_AGENTS_API_KEY` | Shared-key API auth material |
+| `RENDER_AGENTS_API_KEY` | Shared-key API auth material (maps to the operator principal) |
+| `RENDER_AGENTS_OPERATOR_ID` | userId assigned to the shared-key operator (default `operator`) |
 | `RENDER_AGENTS_EXECUTION_MODE` | `inline` or `queue` |
-| `RENDER_AGENTS_ENCRYPTION_KEY` | OAuth token encryption + signing secret |
-| `RENDER_AGENTS_COOKIE_SECRET` | Optional explicit cookie-signing secret for UI session |
+| `RENDER_AGENTS_ENCRYPTION_KEY` | OAuth token encryption + cookie/stream-token signing secret |
+| `RENDER_AGENTS_COOKIE_SECRET` | Optional explicit cookie/stream-token signing secret (falls back to `RENDER_AGENTS_ENCRYPTION_KEY`) |
 | `RENDER_AGENTS_STRICT_APPROVAL` | Toggle strict approval in non-production |
 | `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` | Require inbound webhook/connector signature verification (default on in production) |
 | `RENDER_AGENTS_EVENT_RETENTION_DAYS` | Event-detail retention horizon |
@@ -61,10 +62,17 @@ Operationally important env vars:
 
 Auth behavior notes:
 
-- protected routes return `401` when key resolution fails,
+- protected routes return `401` when identity resolution fails,
+- per-user multi-tenancy: pass `createGatewayApp({ auth })` — e.g.
+  `jwtAuthResolver({ issuer, audience, jwksUri })` (verify an IdP JWT → `role: "user"`),
+  optionally `composeResolvers(jwt, bearerKeyResolver(...))` to keep a shared-key
+  operator break-glass. The default (shared key only) is single-operator,
+- `/admin/*` is operator-only (`403` for `role: "user"`),
 - UI can authenticate via `/ui/login` cookie session when UI is enabled,
-- SSE supports query key on allowlisted paths,
-- inbound webhook/connector routes are public but signature-verified via each adapter's `verify` (fail-closed in production; see `01-authoring.md`).
+- SSE per-user credential: `POST /auth/stream-token` mints a short-lived signed
+  token; clients open `EventSource(...?token=...)`. The `?key=` query fallback is
+  operator-only,
+- inbound channel routes are public but signature-verified via each channel's `verify` (fail-closed in production; see `01-authoring.md`).
 
 ---
 

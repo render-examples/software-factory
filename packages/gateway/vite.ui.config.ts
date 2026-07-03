@@ -21,7 +21,7 @@ const GATEWAY_ORIGIN = process.env.GATEWAY_ORIGIN ?? "http://localhost:3000";
 // Path prefixes the gateway owns; everything else is the SPA itself.
 const API_PREFIXES = [
   "/runs", "/inputs", "/threads", "/events", "/schedules",
-  "/workflows", "/admin", "/health", "/oauth", "/webhooks", "/connectors",
+  "/workflows", "/admin", "/health", "/oauth", "/channels",
 ];
 
 export default defineConfig({

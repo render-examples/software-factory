@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { ScheduleStore, ScheduleRecord } from "@render-agents/store";
 import { validateCron, dueSchedules } from "@render-agents/store";
 import type { WorkflowDefinition } from "@render-agents/sdk";
+import { getPrincipal, canAccess } from "../auth.js";
 
 export interface ScheduleRoutesDeps {
   scheduleStore: ScheduleStore;
@@ -44,7 +45,9 @@ export async function reconcileDueSchedules(deps: ScheduleRoutesDeps, now: Date)
       // Stamp lastRunAt to the firing minute *before* dispatch so a concurrent
       // / retried tick in the same minute sees it as already fired (dedupe).
       await deps.scheduleStore.updateSchedule(s.id, { lastRunAt: now.toISOString() });
-      const run = await workflow.dispatch(s.input ?? {}, "cron");
+      // The fired run inherits the schedule's owner so it is tenant-scoped like
+      // any other run (an unowned/operator schedule dispatches without a userId).
+      const run = await workflow.dispatch(s.input ?? {}, "cron", { userId: s.userId });
       await deps.scheduleStore.updateSchedule(s.id, { lastRunId: run.id, lastRunAt: now.toISOString() });
       result.fired.push({ scheduleId: s.id, workflow: s.workflow, runId: run.id });
     } catch (err) {
@@ -99,12 +102,14 @@ export function scheduleRoutes(deps: ScheduleRoutesDeps) {
       return c.json({ error: cronError }, 400);
     }
     const ts = now().toISOString();
+    // Ownership comes from auth, never the client body (CR-D1).
     const record: ScheduleRecord = {
       id: randomUUID(),
       workflow: body.workflow,
       cronExpression: body.cronExpression,
       input: body.input,
       enabled: body.enabled ?? true,
+      userId: getPrincipal(c).userId,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -112,16 +117,20 @@ export function scheduleRoutes(deps: ScheduleRoutesDeps) {
     return c.json(record, 201);
   });
 
-  // GET /schedules — list all schedules
+  // GET /schedules — the caller's schedules (operators see all; users see their own)
   app.get("/schedules", async (c) => {
-    const schedules = await scheduleStore.listSchedules();
+    const principal = getPrincipal(c);
+    const userId = principal.role === "operator" ? c.req.query("userId") : principal.userId;
+    const schedules = await scheduleStore.listSchedules({ userId });
     return c.json({ schedules });
   });
 
-  // GET /schedules/:id — fetch one
+  // GET /schedules/:id — fetch one (ownership-scoped; 404 on a foreign id)
   app.get("/schedules/:id", async (c) => {
     const schedule = await scheduleStore.getSchedule(c.req.param("id"));
-    if (!schedule) return c.json({ error: "Schedule not found" }, 404);
+    if (!schedule || !canAccess(schedule.userId, getPrincipal(c))) {
+      return c.json({ error: "Schedule not found" }, 404);
+    }
     return c.json(schedule);
   });
 
@@ -129,7 +138,9 @@ export function scheduleRoutes(deps: ScheduleRoutesDeps) {
   app.patch("/schedules/:id", async (c) => {
     const id = c.req.param("id");
     const existing = await scheduleStore.getSchedule(id);
-    if (!existing) return c.json({ error: "Schedule not found" }, 404);
+    if (!existing || !canAccess(existing.userId, getPrincipal(c))) {
+      return c.json({ error: "Schedule not found" }, 404);
+    }
 
     let body: Partial<Pick<ScheduleRecord, "workflow" | "cronExpression" | "input" | "enabled">> = {};
     try {
@@ -152,7 +163,9 @@ export function scheduleRoutes(deps: ScheduleRoutesDeps) {
   app.delete("/schedules/:id", async (c) => {
     const id = c.req.param("id");
     const existing = await scheduleStore.getSchedule(id);
-    if (!existing) return c.json({ error: "Schedule not found" }, 404);
+    if (!existing || !canAccess(existing.userId, getPrincipal(c))) {
+      return c.json({ error: "Schedule not found" }, 404);
+    }
     await scheduleStore.deleteSchedule(id);
     return c.json({ deleted: id });
   });

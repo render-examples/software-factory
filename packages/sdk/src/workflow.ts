@@ -16,7 +16,6 @@ import type {
 import { RunPaused, RunCancelled } from "@render-agents/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
-import type { WebhookVerify } from "./webhook-verify.js";
 import { runAgentInProcess } from "./run-in-process.js";
 
 export interface WorkflowOptions {
@@ -41,6 +40,10 @@ export interface WorkflowContext {
 export interface WorkflowDispatchOptions {
   threadId?: string;
   userId?: string;
+  /** External channel this run was triggered from (outbound delivery + resume mapping). */
+  channel?: string;
+  /** The channel's conversation id (Slack `channel:ts`, GitHub issue #, …). */
+  externalConversationId?: string;
 }
 
 export interface WorkflowDefinition {
@@ -115,6 +118,8 @@ export function workflow(
           trigger,
           threadId: dispatchOpts?.threadId,
           userId: dispatchOpts?.userId,
+          channel: dispatchOpts?.channel,
+          externalConversationId: dispatchOpts?.externalConversationId,
           // The root of a workflow run is a `workflow`-kind span, not an agent:
           // the handler orchestrates (steps + agent dispatches) and is not itself
           // an agent invocation. Agent runs it dispatches nest under this span.
@@ -559,21 +564,3 @@ function inlineWorkflowDispatcher(runtime: AgentRuntime): NonNullable<AgentRunti
   };
 }
 
-// --- Webhook adapter types (re-exported) ---
-
-export interface WebhookAdapter {
-  readonly name: string;
-  /**
-   * Inbound-signature verification policy, enforced by the gateway before the
-   * request is routed or dispatched. Omit and it is fail-closed (rejected in
-   * production); set `"none"` to explicitly opt out. See {@link WebhookVerify}.
-   */
-  readonly verify?: WebhookVerify;
-  match(req: Request): WebhookMatch | null;
-  parse(req: Request): Promise<unknown>;
-}
-
-export interface WebhookMatch {
-  workflow: string;
-  trigger: string;
-}

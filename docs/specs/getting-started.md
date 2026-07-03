@@ -12,7 +12,7 @@ npm install
 
 You get the **code-review** example: `security` and `performance` reviewer agents
 (markdown), a `judge` with a structured output schema, a `code-review` workflow that
-fans out then decides, sample tools/skills/webhooks/hooks, and deploy config.
+fans out then decides, sample tools/skills/channels/hooks, and deploy config.
 
 ## 2. Run locally
 

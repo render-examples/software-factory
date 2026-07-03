@@ -4,6 +4,9 @@ export interface ScheduleRecord {
   cronExpression: string;
   input?: unknown;
   enabled: boolean;
+  /** Owning tenant (from auth at create time). Cron-fired runs inherit it so they
+   *  are tenant-scoped like any other run. Undefined for legacy/operator schedules. */
+  userId?: string;
   lastRunId?: string;
   lastRunAt?: string;
   createdAt: string;
@@ -15,6 +18,7 @@ export interface ScheduleStore {
   getSchedule(id: string): Promise<ScheduleRecord | undefined>;
   updateSchedule(id: string, patch: Partial<ScheduleRecord>): Promise<void>;
   deleteSchedule(id: string): Promise<void>;
-  listSchedules(): Promise<ScheduleRecord[]>;
+  /** List schedules, optionally scoped to one tenant (`userId`). */
+  listSchedules(opts?: { userId?: string }): Promise<ScheduleRecord[]>;
   listEnabled(): Promise<ScheduleRecord[]>;
 }

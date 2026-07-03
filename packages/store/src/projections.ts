@@ -1,6 +1,6 @@
 import type { RunEventRecord, ToolResult, ContentBlock } from "./events.js";
 import type { Message } from "./messages.js";
-import type { RunRecord, SpanRecord, ListRunsOptions } from "./run-store.js";
+import type { RunRecord, SpanRecord, ListRunsOptions, ChannelConversation } from "./run-store.js";
 import type { ThreadMessage } from "./thread-store.js";
 
 /**
@@ -63,6 +63,8 @@ export class Projections {
   private messages = new Map<string, MessageEntry[]>();
   /** Human-facing per-thread transcript, folded from message.* on thread-scoped runs. */
   private threadMessages = new Map<string, ThreadMessage[]>();
+  /** Channel conversation mapping: `(channel, externalConversationId)` → thread/last run. */
+  private channelConversations = new Map<string, ChannelConversation>();
   private spans = new Map<string, Map<string, SpanRecord>>();
   private toolResults = new Map<string, Map<string, ToolResult>>();
   private steps = new Map<string, Map<string, { value: unknown }>>();
@@ -105,6 +107,20 @@ export class Projections {
         if (p.agentVersion) r.agentVersion = p.agentVersion;
         if (p.threadId) r.threadId = p.threadId;
         if (p.userId) r.userId = p.userId;
+        if (p.channel) r.channel = p.channel;
+        if (p.externalConversationId) r.externalConversationId = p.externalConversationId;
+        if (p.channel && p.externalConversationId) {
+          const key = `${p.channel}\u0000${p.externalConversationId}`;
+          const existing = this.channelConversations.get(key);
+          this.channelConversations.set(key, {
+            channel: p.channel,
+            externalConversationId: p.externalConversationId,
+            // The thread is established by the first run on this conversation and
+            // stays stable across subsequent turns; the last run always advances.
+            threadId: existing?.threadId ?? p.threadId,
+            lastRunId: rec.runId,
+          });
+        }
         if (rec.parentSpanId) r.parentSpanId = rec.parentSpanId;
         break;
       }
@@ -465,6 +481,12 @@ export class Projections {
             : a.seq - b.seq,
       )
       .map(m => ({ ...m }));
+  }
+
+  /** The render-agents conversation bound to an external channel conversation. */
+  resolveConversation(channel: string, externalConversationId: string): ChannelConversation | undefined {
+    const c = this.channelConversations.get(`${channel}\u0000${externalConversationId}`);
+    return c ? { ...c } : undefined;
   }
 
   /** All input requests across every run, newest request first, optional status filter. */

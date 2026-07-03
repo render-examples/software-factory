@@ -78,23 +78,38 @@ export class PgJobQueue implements JobQueue {
 
   async enqueue(opts: EnqueueOptions): Promise<JobRecord> {
     const id = opts.id ?? randomUUID();
+    const payload = opts.payload !== undefined ? JSON.stringify(opts.payload) : null;
+    const params = [id, opts.runId, opts.kind, opts.priority ?? DEFAULT_PRIORITY, payload, opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS, opts.availableAt ?? null];
+
+    // `deliver` jobs are post-processing side-effects, not turn drivers: they are
+    // exempt from the per-run active index (so they coexist with the run's active
+    // agent/resume job) and are idempotent by their explicit id instead.
+    if (opts.kind === "deliver") {
+      const res = await this.pool.query<PgJobRow>(
+        `INSERT INTO run_jobs (id, run_id, kind, status, priority, payload, attempts, max_attempts, available_at)
+         VALUES ($1, $2, $3, 'queued', $4, $5, 0, $6, COALESCE($7::timestamptz, now()))
+         ON CONFLICT (id) DO NOTHING
+         RETURNING ${COLS}`,
+        params,
+      );
+      if (res.rows.length > 0) {
+        await this.notify();
+        return mapJobRow(res.rows[0]);
+      }
+      // A job with this id already exists (duplicate trigger / tail replay) — return it.
+      const existing = await this.pool.query<PgJobRow>(`SELECT ${COLS} FROM run_jobs WHERE id = $1`, [id]);
+      return mapJobRow(existing.rows[0]);
+    }
+
     // Idempotent per run via the partial unique index on (run_id) WHERE
-    // status IN ('queued','running'). A conflicting insert is a no-op; we then
-    // return the existing active job.
+    // status IN ('queued','running') AND kind <> 'deliver'. A conflicting insert
+    // is a no-op; we then return the existing active turn job.
     const res = await this.pool.query<PgJobRow>(
       `INSERT INTO run_jobs (id, run_id, kind, status, priority, payload, attempts, max_attempts, available_at)
        VALUES ($1, $2, $3, 'queued', $4, $5, 0, $6, COALESCE($7::timestamptz, now()))
-       ON CONFLICT (run_id) WHERE status IN ('queued', 'running') DO NOTHING
+       ON CONFLICT (run_id) WHERE status IN ('queued', 'running') AND kind <> 'deliver' DO NOTHING
        RETURNING ${COLS}`,
-      [
-        id,
-        opts.runId,
-        opts.kind,
-        opts.priority ?? DEFAULT_PRIORITY,
-        opts.payload !== undefined ? JSON.stringify(opts.payload) : null,
-        opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
-        opts.availableAt ?? null,
-      ],
+      params,
     );
 
     if (res.rows.length > 0) {
@@ -102,10 +117,10 @@ export class PgJobQueue implements JobQueue {
       return mapJobRow(res.rows[0]);
     }
 
-    // Conflict: an active job already exists for this run. Return it.
+    // Conflict: an active turn job already exists for this run. Return it.
     const existing = await this.pool.query<PgJobRow>(
       `SELECT ${COLS} FROM run_jobs
-       WHERE run_id = $1 AND status IN ('queued', 'running')
+       WHERE run_id = $1 AND status IN ('queued', 'running') AND kind <> 'deliver'
        ORDER BY created_at LIMIT 1`,
       [opts.runId],
     );

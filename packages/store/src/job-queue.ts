@@ -20,10 +20,11 @@
  * What a claimed job tells the warm chat worker (Lane B) to drive. Durable
  * pipelines (Lane A) do not use `run_jobs` — Render Workflows is their queue —
  * so there is no `workflow` kind here.
- * - `agent`  — one interactive chat turn (new run per message, thread-scoped memory).
- * - `resume` — re-drive a paused chat run after HITL within a turn resolves.
+ * - `agent`   — one interactive chat turn (new run per message, thread-scoped memory).
+ * - `resume`  — re-drive a paused chat run after HITL within a turn resolves.
+ * - `deliver` — push a completed channel-bound run's reply back to its surface (outbound).
  */
-export type JobKind = "agent" | "resume";
+export type JobKind = "agent" | "resume" | "deliver";
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
 

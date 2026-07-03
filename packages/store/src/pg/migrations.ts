@@ -20,6 +20,9 @@ const CORE_MIGRATIONS = [
   "0006_schedules_fk.sql",
   "0007_run_jobs.sql",
   "0008_run_parent_span.sql",
+  "0009_channels.sql",
+  "0010_deliver_jobs.sql",
+  "0011_schedule_user.sql",
 ];
 
 /**
