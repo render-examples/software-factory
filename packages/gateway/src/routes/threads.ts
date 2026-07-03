@@ -55,11 +55,22 @@ export function threadRoutes(deps: ThreadRouteDeps) {
 
   app.post("/threads", async (c) => {
     const principal = getPrincipal(c);
-    let body: { metadata?: Record<string, unknown>; title?: string } = {};
+    let raw: unknown;
     try {
-      body = await c.req.json();
+      raw = await c.req.json();
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return c.json({ error: "Thread create body must be a JSON object" }, 400);
+    }
+    const title = (raw as { title?: unknown }).title;
+    if (title !== undefined && typeof title !== "string") {
+      return c.json({ error: "title must be a string" }, 400);
+    }
+    const metadata = (raw as { metadata?: unknown }).metadata;
+    if (metadata !== undefined && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
+      return c.json({ error: "metadata must be a JSON object" }, 400);
     }
 
     const now = new Date().toISOString();
@@ -67,9 +78,9 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     const thread: Thread = {
       id: randomUUID(),
       userId: principal.userId,
-      metadata: body.metadata,
+      metadata: metadata as Record<string, unknown> | undefined,
       status: "active",
-      title: body.title,
+      title,
       createdAt: now,
       updatedAt: now,
     };
@@ -128,15 +139,18 @@ export function threadRoutes(deps: ThreadRouteDeps) {
   app.post("/threads/:id/messages", async (c) => {
     const principal = getPrincipal(c);
     const threadId = c.req.param("id");
-    let body: { content: string } = { content: "" };
+    let raw: unknown;
     try {
-      body = await c.req.json();
+      raw = await c.req.json();
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
-
-    if (!body.content || body.content.trim() === "") {
-      return c.json({ error: "content is required and must be non-empty" }, 400);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return c.json({ error: "Message body must be a JSON object" }, 400);
+    }
+    const content = (raw as { content?: unknown }).content;
+    if (typeof content !== "string" || content.trim() === "") {
+      return c.json({ error: "content is required and must be a non-empty string" }, 400);
     }
 
     const thread = await threadStore.getThread(threadId);
@@ -163,20 +177,24 @@ export function threadRoutes(deps: ThreadRouteDeps) {
           runId: active.id,
         }, 409);
       }
-      if (pendingMessage) {
-        await store.events.append(
-          buildEventRecord(active.id, {
-            type: "input.provided",
-            inputRequestId: pendingMessage.inputRequestId,
-            kind: "message",
-            value: body.content,
-          }),
-        );
+      if (!pendingMessage) {
+        return c.json({
+          error: "Run is paused but has no pending message input; resolve it via POST /runs/:id/input",
+          runId: active.id,
+        }, 409);
       }
       await store.events.append(
         buildEventRecord(active.id, {
+          type: "input.provided",
+          inputRequestId: pendingMessage.inputRequestId,
+          kind: "message",
+          value: content,
+        }),
+      );
+      await store.events.append(
+        buildEventRecord(active.id, {
           type: "message.user",
-          content: [{ type: "text", text: body.content }],
+          content: [{ type: "text", text: content }],
         }),
       );
       await driveResume(active.id);
@@ -189,7 +207,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     if (defaultAgent && startAgentRun) {
       const runId = randomUUID();
       try {
-        await startAgentRun(defaultAgent, body.content, { runId, threadId, userId: thread.userId });
+        await startAgentRun(defaultAgent, content, { runId, threadId, userId: thread.userId });
       } catch (err) {
         // DB-level guard: partial unique index on one-active-run-per-thread
         // rejects a concurrent second run.started; translate to a clean 409.
@@ -211,7 +229,7 @@ export function threadRoutes(deps: ThreadRouteDeps) {
 
     try {
       const run = await workflow.dispatch(
-        { message: body.content, threadId },
+        { message: content, threadId },
         "thread_message",
         { threadId, userId: thread.userId },
       );

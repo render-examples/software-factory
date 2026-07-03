@@ -330,11 +330,17 @@ export function createGatewayApp(opts: GatewayOptions) {
         return { runId: active.id, threadId, status: 409, body: { error: "Run is paused awaiting approval; resolve it via the inputs API", runId: active.id } };
       }
       const pendingMessage = pending.find((i) => i.kind === "message");
-      if (pendingMessage) {
-        await store.events.append(
-          buildEventRecord(active.id, { type: "input.provided", inputRequestId: pendingMessage.inputRequestId, kind: "message", value: text }),
-        );
+      if (!pendingMessage) {
+        return {
+          runId: active.id,
+          threadId,
+          status: 409,
+          body: { error: "Run is paused but has no pending message input; resolve it via the inputs API", runId: active.id },
+        };
       }
+      await store.events.append(
+        buildEventRecord(active.id, { type: "input.provided", inputRequestId: pendingMessage.inputRequestId, kind: "message", value: text }),
+      );
       await store.events.append(
         buildEventRecord(active.id, { type: "message.user", content: [{ type: "text", text }] }),
       );

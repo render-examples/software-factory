@@ -169,6 +169,37 @@ describe("gateway HITL — thread-scoped inputs (chat N+1 avoidance)", () => {
   });
 });
 
+describe("gateway HITL — run input targeting", () => {
+  it("does not fall through when a specific inputId is missing", async () => {
+    const runtime = await createTestRuntime();
+    const runId = "paused-run-missing-input";
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.started", trigger: "api" }, { spanId: runId }),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(
+        runId,
+        { type: "input.requested", inputRequestId: "ap-1", kind: "approval", toolName: "deploy", input: {} },
+        { spanId: runId },
+      ),
+    );
+    await runtime.store.events.append(
+      buildEventRecord(runId, { type: "run.paused", reason: "input", pendingInputIds: ["ap-1"] }, { spanId: runId }),
+    );
+
+    const app = createGatewayApp({ runtime, disableAuth: true, awaitResume: true });
+    const res = await app.request(`/runs/${runId}/input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inputId: "missing", approved: true }),
+    });
+    expect(res.status).toBe(404);
+
+    const pending = await runtime.store.getInputs(runId);
+    expect(pending.find((i) => i.inputRequestId === "ap-1")?.status).toBe("pending");
+  });
+});
+
 describe("gateway HITL — events scaffolding sanity", () => {
   it("buildEventRecord is importable from store (smoke)", () => {
     const rec = buildEventRecord("r", { type: "run.started" });

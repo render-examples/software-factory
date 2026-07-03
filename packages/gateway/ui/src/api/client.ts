@@ -1,7 +1,7 @@
 import type {
   Approval, RunDetail, RunEventRecord, RunRecord, ScheduleRecord,
   SpanRecord, Thread, ThreadMessage, ToolCallEntry, RunStatus,
-  WorkflowInfo, ConnectionInfo, JobsSnapshot, RetentionResult, ReapResult, RunCounts, InputCounts, ThreadView,
+  WorkflowInfo, ConnectionInfo, JobsSnapshot, RetentionResult, ReapResult, RunCounts, InputCounts, ThreadView, RunView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -57,14 +57,26 @@ export const client = {
   getRun(id: string): Promise<RunDetail> {
     return api(`/runs/${encodeURIComponent(id)}`);
   },
+  getRunView(id: string): Promise<RunView> {
+    return api(`/runs/${encodeURIComponent(id)}/view`);
+  },
   getSpans(id: string): Promise<{ spans: SpanRecord[] }> {
     return api(`/runs/${encodeURIComponent(id)}/spans`);
   },
   getToolCalls(id: string): Promise<{ toolCalls: ToolCallEntry[] }> {
     return api(`/runs/${encodeURIComponent(id)}/tool-calls`);
   },
-  getRunEvents(id: string): Promise<{ events: RunEventRecord[] }> {
-    return api(`/runs/${encodeURIComponent(id)}/events`);
+  getRunEvents(
+    id: string,
+    params: { seq?: number; category?: string; q?: string; limit?: number } = {},
+  ): Promise<{ events: RunEventRecord[] }> {
+    const q = new URLSearchParams();
+    if (params.seq !== undefined) q.set("seq", String(params.seq));
+    if (params.category) q.set("category", params.category);
+    if (params.q) q.set("q", params.q);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return api(`/runs/${encodeURIComponent(id)}/events${qs ? `?${qs}` : ""}`);
   },
   cancelRun(id: string): Promise<{ status: string; runId: string }> {
     return api(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });

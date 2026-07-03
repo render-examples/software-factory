@@ -11,8 +11,7 @@ type Lane = "all" | "workflow" | "chat";
 
 const PAGE = 100;
 
-// A run carries a threadId iff it is a Lane B chat turn; Lane A workflow roots
-// don't. This is the one field that distinguishes the two execution lanes (D12).
+// threadId distinguishes Lane B chat turns from Lane A workflow roots (D12).
 function laneOf(r: RunRecord): Exclude<Lane, "all"> {
   return r.threadId ? "chat" : "workflow";
 }
@@ -40,9 +39,7 @@ export function RunsView({ route }: { route: Route }) {
     setLane((route.query.get("lane") as Lane) ?? "all");
   }, [route.hash]);
 
-  // First page (and refresh). Keyed on workflow so a server-side filter change
-  // resets the cursor. Client-side filters (attention/live/text) operate on the
-  // accumulated pages below.
+  // Keyed on workflow so a server-side filter change resets the cursor.
   const loadFirst = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -59,7 +56,6 @@ export function RunsView({ route }: { route: Route }) {
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
-  // Live: refresh the first page on lifecycle events.
   useEffect(() => {
     if (lastEvent?.category === "lifecycle") {
       const t = setTimeout(loadFirst, 300);

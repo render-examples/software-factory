@@ -159,6 +159,51 @@ describe("channels — inbound conversation mapping (P2)", () => {
       else process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES = prev;
     }
   });
+
+  it("enforces content-type for non-empty payloads when strict mode is enabled", async () => {
+    const prev = process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE;
+    process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE = "1";
+    try {
+      const runtime = await createTestRuntime();
+      const channel: Channel = {
+        target: { workflow: "review" },
+        verify: "none",
+        match: () => ({ event: "pr" }),
+        parse: async () => ({ conversationId: "pr-10", input: {} }),
+      };
+      const wf = workflow(async () => "ok");
+      bindWorkflow(wf, "review", runtime);
+      const app = createGatewayApp({
+        runtime,
+        workflows: new Map<string, WorkflowDefinition>([["review", wf]]),
+        channels: new Map([["gh", channel]]),
+        disableAuth: true,
+      });
+
+      const missingType = await app.request("/channels/gh", {
+        method: "POST",
+        body: new TextEncoder().encode(JSON.stringify({ conversationId: "x", text: "hello" })),
+      });
+      expect(missingType.status).toBe(415);
+
+      const unsupportedType = await app.request("/channels/gh", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: JSON.stringify({ conversationId: "x", text: "hello" }),
+      });
+      expect(unsupportedType.status).toBe(415);
+
+      const jsonType = await app.request("/channels/gh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: "x", text: "hello" }),
+      });
+      expect(jsonType.status).toBe(202);
+    } finally {
+      if (prev === undefined) delete process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE;
+      else process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE = prev;
+    }
+  });
 });
 
 describe("channels — HITL over a channel (P5)", () => {
@@ -237,6 +282,33 @@ describe("channels — HITL over a channel (P5)", () => {
     });
     expect(res.status).toBe(409);
     expect((await res.json()).error).toContain("approval");
+  });
+
+  it("rejects a channel message when paused run has no pending message input", async () => {
+    const runtime = await createTestRuntime({
+      model: mockModel(() => ({ content: [{ type: "text", text: "x" }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" })),
+    });
+    runtime.agentDefinitions.set("assistant", assistantDef());
+    const channel: Channel = {
+      target: { agent: "assistant" },
+      verify: "none",
+      match: () => ({ event: "message" }),
+      parse: async (req) => { const b = (await req.json()) as { conversationId: string; text: string }; return { conversationId: b.conversationId, input: b.text }; },
+    };
+    const app = createGatewayApp({ runtime, channels: new Map([["chat", channel]]), disableAuth: true, awaitResume: true });
+
+    const threadId = idempotencyKey("chat", "conv-stale");
+    const runId = "stale-paused";
+    const now = new Date().toISOString();
+    await runtime.threadStore.createThread({ id: threadId, status: "active", createdAt: now, updatedAt: now });
+    await runtime.store.events.append(buildEventRecord(runId, { type: "run.started", channel: "chat", externalConversationId: "conv-stale", threadId, input: "go" }, { agentName: "assistant", spanId: runId }));
+    await runtime.store.events.append(buildEventRecord(runId, { type: "run.paused", reason: "input", pendingInputIds: ["missing"] }, { agentName: "assistant", spanId: runId }));
+
+    const res = await app.request("/channels/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId: "conv-stale", text: "hello" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("no pending message input");
   });
 });
 
