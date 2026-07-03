@@ -41,6 +41,10 @@ function rebuildRequest(url: string, headers: Headers, body: string): Request {
   return new Request(url, { method: "POST", headers, body });
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function readRawBodyLimited(
   req: Request,
   maxBytes: number,
@@ -159,8 +163,17 @@ export function channelRoutes(deps: {
       return c.json({ error: auth.reason }, auth.status);
     }
 
-    // `match` may be async (platforms that route on the body, e.g. Slack).
-    const matched = await channel.match(rebuildRequest(url, headers, rawBody));
+    // `match` may be async (platforms that route on the body, e.g. Slack). A
+    // signature can verify over a body that's otherwise malformed (garbage,
+    // truncated, wrong shape) — `match`/`parse` are third-party-authored and may
+    // throw (e.g. `JSON.parse` on a non-JSON payload), which must surface as a
+    // client error (bad payload) rather than an unhandled 500.
+    let matched;
+    try {
+      matched = await channel.match(rebuildRequest(url, headers, rawBody));
+    } catch (err) {
+      return c.json({ error: `Channel "${id}" failed to match request: ${errorMessage(err)}` }, 400);
+    }
     if (!matched) {
       return c.json({ error: "Channel did not match" }, 400);
     }
@@ -169,7 +182,12 @@ export function channelRoutes(deps: {
       return matched.ack;
     }
 
-    const event = await channel.parse(rebuildRequest(url, headers, rawBody));
+    let event;
+    try {
+      event = await channel.parse(rebuildRequest(url, headers, rawBody));
+    } catch (err) {
+      return c.json({ error: `Channel "${id}" failed to parse request: ${errorMessage(err)}` }, 400);
+    }
     const target = event.target ?? channel.target;
 
     if ("workflow" in target) {
