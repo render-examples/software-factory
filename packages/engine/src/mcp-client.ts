@@ -117,6 +117,9 @@ class StdioMcpConnection implements McpConnection {
   private constructor(private readonly child: ChildProcessWithoutNullStreams) {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onData(chunk));
+    // Drain stderr so chatty MCP servers cannot block on a full pipe.
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", () => {});
     child.on("error", (err) => this.failAll(err));
     child.on("exit", (code) => this.failAll(new Error(`MCP stdio server exited (code ${code})`)));
   }
