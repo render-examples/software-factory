@@ -121,6 +121,7 @@ export class InProcessRunContext implements RunContext {
   // their order across `LISTEN/NOTIFY` without blocking the agent loop.
   private deltaSeq = 0;
   private deltaTail: Promise<void> = Promise.resolve();
+  private readonly consumedMessageInputIds = new Set<string>();
 
   // Deterministic so resume/replay reuses the same agent span id and the
   // terminal run.completed/failed/cancelled close the original span.
@@ -313,7 +314,15 @@ export class InProcessRunContext implements RunContext {
     // If tool sources are provided, use the real ToolEnvironment mount path.
     if (this.toolSources.size > 0) {
       this.toolEnv = new ToolEnvironment();
-      return this.toolEnv.mount(this.toolSources, toolIds, this.logger, this.signal);
+      try {
+        return await this.toolEnv.mount(this.toolSources, toolIds, this.logger, this.signal);
+      } catch (err) {
+        // If mounting fails partway through, close any already-opened sources
+        // before surfacing the error so failed mounts don't leak processes/sockets.
+        await this.toolEnv.dispose().catch(() => {});
+        this.toolEnv = undefined;
+        throw err;
+      }
     }
     // Fallback: flat tool map (tests, Wave 0 compat).
     const tools = toolIds
@@ -417,8 +426,20 @@ export class InProcessRunContext implements RunContext {
   }
 
   async awaitInput(): Promise<ContentBlock[]> {
-    const inputRequestId = idempotencyKey(this.runId, "input:message");
-    const state = await this.inputState(inputRequestId);
+    let state = await this.nextMessageInputState();
+    if (state.resolved) {
+      if (this.consumedMessageInputIds.has(state.inputRequestId)) {
+        const nextOrdinal = state.ordinal + 1;
+        state = {
+          inputRequestId: idempotencyKey(this.runId, `input:message:${nextOrdinal}`),
+          requested: false,
+          resolved: false,
+          ordinal: nextOrdinal,
+        };
+      } else {
+        this.consumedMessageInputIds.add(state.inputRequestId);
+      }
+    }
     if (state.resolved) {
       if (Array.isArray(state.value)) {
         return state.value as ContentBlock[];
@@ -429,13 +450,68 @@ export class InProcessRunContext implements RunContext {
     if (!state.requested) {
       await this.emit({
         type: "input.requested",
-        inputRequestId,
+        inputRequestId: state.inputRequestId,
         kind: "message",
         prompt: "awaiting user input",
       });
     }
-    await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [inputRequestId] });
-    throw new RunPaused(this.runId, "input", [inputRequestId]);
+    await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [state.inputRequestId] });
+    throw new RunPaused(this.runId, "input", [state.inputRequestId]);
+  }
+
+  /**
+   * Determine the message-input request this await point belongs to:
+   * - reuse the latest unresolved request (resume idempotency),
+   * - otherwise advance to the next deterministic ordinal so multiple
+   *   awaitInput() calls in one run don't reuse stale input.
+   */
+  private async nextMessageInputState(): Promise<{ inputRequestId: string; requested: boolean; resolved: boolean; value?: unknown; ordinal: number }> {
+    const events = await this.store.events.read(this.runId);
+    const requested: string[] = [];
+    const byId = new Map<string, { resolved: boolean; value?: unknown }>();
+
+    for (const e of events) {
+      const p = e.payload;
+      if (p.type === "input.requested" && p.kind === "message") {
+        requested.push(p.inputRequestId);
+        byId.set(p.inputRequestId, { resolved: false });
+        continue;
+      }
+      if (p.type === "input.provided") {
+        const row = byId.get(p.inputRequestId);
+        if (!row) continue;
+        row.resolved = true;
+        row.value = p.value;
+      }
+    }
+
+    for (let i = requested.length - 1; i >= 0; i--) {
+      const inputRequestId = requested[i];
+      const state = byId.get(inputRequestId);
+      if (!state) continue;
+      if (!state.resolved) {
+        return { inputRequestId, requested: true, resolved: false, ordinal: i };
+      }
+      // Latest request is resolved: this awaitInput() should return it now.
+      if (i === requested.length - 1) {
+        return {
+          inputRequestId,
+          requested: true,
+          resolved: true,
+          value: state.value,
+          ordinal: i,
+        };
+      }
+      break;
+    }
+
+    const ordinal = requested.length;
+    return {
+      inputRequestId: idempotencyKey(this.runId, `input:message:${ordinal}`),
+      requested: false,
+      resolved: false,
+      ordinal,
+    };
   }
 
   private spanCorrelation(event: RunEvent): { spanId: string; parentSpanId?: string } | undefined {

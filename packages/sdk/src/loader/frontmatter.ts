@@ -36,7 +36,7 @@ const FrontmatterSchema = z.object({
     maxOutputTokens: z.number().optional(),
   }).optional(),
   runner: z.string().optional(),
-  /** Conversational agent: parks on `awaitInput()` between turns instead of completing. */
+  /** Conversational agent surfaced on thread routes (one run per turn, thread-scoped memory). */
   interactive: z.boolean().optional(),
 });
 

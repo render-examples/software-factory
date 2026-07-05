@@ -54,28 +54,11 @@ export class DefaultRunner implements AgentRunner {
   ) {}
 
   async run(agent: AgentDefinition, input: AgentInput, ctx: RunContext): Promise<AgentOutput> {
-    // Declared tools plus, if the agent delegates, the `subagents__<name>`
-    // delegation tools (resolved from the "subagents" source mounted by the
-    // run context when subagents are present).
-    const subagentToolIds = (agent.subagents ?? []).map((name) => `subagents__${name}`);
-    const mounted = await ctx.mountTools([...agent.tools, ...subagentToolIds]);
-    const skillTool = buildSkillTool(agent.skills);
-    const allTools = skillTool ? [...mounted.tools, skillTool] : mounted.tools;
-    const toolSchemas: ToolSchema[] = allTools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-    }));
-    const allMounted: MountedTools = {
-      tools: allTools,
-      byName: (name: string) => allTools.find((t) => t.name === name),
-    };
-
     const systemPrompt = buildSystemPrompt(agent.systemPrompt, agent.skills);
     const budget = resolveBudget(agent.budget);
     const usage = { inputTokens: 0, outputTokens: 0 };
 
-    // Resume support (D7): a run already in the log is being re-executed; do not
+    // Resume support: a run already in the log is being re-executed; do not
     // re-emit its opening events (that would duplicate the user turn).
     if (!(await ctx.hasStarted())) {
       await ctx.emit({ type: "run.started", input, agentVersion: agent.version, model: agent.model.model });
@@ -88,6 +71,24 @@ export class DefaultRunner implements AgentRunner {
     const runStartedAt = Date.now();
 
     try {
+      // Declared tools plus, if the agent delegates, the `subagents__<name>`
+      // delegation tools (resolved from the "subagents" source mounted by the
+      // run context when subagents are present). Mounted inside the try/finally
+      // so failures still run cleanup.
+      const subagentToolIds = (agent.subagents ?? []).map((name) => `subagents__${name}`);
+      const mounted = await ctx.mountTools([...agent.tools, ...subagentToolIds]);
+      const skillTool = buildSkillTool(agent.skills);
+      const allTools = skillTool ? [...mounted.tools, skillTool] : mounted.tools;
+      const toolSchemas: ToolSchema[] = allTools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      }));
+      const allMounted: MountedTools = {
+        tools: allTools,
+        byName: (name: string) => allTools.find((t) => t.name === name),
+      };
+
       while (true) {
         if (await ctx.isCancelled()) {
           await ctx.emit({ type: "run.cancelled" });
