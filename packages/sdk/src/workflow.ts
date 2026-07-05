@@ -455,6 +455,7 @@ function createRunScopedAgent(
         oauthStore: runtime.oauthStore,
         oauthRefreshers: runtime.oauthRefreshers,
         deltaBus: runtime.deltaBus,
+        suspender: runtime.suspender,
       }, {
         runId: childRunId,
         parentSpanId: parentRunId,
@@ -529,6 +530,7 @@ function inlineWorkflowDispatcher(runtime: AgentRuntime): NonNullable<AgentRunti
         oauthStore: runtime.oauthStore,
         oauthRefreshers: runtime.oauthRefreshers,
         deltaBus: runtime.deltaBus,
+        suspender: runtime.suspender,
       }, {
         runId: dOpts.runId,
         parentSpanId: dOpts.parentSpanId,

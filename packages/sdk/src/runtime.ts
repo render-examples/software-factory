@@ -27,6 +27,7 @@ import type {
   RetryPolicy,
   ModelPricing,
   OAuthRefresher,
+  Suspender,
 } from "@render-agents/engine";
 import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
 import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment, isRootTriggerEnvironment } from "./dispatch.js";
@@ -78,6 +79,21 @@ export interface TaskDispatcher {
    * in-process drive when it is absent.
    */
   dispatchRoot?(job: RootDispatchJob): Promise<void>;
+  /**
+   * Whether this dispatcher's runtime supports native durable suspension (Lane A
+   * on Render Workflows) rather than resume-by-replay. When true, the gateway
+   * wakes a parked run by delivering the resolution via `resumeSuspension`
+   * instead of re-triggering + replaying it. Defaults to falsy (replay).
+   */
+  supportsNativeSuspension?: boolean;
+  /**
+   * Wake a natively-suspended run — a workflow root *or* a child `agent.task()`
+   * whose gate parked — by triggering its resume webhook/endpoint (keyed by
+   * `token`) so the parked `await` returns and reads the recorded resolution
+   * from the event log. Present only when `supportsNativeSuspension` is true;
+   * otherwise resume is a re-drive (`dispatchRoot`) that replays from the log.
+   */
+  resumeSuspension?(job: { runId: string; token: string; payload?: unknown }): Promise<void>;
 }
 
 /**
@@ -110,6 +126,13 @@ export interface AgentRuntime {
   readonly hooks: HookRegistry;
   readonly contextManager: ContextManager;
   readonly dispatcher?: TaskDispatcher;
+  /**
+   * HITL suspension strategy (the `Suspender` seam), threaded into in-process
+   * runs. Undefined = default resume-by-replay (`ReplaySuspender`). A
+   * `NativeWorkflowsSuspender` can be injected for Lane A native durable
+   * pause/resume once the platform API is available.
+   */
+  readonly suspender?: Suspender;
   /** Durable job queue (control plane) for root-run + resume dispatch. Backed by Postgres when available, else in-memory. */
   readonly jobQueue: JobQueue;
   /** Transient token-delta bus (D13) for live streaming; never persisted. Postgres NOTIFY when available, else in-memory. */
@@ -156,6 +179,8 @@ export interface CreateRuntimeOptions {
    * `render workflows dev` shell (where those vars are exported).
    */
   autoDetectDispatcher?: boolean;
+  /** Override the HITL suspension strategy (default: resume-by-replay). */
+  suspender?: Suspender;
   jobQueue?: JobQueue;
   deltaBus?: DeltaBus;
   /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
@@ -299,6 +324,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       oauthStore,
       oauthRefreshers,
       deltaBus,
+      suspender: opts?.suspender,
     });
 
   if (hooks.ids().length > 0 && "setInterceptor" in store) {
@@ -319,6 +345,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
     hooks,
     contextManager,
     dispatcher,
+    suspender: opts?.suspender,
     jobQueue,
     deltaBus,
     executionMode,

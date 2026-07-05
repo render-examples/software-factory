@@ -22,6 +22,7 @@ import { applyMigrations } from "./migrations.js";
 import { createPool, type PoolConfig } from "./db.js";
 
 const NOTIFY_CHANNEL = "run_events";
+const MAX_EVENT_TAIL_QUEUE = 10_000;
 
 /**
  * Postgres's `jsonb` type rejects a literal NUL byte inside a JSON string
@@ -59,6 +60,9 @@ export class PgEventLogStore implements EventLogStore {
   private tailListenClient: pg.PoolClient | null = null;
   private tailListening: Promise<void> | null = null;
   private readonly tailSubs = new Set<EventTailSub>();
+  // Best-effort cache for run -> thread, used by thread-scoped tails to avoid a
+  // SELECT on every notified pointer.
+  private readonly runThreadCache = new Map<string, string>();
 
   constructor(private readonly pool: Pool) {}
 
@@ -90,9 +94,26 @@ export class PgEventLogStore implements EventLogStore {
       }
       for (const sub of this.tailSubs) {
         sub.queue.push(pointer);
+        if (sub.queue.length > MAX_EVENT_TAIL_QUEUE) sub.queue.shift();
         sub.wake?.();
       }
     });
+    const onGone = () => {
+      if (this.tailListenClient !== client) return;
+      this.tailListenClient = null;
+      this.tailListening = null;
+      try {
+        client.release();
+      } catch {
+        // already released
+      }
+      if (this.tailSubs.size > 0) {
+        // Transparent recovery for long-lived stream subscribers.
+        void this.ensureTailListening().catch(() => {});
+      }
+    };
+    client.on("error", onGone);
+    client.on("end", onGone);
     await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
   }
 
@@ -108,7 +129,11 @@ export class PgEventLogStore implements EventLogStore {
     } catch {
       // ignore — releasing the client drops the LISTEN anyway
     }
-    client.release();
+    try {
+      client.release();
+    } catch {
+      // already released
+    }
   }
 
   async append(record: RunEventRecord): Promise<void> {
@@ -179,6 +204,9 @@ export class PgEventLogStore implements EventLogStore {
       await this.foldWorkflowSteps(client, stored);
       await this.foldInputs(client, stored);
       await this.foldThreadMessages(client, stored);
+      if (stored.payload.type === "run.started" && stored.payload.threadId) {
+        this.runThreadCache.set(stored.runId, stored.payload.threadId);
+      }
 
       // Pointer-only NOTIFY payload avoids the 8KB limit
       await client.query(
@@ -227,6 +255,7 @@ export class PgEventLogStore implements EventLogStore {
     signal: AbortSignal,
   ): AsyncIterable<RunEventRecord> {
     const pool = this.pool;
+    const runThreadCache = this.runThreadCache;
     const readEvent = async (runId: string, seq: number): Promise<RunEventRecord | null> => {
       const res = await pool.query<PgEventRow>(
         `SELECT id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version
@@ -240,11 +269,15 @@ export class PgEventLogStore implements EventLogStore {
       if (!filter.runId && !filter.threadId) return true;
       if (filter.runId && filter.runId === runId) return true;
       if (filter.threadId) {
+        const cached = runThreadCache.get(runId);
+        if (cached !== undefined) return cached === filter.threadId;
         const res = await pool.query<{ thread_id: string | null }>(
           "SELECT thread_id FROM runs WHERE id = $1",
           [runId],
         );
-        return res.rows[0]?.thread_id === filter.threadId;
+        const threadId = res.rows[0]?.thread_id ?? undefined;
+        if (threadId !== undefined) runThreadCache.set(runId, threadId);
+        return threadId === filter.threadId;
       }
       return false;
     };
@@ -517,20 +550,22 @@ export class PgEventLogStore implements EventLogStore {
           `INSERT INTO tool_calls (id, run_id, idempotency_key, tool_name, input, status, started_at)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
            ON CONFLICT (run_id, idempotency_key) DO NOTHING`,
-          [p.toolCallId, rec.runId, idemKey, p.name, jsonbStringify(p.input), rec.ts],
+          [idemKey, rec.runId, idemKey, p.name, jsonbStringify(p.input), rec.ts],
         );
         break;
       }
-      case "tool.result":
+      case "tool.result": {
+        const idemKey = idempotencyKey(rec.runId, p.toolCallId);
         await client.query(
           `UPDATE tool_calls SET
              result_content = $2, result_is_error = $3,
              status = CASE WHEN $3 THEN 'failed' ELSE 'completed' END,
              finished_at = $4
-           WHERE id = $1`,
-          [p.toolCallId, p.result.content, p.result.isError ?? false, rec.ts],
+           WHERE run_id = $1 AND idempotency_key = $5`,
+          [rec.runId, p.result.content, p.result.isError ?? false, rec.ts, idemKey],
         );
         break;
+      }
     }
   }
 
@@ -675,6 +710,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async listRuns(opts?: ListRunsOptions): Promise<RunRecord[]> {
+    let beforeCursor: { id: string; started_at: Date } | undefined;
+    if (opts?.before) {
+      const res = await this.pool.query<{ id: string; started_at: Date }>(
+        `SELECT id, started_at FROM runs WHERE id = $1`,
+        [opts.before],
+      );
+      if (res.rows.length > 0) beforeCursor = res.rows[0];
+    }
+
     const conditions: string[] = [];
     const params: unknown[] = [];
     let paramIdx = 1;
@@ -698,10 +742,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     if (opts?.roots) {
       conditions.push(`parent_span_id IS NULL`);
     }
-    if (opts?.before) {
-      // Keyset pagination on the cursor run's started_at
-      conditions.push(`started_at < (SELECT started_at FROM runs WHERE id = $${paramIdx++})`);
-      params.push(opts.before);
+    if (beforeCursor) {
+      // Stable keyset pagination matching ORDER BY started_at DESC, id DESC.
+      conditions.push(`(started_at, id) < ($${paramIdx++}, $${paramIdx++})`);
+      params.push(beforeCursor.started_at);
+      params.push(beforeCursor.id);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

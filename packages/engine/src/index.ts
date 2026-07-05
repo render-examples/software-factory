@@ -37,6 +37,9 @@ export type {
   AgentRunner,
 } from "./context.js";
 
+export type { Suspender, SuspendRequest } from "./suspender.js";
+export { ReplaySuspender, replaySuspender } from "./suspender.js";
+
 export type {
   ToolSchema,
   CompleteArgs,
