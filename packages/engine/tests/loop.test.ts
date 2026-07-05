@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createMemoryStore, buildEventRecord, type MemoryRunStore } from "@render-agents/store";
 import type { Tracer } from "@render-agents/store";
 import type { AgentDefinition } from "../src/agent.js";
@@ -7,6 +7,7 @@ import type { Tool } from "../src/tool.js";
 import { DefaultRunner } from "../src/default-runner.js";
 import { InProcessRunContext } from "../src/run-context.js";
 import { passThroughContextManager } from "../src/context-manager.js";
+import type { RunContext } from "../src/context.js";
 
 const noopTracer: Tracer = { onStart: () => {}, onEnd: () => {} };
 
@@ -363,5 +364,39 @@ describe("DefaultRunner — control signals", () => {
     await runner.run(agent, "go", makeCtx(store, agent, "r1", { tools: new Map([["deploy", tool]]) }));
     expect(invoked).toBe(1);
     expect(await types(store, "r1")).toContain("input.auto");
+  });
+
+  it("cleans up mounted tools when mount fails before loop execution", async () => {
+    const agent = makeAgent();
+    const runner = new DefaultRunner(
+      mockModel([
+        { content: [{ type: "text", text: "never" }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" },
+      ]),
+    );
+    const emitted: string[] = [];
+    const disposeTools = vi.fn(async () => {});
+    const ctx: RunContext = {
+      signal: new AbortController().signal,
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      tracer: noopTracer,
+      runId: "r1",
+      depth: 0,
+      env: () => undefined,
+      connection: async () => undefined,
+      async mountTools() { throw new Error("mount failed"); },
+      disposeTools,
+      async requestInput() { return { approved: true }; },
+      async awaitInput() { return []; },
+      async emit(event) { emitted.push(event.type); },
+      streamDelta: () => {},
+      async messages() { return []; },
+      async appliedToolResult() { return undefined; },
+      async isCancelled() { return false; },
+      async hasStarted() { return false; },
+    };
+
+    await expect(runner.run(agent, "go", ctx)).rejects.toThrow("mount failed");
+    expect(disposeTools).toHaveBeenCalledTimes(1);
+    expect(emitted).toEqual(["run.started", "message.user", "run.failed"]);
   });
 });

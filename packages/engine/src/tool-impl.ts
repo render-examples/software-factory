@@ -129,6 +129,7 @@ export class ToolEnvironment {
 
     const allTools: Tool[] = [];
     const nameSet = new Set<string>();
+    const resolvedBySourceId = new Map<string, ResolvedSource>();
 
     for (const declaredId of declaredToolIds) {
       const isNamespaced = declaredId.includes("__");
@@ -140,8 +141,12 @@ export class ToolEnvironment {
         continue;
       }
 
-      const resolved = await source.resolve(env);
-      this.sources.push(resolved);
+      let resolved = resolvedBySourceId.get(sourceId);
+      if (!resolved) {
+        resolved = await source.resolve(env);
+        resolvedBySourceId.set(sourceId, resolved);
+        this.sources.push(resolved);
+      }
 
       if (isNamespaced) {
         const bareName = declaredId.split("__")[1];

@@ -107,6 +107,33 @@ describe("ToolEnvironment", () => {
     await env.dispose();
   });
 
+  it("resolves each source only once per mount even with multiple declared tools", async () => {
+    let resolveCalls = 0;
+    const source = {
+      id: "github",
+      async resolve() {
+        resolveCalls += 1;
+        return {
+          tools: [
+            { name: "get_file", description: "x", inputSchema: {}, invoke: async () => ({ content: "ok" }) },
+            { name: "push_code", description: "x", inputSchema: {}, invoke: async () => ({ content: "ok" }) },
+          ],
+          close: async () => {},
+        };
+      },
+    };
+    const env = new ToolEnvironment();
+    const mounted = await env.mount(
+      new Map([["github", source]]),
+      ["github__get_file", "github__push_code"],
+      silentLogger,
+      new AbortController().signal,
+    );
+    expect(resolveCalls).toBe(1);
+    expect(mounted.tools.map((t) => t.name).sort()).toEqual(["github__get_file", "github__push_code"]);
+    await env.dispose();
+  });
+
   it("namespaces prefixTools (MCP) sources by the directory key, incl. a single tool (BUG-10)", async () => {
     // Mirrors what defineMcpSource emits: bare server tool names + prefixTools.
     const mcpMulti = {
@@ -188,5 +215,19 @@ describe("ssrfFetch", () => {
 
   it("blocks private IP 192.168.x", async () => {
     await expect(ssrfFetch("http://192.168.1.1/admin")).rejects.toThrow(/SSRF blocked/);
+  });
+
+  it("allows a public literal IP and returns the response", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }),
+    );
+    try {
+      const res = await ssrfFetch("http://93.184.216.34/hello");
+      expect(res.status).toBe(200);
+      await expect(res.text()).resolves.toBe("ok");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });
