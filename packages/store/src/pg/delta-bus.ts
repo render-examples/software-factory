@@ -86,6 +86,21 @@ export class PgDeltaBus implements DeltaBus {
         if (deltaMatchesFilter(sub.filter, delta)) sub.queue.push(delta);
       }
     });
+    const onGone = () => {
+      if (this.listenClient !== client) return;
+      this.listenClient = null;
+      this.listening = null;
+      try {
+        client.release();
+      } catch {
+        // already released
+      }
+      if (this.subs.size > 0) {
+        void this.ensureListening().catch(() => {});
+      }
+    };
+    client.on("error", onGone);
+    client.on("end", onGone);
     await client.query(`LISTEN ${DELTA_CHANNEL}`);
   }
 
@@ -102,6 +117,10 @@ export class PgDeltaBus implements DeltaBus {
     } catch {
       // ignore — releasing the client drops the LISTEN anyway
     }
-    client.release();
+    try {
+      client.release();
+    } catch {
+      // already released
+    }
   }
 }

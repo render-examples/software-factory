@@ -76,6 +76,8 @@ export type {
   InputResult,
   RunContext,
   AgentRunner,
+  Suspender,
+  SuspendRequest,
   ToolSchema,
   CompleteArgs,
   CompleteResult,
@@ -95,6 +97,7 @@ export type {
   ResolveModelResult,
 } from "@render-agents/engine";
 export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-agents/engine";
+export { ReplaySuspender, replaySuspender } from "@render-agents/engine";
 export { resolveModelSpec, isTierAlias, inferProvider } from "@render-agents/engine";
 export { defineTool as engineDefineTool, defineToolSource, ToolEnvironment, buildToolContext, ssrfFetch, validateToolInput } from "@render-agents/engine";
 
@@ -161,6 +164,8 @@ export {
   isRootTriggerEnvironment,
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
+
+export { NativeWorkflowsSuspender } from "./native-suspender.js";
 
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 

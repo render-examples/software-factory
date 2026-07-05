@@ -33,6 +33,7 @@ interface Subscriber {
   wake?: () => void;
   done: boolean;
 }
+const MAX_EVENT_TAIL_QUEUE = 10_000;
 
 /**
  * In-memory append-only event log. `append` is the single write path: it runs
@@ -169,6 +170,7 @@ export class MemoryEventLogStore implements EventLogStore {
         if (this.runThread.get(rec.runId) !== sub.filter.threadId) continue;
       }
       sub.queue.push(copy);
+      if (sub.queue.length > MAX_EVENT_TAIL_QUEUE) sub.queue.shift();
       sub.wake?.();
     }
   }
