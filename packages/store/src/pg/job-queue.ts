@@ -59,6 +59,21 @@ export class PgJobQueue implements JobQueue {
         sub.wake?.();
       }
     });
+    const onGone = () => {
+      if (this.tailListenClient !== client) return;
+      this.tailListenClient = null;
+      this.tailListening = null;
+      try {
+        client.release();
+      } catch {
+        // already released
+      }
+      if (this.tailSubs.size > 0) {
+        void this.ensureTailListening().catch(() => {});
+      }
+    };
+    client.on("error", onGone);
+    client.on("end", onGone);
     await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
   }
 
@@ -73,7 +88,11 @@ export class PgJobQueue implements JobQueue {
     } catch {
       // ignore — releasing the client drops the LISTEN anyway
     }
-    client.release();
+    try {
+      client.release();
+    } catch {
+      // already released
+    }
   }
 
   async enqueue(opts: EnqueueOptions): Promise<JobRecord> {

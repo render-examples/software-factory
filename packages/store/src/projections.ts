@@ -384,16 +384,24 @@ export class Projections {
   }
 
   listRuns(opts?: ListRunsOptions): RunRecord[] {
+    const cursor = opts?.before ? this.runs.get(opts.before) : undefined;
     let rows = [...this.runs.values()];
     if (opts?.workflow) rows = rows.filter(r => r.workflow === opts.workflow);
     if (opts?.status) rows = rows.filter(r => r.status === opts.status);
     if (opts?.threadId) rows = rows.filter(r => r.threadId === opts.threadId);
     if (opts?.userId) rows = rows.filter(r => r.userId === opts.userId);
     if (opts?.roots) rows = rows.filter(r => !r.parentSpanId);
-    rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
-    if (opts?.before) {
-      const idx = rows.findIndex(r => r.id === opts.before);
-      if (idx >= 0) rows = rows.slice(idx + 1);
+    // Keep pagination deterministic for tied timestamps: same order/cursor
+    // semantics as Postgres (`ORDER BY started_at DESC, id DESC`).
+    rows.sort((a, b) =>
+      a.startedAt !== b.startedAt
+        ? (a.startedAt < b.startedAt ? 1 : -1)
+        : (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+    );
+    if (cursor) {
+      rows = rows.filter((r) =>
+        r.startedAt < cursor.startedAt || (r.startedAt === cursor.startedAt && r.id < cursor.id),
+      );
     }
     if (opts?.limit !== undefined) rows = rows.slice(0, opts.limit);
     return rows.map(r => ({ ...r }));

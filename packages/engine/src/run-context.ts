@@ -20,6 +20,8 @@ import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
 import type { MountedTools, Tool, ToolSource, OAuthTokens } from "./tool.js";
 import type { RunContext, InputResult } from "./context.js";
+import type { Suspender } from "./suspender.js";
+import { replaySuspender } from "./suspender.js";
 
 /** Refreshes a provider's tokens (provided by the composition root that knows token endpoints). */
 export type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>;
@@ -84,10 +86,17 @@ export interface InProcessRunContextOptions {
   oauthRefreshers?: Map<string, OAuthRefresher>;
   /** Transient token-delta bus (D13). When present, `streamDelta` publishes live deltas; absent = no-op. */
   deltaBus?: DeltaBus;
+  /**
+   * How the run parks on HITL (approval/`awaitInput`) and is woken. Defaults to
+   * `replaySuspender` (throw `RunPaused`, resume-by-replay). A
+   * continuation-preserving suspender (native Render Workflows pause/resume) can
+   * be injected to suspend the `await` in place instead.
+   */
+  suspender?: Suspender;
 }
 
 /**
- * The in-process realization of `RunContext` (D2/D9): every persisting step is
+ * The in-process realization of `RunContext`): every persisting step is
  * an `emit` to the event log. The loop talks only to this contract, so Wave 1
  * features land in the context/store rather than the loop body. Span ids are
  * correlated here so the `spans` projection can assemble the trace tree.
@@ -117,6 +126,7 @@ export class InProcessRunContext implements RunContext {
   private readonly oauthStore?: OAuthStore;
   private readonly oauthRefreshers: Map<string, OAuthRefresher>;
   private readonly deltaBus?: DeltaBus;
+  private readonly suspender: Suspender;
   // Per-run monotonic delta sequence + a serialized publish tail so deltas keep
   // their order across `LISTEN/NOTIFY` without blocking the agent loop.
   private deltaSeq = 0;
@@ -151,6 +161,7 @@ export class InProcessRunContext implements RunContext {
     this.oauthStore = opts.oauthStore;
     this.oauthRefreshers = opts.oauthRefreshers ?? new Map();
     this.deltaBus = opts.deltaBus;
+    this.suspender = opts.suspender ?? replaySuspender;
     this.agentSpanId = idempotencyKey(opts.runId, `agent-span:${opts.agentName}`);
 
     if (opts.cancelStore) {
@@ -395,11 +406,22 @@ export class InProcessRunContext implements RunContext {
       return { approved: false, reason: "denied at prompt" };
     }
 
-    // 4./5. Non-interactive: request once (if not already), then pause.
+    // 4./5. Non-interactive: request once (if not already), record the pause,
+    // then park via the suspender. Replay unwinds here (throws `RunPaused`);
+    // a continuation-preserving suspender (native) returns on wake, after which
+    // the recorded decision is read back below.
     if (!state.requested) {
       await this.emit({ type: "input.requested", inputRequestId, kind: "approval", toolName, input });
     }
     await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [inputRequestId] });
+    await this.suspender.park({ runId: this.runId, inputRequestId, kind: "approval" });
+
+    // Reached only under a continuation-preserving suspender: the resume
+    // delivered a decision, now folded from the log.
+    const resolved = await this.inputState(inputRequestId);
+    if (resolved.resolved && resolved.approved !== undefined) {
+      return resolved.approved ? { approved: true } : { approved: false, reason: resolved.reason };
+    }
     return { status: "pending", inputRequestId };
   }
 
@@ -441,11 +463,7 @@ export class InProcessRunContext implements RunContext {
       }
     }
     if (state.resolved) {
-      if (Array.isArray(state.value)) {
-        return state.value as ContentBlock[];
-      }
-      const text = typeof state.value === "string" ? state.value : state.value === undefined ? "" : JSON.stringify(state.value);
-      return [{ type: "text", text }];
+      return this.messageContent(state.value);
     }
     if (!state.requested) {
       await this.emit({
@@ -456,7 +474,23 @@ export class InProcessRunContext implements RunContext {
       });
     }
     await this.emit({ type: "run.paused", reason: "input", pendingInputIds: [state.inputRequestId] });
+    await this.suspender.park({ runId: this.runId, inputRequestId: state.inputRequestId, kind: "message" });
+
+    // Continuation-preserving suspender (native) resumes here: the delivered
+    // message is now in the log — re-read and return it as the awaited turn.
+    const delivered = await this.nextMessageInputState();
+    if (delivered.resolved) {
+      return this.messageContent(delivered.value);
+    }
+    // A well-behaved suspender always wakes with the input resolved; guard anyway.
     throw new RunPaused(this.runId, "input", [state.inputRequestId]);
+  }
+
+  /** Coerce a resolved message-input value into model-visible content blocks. */
+  private messageContent(value: unknown): ContentBlock[] {
+    if (Array.isArray(value)) return value as ContentBlock[];
+    const text = typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
+    return [{ type: "text", text }];
   }
 
   /**

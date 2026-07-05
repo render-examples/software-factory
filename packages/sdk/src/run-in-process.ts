@@ -9,6 +9,7 @@ import type {
   DelegationLimits,
   ToolSource,
   OAuthRefresher,
+  Suspender,
 } from "@render-agents/engine";
 import { InProcessRunContext, buildSubagentToolSource } from "@render-agents/engine";
 import type { RunnerRegistry, TaskDispatcher } from "./runtime.js";
@@ -36,6 +37,12 @@ export interface RunInProcessDeps {
   oauthRefreshers?: Map<string, OAuthRefresher>;
   /** Transient token-delta bus (D13) for live streaming; omit to disable (no-op). */
   deltaBus?: DeltaBus;
+  /**
+   * How runs park on HITL (approval / `awaitInput`) and are woken. Omitted =
+   * resume-by-replay (`ReplaySuspender`); a native Render Workflows suspender can
+   * be injected for Lane A durable pause/resume.
+   */
+  suspender?: Suspender;
 }
 
 export interface RunInProcessOptions {
@@ -101,6 +108,7 @@ export function runAgentInProcess<T = unknown>(
     oauthStore: deps.oauthStore,
     oauthRefreshers: deps.oauthRefreshers,
     deltaBus: deps.deltaBus,
+    suspender: deps.suspender,
   });
 
   // Descendants inherit the enclosing scope if set, else this run becomes

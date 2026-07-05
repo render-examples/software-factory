@@ -13,6 +13,7 @@ import type {
   ContextManager,
   DelegationLimits,
   ToolSource,
+  Suspender,
 } from "@render-agents/engine";
 import { noopTracer, RunPaused, RunCancelled } from "@render-agents/engine";
 import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry, RootDispatchJob } from "./runtime.js";
@@ -63,6 +64,8 @@ export interface InProcessDispatcherOptions {
   oauthRefreshers?: Map<string, import("@render-agents/engine").OAuthRefresher>;
   /** Transient token-delta bus (D13) for live streaming; never persisted. */
   deltaBus?: import("@render-agents/store").DeltaBus;
+  /** HITL suspension strategy (default: resume-by-replay). */
+  suspender?: Suspender;
 }
 
 /**
@@ -124,6 +127,7 @@ export class InProcessDispatcher implements TaskDispatcher {
       oauthStore: this.opts.oauthStore,
       oauthRefreshers: this.opts.oauthRefreshers,
       deltaBus: this.opts.deltaBus,
+      suspender: this.opts.suspender,
     }, {
       runId,
       parentSpanId: dispatchOpts.parentSpanId,
@@ -349,6 +353,7 @@ export async function agentTaskHandler(
     oauthStore: runtime.oauthStore,
     oauthRefreshers: runtime.oauthRefreshers,
     deltaBus: runtime.deltaBus,
+    suspender: runtime.suspender,
   }, {
     runId,
     parentSpanId,

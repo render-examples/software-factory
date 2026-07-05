@@ -209,6 +209,25 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
     expect(pgResult?.content).toBe("real data");
   });
 
+  it("handles repeated toolCallId across different runs identically", async () => {
+    const runA = `parity-toolid-a-${Date.now()}`;
+    const runB = `parity-toolid-b-${Date.now()}`;
+    const sharedToolCallId = "call_0";
+
+    for (const store of [pgStore, memStore]) {
+      for (const [runId, content] of [[runA, "from-a"], [runB, "from-b"]] as const) {
+        await store.events.append(buildEventRecord(runId, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runId }));
+        await store.events.append(buildEventRecord(runId, { type: "tool.called", toolCallId: sharedToolCallId, name: "search", input: {} }, { agentName: AGENT, spanId: `${runId}-tool` }));
+        await store.events.append(buildEventRecord(runId, { type: "tool.result", toolCallId: sharedToolCallId, name: "search", result: { content } }, { agentName: AGENT, spanId: `${runId}-tool` }));
+      }
+    }
+
+    expect((await pgStore.getToolResult(runA, sharedToolCallId))?.content).toBe("from-a");
+    expect((await pgStore.getToolResult(runB, sharedToolCallId))?.content).toBe("from-b");
+    expect((await memStore.getToolResult(runA, sharedToolCallId))?.content).toBe("from-a");
+    expect((await memStore.getToolResult(runB, sharedToolCallId))?.content).toBe("from-b");
+  });
+
   it("memoizes step results by (runId, name)", async () => {
     const runId = `parity-steps-${Date.now()}`;
 
@@ -282,6 +301,75 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
     expect(memRuns.length).toBeGreaterThanOrEqual(2);
     expect(pgRuns[0]!.id).toBe(run2);
     expect(memRuns[0]!.id).toBe(run2);
+  });
+
+  it("listRuns before-cursor keyset matches memory semantics with tie timestamps", async () => {
+    const tag = `parity-cursor-${Date.now()}`;
+    const t = "2026-02-01T00:00:00.000Z";
+    const runA = `${tag}-a`;
+    const runB = `${tag}-b`;
+    const runC = `${tag}-c`;
+
+    // B and A share the same started_at; DESC id order is B then A.
+    for (const store of [pgStore, memStore]) {
+      await store.events.append(buildEventRecord(runA, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runA, ts: t }));
+      await store.events.append(buildEventRecord(runA, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: runA, ts: t }));
+      await store.events.append(buildEventRecord(runB, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runB, ts: t }));
+      await store.events.append(buildEventRecord(runB, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: runB, ts: t }));
+      await store.events.append(buildEventRecord(runC, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runC, ts: "2026-01-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(runC, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: runC, ts: "2026-01-01T00:00:00.000Z" }));
+    }
+
+    const pgBeforeB = (await pgStore.listRuns({ before: runB, limit: 10 })).map((r) => r.id);
+    const memBeforeB = (await memStore.listRuns({ before: runB, limit: 10 })).map((r) => r.id);
+    expect(pgBeforeB).toEqual(memBeforeB);
+    expect(pgBeforeB).toContain(runA);
+    expect(pgBeforeB).toContain(runC);
+
+    // Missing cursor id should behave like memory (no cursor filter applied).
+    const pgMissing = (await pgStore.listRuns({ before: `${tag}-missing`, limit: 10 })).map((r) => r.id);
+    const memMissing = (await memStore.listRuns({ before: `${tag}-missing`, limit: 10 })).map((r) => r.id);
+    expect(pgMissing).toEqual(memMissing);
+  });
+
+  it("applies before-cursor even when the cursor run does not match status filter", async () => {
+    const tag = `parity-cursor-filter-${Date.now()}`;
+    const runNew = `${tag}-new-running`;
+    const runCursor = `${tag}-cursor-completed`;
+    const runOld = `${tag}-old-running`;
+
+    for (const store of [pgStore, memStore]) {
+      await store.events.append(buildEventRecord(runNew, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runNew, ts: "2026-03-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(runCursor, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runCursor, ts: "2026-02-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(runCursor, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: runCursor, ts: "2026-02-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(runOld, { type: "run.started", input: {} }, { agentName: AGENT, spanId: runOld, ts: "2026-01-01T00:00:00.000Z" }));
+    }
+
+    const pgRunning = (await pgStore.listRuns({ status: "running", before: runCursor, limit: 10 })).map((r) => r.id);
+    const memRunning = (await memStore.listRuns({ status: "running", before: runCursor, limit: 10 })).map((r) => r.id);
+    expect(pgRunning).toEqual(memRunning);
+    expect(pgRunning).toEqual([runOld]);
+  });
+
+  it("combines roots-only and before-cursor pagination identically", async () => {
+    const tag = `parity-roots-cursor-${Date.now()}`;
+    const workflow = `${AGENT}-roots-edge`;
+    const rootNew = `${tag}-root-new`;
+    const rootCursor = `${tag}-root-cursor`;
+    const childOld = `${tag}-child-old`;
+    const rootOld = `${tag}-root-old`;
+
+    for (const store of [pgStore, memStore]) {
+      await store.events.append(buildEventRecord(rootNew, { type: "run.started", input: {} }, { agentName: workflow, spanId: rootNew, ts: "2026-04-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(rootCursor, { type: "run.started", input: {} }, { agentName: workflow, spanId: rootCursor, ts: "2026-03-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(childOld, { type: "run.started", input: {} }, { agentName: workflow, spanId: childOld, parentSpanId: `${tag}-parent-span`, ts: "2026-02-01T00:00:00.000Z" }));
+      await store.events.append(buildEventRecord(rootOld, { type: "run.started", input: {} }, { agentName: workflow, spanId: rootOld, ts: "2026-01-01T00:00:00.000Z" }));
+    }
+
+    const pgRoots = (await pgStore.listRuns({ workflow, roots: true, before: rootCursor, limit: 10 })).map((r) => r.id);
+    const memRoots = (await memStore.listRuns({ workflow, roots: true, before: rootCursor, limit: 10 })).map((r) => r.id);
+    expect(pgRoots).toEqual(memRoots);
+    expect(pgRoots).toEqual([rootOld]);
   });
 });
 
