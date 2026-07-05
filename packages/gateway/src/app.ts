@@ -194,7 +194,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Child→parent HITL bubble: an approval gate inside a child run resolves the
   // child, but the parked run is the workflow root above it. Walk parentSpanId
   // up to the nearest paused root so its replay re-dispatches past the now-
-  // resolved gate. Interim until native Workflows pause/resume lands (docs/bug-bash.md).
+  // resolved gate. Interim until native Workflows pause/resume lands
+  // (docs/sprints/native-pause-resume.md).
   const findPausedWorkflowRoot = async (run: RunRecord): Promise<RunRecord | undefined> => {
     const seen = new Set<string>();
     let cursor: RunRecord | undefined = run;
