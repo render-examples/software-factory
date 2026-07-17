@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "worker": "tsx src/worker.ts",
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }
