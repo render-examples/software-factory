@@ -219,7 +219,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 .main { display: flex; flex-direction: column; overflow: hidden; height: 100%; }
 .content { flex: 1; overflow: auto; }
-/* Local header bar for panes (e.g. the chat conversation view). The global app
+/* Local header bar for panes (e.g. the chat thread view). The global app
    top bar was removed; its controls now live in the left rail footer. */
 .topbar {
   display: flex; align-items: center; gap: 0.6rem;

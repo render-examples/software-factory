@@ -6,7 +6,7 @@ import type { Approval, RunStatus, Thread, ThreadMessage } from "../api/types";
 
 export type ChatStatus = "idle" | "thinking" | "waiting" | "needs-approval" | "failed";
 
-export interface ConversationState {
+export interface ThreadState {
   thread: Thread | null;
   messages: ThreadMessage[];
   approvals: Approval[];
@@ -23,7 +23,7 @@ export interface ConversationState {
   stop: () => Promise<void>;
 }
 
-export function useConversation(threadId: string): ConversationState {
+export function useThread(threadId: string): ThreadState {
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);

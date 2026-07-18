@@ -41,7 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "ops", label: "Ops", group: "configure", Icon: OpsIcon },
 ];
 
-/** The section the app lands on with no hash (primary object = conversation). */
+/** The section the app lands on with no hash (primary object = thread). */
 export const DEFAULT_SECTION = "chat";
 
 const LABELS: Record<string, string> = Object.fromEntries(NAV_ITEMS.map((n) => [n.id, n.label]));

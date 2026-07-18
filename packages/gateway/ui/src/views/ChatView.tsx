@@ -3,30 +3,30 @@ import { client } from "../api/client";
 import { navigate, type Route } from "../state/router";
 import { useApp } from "../state/app";
 import { useAsync } from "../hooks/useAsync";
-import { useConversation, type ChatStatus } from "../hooks/useConversation";
+import { useThread, type ChatStatus } from "../hooks/useThread";
 import { relativeTime } from "../lib/format";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { ErrorBanner, CopyButton, Empty, Spinner, StatusBadge } from "../components/ui";
 import { Markdown } from "../components/Markdown";
 import type { ThreadMessage } from "../api/types";
 
-// Former standalone Threads view lives here as a conversation-picker pane
-// (left), with the selected conversation on the right.
+// Former standalone Threads view lives here as a thread-picker pane
+// (left), with the selected thread on the right.
 export function ChatView({ route }: { route: Route }) {
   const threadId = route.segments[1];
   return (
     <div className={`chat-layout${threadId ? " has-active" : ""}`}>
-      <ConversationList activeId={threadId} />
+      <ThreadList activeId={threadId} />
       <div className="convo-main">
         {threadId
-          ? <Conversation key={threadId} threadId={threadId} />
-          : <Empty>Pick a conversation on the left, or start a new one.</Empty>}
+          ? <ThreadPane key={threadId} threadId={threadId} />
+          : <Empty>Pick a thread on the left, or start a new one.</Empty>}
       </div>
     </div>
   );
 }
 
-function ConversationList({ activeId }: { activeId?: string }) {
+function ThreadList({ activeId }: { activeId?: string }) {
   const { lastEvent } = useApp();
   const [userId, setUserId] = useState("");
   const [creating, setCreating] = useState(false);
@@ -42,7 +42,7 @@ function ConversationList({ activeId }: { activeId?: string }) {
   async function newThread() {
     setCreating(true);
     try {
-      const t = await client.createThread({ title: "New conversation", userId: userId || undefined });
+      const t = await client.createThread({ title: "New thread", userId: userId || undefined });
       navigate(`chat/${t.id}`);
       reload();
     } finally {
@@ -51,7 +51,7 @@ function ConversationList({ activeId }: { activeId?: string }) {
   }
 
   return (
-    <aside className="convo-list" aria-label="Conversations">
+    <aside className="convo-list" aria-label="Threads">
       <div className="convo-list-head">
         <button className="primary" disabled={creating} onClick={newThread}>{creating ? <Spinner /> : "+ New"}</button>
         <input placeholder="filter by user id" value={userId} onChange={(e) => setUserId(e.target.value)} />
@@ -60,7 +60,7 @@ function ConversationList({ activeId }: { activeId?: string }) {
       <ErrorBanner error={error} />
       <div className="convo-scroll">
         {(data?.threads.length ?? 0) === 0 && !loading ? (
-          <Empty>No conversations yet.</Empty>
+          <Empty>No threads yet.</Empty>
         ) : (
           data?.threads.map((t) => (
             <button
@@ -81,7 +81,7 @@ function ConversationList({ activeId }: { activeId?: string }) {
   );
 }
 
-function Conversation({ threadId }: { threadId: string }) {
+function ThreadPane({ threadId }: { threadId: string }) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const {
@@ -99,7 +99,7 @@ function Conversation({ threadId }: { threadId: string }) {
     refresh,
     send,
     stop,
-  } = useConversation(threadId);
+  } = useThread(threadId);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -115,10 +115,10 @@ function Conversation({ threadId }: { threadId: string }) {
   return (
     <div className="chat">
       <div className="topbar" style={{ borderTop: "none" }}>
-        <button className="ghost convo-back" onClick={() => navigate("chat")} aria-label="Back to conversations">
-          back to conversations
+        <button className="ghost convo-back" onClick={() => navigate("chat")} aria-label="Back to threads">
+          back to threads
         </button>
-        <b>{thread?.title || "Conversation"}</b>
+        <b>{thread?.title || "Thread"}</b>
         <span className="chip mono">{threadId.slice(0, 8)}</span>
         <StatusLine status={status} />
         <span className="spacer" />
