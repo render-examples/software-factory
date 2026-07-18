@@ -1,0 +1,95 @@
+# Track D — Slicing strategy (cutting the DAG)
+
+> De-risks: spec §7.2 (the DAG), §8.1 (machine graph drives slicing), §13 ("slice boundary quality … bad slicing is the primary failure mode").
+
+## Question
+
+How do we cut a typed dependency graph into slices that are **bounded, verifiable, and safely parallelizable**?
+- What algorithms/heuristics produce good boundaries (graph partitioning, community detection, cycle collapsing into SCCs)?
+- How is the LLM's *judgment* role (proposing boundaries, effort estimates, dependency substitutions) combined with the deterministic graph ops (topo sort, cycle detection) without serializing the whole graph into a prompt?
+- How do we handle cycles (mutually recursive modules) that can't be cleanly sliced?
+- Where do integration/e2e test nodes get inserted (§7.2, §10)?
+
+## Why it's load-bearing
+
+Slice boundary quality dictates both parallelism (throughput/cost) and parity verifiability (safety). The spec calls bad slicing *the* primary failure mode.
+
+## Sources to review
+
+- **OpenRewrite / Moderne** — recipe-based large-scale refactoring; how they scope + sequence changes and reason over dependencies at enterprise scale.
+- **Google Large-Scale Changes (LSC)** process — how huge migrations are chunked and sequenced with human gates.
+- Graph partitioning / community detection literature (modularity, min-cut, SCC condensation).
+- Strangler Fig sequencing (Fowler) — bounded incremental replacement + transitional shims.
+
+## Findings
+
+### F1 — The deterministic spine is SCC-condensation → topological order (not clustering)
+
+The load-bearing structure comes *before* any clustering heuristic. Collapsing every strongly connected component (SCC) into a single node always yields a DAG — the **condensation** — and cycles are, by definition, *fully contained inside* SCCs, i.e. SCCs are the natural "containers" of cyclic structure ([Wikipedia: condensation](https://en.wikipedia.org/wiki/Condensation_%28graph_theory%29); [SpaceComplexity: Tarjan](https://spacecomplexity.ai/blog/tarjans-algorithm)). **Tarjan's algorithm** computes all SCCs in a single DFS pass in `O(V+E)` and emits them in **reverse topological order of the condensation DAG — a topological sort for free** ([Wikipedia: Tarjan's SCC](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm); [CMU 15-451 notes](https://www.cs.cmu.edu/~15451-f20/LectureNotes/dfs-scc.pdf)). This is exactly the "cycle detection, topological ordering, safe parallelization" that spec §8.1 assigns to `networkx`/`graphlib`, and it means the migration DAG skeleton is *derived deterministically*, not proposed by an LLM. Any vertex not on a cycle is its own SCC, so on already-acyclic code the condensation is a no-op and topo order is the plan.
+
+### F2 — Community detection *sizes* clusters, but is a heuristic that needs guardrails
+
+**Louvain** greedily maximizes **modularity** (edge density inside a group vs. a random null model) and is *hierarchical*: it repeatedly collapses communities into super-nodes, yielding nested multi-scale structure — useful because slices naturally have sub-slices ([Wikipedia: Louvain](https://en.wikipedia.org/wiki/Louvain_method); [Blondel et al., "15 years later"](https://google.iopscience.iop.org/article/10.1088/1742-5468/ad6139/pdf)). Applied to source graphs (files/symbols = nodes, typed deps = weighted edges) it recovers **semantically coherent concerns**: the Gold/Goldsmiths study found Louvain communities in a program dependence graph mapped cleanly onto its "sum / product / support" concerns ([Dependence Communities in Source Code](http://sebastian.doc.gold.ac.uk/papers/era-hamilton-james-dependence-communities.pdf)), and practitioners cluster ~4,000 files into "features" this way — including the necessary trick of **dampening hub nodes** (symbols imported by >30% of the codebase) so they don't smear across every community ([DEV: clustering with Louvain](https://dev.to/glue_admin_3465093919ac6b/how-we-cluster-4000-files-into-features-using-louvain-community-detection-17b9)). Caveats that directly shape our design: modularity is NP-hard to optimize globally (Louvain is only a heuristic, no global optimum), and it suffers a **resolution limit** that silently merges small distinct communities; **Leiden** is the recommended higher-quality successor that fixes Louvain's connectivity/convergence defects ([Wikipedia: Louvain](https://en.wikipedia.org/wiki/Louvain_method); [PuppyGraph: Louvain](https://www.puppygraph.com/blog/louvain)). The **resolution parameter** is our knob for target slice granularity, and the **minimized cross-community edge cut** is not just an optimization target — each cut edge is exactly one entry in a slice's "must-preserve inventory" (spec §8.4 interface contract). Fewer cut edges = smaller parity surface.
+
+### F3 — LLM judgment is combined with the graph via *tool-mediated navigation*, never serialization
+
+The 2025–2026 research consensus for reasoning over large graphs is explicit: **do not stuff the graph into the context window** — expose graph-navigation *tools* and let the model compose them. **GraphWalk** shows a minimal, domain-agnostic toolset (`node lookup`, `neighbor retrieval`, `property enumeration`) takes non-reasoning models from 0%→100% on structural tasks over arbitrarily large graphs ([GraphWalk](https://www.arxiv.org/pdf/2604.01610)). **GRASP** interleaves on-demand *Neighbor Retrieval* ("eyes") with a deterministic *Code Interpreter* ("hands") — the LLM probes/plans, deterministic code computes ([PKU-ML/GRASP](https://github.com/PKU-ML/GRASP)). **GraphChain** decomposes graph problems into chains of specialized tool calls with progressive distillation of a compact memory state ([GraphChain, NeurIPS 2025](https://papers.neurips.cc/paper_files/paper/2025/file/0afacd536648265c03a0bd86dabb0e1a-Paper-Conference.pdf)). This is a direct, current-literature validation of spec §8.1 ("the LLM's role is judgment, not computing the topological sort") and §8.3 ("wrong context is worse than no context"). The mechanism for us: the deterministic engine hands the Planner a *candidate* boundary plus a **seeded neighborhood** (personalized PageRank, §8.3) and graph-query tools (`who_depends_on`, `scc_of`, `cut_edges_of`), and the LLM refines boundaries / estimates effort / flags substitutions by probing — matching spec §8.5's "graph as a first-class MCP/opencode tool" rather than a prompt blob.
+
+### F4 — Cycles that can't be cleanly sliced: co-migrate or break the seam
+
+A multi-node SCC is a mutually-recursive knot with no valid internal topological order, so it has two dispositions:
+1. **Co-migrate atomically** — treat the whole SCC as one slice. Correct and simple *if* the SCC is under the size bar (F6).
+2. **Break the cycle** when the SCC is too big to estimate/verify. The standard, well-documented techniques all introduce a new direction or a new node: **Dependency Inversion / Extract Interface** (both modules depend on an abstraction in a neutral package, making flow unidirectional), **extract shared types** into a leaf module, or **event/indirection** to decouple peers ([Acyclic Dependencies Principle](https://manoelmedeiros.com/en/blog/acyclic-dependencies-principle-monolith-microservice-graph-theory-cost-change.html); [Circular dependencies: find & fix](https://viberails.net/blog/circular-dependencies-how-to-find-and-fix)). Feathers' **seams** — "a place where you can alter behavior without editing in that place" — are precisely the transitional shims (spec §4) used to break a dependency incrementally and get a knot under test before moving it ([Fowler: Legacy Seam](https://martinfowler.com/bliki/LegacySeam.html); [Working Effectively with Legacy Code, Ch. 25](https://dl.ebooksworld.ir/motoman/Working.Effectively.with.Legacy.Code..www.EBooksWorld.ir.pdf)). Guidance is to **break at the lowest-cost edge** and do it incrementally in legacy ([Acyclic Dependencies Principle](https://manoelmedeiros.com/en/blog/acyclic-dependencies-principle-monolith-microservice-graph-theory-cost-change.html)) — which we operationalize by ranking SCC edges by weakness (fewest call sites / lowest weight) and inverting the weakest one behind a shim.
+
+### F5 — How real large-scale systems scope + sequence units of change
+
+- **Google LSC / Rosie.** A "master change" is **sharded into small pieces along project boundaries and ownership rules**, and each shard runs an *independent* test–mail–submit pipeline; Rosie **caps the number of outstanding shards** and runs at low priority (an explicit concurrency budget), with an **LSC committee as a human gate** ([Software Engineering at Google, Ch. 22](https://abseil.io/resources/swe-book/html/ch22.html); [Le Brun: evolving a codebase at Google scale](https://laurent.le-brun.eu/blog/evolving-a-codebase-at-google-scale)). Google's AI-assisted migrations add a telling division of labor: **static analysis (Kythe/Code Search) computes a *tight superset* of locations + dependencies**, the model generates edits **verified to pass unit tests**, and engineers review before **sharding to owners** ([Accelerating code migrations with AI](https://research.google/blog/accelerating-code-migrations-with-ai/)). Lessons map 1:1 onto our spec: shards = DAG slices on isolated branches (§9.4), a concurrency budget (§6.3), deterministic analysis defines the boundary, AI fills the edit, humans gate (§13).
+- **OpenRewrite / Moderne.** A large migration is a **composite recipe of many small, individually testable, composable sub-recipes** (a Spring Boot 2→3 recipe pulls in *thousands* of cascading sub-recipes); the engine **runs recipes in cycles so later steps react to earlier changes**, and recipes are **idempotent** and type-aware ([OpenRewrite: Recipes](https://docs.openrewrite.org/concepts-and-explanations/recipes); [Moderne: OpenRewrite](https://moderne.ai/openrewrite); [JAVAPRO](https://javapro.io/2026/02/04/the-open-source-deterministic-engine-maintaining-javas-next-30-years/)). Their stated agent doctrine — *"the agent's job is to reach for (or write) the recipe, not to be the editor"* ([Moderne: Recipes](https://www.moderne.ai/recipes)) — reinforces the deterministic-first split (Track E) and, for slicing, models the **big migration as a composition of small units executed in dependency order and re-run in cycles**.
+- **Strangler Fig (Fowler) + Branch by Abstraction.** The four activities include *"decide how to break the problem up into smaller parts,"* and the core work is **finding seams to split the system** and **replacing small, well-isolated components first** (low risk, early value, faster learning), with **transitional architecture expected** ([Fowler: Strangler Fig](https://martinfowler.com/bliki/StranglerFigApplication.html)). **Branch by Abstraction** is the in-codebase cousin — insert an abstraction, build the new impl behind it, switch callers — with the discipline that *new calls may never use the old implementation* ([HLD Handbook: Strangler Fig](https://hld.handbook.academy/curriculum/architecture-patterns/strangler-fig/); [Azure: Strangler Fig](https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig)). This is the sequencing heuristic for root selection: prefer **low-risk, well-isolated, high-fan-in leaf slices** first.
+
+### F6 — The slice-size / estimability bar (answers the Open item)
+
+Spec §4/§5 says "if a slice can't be estimated or verified, decompose." Concretely, a candidate slice is **accepted only if it passes all five gates**; failing any one triggers decomposition:
+1. **Bounded size** — ≤ ~10 public symbols *and* ≤ ~400–600 LOC *and* the slice's repo-map (signatures + direct-dependency contracts, §8.4) fits one Implementer's token budget. (Starting defaults; calibrate on the eval corpus.)
+2. **Bounded interface** — ≤ ~5 *cut edges* (inbound interface contracts to preserve). This is the min-cut objective made into a gate: a fat boundary = a fat must-preserve inventory = fragile parity.
+3. **Estimable** — the Planner returns an effort estimate with confidence ≥ threshold; an "unknown / wide-variance" estimate is itself a decompose signal (mirrors Google's requirement that the change set be an enumerable *tight superset*).
+4. **Verifiable** — ≥ 1 characterization test can be anchored to the slice's public interface (§8.4 behavioral anchors). No attachable parity oracle ⇒ not a valid slice (generate tests first or decompose).
+5. **Acyclic externally** — the slice is a single node in the condensation DAG; its only inter-slice edges point to already-migrated or not-yet-started slices (no cyclic wait). Internal cycles are allowed *only* while gate 1 holds.
+
+Decomposition is a **recursive descent on the Louvain/Leiden hierarchy**: start at a coarse resolution, and for any community that fails a gate, expand to its next hierarchical level (or raise resolution); for an oversized SCC, run the F4 cycle-break instead.
+
+### F7 — Where integration / e2e test nodes go relative to clusters
+
+The current best-practice topology is **layered by boundary, not a single monolithic suite**: unit → component (service *inside* its boundary) → **contract tests at the seams between bounded contexts** → a *few* integration/topology tests for high-risk collaborations → **sparse e2e for only the highest-value journeys**; the recurring maxim is *"integration tests should be chosen, not multiplied"* ([NILUS: integration test topology](https://www.nilus.be/blog/integration_test_topology_in_microservices/); [Boundary-Aware Testing](https://softwarepatternslexicon.com/microservices-boundaries-and-service-decomposition/testing-and-operations/boundary-aware-testing/)). Because our DAG migrates **dependencies-first (topological order)**, the natural fit is **bottom-up integration**: lower-level slices land first, so integration tests attach as an interdependent cluster completes, rather than needing stubs ([Bottom-up vs top-down](https://aqua-cloud.io/bottom-up-vs-top-down-integration-testing/)) — exactly spec §7.2. Contract tests belong on the **cut edges** produced by partitioning (the interface contracts we already minimized), and a contract graph can gate promotion / expose blast radius ([Contract Testing as Architecture](https://www.nilus.be/blog/contract_testing_as_architecture_in_microservices/)).
+
+## Recommendation
+
+**A four-stage slicing pipeline: deterministic backbone first, LLM judgment second, both behind tools.**
+
+**Stage 0 — Graph (deterministic, Phase 1).** Build the typed directional digraph (tree-sitter/LSP, §8.2) in Postgres; load into `networkx`.
+
+**Stage 1 — Condense (deterministic).** Run **Tarjan SCC → condensation DAG** (F1). Each single-node SCC is an atomic candidate; each multi-node SCC is flagged as a cycle for F4 handling. The condensation DAG *is* the migration-DAG skeleton and gives topological order + safe-parallel frontier for free.
+
+**Stage 2 — Partition (deterministic, tunable).** On the (weighted, edge-count-weighted) condensation graph, run **Leiden (preferred) or Louvain hierarchically** (F2), with hub-node dampening, to propose nested slice boundaries. The resolution parameter targets the size bar (F6); minimizing cut edges minimizes each slice's must-preserve interface (§8.4). Compute per-candidate metrics: symbol/LOC size, cut-edge count, PageRank/hub flags, characterization coverage.
+
+**Stage 3 — Judge (LLM, tool-mediated, Phase 2).** For each candidate boundary, hand the **Planner** only the slice's interface contract + direct-dependency signatures + behavioral anchors (§8.4) and a **seeded neighborhood** (personalized PageRank), plus graph-navigation tools (`who_depends_on`, `scc_of`, `cut_edges_of`, `neighbors`) exposed as an MCP/opencode tool (§8.5) — **never the whole graph** (F3). The LLM (a) validates/names the boundary, (b) proposes merges/splits, (c) returns an effort estimate + confidence, (d) flags dependency substitutions (Track F). This is the *only* LLM step in slicing.
+
+**Recursion / cycle-break.** If any F6 gate fails or the LLM returns low-confidence effort, **decompose**: descend the Louvain/Leiden hierarchy (or raise resolution). For an oversized SCC, the deterministic engine **ranks edges by weakness** (fewest call sites) and proposes the cheapest **Extract-Interface / Dependency-Inversion shim** (a transitional shim, §4) to the LLM/human; approving it splits the SCC into orderable sub-slices (F4).
+
+**Assemble DAG + test nodes.** Nodes = accepted slices; edges = cut dependencies. Insert test nodes per F7:
+- a **contract-test node on every cut edge** (cheap, targeted — the boundary was chosen to minimize these);
+- an **integration-test node at each condensation-DAG join** where a sibling cluster reaches parity (bottom-up, §7.2);
+- **sparse e2e nodes** at root/entrypoint clusters for a handful of critical journeys.
+
+**Sequencing heuristic (root selection).** Following Strangler Fig, start with **low-risk, well-isolated leaf slices** (high fan-in, low fan-out, strong existing characterization coverage) to bank early value and learning (F5).
+
+**Human gate.** Surface the proposed cut (slice list, sizes, cut edges, cycle-breaks, effort estimates) as a **defaulted decision** for sign-off before implementation (§13), mirroring Google's LSC committee. Enforce a **concurrency budget** on the parallel frontier (Rosie-style, §6.3).
+
+## Open items
+
+- **Slice-size / estimability bar — defined (see F6):** five gates (size, interface width, estimability, verifiability, external acyclicity); failing any triggers recursive descent on the community hierarchy or an SCC cycle-break. Concrete thresholds (~10 symbols / ~400–600 LOC / ~5 cut edges / confidence threshold) are **starting defaults to calibrate empirically on the eval corpus** (`corpus.md`).
+- **Louvain vs. Leiden and resolution tuning:** decide default algorithm (Leiden recommended for connectivity/convergence) and how resolution is auto-set from the size bar vs. swept; measure boundary stability across re-runs (heuristics have no global optimum).
+- **Directed vs. undirected partitioning:** community detection is classically undirected/weighted, but our edges are directional and the parity contract is directional (§8.2). Decide the projection (e.g. weight by call count; consider directed modularity / flow-based methods) so boundaries respect dependency direction.
+- **Cycle-break automation ceiling:** how far to auto-propose Extract-Interface shims vs. always route large SCCs to a human decision; define the SCC-size threshold that forces human review.
+- **Cost/freshness of the judge step:** Stage 3 runs per candidate boundary; needs the same caching/incremental strategy flagged for the repo-map artifact (§13), especially as slices land and upstream signatures switch to target-language contracts (§8.4).
+- **Contract-test synthesis:** F7 wants a contract test on every cut edge — confirm these can be derived from the interface contract + characterization anchors (Track B) rather than hand-authored.
