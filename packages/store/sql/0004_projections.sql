@@ -4,6 +4,7 @@
 -- Spans — observability tree
 CREATE TABLE IF NOT EXISTS spans (
     id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL,
     run_id      TEXT NOT NULL REFERENCES runs(id),
     parent_id   TEXT,
     seq         INTEGER NOT NULL,
@@ -23,6 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_spans_run_id ON spans(run_id);
 -- Tool calls — idempotency index
 CREATE TABLE IF NOT EXISTS tool_calls (
     id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
     run_id          TEXT NOT NULL REFERENCES runs(id),
     idempotency_key TEXT NOT NULL,
     tool_name       TEXT NOT NULL,
@@ -40,6 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
 -- Run messages — per-agent LLM history
 CREATE TABLE IF NOT EXISTS run_messages (
     id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL,
     run_id      TEXT NOT NULL REFERENCES runs(id),
     agent_name  TEXT NOT NULL,
     seq         INTEGER NOT NULL,
@@ -52,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_run_messages_run_agent ON run_messages(run_id, ag
 
 -- Workflow steps — memoized ctx.step() results
 CREATE TABLE IF NOT EXISTS workflow_steps (
+    tenant_id   TEXT NOT NULL,
     run_id      TEXT NOT NULL REFERENCES runs(id),
     name        TEXT NOT NULL,
     result      JSONB,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
 -- Input requests
 CREATE TABLE IF NOT EXISTS input_requests (
     id           TEXT PRIMARY KEY,
+    tenant_id    TEXT NOT NULL,
     run_id       TEXT NOT NULL REFERENCES runs(id),
     kind         TEXT NOT NULL,
     tool_name    TEXT,
@@ -77,17 +82,22 @@ CREATE TABLE IF NOT EXISTS input_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_inputs_run_id ON input_requests(run_id);
-CREATE INDEX IF NOT EXISTS idx_inputs_status ON input_requests(status);
+CREATE INDEX IF NOT EXISTS idx_inputs_tenant_status ON input_requests(tenant_id, status);
 
 -- Schedules
 CREATE TABLE IF NOT EXISTS schedules (
     id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
+    user_id         TEXT,
     workflow        TEXT NOT NULL,
     cron_expression TEXT NOT NULL,
     input           JSONB,
     enabled         BOOLEAN NOT NULL DEFAULT true,
-    last_run_id     TEXT REFERENCES runs(id),
+    last_run_id     TEXT REFERENCES runs(id) ON DELETE SET NULL,
     last_run_at     TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_schedules_tenant ON schedules(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_user ON schedules(tenant_id, user_id);

@@ -42,18 +42,20 @@ describeWithPg("cross-process cancel cascade over Postgres (E3)", () => {
       },
     });
 
+    const tenantId = "test-cancel-cascade";
     // Runtime A: runs the child. Its cancel store is backed by Postgres.
-    const storeA = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    const storeA = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId });
     await storeA.init();
     // Runtime B: a *separate* store + cancel store over the same DB (the canceller).
-    const storeB = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    const storeB = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId });
     await storeB.init();
-    const cancelB = new PgCancelStore(storeB.pool);
+    const cancelB = new PgCancelStore(storeB.pool, tenantId);
 
     try {
       const runtimeA = await createTestRuntime({
+        tenantId,
         store: storeA,
-        cancelStore: new PgCancelStore(storeA.pool),
+        cancelStore: new PgCancelStore(storeA.pool, tenantId),
         model: mockModel(() => ({ content: [{ type: "tool_use", id: toolCallId, name: "gate", input: {} }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "tool_use" })),
         toolSources: new Map([["gate", gateTool]]),
       });

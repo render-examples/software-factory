@@ -208,10 +208,10 @@ describeWithPg("PgJobQueue parity", () => {
   };
 
   beforeAll(async () => {
-    store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    store = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await store.init();
-    await store.pool.query("TRUNCATE run_jobs"); // clean slate across CI re-runs
-    q = new PgJobQueue(store.pool);
+    await store.pool.query("TRUNCATE run_jobs");
+    q = new PgJobQueue(store.pool, "test-tenant");
   });
 
   afterAll(async () => {

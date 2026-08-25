@@ -13,8 +13,6 @@ import type { JobQueue, DeltaBus } from "@render-agents/store";
 import { createStore, createJobQueue, createDeltaBus, createCancelStore } from "@render-agents/store";
 import type {
   ModelClient,
-  CompleteArgs,
-  CompleteResult,
   AgentRunner,
   AgentDefinition,
   Hook,
@@ -24,12 +22,12 @@ import type {
   AgentInput,
   AgentOutput,
   RenderPlan,
-  RetryPolicy,
   ModelPricing,
   OAuthRefresher,
   Suspender,
+  SandboxProvider,
 } from "@render-agents/engine";
-import { DefaultRunner, passThroughContextManager, DefaultContextManager, resolveClient, resolveModelSpec, noopTracer, buildHookInterceptor } from "@render-agents/engine";
+import { DefaultRunner, DefaultContextManager, noopTracer, buildHookInterceptor, createSandboxToolSource } from "@render-agents/engine";
 import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment, isRootTriggerEnvironment } from "./dispatch.js";
 import type { WorkflowDefinition } from "./workflow.js";
 import type { Channel } from "./channel.js";
@@ -125,7 +123,7 @@ export interface AgentRuntime {
   readonly runners: RunnerRegistry;
   readonly hooks: HookRegistry;
   readonly contextManager: ContextManager;
-  readonly dispatcher?: TaskDispatcher;
+  readonly dispatcher: TaskDispatcher;
   /**
    * HITL suspension strategy (the `Suspender` seam), threaded into in-process
    * runs. Undefined = default resume-by-replay (`ReplaySuspender`). A
@@ -162,11 +160,13 @@ export interface AgentRuntime {
 }
 
 export interface CreateRuntimeOptions {
+  /** Required. Scopes all data access to this tenant. */
+  tenantId: string;
   store?: RunStore;
   tracer?: Tracer;
-  model?: ModelClient;
+  /** Required. The LLM client used by the default runner. No auto-detection. */
+  model: ModelClient;
   pricing?: Record<string, ModelPricing>;
-  retry?: Partial<RetryPolicy>;
   runners?: RunnerRegistry;
   /** Custom runners discovered from `runners/` (keyed by name); merged with the built-in `default`. */
   extraRunners?: Map<string, AgentRunner>;
@@ -195,35 +195,14 @@ export interface CreateRuntimeOptions {
   oauthRefreshers?: Map<string, OAuthRefresher>;
   /** Discovered channels (keyed by id); usually populated by `loadProject`. */
   channels?: Map<string, Channel>;
+  /**
+   * Pluggable sandbox provider. When set, a "sandbox" tool source is
+   * automatically registered that connects to sandboxes by ID. Agents
+   * pass `sandbox_id` on every tool call to target a specific sandbox.
+   */
+  sandbox?: SandboxProvider;
 }
 
-/**
- * Attempt to auto-detect a model client from environment variables.
- * Falls back to the unconfigured placeholder when no API key is found.
- */
-function detectModel(retry?: Partial<RetryPolicy>): ModelClient {
-  if (process.env.ANTHROPIC_API_KEY) {
-    const { spec } = resolveModelSpec("medium");
-    return resolveClient(spec, { retry });
-  }
-  if (process.env.OPENAI_API_KEY) {
-    return resolveClient({ provider: "openai", model: "gpt-4o" }, { retry });
-  }
-  return unconfiguredModel;
-}
-
-/**
- * Placeholder model used when none is provided and no API key is detected.
- * The error only surfaces if an agent is actually run without a configured model.
- */
-const unconfiguredModel: ModelClient = {
-  async complete(_args: CompleteArgs): Promise<CompleteResult> {
-    throw new Error(
-      "No model configured. Pass one via createRuntime({ model }) (e.g. mockModel in tests), " +
-        "or set ANTHROPIC_API_KEY / OPENAI_API_KEY to enable auto-detection.",
-    );
-  },
-};
 
 function buildHookRegistry(hooks: Hook[]): HookRegistry {
   const byName = new Map<string, Hook>();
@@ -275,42 +254,39 @@ function detectDispatcher(): TaskDispatcher | undefined {
  * dispatcher, so `.task()` runs as `.run()`). Postgres detection and real model
  * clients are wired in later sprints.
  */
-export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentRuntime> {
-  const store: RunStore = opts?.store ?? createStore();
+export async function createRuntime(opts: CreateRuntimeOptions): Promise<AgentRuntime> {
+  if (!opts.tenantId) throw new Error("createRuntime requires a tenantId");
+  const { tenantId } = opts;
+
+  const store: RunStore = opts.store ?? createStore({ tenantId });
   await store.init();
 
-  const tracer = opts?.tracer ?? noopTracer;
-  const model = opts?.model ?? detectModel(opts?.retry);
-  const contextManager = opts?.contextManager ?? (
-    model !== unconfiguredModel
-      ? new DefaultContextManager({ model })
-      : passThroughContextManager
-  );
-  const hooks = buildHookRegistry(opts?.hooks ?? []);
-  const runners = opts?.runners ?? buildRunnerRegistry(model, opts?.pricing, opts?.extraRunners);
-  // Shares the run store's Postgres pool when available so cancel writes are
-  // read back by the loop's poll; gateway defaults its cancel route to this
-  // same instance (BUG-01).
-  const cancelStore = opts?.cancelStore ?? createCancelStore({ store });
-  const jobQueue = opts?.jobQueue ?? createJobQueue({ store });
-  // Transient streaming side-channel (D13): never persists.
-  const deltaBus = opts?.deltaBus ?? createDeltaBus({ store });
+  const tracer = opts.tracer ?? noopTracer;
+  const model = opts.model;
+  const contextManager = opts.contextManager ?? new DefaultContextManager({ model });
+  const hooks = buildHookRegistry(opts.hooks ?? []);
+  const runners = opts.runners ?? buildRunnerRegistry(model, opts.pricing, opts.extraRunners);
+  const cancelStore = opts.cancelStore ?? createCancelStore({ store, tenantId });
+  const jobQueue = opts.jobQueue ?? createJobQueue({ store, tenantId });
+  const deltaBus = opts.deltaBus ?? createDeltaBus({ store });
   const executionMode: ExecutionMode =
-    opts?.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
+    opts.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
   const agentDefinitions = new Map<string, AgentDefinition>();
-  // Populated later by bindWorkflow/loadWorkflows; dispatchRoot closes over
-  // this reference so late-registered workflows stay resolvable.
   const workflows = new Map<string, WorkflowDefinition>();
-  const toolSources = opts?.toolSources ?? new Map();
-  // Populated later by loadProject; outbound delivery resolves a run's channel here.
-  const channels = opts?.channels ?? new Map<string, Channel>();
-  const oauthStore = asOAuthStore(store);
-  const oauthRefreshers = opts?.oauthRefreshers ?? new Map<string, OAuthRefresher>();
+  const toolSources = opts.toolSources ?? new Map();
 
-  // `.task()` always runs through a dispatcher: Render Workflows in production,
-  // else an in-process one with identical observable behavior minus isolation.
-  const dispatcher = opts?.dispatcher
-    ?? (opts?.autoDetectDispatcher === false ? undefined : detectDispatcher())
+  if (opts.sandbox && !toolSources.has("sandbox")) {
+    toolSources.set("sandbox", createSandboxToolSource({
+      provider: opts.sandbox,
+    }));
+  }
+
+  const channels = opts.channels ?? new Map<string, Channel>();
+  const oauthStore = asOAuthStore(store);
+  const oauthRefreshers = opts.oauthRefreshers ?? new Map<string, OAuthRefresher>();
+
+  const dispatcher = opts.dispatcher
+    ?? (opts.autoDetectDispatcher === false ? undefined : detectDispatcher())
     ?? new InProcessDispatcher({
       store,
       runners,
@@ -318,7 +294,7 @@ export async function createRuntime(opts?: CreateRuntimeOptions): Promise<AgentR
       contextManager,
       cancelStore,
       toolSources,
-      delegation: opts?.delegation,
+      delegation: opts.delegation,
       getDefinition: (name) => agentDefinitions.get(name),
       getWorkflow: (name) => workflows.get(name),
       oauthStore,

@@ -16,8 +16,11 @@
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },
   "dependencies": {
+    "@render-agents/engine": "workspace:*",
     "@render-agents/gateway": "workspace:*",
+    "@render-agents/sandbox-render": "workspace:*",
     "@render-agents/sdk": "workspace:*",
+    "@render-agents/store": "workspace:*",
     "@renderinc/sdk": "^0.6.0",
     "tsx": "^4.19.2"
   },

@@ -35,6 +35,8 @@ export interface JobRecord {
   attempts: number;
   /** Delivery/crash-loop budget. Exhausted claims dead-letter. */
   maxAttempts: number;
+  /** Fencing token issued at claim time. Must be presented to complete/fail. */
+  leaseToken?: string;
   /** ISO timestamp; the job is only claimable once `availableAt <= now`. */
   availableAt: string;
   lockedAt?: string;
@@ -65,6 +67,8 @@ export interface FailOptions {
   backoffMs?: number;
   /** Error message recorded on the job for diagnostics. */
   error?: string;
+  /** Lease token from claim — verifies the caller still holds the lease. */
+  leaseToken?: string;
 }
 
 export interface JobQueue {
@@ -83,8 +87,8 @@ export interface JobQueue {
    */
   claim(workerId: string): Promise<JobRecord | undefined>;
 
-  /** Mark a claimed job `done`. */
-  complete(id: string): Promise<void>;
+  /** Mark a claimed job `done`. Pass `leaseToken` to verify ownership. */
+  complete(id: string, leaseToken?: string): Promise<void>;
 
   /**
    * Report a claimed job as failed. Requeues with backoff when `requeue` is set

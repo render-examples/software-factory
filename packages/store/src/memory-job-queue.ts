@@ -59,7 +59,6 @@ export class MemoryJobQueue implements JobQueue {
 
   async claim(workerId: string): Promise<JobRecord | undefined> {
     const now = Date.now();
-    // Atomic critical section: select + mark with no intervening await.
     const candidate = [...this.jobs.values()]
       .filter((j) => j.status === "queued" && Date.parse(j.availableAt) <= now)
       .sort(byClaimOrder)[0];
@@ -68,16 +67,21 @@ export class MemoryJobQueue implements JobQueue {
     const nowIso = new Date().toISOString();
     candidate.status = "running";
     candidate.attempts += 1;
+    candidate.leaseToken = randomUUID();
     candidate.lockedAt = nowIso;
     candidate.lockedBy = workerId;
     candidate.updatedAt = nowIso;
     return { ...candidate };
   }
 
-  async complete(id: string): Promise<void> {
+  async complete(id: string, leaseToken?: string): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
+    if (leaseToken && job.leaseToken !== leaseToken) {
+      throw new Error(`Lease token mismatch on job ${id} — another worker may have claimed it.`);
+    }
     job.status = "done";
+    job.leaseToken = undefined;
     job.lockedAt = undefined;
     job.lockedBy = undefined;
     job.updatedAt = new Date().toISOString();
@@ -86,8 +90,12 @@ export class MemoryJobQueue implements JobQueue {
   async fail(id: string, opts?: FailOptions): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
+    if (opts?.leaseToken && job.leaseToken !== opts.leaseToken) {
+      throw new Error(`Lease token mismatch on job ${id} — another worker may have claimed it.`);
+    }
     const nowIso = new Date().toISOString();
     job.lastError = opts?.error ?? job.lastError;
+    job.leaseToken = undefined;
     job.lockedAt = undefined;
     job.lockedBy = undefined;
     job.updatedAt = nowIso;
@@ -98,8 +106,6 @@ export class MemoryJobQueue implements JobQueue {
       this.notify();
       return;
     }
-    // Requeue requested but budget exhausted → dead-letter; otherwise a
-    // deliberate, non-retried failure.
     job.status = opts?.requeue ? "dead" : "failed";
   }
 
@@ -111,12 +117,13 @@ export class MemoryJobQueue implements JobQueue {
       if (job.status !== "running") continue;
       if (!job.lockedAt || Date.parse(job.lockedAt) > threshold) continue;
       const nowIso = new Date().toISOString();
+      job.leaseToken = undefined;
       job.lockedAt = undefined;
       job.lockedBy = undefined;
       job.updatedAt = nowIso;
       job.lastError = "reclaimed after visibility timeout";
       if (job.attempts >= job.maxAttempts) {
-        job.status = "dead"; // crash-looped past the delivery budget
+        job.status = "dead";
       } else {
         job.status = "queued";
         job.availableAt = nowIso;

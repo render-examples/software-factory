@@ -81,6 +81,16 @@ export interface RunEventRecord {
   parentSpanId?: string;
   payload: RunEvent;
   version: number;
+  /** References to externally stored artifacts (used for payloads exceeding 8KB). */
+  artifactRefs?: Record<string, string>;
+  /** Event classification tag (e.g. "tool_call", "message", "internal"). */
+  classification?: string;
+  /** Correlation ID for tracing a causal chain across runs. */
+  correlationId?: string;
+  /** Causation ID linking this event to the event that caused it. */
+  causationId?: string;
+  /** Client-supplied idempotency key — unique per tenant where present. */
+  idempotencyKey?: string;
 }
 
 export interface EventLogStore {

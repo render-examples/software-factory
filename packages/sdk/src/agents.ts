@@ -10,7 +10,6 @@ import type {
 import { RunPaused } from "@render-agents/engine";
 import { idempotencyKey } from "@render-agents/store";
 import type { AgentRuntime } from "./runtime.js";
-import { createRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
 import { loadAgentsFromDir } from "./loader/load-agents.js";
 
@@ -28,12 +27,10 @@ export interface Agent {
   task<T = unknown>(input: AgentInput, opts?: TaskOptions): Promise<AgentOutput<T>>;
 }
 
-export async function loadAgents(dir?: string, runtime?: AgentRuntime): Promise<AgentSet> {
-  const projectDir = dir ?? ".";
-  const inert = await loadAgentsFromDir(projectDir);
+export async function loadAgents(dir: string, runtime: AgentRuntime): Promise<AgentSet> {
+  const inert = await loadAgentsFromDir(dir);
   const definitions = inert.all().map((a) => a.definition);
-  const rt = runtime ?? (await createRuntime());
-  return bindAgentSet(definitions, rt);
+  return bindAgentSet(definitions, runtime);
 }
 
 function bindAgentSet(definitions: AgentDefinition[], runtime: AgentRuntime): AgentSet {
@@ -76,10 +73,6 @@ function bindAgent(definition: AgentDefinition, runtime: AgentRuntime): Agent {
       return runInProcess<T>(definition, input, runtime, opts);
     },
     task<T>(input: AgentInput, opts?: TaskOptions): Promise<AgentOutput<T>> {
-      if (!runtime.dispatcher) {
-        // Local-dev/testing parity: no workflow server → run in-process.
-        return runInProcess<T>(definition, input, runtime, opts);
-      }
       const runId = opts?.runId ?? randomUUID();
       return runtime.dispatcher.dispatch(definition.name, input, {
         runId,

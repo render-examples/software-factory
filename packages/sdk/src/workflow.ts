@@ -4,6 +4,7 @@ import type {
   Tracer,
   RunRecord,
   RunEvent,
+  ThreadStore,
 } from "@render-agents/store";
 import { buildEventRecord, idempotencyKey } from "@render-agents/store";
 import type {
@@ -30,6 +31,7 @@ export interface WorkflowContext {
   readonly trigger: string;
   readonly input: unknown;
   readonly agents: AgentSet;
+  readonly threadStore: ThreadStore;
   readonly tracer: Tracer;
   readonly logger: Logger;
   readonly signal: AbortSignal;
@@ -306,6 +308,7 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     trigger: opts.trigger,
     input: opts.input,
     agents: createRunScopedAgentSet(runtime, runId, nextOrdinal, { threadId: opts.threadId, userId: opts.userId }),
+    threadStore: runtime.threadStore,
     tracer: runtime.tracer,
     logger: { debug: console.debug, info: console.info, warn: console.warn, error: console.error },
     signal: opts.signal,

@@ -7,6 +7,7 @@
 CREATE TABLE IF NOT EXISTS messages (
     run_id      TEXT NOT NULL,
     seq         BIGINT NOT NULL,
+    tenant_id   TEXT NOT NULL,
     thread_id   TEXT NOT NULL REFERENCES threads(id),
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
@@ -14,11 +15,12 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (run_id, seq)
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(tenant_id, thread_id);
 
 -- OAuth connections — per-user tokens (encrypted at rest by application layer)
 CREATE TABLE IF NOT EXISTS oauth_connections (
     id            TEXT PRIMARY KEY,
+    tenant_id     TEXT NOT NULL,
     user_id       TEXT NOT NULL,
     provider      TEXT NOT NULL,
     access_token  TEXT NOT NULL,
@@ -27,5 +29,5 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
     scopes        TEXT[] NOT NULL DEFAULT '{}',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(user_id, provider)
+    UNIQUE(tenant_id, user_id, provider)
 );
