@@ -20,6 +20,7 @@ import {
   RenderWorkflowsDispatcher,
 } from "@render-agents/sdk";
 import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-agents/sdk";
+import { resolveClient, resolveModelSpec } from "@render-agents/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "./lib/render.js";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -70,7 +71,10 @@ class NativeChainingDispatcher extends RenderWorkflowsDispatcher {
 }
 
 const dispatcher = new NativeChainingDispatcher({ workflowSlug: WORKFLOW_SLUG });
-const { runtime, workflows } = await loadProject(root, { runtime: { dispatcher } });
+const tenantId = process.env.TENANT_ID ?? "default";
+const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
+const model = resolveClient(spec);
+const { runtime, workflows } = await loadProject(root, { tenantId, model, runtime: { dispatcher } });
 
 const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
 

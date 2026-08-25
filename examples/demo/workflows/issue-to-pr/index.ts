@@ -1,18 +1,8 @@
 import { workflow } from "@render-agents/sdk";
 import { githubFromEnv, type Issue, type IssueComment } from "../../src/lib/github.js";
-import { WorkspaceManager } from "../../src/lib/workspace.js";
+import { RenderSandboxProvider } from "@render-agents/sandbox-render";
+import { collectExecOutput } from "@render-agents/engine";
 import type { NormalizedGitHubEvent } from "../../src/lib/github-events.js";
-
-// Issue -> PR (trigger: issues / issue_comment). Stateless re-evaluation: each
-// event re-reads the issue from GitHub and uses labels as the state machine, so
-// there are no paused runs to correlate.
-//
-//   issues.opened / issue_comment.created
-//     -> triage: enough detail?
-//        no  -> post questions + label `agent:needs-info`; stop
-//        yes -> label `agent:working`; clone; Research -> Plan -> Implement
-//               (in-process .run() so they share ONE checkout); commit + push;
-//               open PR; comment the link + label `agent:done`.
 
 const NEEDS_INFO = "agent:needs-info";
 const WORKING = "agent:working";
@@ -53,7 +43,7 @@ function renderIssue(issue: Issue, comments: IssueComment[]): string {
 function renderQuestions(questions: string[]): string {
   const list = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
   return (
-    "👋 Thanks for opening this! Before I can implement it, I need a few more details:\n\n" +
+    "Thanks for opening this! Before I can implement it, I need a few more details:\n\n" +
     `${list}\n\n` +
     "_Reply here with the specifics and I'll pick this up automatically._"
   );
@@ -103,42 +93,56 @@ export default workflow({ name: "issue-to-pr" }, async (ctx) => {
     return { status: "asked", questions };
   }
 
-  // --- Research -> Plan -> Implement on one shared checkout ---
+  // --- Provision sandbox, clone repo, run agents ---
   await ctx.step("mark-working", async () => {
     await gh.removeLabel(repo, number, NEEDS_INFO);
     await gh.addLabels(repo, number, [WORKING]);
     return { ok: true };
   });
 
-  const ws = new WorkspaceManager();
-  const key = `issue-${number}`;
+  const provider = new RenderSandboxProvider();
+  const sandbox = await provider.create({ metadata: { issue: `${repo.owner}/${repo.repo}#${number}` } });
+  const sandboxId = sandbox.id;
   const branch = `agent/issue-${number}`;
+  const dir = "/workspace";
 
-  // Not wrapped in ctx.step: cloning is idempotent and must actually exist on the
-  // container running the agents (a memoized step would return a path a fresh
-  // container wouldn't have). The agents below use .run() (in-process) so they
-  // share THIS checkout.
-  const dir = await ws.ensureCheckout({ owner: repo.owner, repo: repo.repo, key, token, ref: repo.defaultBranch });
-  await ws.createBranch(dir, branch);
+  // Clone the repo into the sandbox
+  const cloneUrl = `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
+  const cloneEvents = await sandbox.exec(
+    `git clone ${cloneUrl} ${dir} && cd ${dir} && git checkout -B ${branch}`,
+  );
+  const cloneResult = await collectExecOutput(cloneEvents);
+  if (cloneResult.exitCode !== 0) {
+    await sandbox.terminate();
+    throw new Error(`Clone failed: ${cloneResult.output.slice(0, 500)}`);
+  }
+
+  // --- Research -> Plan -> Implement (agents use sandbox_id to route tool calls) ---
+  const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
   const research = await ctx.agents.get("researcher").run(
-    `The repository is checked out at:\n  repoDir: ${dir}\n\nIssue #${number}: ${issue.title}\n\n${issue.body}`,
+    `${sandboxContext}\n\nIssue #${number}: ${issue.title}\n\n${issue.body}`,
   );
 
   const plan = await ctx.agents.get("planner").run<PlanOut>(
-    `repoDir: ${dir}\n\nIssue #${number}: ${issue.title}\n\n${issue.body}\n\nResearch brief:\n${research.text}`,
+    `${sandboxContext}\n\nIssue #${number}: ${issue.title}\n\n${issue.body}\n\nResearch brief:\n${research.text}`,
   );
   const planText = plan.data ? JSON.stringify(plan.data, null, 2) : plan.text;
 
   const impl = await ctx.agents.get("implementer").run(
-    `repoDir: ${dir}\n\nIssue #${number}: ${issue.title}\n\nApproved plan:\n${planText}`,
+    `${sandboxContext}\n\nIssue #${number}: ${issue.title}\n\nApproved plan:\n${planText}`,
   );
 
-  // --- commit + push (deterministic side effects) ---
+  // --- commit + push ---
   const committed = await ctx.step("commit-push", async () => {
-    const changed = await ws.commitAll(dir, `Fix #${number}: ${issue.title}`);
-    if (!changed) return { changed: false };
-    await ws.push(dir, branch);
+    const statusEvents = await sandbox.exec(`cd ${dir} && git status --porcelain`);
+    const { output: status } = await collectExecOutput(statusEvents);
+    if (!status.trim()) return { changed: false };
+    const commitEvents = await sandbox.exec(
+      `cd ${dir} && git add -A && git commit -m "Fix #${number}: ${issue.title}" && git push --force-with-lease origin ${branch}`,
+    );
+    const { exitCode, output } = await collectExecOutput(commitEvents);
+    if (exitCode !== 0) throw new Error(`Commit/push failed: ${output.slice(0, 500)}`);
     return { changed: true };
   });
 
@@ -153,7 +157,7 @@ export default workflow({ name: "issue-to-pr" }, async (ctx) => {
       await gh.addLabels(repo, number, [FAILED]);
       return { ok: true };
     });
-    await ws.cleanup(key);
+    await sandbox.terminate();
     return { status: "no_changes" };
   }
 
@@ -167,12 +171,12 @@ export default workflow({ name: "issue-to-pr" }, async (ctx) => {
   );
 
   await ctx.step("finish", async () => {
-    await gh.createIssueComment(repo, number, `🤖 Opened a pull request: ${pr.htmlUrl}`);
+    await gh.createIssueComment(repo, number, `Opened a pull request: ${pr.htmlUrl}`);
     await gh.removeLabel(repo, number, WORKING);
     await gh.addLabels(repo, number, [DONE]);
     return { ok: true };
   });
 
-  await ws.cleanup(key);
+  await sandbox.terminate();
   return { status: "pr_opened", pr: pr.htmlUrl, branch };
 });

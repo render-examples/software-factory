@@ -23,6 +23,7 @@ import { createPool, type PoolConfig } from "./db.js";
 
 const NOTIFY_CHANNEL = "run_events";
 const MAX_EVENT_TAIL_QUEUE = 10_000;
+const MAX_PAYLOAD_BYTES = 8_000;
 
 /**
  * Postgres's `jsonb` type rejects a literal NUL byte inside a JSON string
@@ -64,7 +65,10 @@ export class PgEventLogStore implements EventLogStore {
   // SELECT on every notified pointer.
   private readonly runThreadCache = new Map<string, string>();
 
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly tenantId: string,
+  ) {}
 
   setInterceptor(interceptor?: EventInterceptor): void {
     this.interceptor = interceptor;
@@ -153,16 +157,26 @@ export class PgEventLogStore implements EventLogStore {
     }
     record = { ...record, payload, type: payload.type, category: categoryOf(payload.type) };
 
+    const serialized = jsonbStringify(payload);
+    if (Buffer.byteLength(serialized, "utf-8") > MAX_PAYLOAD_BYTES) {
+      throw new EventRejectedError(
+        `Payload exceeds ${MAX_PAYLOAD_BYTES} bytes. Use artifact_refs for large content.`,
+      );
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
 
+      // Set tenant context for RLS backstop.
+      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
+
       // Ensure run row exists (FK target); ON CONFLICT no-op is safe on every append.
       await client.query(
-        `INSERT INTO runs (id, workflow, status, started_at)
-         VALUES ($1, $2, 'pending', $3)
+        `INSERT INTO runs (id, tenant_id, workflow, status, started_at)
+         VALUES ($1, $2, $3, 'pending', $4)
          ON CONFLICT (id) DO NOTHING`,
-        [record.runId, record.agentName ?? "", record.ts],
+        [record.runId, this.tenantId, record.agentName ?? "", record.ts],
       );
 
       const seqRes = await client.query<{ next_event_seq: string }>(
@@ -180,10 +194,11 @@ export class PgEventLogStore implements EventLogStore {
       };
 
       await client.query(
-        `INSERT INTO run_events (id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        `INSERT INTO run_events (id, tenant_id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version, artifact_refs, classification, correlation_id, causation_id, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
           stored.id,
+          this.tenantId,
           stored.runId,
           stored.seq,
           stored.ts,
@@ -192,8 +207,13 @@ export class PgEventLogStore implements EventLogStore {
           stored.agentName ?? null,
           stored.spanId ?? null,
           stored.parentSpanId ?? null,
-          jsonbStringify(stored.payload),
+          serialized,
           stored.version,
+          stored.artifactRefs ? jsonbStringify(stored.artifactRefs) : null,
+          stored.classification ?? null,
+          stored.correlationId ?? null,
+          stored.causationId ?? null,
+          stored.idempotencyKey ?? null,
         ],
       );
 
@@ -224,10 +244,10 @@ export class PgEventLogStore implements EventLogStore {
   }
 
   async read(runId: string, fromSeq?: number): Promise<RunEventRecord[]> {
-    const params: unknown[] = [runId];
-    let where = "run_id = $1";
+    const params: unknown[] = [runId, this.tenantId];
+    let where = "run_id = $1 AND tenant_id = $2";
     if (fromSeq !== undefined) {
-      where += " AND seq >= $2";
+      where += " AND seq >= $3";
       params.push(fromSeq);
     }
     const res = await this.pool.query<PgEventRow>(
@@ -243,9 +263,9 @@ export class PgEventLogStore implements EventLogStore {
       `SELECT e.id, e.run_id, e.seq, e.ts, e.category, e.type, e.agent_name, e.span_id, e.parent_span_id, e.payload, e.version
        FROM run_events e
        JOIN runs r ON r.id = e.run_id
-       WHERE r.thread_id = $1
+       WHERE r.thread_id = $1 AND r.tenant_id = $2
        ORDER BY e.ts, e.run_id, e.seq`,
-      [threadId],
+      [threadId, this.tenantId],
     );
     return res.rows.map(mapEventRow);
   }
@@ -325,19 +345,17 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
     switch (p.type) {
       case "run.started":
-        // D10: event log must stay self-sufficient, so a run.started with a
-        // threadId can append even if the thread row wasn't created out-of-band.
         if (p.threadId) {
           await client.query(
-            `INSERT INTO threads (id, user_id, created_at, updated_at)
-             VALUES ($1, $2, $3, $3)
+            `INSERT INTO threads (id, tenant_id, user_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $4)
              ON CONFLICT (id) DO NOTHING`,
-            [p.threadId, p.userId ?? null, rec.ts],
+            [p.threadId, this.tenantId, p.userId ?? null, rec.ts],
           );
         }
         await client.query(
-          `INSERT INTO runs (id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id)
-           VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `INSERT INTO runs (id, tenant_id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id)
+           VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
              started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
@@ -349,6 +367,7 @@ export class PgEventLogStore implements EventLogStore {
              external_conversation_id = COALESCE(EXCLUDED.external_conversation_id, runs.external_conversation_id)`,
           [
             rec.runId,
+            this.tenantId,
             rec.agentName ?? "",
             p.input !== undefined ? jsonbStringify(p.input) : null,
             p.trigger ?? null,
@@ -361,17 +380,15 @@ export class PgEventLogStore implements EventLogStore {
             p.externalConversationId ?? null,
           ],
         );
-        // First run on a conversation establishes the thread; later turns keep it
-        // and advance last_run_id. No FK on last_run_id — mapping outlives runs.
         if (p.channel && p.externalConversationId) {
           await client.query(
-            `INSERT INTO channel_conversations (channel, external_conversation_id, thread_id, last_run_id, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $5)
-             ON CONFLICT (channel, external_conversation_id) DO UPDATE SET
+            `INSERT INTO channel_conversations (tenant_id, channel, external_conversation_id, thread_id, last_run_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $6)
+             ON CONFLICT (tenant_id, channel, external_conversation_id) DO UPDATE SET
                thread_id = COALESCE(channel_conversations.thread_id, EXCLUDED.thread_id),
                last_run_id = EXCLUDED.last_run_id,
                updated_at = EXCLUDED.updated_at`,
-            [p.channel, p.externalConversationId, p.threadId ?? null, rec.runId, rec.ts],
+            [this.tenantId, p.channel, p.externalConversationId, p.threadId ?? null, rec.runId, rec.ts],
           );
         }
         break;
@@ -424,10 +441,10 @@ export class PgEventLogStore implements EventLogStore {
           ? { workflow: rec.agentName, trigger: p.trigger }
           : { agentName: rec.agentName, agentVersion: p.agentVersion, model: p.model, iterations: 0, usage: { inputTokens: 0, outputTokens: 0 } };
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9)
+          `INSERT INTO spans (id, tenant_id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', $8, $9, $10)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", kind, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify(attributes), rec.ts],
+          [spanId, this.tenantId, rec.runId, rec.parentSpanId ?? null, rec.seq, rec.agentName ?? "run", kind, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify(attributes), rec.ts],
         );
         break;
       }
@@ -455,10 +472,10 @@ export class PgEventLogStore implements EventLogStore {
 
       case "tool.called":
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'tool', 'running', $6, $7, $8)
+          `INSERT INTO spans (id, tenant_id, run_id, parent_id, seq, name, kind, status, input, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'tool', 'running', $7, $8, $9)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify({ toolName: p.name }), rec.ts],
+          [spanId, this.tenantId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, p.input !== undefined ? jsonbStringify(p.input) : null, jsonbStringify({ toolName: p.name }), rec.ts],
         );
         break;
 
@@ -488,10 +505,10 @@ export class PgEventLogStore implements EventLogStore {
 
       case "step.started":
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, attributes, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'step', 'running', $6, $7)
+          `INSERT INTO spans (id, tenant_id, run_id, parent_id, seq, name, kind, status, attributes, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'step', 'running', $7, $8)
            ON CONFLICT (id) DO NOTHING`,
-          [spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, jsonbStringify({ step: p.name }), rec.ts],
+          [spanId, this.tenantId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.name, jsonbStringify({ step: p.name }), rec.ts],
         );
         break;
 
@@ -504,11 +521,11 @@ export class PgEventLogStore implements EventLogStore {
 
       case "llm.call":
         await client.query(
-          `INSERT INTO spans (id, run_id, parent_id, seq, name, kind, status, attributes, started_at, finished_at)
-           VALUES ($1, $2, $3, $4, $5, 'llm', 'ok', $6, $7, $7)
+          `INSERT INTO spans (id, tenant_id, run_id, parent_id, seq, name, kind, status, attributes, started_at, finished_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'llm', 'ok', $7, $8, $8)
            ON CONFLICT (id) DO NOTHING`,
           [
-            spanId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.model,
+            spanId, this.tenantId, rec.runId, rec.parentSpanId ?? null, rec.seq, p.model,
             jsonbStringify({
               usage: p.usage,
               costUsd: p.costUsd,
@@ -547,10 +564,10 @@ export class PgEventLogStore implements EventLogStore {
       case "tool.called": {
         const idemKey = idempotencyKey(rec.runId, p.toolCallId);
         await client.query(
-          `INSERT INTO tool_calls (id, run_id, idempotency_key, tool_name, input, status, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'running', $6)
+          `INSERT INTO tool_calls (id, tenant_id, run_id, idempotency_key, tool_name, input, status, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'running', $7)
            ON CONFLICT (run_id, idempotency_key) DO NOTHING`,
-          [idemKey, rec.runId, idemKey, p.name, jsonbStringify(p.input), rec.ts],
+          [idemKey, this.tenantId, rec.runId, idemKey, p.name, jsonbStringify(p.input), rec.ts],
         );
         break;
       }
@@ -595,10 +612,10 @@ export class PgEventLogStore implements EventLogStore {
     }
 
     await client.query(
-      `INSERT INTO run_messages (id, run_id, agent_name, seq, role, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO run_messages (id, tenant_id, run_id, agent_name, seq, role, content, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (id) DO NOTHING`,
-      [rec.id, rec.runId, agentName ?? "", rec.seq, role, jsonbStringify(content), rec.ts],
+      [rec.id, this.tenantId, rec.runId, agentName ?? "", rec.seq, role, jsonbStringify(content), rec.ts],
     );
   }
 
@@ -606,10 +623,10 @@ export class PgEventLogStore implements EventLogStore {
     const p = rec.payload;
     if (p.type !== "step.completed") return;
     await client.query(
-      `INSERT INTO workflow_steps (run_id, name, result, created_at)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO workflow_steps (tenant_id, run_id, name, result, created_at)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (run_id, name) DO NOTHING`,
-      [rec.runId, p.name, jsonbStringify(p.result), rec.ts],
+      [this.tenantId, rec.runId, p.name, jsonbStringify(p.result), rec.ts],
     );
   }
 
@@ -618,11 +635,12 @@ export class PgEventLogStore implements EventLogStore {
     switch (p.type) {
       case "input.requested":
         await client.query(
-          `INSERT INTO input_requests (id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 'pending', $8)
+          `INSERT INTO input_requests (id, tenant_id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, 'pending', $9)
            ON CONFLICT (id) DO NOTHING`,
           [
             p.inputRequestId,
+            this.tenantId,
             rec.runId,
             p.kind,
             p.toolName ?? null,
@@ -667,24 +685,31 @@ export class PgEventLogStore implements EventLogStore {
     const contentText = flattenContent(p.content);
 
     await client.query(
-      `INSERT INTO messages (run_id, seq, thread_id, role, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO messages (run_id, seq, tenant_id, thread_id, role, content, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (run_id, seq) DO NOTHING`,
-      [rec.runId, rec.seq, threadId, p.type === "message.user" ? "user" : "assistant", contentText, rec.ts],
+      [rec.runId, rec.seq, this.tenantId, threadId, p.type === "message.user" ? "user" : "assistant", contentText, rec.ts],
     );
   }
 }
 
 // --- Postgres RunStore implementation ---
 
+export interface PgRunStoreConfig extends PoolConfig {
+  tenantId: string;
+}
+
 export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleStore {
   /** Exposed so a `PgJobQueue` can share the store's connection pool. */
   readonly pool: Pool;
   readonly events: PgEventLogStore;
+  readonly tenantId: string;
 
-  constructor(config: PoolConfig) {
+  constructor(config: PgRunStoreConfig) {
+    if (!config.tenantId) throw new Error("PgRunStore requires a tenantId");
+    this.tenantId = config.tenantId;
     this.pool = createPool(config);
-    this.events = new PgEventLogStore(this.pool);
+    this.events = new PgEventLogStore(this.pool, this.tenantId);
   }
 
   async init(): Promise<void> {
@@ -703,8 +728,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
               thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
-       FROM runs WHERE id = $1`,
-      [id],
+       FROM runs WHERE id = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
     );
     return res.rows.length > 0 ? mapRunRow(res.rows[0]) : undefined;
   }
@@ -713,15 +738,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     let beforeCursor: { id: string; started_at: Date } | undefined;
     if (opts?.before) {
       const res = await this.pool.query<{ id: string; started_at: Date }>(
-        `SELECT id, started_at FROM runs WHERE id = $1`,
-        [opts.before],
+        `SELECT id, started_at FROM runs WHERE id = $1 AND tenant_id = $2`,
+        [opts.before, this.tenantId],
       );
       if (res.rows.length > 0) beforeCursor = res.rows[0];
     }
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let paramIdx = 1;
+    const conditions: string[] = [`tenant_id = $1`];
+    const params: unknown[] = [this.tenantId];
+    let paramIdx = 2;
 
     if (opts?.workflow) {
       conditions.push(`workflow = $${paramIdx++}`);
@@ -743,14 +768,12 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       conditions.push(`parent_span_id IS NULL`);
     }
     if (beforeCursor) {
-      // Stable keyset pagination matching ORDER BY started_at DESC, id DESC.
       conditions.push(`(started_at, id) < ($${paramIdx++}, $${paramIdx++})`);
       params.push(beforeCursor.started_at);
       params.push(beforeCursor.id);
     }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    // No limit ⇒ return all matching runs (parity with in-memory store).
+    const where = `WHERE ${conditions.join(" AND ")}`;
     const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
     const finalParams = opts?.limit !== undefined ? [...params, opts.limit] : params;
 
@@ -766,16 +789,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async listChildRuns(runId: string): Promise<RunRecord[]> {
-    // Children hang off a span in the parent run: workflow fan-out points at the
-    // root span (id === runId), LLM subagents at a tool-call span. Match either.
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
               thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
        FROM runs
-       WHERE parent_span_id IS NOT NULL
+       WHERE tenant_id = $2
+         AND parent_span_id IS NOT NULL
          AND (parent_span_id = $1 OR parent_span_id IN (SELECT id FROM spans WHERE run_id = $1))
        ORDER BY started_at ASC, id ASC`,
-      [runId],
+      [runId, this.tenantId],
     );
     return res.rows.map(mapRunRow);
   }
@@ -783,9 +805,9 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getMessages(runId: string, agentName: string): Promise<Message[]> {
     const res = await this.pool.query<{ role: string; content: unknown }>(
       `SELECT role, content FROM run_messages
-       WHERE run_id = $1 AND (agent_name = $2 OR agent_name = '')
+       WHERE run_id = $1 AND tenant_id = $3 AND (agent_name = $2 OR agent_name = '')
        ORDER BY seq`,
-      [runId, agentName],
+      [runId, agentName, this.tenantId],
     );
     return res.rows.map((row) => ({
       role: row.role as Message["role"],
@@ -794,15 +816,13 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async getThreadAgentMessages(threadId: string, agentName: string): Promise<Message[]> {
-    // Folds history across every run in the thread, ordered by run start (then
-    // seq), for the chat lane's new-run-per-turn memory.
     const res = await this.pool.query<{ role: string; content: unknown }>(
       `SELECT rm.role, rm.content
        FROM run_messages rm
        JOIN runs r ON r.id = rm.run_id
-       WHERE r.thread_id = $1 AND (rm.agent_name = $2 OR rm.agent_name = '')
+       WHERE r.thread_id = $1 AND r.tenant_id = $3 AND (rm.agent_name = $2 OR rm.agent_name = '')
        ORDER BY r.started_at, r.id, rm.seq`,
-      [threadId, agentName],
+      [threadId, agentName, this.tenantId],
     );
     return res.rows.map((row) => ({
       role: row.role as Message["role"],
@@ -813,16 +833,16 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async listSpans(runId: string): Promise<SpanRecord[]> {
     const res = await this.pool.query<PgSpanRow>(
       `SELECT id, run_id, parent_id, seq, name, kind, status, input, output, error, attributes, started_at, finished_at
-       FROM spans WHERE run_id = $1 ORDER BY seq`,
-      [runId],
+       FROM spans WHERE run_id = $1 AND tenant_id = $2 ORDER BY seq`,
+      [runId, this.tenantId],
     );
     return res.rows.map(mapSpanRow);
   }
 
   async getStepResult(runId: string, name: string): Promise<{ value: unknown } | undefined> {
     const res = await this.pool.query<{ result: unknown }>(
-      `SELECT result FROM workflow_steps WHERE run_id = $1 AND name = $2`,
-      [runId, name],
+      `SELECT result FROM workflow_steps WHERE run_id = $1 AND name = $2 AND tenant_id = $3`,
+      [runId, name, this.tenantId],
     );
     const row = res.rows[0];
     if (!row) return undefined;
@@ -833,8 +853,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const idemKey = idempotencyKey(runId, toolCallId);
     const res = await this.pool.query<{ result_content: string | null; result_is_error: boolean }>(
       `SELECT result_content, result_is_error FROM tool_calls
-       WHERE run_id = $1 AND idempotency_key = $2 AND status IN ('completed', 'failed')`,
-      [runId, idemKey],
+       WHERE run_id = $1 AND idempotency_key = $2 AND tenant_id = $3 AND status IN ('completed', 'failed')`,
+      [runId, idemKey, this.tenantId],
     );
     const row = res.rows[0];
     if (!row || row.result_content === null) return undefined;
@@ -847,8 +867,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getInputs(runId: string): Promise<InputRequestProjectionRecord[]> {
     const res = await this.pool.query<PgApprovalRow>(
       `SELECT id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at, resolved_at, provided_by, reason
-       FROM input_requests WHERE run_id = $1 ORDER BY requested_at`,
-      [runId],
+       FROM input_requests WHERE run_id = $1 AND tenant_id = $2 ORDER BY requested_at`,
+      [runId, this.tenantId],
     );
     return res.rows.map(mapApprovalRow);
   }
@@ -856,15 +876,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getInputById(inputRequestId: string): Promise<InputRequestProjectionRecord | undefined> {
     const res = await this.pool.query<PgApprovalRow>(
       `SELECT id, run_id, kind, tool_name, tool_input, prompt, value, agent_name, status, requested_at, resolved_at, provided_by, reason
-       FROM input_requests WHERE id = $1`,
-      [inputRequestId],
+       FROM input_requests WHERE id = $1 AND tenant_id = $2`,
+      [inputRequestId, this.tenantId],
     );
     return res.rows.length > 0 ? mapApprovalRow(res.rows[0]) : undefined;
   }
 
   async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {
-    const params: unknown[] = [];
-    const filters: string[] = [];
+    const params: unknown[] = [this.tenantId];
+    const filters: string[] = [`tenant_id = $1`];
     if (opts?.status) {
       params.push(opts.status);
       filters.push(`status = $${params.length}`);
@@ -873,7 +893,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       params.push(opts.kind);
       filters.push(`kind = $${params.length}`);
     }
-    const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const where = `WHERE ${filters.join(" AND ")}`;
     const limitClause = opts?.limit !== undefined ? `LIMIT $${params.length + 1}` : "";
     if (opts?.limit !== undefined) params.push(opts.limit);
     const res = await this.pool.query<PgApprovalRow>(
@@ -887,8 +907,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async resolveConversation(channel: string, externalConversationId: string): Promise<ChannelConversation | undefined> {
     const res = await this.pool.query<{ channel: string; external_conversation_id: string; thread_id: string | null; last_run_id: string | null }>(
       `SELECT channel, external_conversation_id, thread_id, last_run_id
-       FROM channel_conversations WHERE channel = $1 AND external_conversation_id = $2`,
-      [channel, externalConversationId],
+       FROM channel_conversations WHERE tenant_id = $1 AND channel = $2 AND external_conversation_id = $3`,
+      [this.tenantId, channel, externalConversationId],
     );
     const row = res.rows[0];
     if (!row) return undefined;
@@ -904,11 +924,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
   async createThread(thread: Thread): Promise<void> {
     await this.pool.query(
-      `INSERT INTO threads (id, user_id, metadata, status, title, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO threads (id, tenant_id, user_id, metadata, status, title, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (id) DO NOTHING`,
       [
-        thread.id, thread.userId ?? null,
+        thread.id, this.tenantId, thread.userId ?? null,
         thread.metadata !== undefined ? jsonbStringify(thread.metadata) : null,
         thread.status, thread.title ?? null, thread.createdAt, thread.updatedAt,
       ],
@@ -917,15 +937,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
   async getThread(id: string): Promise<Thread | undefined> {
     const res = await this.pool.query<PgThreadRow>(
-      `SELECT id, user_id, metadata, status, title, created_at, updated_at FROM threads WHERE id = $1`,
-      [id],
+      `SELECT id, user_id, metadata, status, title, created_at, updated_at FROM threads WHERE id = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
     );
     return res.rows.length > 0 ? mapThreadRow(res.rows[0]) : undefined;
   }
 
   async updateThread(id: string, patch: Partial<Thread>): Promise<void> {
     const sets: string[] = [];
-    const params: unknown[] = [id];
+    const params: unknown[] = [id, this.tenantId];
     const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
     if (patch.status !== undefined) add("status", patch.status);
     if (patch.title !== undefined) add("title", patch.title);
@@ -933,17 +953,18 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     if (patch.metadata !== undefined) add("metadata", jsonbStringify(patch.metadata));
     params.push(new Date().toISOString());
     sets.push(`updated_at = $${params.length}`);
-    if (sets.length === 1) return; // only updated_at → nothing meaningful
-    await this.pool.query(`UPDATE threads SET ${sets.join(", ")} WHERE id = $1`, params);
+    if (sets.length === 1) return;
+    await this.pool.query(`UPDATE threads SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2`, params);
   }
 
   async listThreads(opts?: { userId?: string }): Promise<Thread[]> {
-    const params: unknown[] = [];
-    let where = "";
+    const params: unknown[] = [this.tenantId];
+    const conditions: string[] = [`tenant_id = $1`];
     if (opts?.userId) {
       params.push(opts.userId);
-      where = `WHERE user_id = $1`;
+      conditions.push(`user_id = $${params.length}`);
     }
+    const where = `WHERE ${conditions.join(" AND ")}`;
     const res = await this.pool.query<PgThreadRow>(
       `SELECT id, user_id, metadata, status, title, created_at, updated_at
        FROM threads ${where} ORDER BY created_at DESC`,
@@ -955,8 +976,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     const res = await this.pool.query<PgMessageRow>(
       `SELECT run_id, seq, thread_id, role, content, created_at
-       FROM messages WHERE thread_id = $1 ORDER BY created_at, run_id, seq`,
-      [threadId],
+       FROM messages WHERE thread_id = $1 AND tenant_id = $2 ORDER BY created_at, run_id, seq`,
+      [threadId, this.tenantId],
     );
     return res.rows.map(mapMessageRow);
   }
@@ -965,11 +986,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
   async createSchedule(s: ScheduleRecord): Promise<void> {
     await this.pool.query(
-      `INSERT INTO schedules (id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO schedules (id, tenant_id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id) DO NOTHING`,
       [
-        s.id, s.workflow, s.cronExpression,
+        s.id, this.tenantId, s.workflow, s.cronExpression,
         s.input !== undefined ? jsonbStringify(s.input) : null,
         s.enabled, s.userId ?? null, s.lastRunId ?? null, s.lastRunAt ?? null, s.createdAt, s.updatedAt,
       ],
@@ -979,15 +1000,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getSchedule(id: string): Promise<ScheduleRecord | undefined> {
     const res = await this.pool.query<PgScheduleRow>(
       `SELECT id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at
-       FROM schedules WHERE id = $1`,
-      [id],
+       FROM schedules WHERE id = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
     );
     return res.rows.length > 0 ? mapScheduleRow(res.rows[0]) : undefined;
   }
 
   async updateSchedule(id: string, patch: Partial<ScheduleRecord>): Promise<void> {
     const sets: string[] = [];
-    const params: unknown[] = [id];
+    const params: unknown[] = [id, this.tenantId];
     const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
     if (patch.workflow !== undefined) add("workflow", patch.workflow);
     if (patch.cronExpression !== undefined) add("cron_expression", patch.cronExpression);
@@ -997,32 +1018,35 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     if (patch.lastRunAt !== undefined) add("last_run_at", patch.lastRunAt);
     params.push(new Date().toISOString());
     sets.push(`updated_at = $${params.length}`);
-    if (sets.length === 1) return; // only updated_at → nothing meaningful
-    await this.pool.query(`UPDATE schedules SET ${sets.join(", ")} WHERE id = $1`, params);
+    if (sets.length === 1) return;
+    await this.pool.query(`UPDATE schedules SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2`, params);
   }
 
   async deleteSchedule(id: string): Promise<void> {
-    await this.pool.query(`DELETE FROM schedules WHERE id = $1`, [id]);
+    await this.pool.query(`DELETE FROM schedules WHERE id = $1 AND tenant_id = $2`, [id, this.tenantId]);
   }
 
   async listSchedules(opts?: { userId?: string }): Promise<ScheduleRecord[]> {
-    const res = opts?.userId
-      ? await this.pool.query<PgScheduleRow>(
-          `SELECT id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at
-           FROM schedules WHERE user_id = $1 ORDER BY created_at DESC`,
-          [opts.userId],
-        )
-      : await this.pool.query<PgScheduleRow>(
-          `SELECT id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at
-           FROM schedules ORDER BY created_at DESC`,
-        );
+    const params: unknown[] = [this.tenantId];
+    const conditions: string[] = [`tenant_id = $1`];
+    if (opts?.userId) {
+      params.push(opts.userId);
+      conditions.push(`user_id = $${params.length}`);
+    }
+    const where = `WHERE ${conditions.join(" AND ")}`;
+    const res = await this.pool.query<PgScheduleRow>(
+      `SELECT id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at
+       FROM schedules ${where} ORDER BY created_at DESC`,
+      params,
+    );
     return res.rows.map(mapScheduleRow);
   }
 
   async listEnabled(): Promise<ScheduleRecord[]> {
     const res = await this.pool.query<PgScheduleRow>(
       `SELECT id, workflow, cron_expression, input, enabled, user_id, last_run_id, last_run_at, created_at, updated_at
-       FROM schedules WHERE enabled = true ORDER BY created_at DESC`,
+       FROM schedules WHERE tenant_id = $1 AND enabled = true ORDER BY created_at DESC`,
+      [this.tenantId],
     );
     return res.rows.map(mapScheduleRow);
   }
@@ -1037,10 +1061,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [this.tenantId]);
 
       const detail = await client.query<{ id: string }>(
-        `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
-        [TERMINAL, eventHorizon],
+        `SELECT id FROM runs WHERE tenant_id = $1 AND status = ANY($2) AND ${ageExpr} < $3`,
+        [this.tenantId, TERMINAL, eventHorizon],
       );
       const detailIds = detail.rows.map((r) => r.id);
       if (detailIds.length > 0) {
@@ -1048,16 +1073,14 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       }
 
       const summary = await client.query<{ id: string }>(
-        `SELECT id FROM runs WHERE status = ANY($1) AND ${ageExpr} < $2`,
-        [TERMINAL, runHorizon],
+        `SELECT id FROM runs WHERE tenant_id = $1 AND status = ANY($2) AND ${ageExpr} < $3`,
+        [this.tenantId, TERMINAL, runHorizon],
       );
       const summaryIds = summary.rows.map((r) => r.id);
       if (summaryIds.length > 0) {
-        // Detail may still exist if runHorizon < eventHorizon; clear it first (FK).
         await this.deleteDetail(client, summaryIds);
-        // Null schedule refs before deleting summaries (FK).
-        await client.query(`UPDATE schedules SET last_run_id = NULL WHERE last_run_id = ANY($1)`, [summaryIds]);
-        await client.query(`DELETE FROM runs WHERE id = ANY($1)`, [summaryIds]);
+        await client.query(`UPDATE schedules SET last_run_id = NULL WHERE tenant_id = $1 AND last_run_id = ANY($2)`, [this.tenantId, summaryIds]);
+        await client.query(`DELETE FROM runs WHERE tenant_id = $1 AND id = ANY($2)`, [this.tenantId, summaryIds]);
       }
 
       await client.query("COMMIT");
@@ -1074,13 +1097,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     const now = opts.now ?? new Date();
     const horizon = new Date(now.getTime() - opts.staleMs).toISOString();
 
-    // Lane A roots only: non-terminal, no active queue job (Lane B is reclaimed
-    // by the job queue's own reaper, never failed here), silent past the
-    // horizon (most recent event predates it — progress resets the clock).
     const res = await this.pool.query<{ id: string }>(
       `SELECT r.id
          FROM runs r
-        WHERE r.status IN ('running', 'pending')
+        WHERE r.tenant_id = $2
+          AND r.status IN ('running', 'pending')
           AND NOT EXISTS (
             SELECT 1 FROM run_jobs j
              WHERE j.run_id = r.id AND j.status IN ('queued', 'running')
@@ -1089,12 +1110,11 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
             (SELECT max(e.ts) FROM run_events e WHERE e.run_id = r.id),
             r.started_at
           ) < $1`,
-      [horizon],
+      [horizon, this.tenantId],
     );
 
     const runIds: string[] = [];
     for (const { id } of res.rows) {
-      // Re-check so a run that settled in the tiny scan-to-now window isn't flipped to failed.
       const run = await this.getRun(id);
       if (!run || (run.status !== "running" && run.status !== "pending")) continue;
       await this.events.append(
@@ -1121,8 +1141,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getConnection(userId: string, provider: string): Promise<OAuthConnection | undefined> {
     const res = await this.pool.query<PgOAuthRow>(
       `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
-       FROM oauth_connections WHERE user_id = $1 AND provider = $2`,
-      [userId, provider],
+       FROM oauth_connections WHERE tenant_id = $1 AND user_id = $2 AND provider = $3`,
+      [this.tenantId, userId, provider],
     );
     return res.rows.length > 0 ? mapOAuthRow(res.rows[0], encryptionKeyFromEnv()) : undefined;
   }
@@ -1130,13 +1150,13 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async upsertConnection(conn: OAuthConnection): Promise<void> {
     const key = encryptionKeyFromEnv();
     await this.pool.query(
-      `INSERT INTO oauth_connections (id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (user_id, provider) DO UPDATE SET
+      `INSERT INTO oauth_connections (id, tenant_id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (tenant_id, user_id, provider) DO UPDATE SET
          access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token,
          expires_at = EXCLUDED.expires_at, scopes = EXCLUDED.scopes, updated_at = EXCLUDED.updated_at`,
       [
-        conn.id, conn.userId, conn.provider,
+        conn.id, this.tenantId, conn.userId, conn.provider,
         encrypt(conn.accessToken, key),
         conn.refreshToken !== undefined ? encrypt(conn.refreshToken, key) : null,
         conn.expiresAt ?? null, conn.scopes, conn.createdAt, conn.updatedAt,
@@ -1145,15 +1165,15 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   }
 
   async deleteConnection(userId: string, provider: string): Promise<void> {
-    await this.pool.query(`DELETE FROM oauth_connections WHERE user_id = $1 AND provider = $2`, [userId, provider]);
+    await this.pool.query(`DELETE FROM oauth_connections WHERE tenant_id = $1 AND user_id = $2 AND provider = $3`, [this.tenantId, userId, provider]);
   }
 
   async listConnections(userId: string): Promise<OAuthConnection[]> {
     const key = encryptionKeyFromEnv();
     const res = await this.pool.query<PgOAuthRow>(
       `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
-       FROM oauth_connections WHERE user_id = $1`,
-      [userId],
+       FROM oauth_connections WHERE tenant_id = $1 AND user_id = $2`,
+      [this.tenantId, userId],
     );
     return res.rows.map((r) => mapOAuthRow(r, key));
   }
@@ -1193,8 +1213,8 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       // Exclusive row lock → concurrent refreshers serialize and coalesce.
       const res = await client.query<PgOAuthRow>(
         `SELECT id, user_id, provider, access_token, refresh_token, expires_at, scopes, created_at, updated_at
-         FROM oauth_connections WHERE user_id = $1 AND provider = $2 FOR UPDATE`,
-        [userId, provider],
+         FROM oauth_connections WHERE tenant_id = $1 AND user_id = $2 AND provider = $3 FOR UPDATE`,
+        [this.tenantId, userId, provider],
       );
       if (res.rows.length === 0) {
         await client.query("COMMIT");
@@ -1208,10 +1228,10 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       const tokens = await doRefresh(current);
       const updatedAt = new Date().toISOString();
       await client.query(
-        `UPDATE oauth_connections SET access_token = $3, refresh_token = $4, expires_at = $5, updated_at = $6
-         WHERE user_id = $1 AND provider = $2`,
+        `UPDATE oauth_connections SET access_token = $4, refresh_token = $5, expires_at = $6, updated_at = $7
+         WHERE tenant_id = $1 AND user_id = $2 AND provider = $3`,
         [
-          userId, provider,
+          this.tenantId, userId, provider,
           encrypt(tokens.accessToken, key),
           tokens.refreshToken !== undefined ? encrypt(tokens.refreshToken, key) : (current.refreshToken !== undefined ? encrypt(current.refreshToken, key) : null),
           tokens.expiresAt ?? null, updatedAt,
@@ -1492,10 +1512,13 @@ function flattenContent(content: Array<{ type: string; text?: string }>): string
     .join("\n");
 }
 
-export function createPgStore(config?: PoolConfig): PgRunStore {
-  const connectionString = config?.connectionString ?? process.env.DATABASE_URL;
+export function createPgStore(config: PgRunStoreConfig): PgRunStore {
+  const connectionString = config.connectionString ?? process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("createPgStore: DATABASE_URL is not set and no connectionString was provided");
+  }
+  if (!config.tenantId) {
+    throw new Error("createPgStore: tenantId is required");
   }
   return new PgRunStore({ connectionString, ...config });
 }

@@ -12,27 +12,29 @@ import type { CancelStore } from "../cancel-store.js";
  * (emitted by the loop on exit) is the canonical terminal transition.
  */
 export class PgCancelStore implements CancelStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly tenantId: string,
+  ) {
+    if (!tenantId) throw new Error("PgCancelStore requires a tenantId");
+  }
 
   async requestCancel(runId: string): Promise<void> {
     await this.pool.query(
-      `UPDATE runs SET status = 'cancelled' WHERE id = $1 AND status IN ('pending', 'running', 'paused')`,
-      [runId],
+      `UPDATE runs SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2 AND status IN ('pending', 'running', 'paused')`,
+      [runId, this.tenantId],
     );
   }
 
   async isCancelled(runId: string): Promise<boolean> {
     const res = await this.pool.query<{ status: string }>(
-      `SELECT status FROM runs WHERE id = $1`,
-      [runId],
+      `SELECT status FROM runs WHERE id = $1 AND tenant_id = $2`,
+      [runId, this.tenantId],
     );
     return res.rows[0]?.status === "cancelled";
   }
 
-  async clearCancel(_runId: string): Promise<void> {
-    // No-op for Postgres: the event-driven fold handles final state.
-    // This exists for KV-backed implementations that need key cleanup.
-  }
+  async clearCancel(_runId: string): Promise<void> {}
 }
 
 /**

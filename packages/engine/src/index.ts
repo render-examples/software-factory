@@ -90,3 +90,19 @@ export { buildHookInterceptor } from "./hook-adapter.js";
 
 export type { TierEntry, ResolveModelResult } from "./tiers.js";
 export { isTierAlias, inferProvider, resolveModelSpec } from "./tiers.js";
+
+export type {
+  Sandbox,
+  SandboxProvider,
+  SandboxExecEvent,
+  SandboxExecOptions,
+  SandboxDownload,
+  SandboxUploadData,
+  SandboxUploadOptions,
+  SandboxStatus,
+  CreateSandboxOptions,
+} from "./sandbox.js";
+export { BaseSandbox, collectExecOutput } from "./sandbox.js";
+
+export { createSandboxToolSource } from "./sandbox-tool-source.js";
+export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";

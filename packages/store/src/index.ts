@@ -26,6 +26,7 @@ export {
   buildEventRecord,
 } from "./memory-store.js";
 export { PgEventLogStore, PgRunStore, createPgStore } from "./pg/postgres-store.js";
+export type { PgRunStoreConfig } from "./pg/postgres-store.js";
 export { getPool, createPool, closeSharedPool, applyMigrations } from "./pg/index.js";
 export { PgCancelStore, MemoryCancelStore } from "./pg/cancel-store.js";
 export type { PoolConfig } from "./pg/index.js";
@@ -45,3 +46,20 @@ export type {
 export { emptyStatusCounts } from "./job-queue.js";
 export { MemoryJobQueue } from "./memory-job-queue.js";
 export { PgJobQueue } from "./pg/job-queue.js";
+export type {
+  CommandStore,
+  CommandRecord,
+  CommandStatus,
+  EnqueueCommandOptions,
+  FailCommandOptions,
+} from "./command-store.js";
+export { LeaseLostError } from "./command-store.js";
+export { PgCommandStore } from "./pg/command-store.js";
+
+export type {
+  InboundStore,
+  InboundMessage,
+  ConversationJob,
+  AcceptMessageInput,
+} from "./inbound-store.js";
+export { PgInboundStore } from "./pg/inbound-store.js";

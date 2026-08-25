@@ -13,17 +13,23 @@ export function mockModel(
   };
 }
 
+/** A no-op model that throws if invoked — use `mockModel(handler)` for assertions. */
+const noopModel: ModelClient = {
+  async complete(): Promise<CompleteResult> {
+    throw new Error("No model configured in test runtime. Use mockModel(handler) instead.");
+  },
+};
+
 /**
  * In-memory runtime for tests: memory store, provided/mock model, and the
  * default in-process dispatcher (so `.task()` runs in-process with the same
  * observable behavior as `.run()`). Runs the *real* DefaultRunner — only the
  * model and store are swapped.
  */
-export function createTestRuntime(opts?: Partial<CreateRuntimeOptions>): Promise<AgentRuntime> {
+export function createTestRuntime(opts?: Partial<CreateRuntimeOptions> & { tenantId?: string }): Promise<AgentRuntime> {
   return createRuntime({
-    // Hermetic by default: ignore ambient Render env (RENDER_USE_LOCAL_DEV etc.)
-    // so the suite uses the in-process dispatcher even when run inside a
-    // `render workflows dev` shell. Callers can still pass an explicit dispatcher.
+    tenantId: opts?.tenantId ?? "test-tenant",
+    model: opts?.model ?? noopModel,
     autoDetectDispatcher: false,
     ...opts,
     store: opts?.store ?? createMemoryStore(),

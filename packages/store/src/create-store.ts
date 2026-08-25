@@ -19,14 +19,16 @@ export interface CreateStoreOptions extends PoolConfig {
    * - `DATABASE_URL` absent → in-memory
    */
   type?: "memory" | "postgres";
+  /** Required for Postgres stores. Scopes all reads and writes to this tenant. */
+  tenantId: string;
 }
 
 /**
  * Auto-detecting store factory. The composition root calls this once at
  * boot; downstream code is store-agnostic.
  */
-export function createStore(opts?: CreateStoreOptions): RunStore {
-  const storeType = opts?.type ?? (process.env.DATABASE_URL ? "postgres" : "memory");
+export function createStore(opts: CreateStoreOptions): RunStore {
+  const storeType = opts.type ?? (process.env.DATABASE_URL ? "postgres" : "memory");
 
   if (storeType === "postgres") {
     return createPgStore(opts);
@@ -39,6 +41,8 @@ export interface CreateJobQueueOptions extends PoolConfig {
   type?: "memory" | "postgres";
   /** Share an existing pool (e.g. the run store's) instead of opening another. */
   pool?: Pool;
+  /** Required for Postgres queues. Scopes all job operations to this tenant. */
+  tenantId: string;
 }
 
 /**
@@ -46,23 +50,22 @@ export interface CreateJobQueueOptions extends PoolConfig {
  * database (jobs reference runs), so backend derives from the given store: a
  * `PgRunStore` yields a Postgres queue sharing its pool; otherwise in-memory.
  */
-export function createJobQueue(opts?: CreateJobQueueOptions & { store?: RunStore }): JobQueue {
-  if (opts?.pool) return new PgJobQueue(opts.pool);
+export function createJobQueue(opts: CreateJobQueueOptions & { store?: RunStore }): JobQueue {
+  if (opts.pool) return new PgJobQueue(opts.pool, opts.tenantId);
 
-  if (opts?.type === "memory") return new MemoryJobQueue();
-  if (opts?.type === "postgres") {
-    return new PgJobQueue(opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts));
+  if (opts.type === "memory") return new MemoryJobQueue();
+  if (opts.type === "postgres") {
+    const pool = opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts);
+    return new PgJobQueue(pool, opts.tenantId);
   }
 
-  // No explicit override: mirror the store's backend so both share one database.
-  if (opts?.store) {
+  if (opts.store) {
     return opts.store instanceof PgRunStore
-      ? new PgJobQueue(opts.store.pool)
+      ? new PgJobQueue(opts.store.pool, opts.tenantId)
       : new MemoryJobQueue();
   }
 
-  // No store given: env detection.
-  return process.env.DATABASE_URL ? new PgJobQueue(getPool(opts)) : new MemoryJobQueue();
+  return process.env.DATABASE_URL ? new PgJobQueue(getPool(opts), opts.tenantId) : new MemoryJobQueue();
 }
 
 export interface CreateDeltaBusOptions extends PoolConfig {
@@ -99,6 +102,8 @@ export interface CreateCancelStoreOptions extends PoolConfig {
   type?: "memory" | "postgres";
   /** Share an existing pool (e.g. the run store's) instead of opening another. */
   pool?: Pool;
+  /** Required for Postgres cancel stores. Scopes operations to this tenant. */
+  tenantId: string;
 }
 
 /**
@@ -106,19 +111,20 @@ export interface CreateCancelStoreOptions extends PoolConfig {
  * (agent loop's `isCancelled` poll) must share one store, so backend derives
  * from the run store: `PgRunStore` yields a `PgCancelStore` on the same pool.
  */
-export function createCancelStore(opts?: CreateCancelStoreOptions & { store?: RunStore }): CancelStore {
-  if (opts?.pool) return new PgCancelStore(opts.pool);
+export function createCancelStore(opts: CreateCancelStoreOptions & { store?: RunStore }): CancelStore {
+  if (opts.pool) return new PgCancelStore(opts.pool, opts.tenantId);
 
-  if (opts?.type === "memory") return new MemoryCancelStore();
-  if (opts?.type === "postgres") {
-    return new PgCancelStore(opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts));
+  if (opts.type === "memory") return new MemoryCancelStore();
+  if (opts.type === "postgres") {
+    const pool = opts.store instanceof PgRunStore ? opts.store.pool : getPool(opts);
+    return new PgCancelStore(pool, opts.tenantId);
   }
 
-  if (opts?.store) {
+  if (opts.store) {
     return opts.store instanceof PgRunStore
-      ? new PgCancelStore(opts.store.pool)
+      ? new PgCancelStore(opts.store.pool, opts.tenantId)
       : new MemoryCancelStore();
   }
 
-  return process.env.DATABASE_URL ? new PgCancelStore(getPool(opts)) : new MemoryCancelStore();
+  return process.env.DATABASE_URL ? new PgCancelStore(getPool(opts), opts.tenantId) : new MemoryCancelStore();
 }

@@ -1,0 +1,20 @@
+{
+  "name": "@render-agents/sandbox-render",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@render-agents/engine": "workspace:*",
+    "@renderinc/sdk": "^0.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

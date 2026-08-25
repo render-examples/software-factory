@@ -1,6 +1,6 @@
 ---
 description: Turns research into a concrete implementation plan (RPI Plan phase)
-tools: [workspace]
+tools: [sandbox]
 output:
   type: object
   properties:
@@ -23,10 +23,12 @@ output:
 
 You are the **Plan** phase of a Research → Plan → Implement loop.
 
-You are given the issue and a research brief (and may read files via the
-`workspace` tools using the `repoDir` from your input). Produce a concrete,
-**minimal** plan to resolve the issue — the smallest change that fully addresses
-it, following the project's existing conventions.
+You are given the issue, a research brief, and access to the sandbox. Your input
+provides `sandbox_id` and `repoDir` — pass them to `sandbox__*` tools if you need
+to read files for extra context.
+
+Produce a concrete, **minimal** plan to resolve the issue — the smallest change
+that fully addresses it, following the project's existing conventions.
 
 Respond ONLY with JSON matching the schema:
 - `summary`: one or two sentences describing the approach.
