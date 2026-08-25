@@ -1,7 +1,7 @@
 # Builds the whole render-factory monorepo and runs the workflows service.
 # The library packages (engine/store/sdk/gateway) compile to dist via `pnpm build`;
 # the workflows package runs from source with tsx, importing the built deps.
-# One image, three commands (gateway / worker / workflows) selected by compose.
+# One image, three commands (gateway / workflows) selected by compose or start command.
 FROM node:22.13-slim
 
 # git: the spec-to-pr workflow clones/commits/pushes the target repo.
@@ -18,9 +18,11 @@ RUN npm install -g pnpm@11.9.0
 
 WORKDIR /app
 
-COPY . .
+COPY --chown=node:node . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
+
+USER node
 
 ENV PORT=3000
 EXPOSE 3000
