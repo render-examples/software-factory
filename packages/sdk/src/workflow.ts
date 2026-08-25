@@ -5,16 +5,16 @@ import type {
   RunRecord,
   RunEvent,
   ThreadStore,
-} from "@render-agents/store";
-import { buildEventRecord, idempotencyKey } from "@render-agents/store";
+} from "@render-factory/store";
+import { buildEventRecord, idempotencyKey } from "@render-factory/store";
 import type {
   RenderPlan,
   AgentDefinition,
   AgentInput,
   AgentOutput,
   RunOptions,
-} from "@render-agents/engine";
-import { RunPaused, RunCancelled } from "@render-agents/engine";
+} from "@render-factory/engine";
+import { RunPaused, RunCancelled } from "@render-factory/engine";
 import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";

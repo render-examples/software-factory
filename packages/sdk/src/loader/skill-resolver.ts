@@ -1,5 +1,5 @@
 import { parse as parseYaml } from "yaml";
-import type { SkillMetadata } from "@render-agents/engine";
+import type { SkillMetadata } from "@render-factory/engine";
 import type { DiscoveredItem } from "./discovery.js";
 import { readTextFile } from "./discovery.js";
 import { LoadError, ERR_SKILL_NOT_FOUND } from "./errors.js";

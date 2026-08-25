@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMemoryStore, buildEventRecord } from "@render-agents/store";
+import { createMemoryStore, buildEventRecord } from "@render-factory/store";
 import { loadAgents } from "../src/agents.js";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 

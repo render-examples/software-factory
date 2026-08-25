@@ -50,7 +50,7 @@ Fill in the loop's per-invocation safety and capability features that were stubb
 
 ## Deliverables
 
-`@render-agents/engine`:
+`@render-factory/engine`:
 - Budget checker in the iterate preamble (+ `maxWallSeconds` abort wiring).
 - Cost accumulation + `llm.call` event emission carrying `usage`/`costUsd`/`stopReason`/`latencyMs`.
 - Structured-output path: `responseFormat` request, parse/validate, bounded retry, `AgentOutput.data` population.

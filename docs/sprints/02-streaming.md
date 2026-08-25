@@ -77,7 +77,7 @@ Reuses infra already in place for `run_events`/`run_jobs`; no new dependency (Re
 ## Contracts (see [Type Reference](../specs/05-type-reference.md))
 
 ```ts
-// @render-agents/store
+// @render-factory/store
 interface StreamDelta { runId: string; threadId?: string; agentName: string; seq: number; text: string; }
 interface DeltaBus {
   publish(delta: StreamDelta): Promise<void>;
@@ -85,7 +85,7 @@ interface DeltaBus {
 }
 function createDeltaBus(opts?: { store?: RunStore; pool?: Pool; type?: "memory" | "postgres" }): DeltaBus;
 
-// @render-agents/engine
+// @render-factory/engine
 interface ModelClient {
   complete(args: CompleteArgs): Promise<CompleteResult>;
   stream?(args: CompleteArgs): AsyncGenerator<ModelStreamEvent, CompleteResult>; // now implemented

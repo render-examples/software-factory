@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { JobQueue, JobRecord, RunStore } from "@render-agents/store";
-import { TERMINAL_STATUSES } from "@render-agents/store";
-import { RunPaused } from "@render-agents/engine";
+import type { JobQueue, JobRecord, RunStore } from "@render-factory/store";
+import { TERMINAL_STATUSES } from "@render-factory/store";
+import { RunPaused } from "@render-factory/engine";
 import type { AgentRuntime } from "./runtime.js";
 import { resumeRun, driveAgentTurn } from "./agents.js";
 import { deliverForRun } from "./channel-delivery.js";

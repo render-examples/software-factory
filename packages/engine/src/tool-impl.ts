@@ -1,4 +1,4 @@
-import type { ToolResult, Logger } from "@render-agents/store";
+import type { ToolResult, Logger } from "@render-factory/store";
 import type {
   Tool,
   ToolSource,

@@ -1,9 +1,9 @@
-import { defineTool } from "@render-agents/sdk";
+import { defineTool } from "@render-factory/sdk";
 
 /**
  * A pretend "deploy" tool — a side-effectful action worth gating behind human
  * approval (see agents/assistant.md `permissions.requireApproval`). With
- * RENDER_AGENTS_STRICT_APPROVAL set, calling this pauses the run for an operator
+ * RENDER_FACTORY_STRICT_APPROVAL set, calling this pauses the run for an operator
  * decision in the Approvals view before it actually "runs".
  */
 export default defineTool({

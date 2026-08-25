@@ -1,5 +1,5 @@
 {
-  "name": "render-agents",
+  "name": "render-factory",
   "version": "0.0.0",
   "private": true,
   "type": "module",

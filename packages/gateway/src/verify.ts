@@ -2,7 +2,7 @@
  * Runtime enforcement of inbound webhook/connector signature verification.
  *
  * The authored, declarative policy (`WebhookVerify`) lives in
- * `@render-agents/sdk`; this module executes it: it recomputes the expected
+ * `@render-factory/sdk`; this module executes it: it recomputes the expected
  * signature over the *raw* request body and compares it (constant-time) against
  * the provider's signature header, applying a replay window where the scheme
  * carries a timestamp. The webhook/connector routes call {@link checkWebhookAuth}
@@ -19,11 +19,11 @@ import type {
   StandardWebhooksVerify,
   HmacAlgorithm,
   SignatureEncoding,
-} from "@render-agents/sdk";
+} from "@render-factory/sdk";
 import { constantTimeEqual } from "./auth.js";
 
 /** Env var that forces webhook verification to be required (fail-closed). */
-export const REQUIRE_WEBHOOK_VERIFY_ENV = "RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY";
+export const REQUIRE_WEBHOOK_VERIFY_ENV = "RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY";
 
 export interface VerifyContext {
   /** The exact raw request body bytes as text (never a re-serialized parse). */
@@ -209,7 +209,7 @@ export function checkWebhookAuth(
       };
     }
     console.warn(
-      `[render-agents] ${label} has no \`verify\` configured; inbound requests are ` +
+      `[render-factory] ${label} has no \`verify\` configured; inbound requests are ` +
         `UNAUTHENTICATED. Add a verify (e.g. githubVerify()) or set verify: "none".`,
     );
     return { ok: true };

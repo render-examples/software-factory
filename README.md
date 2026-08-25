@@ -1,8 +1,8 @@
-# render-agents
+# render-factory
 
 A framework for building production-grade AI agents on Render with markdown-first authoring, durable orchestration, and built-in ops.
 
-`render-agents` gives you a full platform for agent systems:
+`render-factory` gives you a full platform for agent systems:
 
 - **Authoring that stays simple**: agents are `agents/*.md` files (prompt + config).
 - **Runtime that scales**: same code path locally and on Render.
@@ -12,9 +12,9 @@ A framework for building production-grade AI agents on Render with markdown-firs
 
 ---
 
-## Why choose render-agents
+## Why choose render-factory
 
-- **Fast to start**: `npm create render-agents` scaffolds a complete, deployable project.
+- **Fast to start**: `npm create render-factory` scaffolds a complete, deployable project.
 - **Clear mental model**: `agent.run()` for in-process calls, `agent.task()` for isolated durable calls.
 - **Debuggable systems**: every meaningful event is persisted and streamable.
 - **Production-ready architecture**: gateway + worker lanes + Postgres, not a toy loop.
@@ -54,11 +54,11 @@ Monorepo package responsibilities:
 
 | Package | Role |
 |---|---|
-| [`@render-agents/sdk`](packages/sdk) | Public API: runtime creation, loading, workflows, dispatch, worker |
-| [`@render-agents/engine`](packages/engine) | Agent loop, tools, model clients, context management |
-| [`@render-agents/store`](packages/store) | Event log, projections, queue, delta bus, retention, persistence |
-| [`@render-agents/gateway`](packages/gateway) | HTTP service, auth, routes, SSE, OAuth, operator UI |
-| [`create-render-agents`](packages/create-render-agents) | Scaffolder (`npm create`) |
+| [`@render-factory/sdk`](packages/sdk) | Public API: runtime creation, loading, workflows, dispatch, worker |
+| [`@render-factory/engine`](packages/engine) | Agent loop, tools, model clients, context management |
+| [`@render-factory/store`](packages/store) | Event log, projections, queue, delta bus, retention, persistence |
+| [`@render-factory/gateway`](packages/gateway) | HTTP service, auth, routes, SSE, OAuth, operator UI |
+| [`create-render-factory`](packages/create-render-factory) | Scaffolder (`npm create`) |
 
 ---
 
@@ -100,7 +100,7 @@ Common authoring building blocks:
 ### 1) Scaffold a new project
 
 ```sh
-npm create render-agents@latest my-agents
+npm create render-factory@latest my-agents
 cd my-agents
 npm install
 ```
@@ -110,7 +110,7 @@ npm install
 ```sh
 cp .env.example .env
 # set ANTHROPIC_API_KEY or OPENAI_API_KEY
-# set RENDER_AGENTS_API_KEY
+# set RENDER_FACTORY_API_KEY
 npm run dev
 ```
 
@@ -120,7 +120,7 @@ This starts the gateway on `http://localhost:3000` (inline mode by default).
 
 ```sh
 curl -X POST localhost:3000/workflows/code-review \
-  -H "Authorization: Bearer $RENDER_AGENTS_API_KEY" \
+  -H "Authorization: Bearer $RENDER_FACTORY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts\n+ const x = 1"}}'
 ```

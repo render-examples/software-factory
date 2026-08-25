@@ -1,4 +1,4 @@
-import type { RenderPlan } from "@render-agents/engine";
+import type { RenderPlan } from "@render-factory/engine";
 import type { ParsedFrontmatter } from "./frontmatter.js";
 import {
   LoadError,

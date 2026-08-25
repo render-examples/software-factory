@@ -68,7 +68,7 @@ is half-wired.
 - Implement the two bind points above.
 - `createRuntime`: select `NativeWorkflowsSuspender` + set the dispatcher's
   `supportsNativeSuspension` when native is available (env-gated, e.g.
-  `RENDER_AGENTS_NATIVE_SUSPENSION`).
+  `RENDER_FACTORY_NATIVE_SUSPENSION`).
 - Gateway `resume` closure (`packages/gateway/src/app.ts`): when
   `dispatcher.supportsNativeSuspension`, wake the run's pending inputs via
   `resumeSuspension({ runId, token: inputRequestId })` instead of `redriveRoot`;

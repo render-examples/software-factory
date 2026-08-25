@@ -42,7 +42,7 @@ Add dynamic composition: an agent declares which agents it may delegate to (`sub
 
 ## Deliverables
 
-`@render-agents/engine` (+ sdk surface):
+`@render-factory/engine` (+ sdk surface):
 - Built-in subagent `ToolSource` factory that, given an agent's `subagents`, produces `subagents__<name>` tools bound to the dispatcher.
 - Depth/fan-out enforcement against `DelegationLimits` (run-tree-wide fanout counter; per-run depth).
 - `subagent.spawned` event emission + trace nesting (`parentSpanId`/`depth` propagation through `DispatchOptions`).

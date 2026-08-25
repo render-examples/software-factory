@@ -31,7 +31,7 @@ Wire the composition root (`createRuntime`/`AgentRuntime`), bind agents to it (`
 - **`RunContext` implementation** (the in-process realization): `emit` (→ `events.append`), `messages(agentName)` (→ folded history), `appliedToolResult` (→ idempotency lookup), `requestApproval` (auto-approve default mode + `input.auto` event; strict-mode TTY prompt stub — full HITL is Sprint 13), `mountTools` (stub returning declared tools — real mounting Sprint 07), `isCancelled` (memory flag — real cancellation Sprint 13), `signal`/`logger`/`tracer`/`runId`/`parentSpanId`/`userId`/`depth`/`env`.
 - **`DefaultRunner`** implementing the [agent loop](../specs/02-execution.md#the-agent-loop): the ITERATE cycle (cancellation check, budget check stubs, abort check, [context prepare hook — pass-through], model call → `emit llm.call`, `emit message.assistant`, end_turn return, per-`tool_use` dispatch with `emit tool.called`/`tool.result`, `emit message.tool`). Wave 0 scope: real iterate/call/dispatch + event emission; **deep** budget/cost/structured-output/skills/compaction/HITL/idempotency are stubbed or minimal and filled in Wave 1+.
 - **`Agent.run<T>()`** returning `AgentOutput<T>` (text now; `data` once structured output lands in Sprint 08).
-- **Testing utilities** (`@render-agents/sdk/testing`): `mockModel(handler)` (programmable `ModelClient`) and `createTestRuntime(opts?)` (memory store, mock/provided model, no dispatcher).
+- **Testing utilities** (`@render-factory/sdk/testing`): `mockModel(handler)` (programmable `ModelClient`) and `createTestRuntime(opts?)` (memory store, mock/provided model, no dispatcher).
 - **Lifecycle events:** `run.started` / `run.completed` / `run.failed` emitted around the loop; run status projection reflects them.
 
 **Out:**
@@ -44,12 +44,12 @@ Wire the composition root (`createRuntime`/`AgentRuntime`), bind agents to it (`
 
 ## Deliverables
 
-- `createRuntime` + `AgentRuntime` assembly in `@render-agents/sdk` (env detection seams present, defaults to memory/in-process).
+- `createRuntime` + `AgentRuntime` assembly in `@render-factory/sdk` (env detection seams present, defaults to memory/in-process).
 - `loadAgents` runtime binding (completes Sprint 02's pipeline at step 9).
-- `DefaultRunner` in `@render-agents/engine` (re-exported via sdk).
+- `DefaultRunner` in `@render-factory/engine` (re-exported via sdk).
 - `RunContext` in-process implementation.
 - `Agent` handle (`run`/`task`) bound to the runtime.
-- `mockModel` + `createTestRuntime` in `@render-agents/sdk/testing`.
+- `mockModel` + `createTestRuntime` in `@render-factory/sdk/testing`.
 
 ---
 

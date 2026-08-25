@@ -1,4 +1,4 @@
-import type { RunEvent, Message, Logger, Tracer, ContentBlock, ToolResult } from "@render-agents/store";
+import type { RunEvent, Message, Logger, Tracer, ContentBlock, ToolResult } from "@render-factory/store";
 import type { MountedTools, OAuthTokens } from "./tool.js";
 import type { AgentDefinition, AgentInput, AgentOutput } from "./agent.js";
 

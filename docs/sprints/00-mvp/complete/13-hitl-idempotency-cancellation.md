@@ -26,7 +26,7 @@ Implement the human-in-the-loop control-flow signal and its resume-by-replay, fi
 **In:**
 - **Approval state machine** ([Execution → HITL](../specs/02-execution.md#hitl-pause--resume)): `requested` → `pending_approval` → (`denied` | `approved`) → `executed` → `completed`, driven by approval events (`input.requested`/`input.provided`/`input.auto`).
 - **`RunContext.requestApproval` production behavior:** when a gated tool is not pre-approved, emit `input.requested`, set run status `paused`, and throw **`RunPaused`** carrying pending approval id(s). The catch boundary marks the run paused; in a workflow the signal unwinds the handler. `PausedResult` available to callers that inspect the boundary.
-- **In-process approval modes** (finalizing Sprint 04's stub): **auto-approve** (default; emits `input.auto` + span attribute — auditable, never silent) and **strict** (`RENDER_AGENTS_STRICT_APPROVAL`: TTY `y/n`, or error `approval required, no resolver available` when non-interactive).
+- **In-process approval modes** (finalizing Sprint 04's stub): **auto-approve** (default; emits `input.auto` + span attribute — auditable, never silent) and **strict** (`RENDER_FACTORY_STRICT_APPROVAL`: TTY `y/n`, or error `approval required, no resolver available` when non-interactive).
 - **Approve/deny inline (non-pausing) paths:** approval → continue to dispatch; denial → emit a canonical error `tool_result` and continue (no `tool.called`).
 - **Resume-by-replay:** on resume, load folded history (`ctx.messages`), reconstruct approval state from events, re-dispatch approved pending calls through the normal path (idempotency short-circuits already-applied), resolve denied calls as canonical errors, continue from the next iteration.
 - **Awaiting-input pause (sibling of approval):** the same pause/resume-by-replay mechanism also supports a run that pauses awaiting **user input** rather than an approval (harness `pauseForAwaitingInput`). New primitive **`RunContext.awaitInput()`** emits **`run.paused { reason: "input" }`** and throws **`RunPaused` (`reason: "input"`, no `pendingInputIds`)**; the gateway resumes by **appending a `message.user` event** (Sprint 17/18 `/runs/:id/input`), which the replayed loop folds into `ctx.messages()` so `awaitInput()` returns the new turn. This is the basis for **thread turn-taking** — a thread's active run parks in `awaitInput()` between turns; if the awaiting run was deprovisioned, the thread is revived under a fresh run that rehydrates from the `message.user` history in the log. The pause/resume mechanics are shared with approval; only the **reason discriminator** (`"approval"` vs `"input"`) and the resolving event (`input.provided` vs `message.user`) differ.
@@ -42,7 +42,7 @@ Implement the human-in-the-loop control-flow signal and its resume-by-replay, fi
 
 ## Deliverables
 
-`@render-agents/engine` + `@render-agents/store`:
+`@render-factory/engine` + `@render-factory/store`:
 - `RunPaused` (with `reason: "approval" | "input"`) throw + catch-boundary handling in the runner/workflow runtime; `PausedResult` surfacing.
 - `RunContext.awaitInput()` primitive: emits `run.paused { reason: "input" }`, unwinds via `RunPaused`, returns the next `message.user` content on resume.
 - `message.user` event folded into `ctx.messages()` (so delivered turns appear in the resumed/rehydrated history).

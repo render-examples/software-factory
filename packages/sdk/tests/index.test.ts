@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createRuntime, loadAgents, workflow, defineTool, defineMcpSource, defineHook, idempotencyKey, InProcessDispatcher } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
 
-describe("@render-agents/sdk", () => {
+describe("@render-factory/sdk", () => {
   it("createRuntime returns an in-memory runtime with an in-process dispatcher", async () => {
     const model = mockModel(() => ({
       content: [{ type: "text", text: "ok" }],
@@ -56,7 +56,7 @@ describe("@render-agents/sdk", () => {
   });
 });
 
-describe("@render-agents/sdk/testing", () => {
+describe("@render-factory/sdk/testing", () => {
   it("mockModel returns a ModelClient driven by the handler", async () => {
     const model = mockModel(() => ({
       content: [{ type: "text", text: "hi" }],

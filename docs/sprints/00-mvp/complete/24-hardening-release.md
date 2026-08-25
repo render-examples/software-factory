@@ -30,11 +30,11 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
   - Event append latency < 5ms (append + projection update).
   - SSE delivery < 100ms append→client.
   - In-memory store provides equivalent loop semantics without Postgres (no durable resume across restarts — documented).
-  - `@render-agents/sdk` < 100KB minified.
+  - `@render-factory/sdk` < 100KB minified.
   - Zero external deps for observability (Postgres sufficient).
 - **Edge-case test suite** (port the harness's "must not lose" cases — [Porting principle 5](../specs/porting-map.md#4-porting-principles)): concurrent thread turns, mid-loop crash + resume, OAuth token-refresh races, SSRF via DNS rebinding, budget overflow on the last turn. Plus the memory↔Postgres parity suite (Sprint 05) and the determinism/replay suite (Sprints 12/13).
 - **Documentation:** README per package, a top-level getting-started (scaffold → run → deploy), the public API reference (generated from the Type Reference / TSDoc), and a "porting/architecture" overview linking the specs.
-- **Release pipeline:** independent npm publish per `packages/*` (sdk/engine/store/gateway + `create-render-agents`), versioning/changesets, provenance, CI release workflow; bundle-size check in CI.
+- **Release pipeline:** independent npm publish per `packages/*` (sdk/engine/store/gateway + `create-render-factory`), versioning/changesets, provenance, CI release workflow; bundle-size check in CI.
 - **Examples polish:** the scaffolder's default project doubles as the canonical example; ensure it's documented and tested.
 
 **Out:**
@@ -64,7 +64,7 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
 1. **NFRs are CI gates, not aspirations:** encode each target as an automated check (perf benches may run on a labeled job to reduce flakiness). The < 100KB sdk bundle is a hard gate.
 2. **Edge cases use the real loop:** port them against `createTestRuntime` (in-memory) and the Postgres parity harness so they run fast in CI but exercise real behavior.
 3. **Docs derive from the spec:** the API reference is generated from the frozen types (Sprint 01) + TSDoc; the getting-started mirrors the scaffolder flow (Sprint 21).
-4. **Independent publish:** each package versions/publishes on its own (the spec's build+publish model); the scaffolder pins compatible `@render-agents/*` ranges.
+4. **Independent publish:** each package versions/publishes on its own (the spec's build+publish model); the scaffolder pins compatible `@render-factory/*` ranges.
 5. **Release reproducibility:** pin the package manager + Node; use changesets for coordinated multi-package releases; enable npm provenance.
 
 ---
@@ -73,7 +73,7 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
 
 - Every NFR target has a passing automated check (load < 500ms/20 agents, append < 5ms, SSE < 100ms, loop overhead < 10ms/turn, sdk < 100KB, ESM-only, strict TS).
 - The five harness edge-case scenarios pass against the new implementation; the memory↔Postgres parity and determinism/replay suites are green.
-- `npm create render-agents` → build → run → deploy is documented and works end-to-end (getting-started validated).
+- `npm create render-factory` → build → run → deploy is documented and works end-to-end (getting-started validated).
 - All five packages publish to npm (dry-run in CI, real publish on tag) with declarations + provenance; bundle-size gate passes.
 - API reference + package READMEs + architecture overview are published.
 
@@ -82,6 +82,6 @@ Bring the MVP to a releasable state: validate the non-functional targets, port t
 ## Risks / open questions
 
 - **Perf-bench flakiness in CI:** micro-benchmarks (append/loop overhead) can be noisy on shared CI runners; consider thresholds with margin + a dedicated bench job, or track trends rather than hard-failing on small regressions.
-- **Bundle-size gate vs dependencies:** keeping `@render-agents/sdk` < 100KB may constrain dependency choices (e.g. Zod, validators) — verify tree-shaking and consider moving heavy deps to `engine`.
+- **Bundle-size gate vs dependencies:** keeping `@render-factory/sdk` < 100KB may constrain dependency choices (e.g. Zod, validators) — verify tree-shaking and consider moving heavy deps to `engine`.
 - **Release coordination:** cross-package version compatibility (sdk↔engine↔store↔gateway) — use a coordinated changeset release and a compatibility test of the published artifacts (install-from-registry smoke test).
 - **Live-provider tests in CI:** keep provider adapter tests on recorded fixtures; gate any live tests behind secrets + a manual job.

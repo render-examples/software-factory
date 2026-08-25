@@ -69,7 +69,7 @@ async function readFromUiDirs(relative: string): Promise<Buffer | null> {
 const NOT_BUILT_HTML = `<!doctype html><meta charset="utf-8" />
 <body style="font-family:system-ui;padding:2rem;color:#444">
 <h2>Operator UI not built</h2>
-<p>Run <code>pnpm --filter @render-agents/gateway build</code> (or <code>build:ui</code>) to produce the SPA bundle.</p>
+<p>Run <code>pnpm --filter @render-factory/gateway build</code> (or <code>build:ui</code>) to produce the SPA bundle.</p>
 </body>`;
 
 /**

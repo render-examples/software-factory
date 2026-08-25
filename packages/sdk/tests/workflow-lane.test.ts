@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
-import { RunPaused } from "@render-agents/engine";
-import type { AgentDefinition } from "@render-agents/engine";
+import { buildEventRecord } from "@render-factory/store";
+import { RunPaused } from "@render-factory/engine";
+import type { AgentDefinition } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { workflow, bindWorkflow } from "../src/workflow.js";
 import { workflowTaskHandler } from "../src/dispatch.js";

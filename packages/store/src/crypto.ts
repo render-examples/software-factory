@@ -4,7 +4,7 @@ const ALGORITHM = "aes-256-gcm";
 
 /**
  * Derive a 32-byte AES key from a configured secret (e.g.
- * `RENDER_AGENTS_ENCRYPTION_KEY`). SHA-256 yields exactly 256 bits so any
+ * `RENDER_FACTORY_ENCRYPTION_KEY`). SHA-256 yields exactly 256 bits so any
  * secret length works.
  */
 export function deriveKey(secret: string): Buffer {
@@ -43,12 +43,12 @@ let warnedDevKey = false;
  * in dev/test it falls back to a clearly-flagged insecure key with one warning.
  */
 export function encryptionKeyFromEnv(): Buffer {
-  const secret = process.env.RENDER_AGENTS_ENCRYPTION_KEY;
+  const secret = process.env.RENDER_FACTORY_ENCRYPTION_KEY;
   if (secret) return deriveKey(secret);
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "RENDER_AGENTS_ENCRYPTION_KEY is required in production. It encrypts OAuth " +
+      "RENDER_FACTORY_ENCRYPTION_KEY is required in production. It encrypts OAuth " +
         "tokens at rest and signs OAuth state; set a strong 32+ char secret.",
     );
   }
@@ -56,9 +56,9 @@ export function encryptionKeyFromEnv(): Buffer {
   if (!warnedDevKey) {
     warnedDevKey = true;
     console.warn(
-      "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; using an INSECURE dev key " +
+      "[render-factory] RENDER_FACTORY_ENCRYPTION_KEY is not set; using an INSECURE dev key " +
         "for OAuth token encryption. Set a strong 32+ char secret in production.",
     );
   }
-  return deriveKey("render-agents-insecure-dev-key");
+  return deriveKey("render-factory-insecure-dev-key");
 }

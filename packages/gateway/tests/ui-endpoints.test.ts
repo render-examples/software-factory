@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { WorkflowDefinition } from "@render-agents/sdk";
-import { createTestRuntime } from "@render-agents/sdk/testing";
+import type { WorkflowDefinition } from "@render-factory/sdk";
+import { createTestRuntime } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 import type { OAuthProviderConfig } from "../src/routes/oauth.js";
 

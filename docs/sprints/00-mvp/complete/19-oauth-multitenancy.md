@@ -39,11 +39,11 @@ Give tools per-user credentials: persist encrypted per-`(userId, provider)` OAut
 
 ## Deliverables
 
-`@render-agents/gateway` (+ `store` for `OAuthStore`):
+`@render-factory/gateway` (+ `store` for `OAuthStore`):
 - `OAuthStore` with AES-256-GCM encryption + `SELECT FOR UPDATE` refresh.
 - `/oauth/:provider/{authorize,callback}` + `DELETE /oauth/:provider` routes with HMAC state signing.
 - `ToolContext.connection(provider)` resolution against the run's `userId`.
-- Encryption key management via env (`RENDER_AGENTS_ENCRYPTION_KEY`; documented in Sprint 23 config).
+- Encryption key management via env (`RENDER_FACTORY_ENCRYPTION_KEY`; documented in Sprint 23 config).
 
 ---
 

@@ -1,4 +1,4 @@
-import type { InboundStore, ConversationJob } from "@render-agents/store";
+import type { InboundStore, ConversationJob } from "@render-factory/store";
 
 export interface InboundWorkerOptions {
   store: InboundStore;

@@ -1,8 +1,8 @@
-# @render-agents/engine
+# @render-factory/engine
 
-The execution core for [render-agents](../../README.md): the agent loop and the
+The execution core for [render-factory](../../README.md): the agent loop and the
 runtime vocabulary it depends on. Most applications use this via
-[`@render-agents/sdk`](../sdk) rather than directly.
+[`@render-factory/sdk`](../sdk) rather than directly.
 
 ## Contents
 
@@ -12,4 +12,4 @@ runtime vocabulary it depends on. Most applications use this via
 - **Model clients** — Anthropic + OpenAI, tiers (`small`/`medium`/`large`), `estimateCost`, retry.
 - **Context management** — default auto-compaction emitting `context.compacted`.
 
-Depends only on `@render-agents/store`. Never imports the sdk (acyclic graph).
+Depends only on `@render-factory/store`. Never imports the sdk (acyclic graph).

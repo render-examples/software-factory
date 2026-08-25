@@ -29,7 +29,7 @@ Ship a lightweight, read-only dev-mode trace viewer (ported from the template's 
 - **Live trace stream:** `GET /runs/:id/stream` (SSE) — build the span tree incrementally from events; auto-reconnect from last `seq`.
 - **Read-only:** the viewer does not edit agents/workflows; it is a dev inspector. (Approval *display* may show pending approvals with a link, but resolve actions are optional for MVP — see notes.)
 - **Auth:** same API-key bearer as the gateway; key entered on load or via dev query param, stored in memory.
-- **Build:** Vite static bundle embedded in `@render-agents/gateway`; served as static assets; no separate deployment.
+- **Build:** Vite static bundle embedded in `@render-factory/gateway`; served as static assets; no separate deployment.
 
 **Out:**
 - The full operator-UI feature set from [L6](../specs/06-operator-ui.md) (thread browser, resolved-approvals tab, cost-summary header polish, write actions beyond approval) — deferred post-MVP.
@@ -40,7 +40,7 @@ Ship a lightweight, read-only dev-mode trace viewer (ported from the template's 
 
 ## Deliverables
 
-`@render-agents/gateway`:
+`@render-factory/gateway`:
 - Ported/adapted React + Vite SPA under the gateway package, built to static assets.
 - `/ui` + `/ui/*` static serving + SPA fallback.
 - Run list, run detail/span tree, live SSE stream views wired to existing routes.

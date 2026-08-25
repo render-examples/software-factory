@@ -9,8 +9,8 @@ import type {
   SandboxUploadOptions,
   SandboxStatus,
   CreateSandboxOptions,
-} from "@render-agents/engine";
-import { BaseSandbox } from "@render-agents/engine";
+} from "@render-factory/engine";
+import { BaseSandbox } from "@render-factory/engine";
 
 export interface RenderSandboxProviderOptions {
   /** Render API token. Defaults to RENDER_API_KEY env var. */

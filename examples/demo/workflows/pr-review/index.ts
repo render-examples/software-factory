@@ -1,4 +1,4 @@
-import { workflow } from "@render-agents/sdk";
+import { workflow } from "@render-factory/sdk";
 import { githubFromEnv, type PullFile, type ReviewComment } from "../../src/lib/github.js";
 import type { NormalizedGitHubEvent } from "../../src/lib/github-events.js";
 

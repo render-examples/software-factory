@@ -174,7 +174,7 @@ You are a helpful assistant. Hold a multi-turn conversation and answer questions
 - *Pipeline* — a `workflow()` in `workflows/<name>/index.ts` composing agents:
 
 ```typescript
-import { workflow } from "@render-agents/sdk";
+import { workflow } from "@render-factory/sdk";
 
 export default workflow({ name: "code-review" }, async (ctx) => {
   const diff = ctx.input as string;

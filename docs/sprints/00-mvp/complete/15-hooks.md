@@ -17,7 +17,7 @@ Implement hooks: auto-discovered event-stream middleware applied to every run. E
 
 - [D10](../specs/00-foundations.md#d10--the-append-only-event-log-is-the-single-source-of-truth) — because everything is an event, hooks are simply subscribers/transformers on the event stream.
 
-> **Layering note (resolved):** the user-facing `Hook` contract is defined in **`@render-agents/engine`** (runtime vocabulary), not `@render-agents/store`. The store exposes only a minimal, persistence-level [`EventInterceptor`](../specs/05-type-reference.md#eventinterceptor) seam (`(event, meta) → continue | rewrite | reject`, referencing only `RunEvent`). The engine **adapts** the `HookRegistry` into an `EventInterceptor` and the runtime **injects** it into the store's append path. `events.append` therefore knows `EventInterceptor`, never `Hook` — keeping `store` free of authoring concepts (see Sprints 01 & 03).
+> **Layering note (resolved):** the user-facing `Hook` contract is defined in **`@render-factory/engine`** (runtime vocabulary), not `@render-factory/store`. The store exposes only a minimal, persistence-level [`EventInterceptor`](../specs/05-type-reference.md#eventinterceptor) seam (`(event, meta) → continue | rewrite | reject`, referencing only `RunEvent`). The engine **adapts** the `HookRegistry` into an `EventInterceptor` and the runtime **injects** it into the store's append path. `events.append` therefore knows `EventInterceptor`, never `Hook` — keeping `store` free of authoring concepts (see Sprints 01 & 03).
 
 ---
 
@@ -44,7 +44,7 @@ Implement hooks: auto-discovered event-stream middleware applied to every run. E
 
 ## Deliverables
 
-`@render-agents/engine` (authoring + adapter) + `@render-agents/sdk` (discovery/injection wiring):
+`@render-factory/engine` (authoring + adapter) + `@render-factory/sdk` (discovery/injection wiring):
 - `Hook`/`HookResult`/`HookContext`/`HookRegistry` definitions (engine) + `defineHook` (authoring helper, re-exported by sdk).
 - `hooks/` discovery loader + merge with `createRuntime({ hooks })` → `HookRegistry`.
 - `HookRegistry` → `EventInterceptor` adapter honoring order, transform, veto, and fail-open/closed; `HookContext` construction.

@@ -1,6 +1,6 @@
 ---
 name: ThreadStreamer - Slack streaming replies
-overview: Lift the ThreadStreamer from factory into render-coding-agents as a reusable Slack streaming reply component. It posts a single message at turn start and progressively updates it with token deltas, tool indicators, and a final render — eliminating the dead-silence UX during multi-minute agent turns.
+overview: Lift the ThreadStreamer from factory into render-factory as a reusable Slack streaming reply component. It posts a single message at turn start and progressively updates it with token deltas, tool indicators, and a final render — eliminating the dead-silence UX during multi-minute agent turns.
 todos:
   - id: slack-client-with-retry
     content: Create packages/channels/slack/client.ts with retry, rate-limit, and backoff logic (lifted from factory/src/lib/slack/client.ts)
@@ -21,7 +21,7 @@ isProject: false
 
 ## Problem
 
-Today the `slackChannel().deliver` in `render-coding-agents` posts a single `chat.postMessage` when a run completes. During a multi-minute agent turn, the Slack thread shows no activity — no typing indicator, no tool progress, no partial text. The user has no signal the bot is working.
+Today the `slackChannel().deliver` in `render-factory` posts a single `chat.postMessage` when a run completes. During a multi-minute agent turn, the Slack thread shows no activity — no typing indicator, no tool progress, no partial text. The user has no signal the bot is working.
 
 ## What factory has
 
@@ -109,7 +109,7 @@ packages/channels/
     mrkdwn.ts        — Markdown → mrkdwn
     streamer.ts      — ThreadStreamer
     index.ts         — re-exports
-  package.json       — @render-agents/channels-slack
+  package.json       — @render-factory/channels-slack
   tsconfig.json
 ```
 

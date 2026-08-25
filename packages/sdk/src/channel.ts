@@ -10,8 +10,8 @@
 // Inbound verification reuses the declarative `WebhookVerify` surface. An
 // inbound-only channel (no `deliver`) is a fire-and-forget trigger (the former webhook).
 
-import type { Logger } from "@render-agents/store";
-import type { OAuthTokens } from "@render-agents/engine";
+import type { Logger } from "@render-factory/store";
+import type { OAuthTokens } from "@render-factory/engine";
 import type { WebhookVerify } from "./webhook-verify.js";
 
 /** What drives the turn an inbound event starts. */

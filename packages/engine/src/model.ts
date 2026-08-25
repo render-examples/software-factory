@@ -1,4 +1,4 @@
-import type { ContentBlock, TokenUsage, Message } from "@render-agents/store";
+import type { ContentBlock, TokenUsage, Message } from "@render-factory/store";
 import type { ModelSpec, SamplingParams } from "./agent.js";
 
 export interface ToolSchema {
@@ -107,7 +107,7 @@ function warnUnpriced(model: string): void {
   if (warnedModels.has(model)) return;
   warnedModels.add(model);
   console.warn(
-    `[render-agents] Model "${model}" has no pricing entry in MODEL_PRICING. ` +
+    `[render-factory] Model "${model}" has no pricing entry in MODEL_PRICING. ` +
     `Cost estimation returns $0. Add pricing via createRuntime({ pricing }) ` +
     `or use a known model to enable cost budgets.`,
   );

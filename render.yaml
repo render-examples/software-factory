@@ -11,7 +11,7 @@
 # │ (New > Workflow, Language = Docker). See examples/demo/README.md → Deploy.   │
 # │                                                                             │
 # │ The Workflow SLUG is defined in CODE (examples/demo/src/lib/render.ts) as    │
-# │ `render-agents`, so neither service needs a RENDER_WORKFLOW_SLUG env var —    │
+# │ `render-factory`, so neither service needs a RENDER_WORKFLOW_SLUG env var —    │
 # │ just ensure the Workflow service's slug (shown on its Tasks page, before the  │
 # │ "/") equals it. If it differs, edit the constant or set RENDER_WORKFLOW_SLUG  │
 # │ (env wins).                                                                  │
@@ -28,27 +28,27 @@
 # at https://<gateway-url>/webhooks/github with GITHUB_WEBHOOK_SECRET.
 
 databases:
-  - name: render-agents-demo-db
+  - name: render-factory-demo-db
     plan: basic-256mb
 
 services:
   # --- Gateway (web): webhook ingress + trigger surface + SSE + /ui ---
   - type: web
-    name: render-agents-demo-gateway
+    name: render-factory-demo-gateway
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: pnpm --filter @render-agents/example-demo start
+    dockerCommand: pnpm --filter @render-factory/example-demo start
     plan: standard
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: render-agents-demo-db
+          name: render-factory-demo-db
           property: connectionString
-      - key: RENDER_AGENTS_API_KEY
+      - key: RENDER_FACTORY_API_KEY
         generateValue: true
-      - key: RENDER_AGENTS_ENCRYPTION_KEY
+      - key: RENDER_FACTORY_ENCRYPTION_KEY
         generateValue: true
       # Lane A: paste a Render API key (rnd_…) so the gateway can startTask the
       # workflow root. Empty => in-process drive (fallback). (Slug is in code.)
@@ -75,57 +75,57 @@ services:
   # gateway, so it needs no build. `buildCommand: "true"` is a no-op; curl is
   # present in Render's native environment and $VARS expand in the startCommand.
   - type: cron
-    name: render-agents-demo-retention
+    name: render-factory-demo-retention
     runtime: node
     plan: starter
     schedule: "0 4 * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_FACTORY_API_KEY"'
     envVars:
       - key: GATEWAY_URL
         fromService:
           type: web
-          name: render-agents-demo-gateway
+          name: render-factory-demo-gateway
           property: hostport
-      - key: RENDER_AGENTS_API_KEY
+      - key: RENDER_FACTORY_API_KEY
         fromService:
           type: web
-          name: render-agents-demo-gateway
-          envVarKey: RENDER_AGENTS_API_KEY
+          name: render-factory-demo-gateway
+          envVarKey: RENDER_FACTORY_API_KEY
 
   # --- Stranded-run reaper (fails Lane A roots stranded by a lost task) ---
   - type: cron
-    name: render-agents-demo-reaper
+    name: render-factory-demo-reaper
     runtime: node
     plan: starter
     schedule: "*/5 * * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_AGENTS_API_KEY"'
+    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_FACTORY_API_KEY"'
     envVars:
       - key: GATEWAY_URL
         fromService:
           type: web
-          name: render-agents-demo-gateway
+          name: render-factory-demo-gateway
           property: hostport
-      - key: RENDER_AGENTS_API_KEY
+      - key: RENDER_FACTORY_API_KEY
         fromService:
           type: web
-          name: render-agents-demo-gateway
-          envVarKey: RENDER_AGENTS_API_KEY
+          name: render-factory-demo-gateway
+          envVarKey: RENDER_FACTORY_API_KEY
 
 # --- Create this MANUALLY in the Dashboard (Blueprints can't manage Workflows) ---
 # New > Workflow:
 #   Name:            any name whose slug matches WORKFLOW_SLUG in
-#                     src/lib/render.ts (currently "render-agents"; confirm the
+#                     src/lib/render.ts (currently "render-factory"; confirm the
 #                     slug before "/" on the Tasks page and reconcile if different)
 #   Repo:            this repo/branch
 #   Language:        Docker
 #   Dockerfile Path: ./Dockerfile
-#   Start Command:   pnpm --filter @render-agents/example-demo workflows
+#   Start Command:   pnpm --filter @render-factory/example-demo workflows
 #   Instance type:   standard (headroom for clone + build + tests)
 #   Environment variables (the slug is in code, so no RENDER_WORKFLOW_SLUG here):
-#     DATABASE_URL                 = render-agents-demo-db Internal Database URL (same DB)
-#     RENDER_AGENTS_ENCRYPTION_KEY = same value as the gateway (reveal + copy)
+#     DATABASE_URL                 = render-factory-demo-db Internal Database URL (same DB)
+#     RENDER_FACTORY_ENCRYPTION_KEY = same value as the gateway (reveal + copy)
 #     RENDER_API_KEY               = a Render API key (rnd_…) — needed to runTask
 #                                    the reviewer fan-out (agent@standard) children
 #     GITHUB_TOKEN                 = fine-grained PAT (Contents/PRs/Issues RW)

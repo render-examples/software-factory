@@ -7,15 +7,15 @@
  * a signed, httpOnly cookie on top:
  *
  *   1. Browser POSTs the key to `/ui/login`.
- *   2. We validate it against `RENDER_AGENTS_API_KEY` (constant time).
+ *   2. We validate it against `RENDER_FACTORY_API_KEY` (constant time).
  *   3. On success we set a signed cookie carrying the resolved `userId|role`.
  *   4. {@link wrapWithSession} makes the auth resolver accept the cookie OR the
  *      bearer header — so `curl` ops keep working and browsers stay logged in.
  *      EventSource carries the cookie automatically (same-origin), so SSE no
  *      longer needs the key in the URL.
  *
- * The signing secret comes from `RENDER_AGENTS_COOKIE_SECRET`, falling back to
- * `RENDER_AGENTS_ENCRYPTION_KEY`. If neither is set we generate a per-process
+ * The signing secret comes from `RENDER_FACTORY_COOKIE_SECRET`, falling back to
+ * `RENDER_FACTORY_ENCRYPTION_KEY`. If neither is set we generate a per-process
  * secret and warn — fine for dev, but cookies don't survive a restart.
  */
 
@@ -39,8 +39,8 @@ let warnedEphemeral = false;
 export function buildCookieConfig(overrides: Partial<CookieConfig> = {}): CookieConfig {
   const secret =
     overrides.secret ??
-    process.env.RENDER_AGENTS_COOKIE_SECRET ??
-    process.env.RENDER_AGENTS_ENCRYPTION_KEY ??
+    process.env.RENDER_FACTORY_COOKIE_SECRET ??
+    process.env.RENDER_FACTORY_ENCRYPTION_KEY ??
     ephemeralSecret();
   return {
     name: overrides.name ?? COOKIE_NAME,
@@ -118,7 +118,7 @@ function ephemeralSecret(): string {
   if (!warnedEphemeral) {
     warnedEphemeral = true;
     console.warn(
-      "[render-agents] no RENDER_AGENTS_COOKIE_SECRET / RENDER_AGENTS_ENCRYPTION_KEY set; " +
+      "[render-factory] no RENDER_FACTORY_COOKIE_SECRET / RENDER_FACTORY_ENCRYPTION_KEY set; " +
         "UI session cookies use a per-process secret and won't survive a restart.",
     );
   }

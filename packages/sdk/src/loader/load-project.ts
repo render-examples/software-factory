@@ -1,8 +1,8 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ToolSource, DefineToolSpec, Hook, AgentRunner } from "@render-agents/engine";
-import { defineTool, defineToolSource } from "@render-agents/engine";
+import type { ToolSource, DefineToolSpec, Hook, AgentRunner } from "@render-factory/engine";
+import { defineTool, defineToolSource } from "@render-factory/engine";
 import type { AgentRuntime } from "../runtime.js";
 import type { WorkflowDefinition } from "../workflow.js";
 import type { Channel } from "../channel.js";

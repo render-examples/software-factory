@@ -1,5 +1,5 @@
-import type { ModelClient, CompleteArgs, CompleteResult } from "@render-agents/engine";
-import { createMemoryStore } from "@render-agents/store";
+import type { ModelClient, CompleteArgs, CompleteResult } from "@render-factory/engine";
+import { createMemoryStore } from "@render-factory/store";
 import { createRuntime, type AgentRuntime, type CreateRuntimeOptions } from "./runtime.js";
 
 /** A programmable `ModelClient` for tests: the handler decides each completion. */

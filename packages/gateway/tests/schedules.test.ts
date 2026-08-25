@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { createMemoryStore, type ScheduleStore } from "@render-agents/store";
-import type { WorkflowDefinition } from "@render-agents/sdk";
-import { createTestRuntime } from "@render-agents/sdk/testing";
+import { createMemoryStore, type ScheduleStore } from "@render-factory/store";
+import type { WorkflowDefinition } from "@render-factory/sdk";
+import { createTestRuntime } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 import { reconcileDueSchedules } from "../src/routes/schedules.js";
 

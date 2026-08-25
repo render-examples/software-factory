@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
-import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-agents/sdk";
-import { createTestRuntime, mockModel } from "@render-agents/sdk/testing";
-import { defineTool, workflow, bindWorkflow } from "@render-agents/sdk";
+import { buildEventRecord } from "@render-factory/store";
+import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-factory/sdk";
+import { createTestRuntime, mockModel } from "@render-factory/sdk/testing";
+import { defineTool, workflow, bindWorkflow } from "@render-factory/sdk";
 import { createGatewayApp } from "../src/index.js";
 
-const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
 
 afterEach(() => {
   delete process.env[KEY];

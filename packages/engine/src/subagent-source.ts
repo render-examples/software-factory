@@ -1,4 +1,4 @@
-import type { ToolResult, Logger } from "@render-agents/store";
+import type { ToolResult, Logger } from "@render-factory/store";
 import type { AgentDefinition, AgentOutput } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { Tool, ToolSource, ResolvedSource, ToolContext } from "./tool.js";

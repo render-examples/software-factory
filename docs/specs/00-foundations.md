@@ -1,15 +1,15 @@
-# render-agents Foundations
+# render-factory Foundations
 
 **Status:** IMPLEMENTED (living)
 **Date:** 2026-07-02
 
-This document is the overview of the `render-agents` monorepo. It defines package ownership, architecture boundaries, and the invariants the rest of `docs/specs/` builds on.
+This document is the overview of the `render-factory` monorepo. It defines package ownership, architecture boundaries, and the invariants the rest of `docs/specs/` builds on.
 
 ---
 
 ## What this system is
 
-`render-agents` is a TypeScript platform for building and operating agent systems on Render:
+`render-factory` is a TypeScript platform for building and operating agent systems on Render:
 
 - Agents are markdown files in `agents/*.md`.
 - Workflows are TypeScript handlers in `workflows/*/index.ts`.
@@ -21,11 +21,11 @@ The implementation is in five runtime packages plus one scaffolder:
 
 | Package | Purpose |
 |---|---|
-| `@render-agents/sdk` | Public composition API: runtime creation, loading, workflow binding, dispatch, worker |
-| `@render-agents/engine` | Agent loop, tool runtime, model clients, context compaction, run context |
-| `@render-agents/store` | Event log, projections, Postgres/memory stores, queues, delta bus, retention |
-| `@render-agents/gateway` | HTTP/API layer, auth, threads, HITL input routes, OAuth, schedules, SSE, UI serving |
-| `create-render-agents` | Project generator (`npm create`) and deployment blueprint |
+| `@render-factory/sdk` | Public composition API: runtime creation, loading, workflow binding, dispatch, worker |
+| `@render-factory/engine` | Agent loop, tool runtime, model clients, context compaction, run context |
+| `@render-factory/store` | Event log, projections, Postgres/memory stores, queues, delta bus, retention |
+| `@render-factory/gateway` | HTTP/API layer, auth, threads, HITL input routes, OAuth, schedules, SSE, UI serving |
+| `create-render-factory` | Project generator (`npm create`) and deployment blueprint |
 
 ---
 
@@ -33,7 +33,7 @@ The implementation is in five runtime packages plus one scaffolder:
 
 The following modules are the practical ownership boundaries to use when editing behavior.
 
-### `@render-agents/sdk`
+### `@render-factory/sdk`
 
 - `src/runtime.ts`: `createRuntime`, dependency auto-detection, composition root.
 - `src/agents.ts`: `loadAgents`, bound `Agent` handles, `driveAgentTurn`, `resumeRun`.
@@ -43,7 +43,7 @@ The following modules are the practical ownership boundaries to use when editing
 - `src/submit.ts`: inline-vs-queue root execution fork.
 - `src/loader/*`: project convention discovery and validation.
 
-### `@render-agents/engine`
+### `@render-factory/engine`
 
 - `src/default-runner.ts`: core agent loop.
 - `src/run-context.ts`: event emission, input gating, cancellation checks, thread history, OAuth, deltas.
@@ -52,7 +52,7 @@ The following modules are the practical ownership boundaries to use when editing
 - `src/context-manager-impl.ts`: auto compaction implementation.
 - `src/clients/*`: Anthropic/OpenAI clients and retry behavior.
 
-### `@render-agents/store`
+### `@render-factory/store`
 
 - `src/events.ts`: event taxonomy and event-store contracts.
 - `src/projections.ts`: fold logic from events to projections.
@@ -62,7 +62,7 @@ The following modules are the practical ownership boundaries to use when editing
 - `src/retention.ts`: retention and stranded-run reaping.
 - `sql/*.sql`: migration source of truth.
 
-### `@render-agents/gateway`
+### `@render-factory/gateway`
 
 - `src/app.ts`: app assembly and lane routing.
 - `src/auth.ts` + `src/ui-session.ts`: bearer auth, cookie session auth for UI.
@@ -70,7 +70,7 @@ The following modules are the practical ownership boundaries to use when editing
 - `src/connector.ts`: package-contributed connector loading from `tools/*`.
 - `ui/src/*`: operator UI implementation.
 
-### `create-render-agents`
+### `create-render-factory`
 
 - `src/index.ts`: CLI flow and argument handling.
 - `src/blueprint.ts`: generated project files and default topology.

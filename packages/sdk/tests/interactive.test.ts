@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
-import type { AgentDefinition } from "@render-agents/engine";
+import { buildEventRecord } from "@render-factory/store";
+import type { AgentDefinition } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { driveAgentTurn } from "../src/agents.js";
 

@@ -41,9 +41,9 @@ Expose the production HITL surface over HTTP: list pending approvals, resolve th
 
 ## Deliverables
 
-`@render-agents/gateway`:
+`@render-factory/gateway`:
 - `/approvals`, `/approvals/:id/resolve`, `/runs/:id/input` routes.
-- `ApprovalStore` (interface + impl in `@render-agents/store`) over events/projection; routes in gateway.
+- `ApprovalStore` (interface + impl in `@render-factory/store`) over events/projection; routes in gateway.
 - Resume orchestration wiring (resolve → emit `input.provided` → re-trigger run re-execution).
 - State-transition validation + clear errors.
 

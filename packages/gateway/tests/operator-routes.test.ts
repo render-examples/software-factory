@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
-import { createTestRuntime } from "@render-agents/sdk/testing";
+import { buildEventRecord } from "@render-factory/store";
+import { createTestRuntime } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 
 describe("operator routes — per-run event log", () => {

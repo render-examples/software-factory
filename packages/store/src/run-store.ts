@@ -102,7 +102,7 @@ export interface ListRunsOptions {
 }
 
 /**
- * A mapping from an external channel conversation to a render-agents thread,
+ * A mapping from an external channel conversation to a render-factory thread,
  * folded from `run.started`. This is the channel "continuation token": it lets a
  * re-entrant inbound message resume the same thread, and lets outbound delivery
  * address the surface a run came from.
@@ -144,7 +144,7 @@ export interface RunStore {
   /** Folded input requests across all runs, optionally filtered by status/kind. */
   listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]>;
   /**
-   * Resolve the render-agents conversation bound to an external channel
+   * Resolve the render-factory conversation bound to an external channel
    * conversation — `(channel, externalConversationId)` → the thread + last run,
    * folded from `run.started`. Returns `undefined` when nothing is bound yet.
    */

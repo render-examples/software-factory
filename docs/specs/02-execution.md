@@ -18,7 +18,7 @@ Auto-detected defaults:
 - **Model:** inferred from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, else unconfigured placeholder.
 - **Dispatcher:** Render Workflows dispatcher when Render env signals are present; otherwise in-process dispatcher.
 - **Queue/Delta/Cancel:** derived from store backend via `createJobQueue`, `createDeltaBus`, `createCancelStore`.
-- **Execution mode:** `inline` by default, or `queue` when `RENDER_AGENTS_EXECUTION_MODE=queue`.
+- **Execution mode:** `inline` by default, or `queue` when `RENDER_FACTORY_EXECUTION_MODE=queue`.
 
 Runtime includes: `store`, `threadStore`, `oauthStore`, `scheduleStore`, `runners`, `hooks`, `dispatcher`, `jobQueue`, `deltaBus`, `cancelStore`, and loaded registries for agents/workflows/tool sources.
 

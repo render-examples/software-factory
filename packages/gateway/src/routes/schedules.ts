@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { ScheduleStore, ScheduleRecord } from "@render-agents/store";
-import { validateCron, dueSchedules } from "@render-agents/store";
-import type { WorkflowDefinition } from "@render-agents/sdk";
+import type { ScheduleStore, ScheduleRecord } from "@render-factory/store";
+import { validateCron, dueSchedules } from "@render-factory/store";
+import type { WorkflowDefinition } from "@render-factory/sdk";
 import { getPrincipal, canAccess } from "../auth.js";
 
 const PATCHABLE_SCHEDULE_FIELDS = new Set(["workflow", "cronExpression", "input", "enabled"]);

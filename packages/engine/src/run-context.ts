@@ -13,8 +13,8 @@ import type {
   OAuthConnection,
   RefreshedTokens,
   DeltaBus,
-} from "@render-agents/store";
-import { buildEventRecord, idempotencyKey } from "@render-agents/store";
+} from "@render-factory/store";
+import { buildEventRecord, idempotencyKey } from "@render-factory/store";
 import type { ModelSpec } from "./agent.js";
 import { RunPaused } from "./agent.js";
 import type { ContextManager } from "./context-manager.js";
@@ -30,7 +30,7 @@ export type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>
 const TOKEN_EXPIRY_SKEW_MS = 60_000;
 import { ToolEnvironment } from "./tool-impl.js";
 
-const STRICT_APPROVAL_ENV = "RENDER_AGENTS_STRICT_APPROVAL";
+const STRICT_APPROVAL_ENV = "RENDER_FACTORY_STRICT_APPROVAL";
 
 const consoleLogger: Logger = {
   debug: () => {},
@@ -61,7 +61,7 @@ export interface InProcessRunContextOptions {
   /** Direct cancel check (legacy/tests). Prefer cancelStore for production. */
   isCancelledFn?: () => boolean | Promise<boolean>;
   /** CancelStore for cooperative cancellation. Overrides isCancelledFn when provided. */
-  cancelStore?: import("@render-agents/store").CancelStore;
+  cancelStore?: import("@render-factory/store").CancelStore;
   /**
    * Cancel scope this run belongs to — the id of the cancellable unit (the
    * workflow/agent root). Cancelling that root cascades to every descendant that

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SSEStreamingApi } from "hono/streaming";
-import type { DeltaBus, RunEventRecord, RunStore, StreamDelta, ThreadStore } from "@render-agents/store";
+import type { DeltaBus, RunEventRecord, RunStore, StreamDelta, ThreadStore } from "@render-factory/store";
 import { getPrincipal, canAccess } from "../auth.js";
 
 /**

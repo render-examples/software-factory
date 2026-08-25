@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { idempotencyKey } from "../src/index.js";
 
-describe("@render-agents/store", () => {
+describe("@render-factory/store", () => {
   it("idempotencyKey is a stable SHA-256 hex digest", () => {
     const key = idempotencyKey("run1", "suffix");
     expect(key).toMatch(/^[0-9a-f]{64}$/);

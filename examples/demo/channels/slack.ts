@@ -1,4 +1,4 @@
-import { slackChannel } from "@render-agents/sdk";
+import { slackChannel } from "@render-factory/sdk";
 
 // Auto-discovered at POST /channels/slack. The built-in Slack reference channel
 // wires the conversational `assistant` agent to Slack end-to-end:

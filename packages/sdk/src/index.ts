@@ -1,4 +1,4 @@
-// @render-agents/sdk — Public API surface
+// @render-factory/sdk — Public API surface
 // Re-exports all of engine + store + sdk-defined types
 
 // --- Store (persistence/event vocabulary) ---
@@ -41,9 +41,9 @@ export type {
   JobStatus,
   EnqueueOptions,
   FailOptions,
-} from "@render-agents/store";
-export { idempotencyKey, TERMINAL_STATUSES } from "@render-agents/store";
-export { MemoryJobQueue, PgJobQueue, createJobQueue } from "@render-agents/store";
+} from "@render-factory/store";
+export { idempotencyKey, TERMINAL_STATUSES } from "@render-factory/store";
+export { MemoryJobQueue, PgJobQueue, createJobQueue } from "@render-factory/store";
 
 // --- Engine (runtime vocabulary) ---
 export type {
@@ -95,11 +95,11 @@ export type {
   DelegationLimits,
   TierEntry,
   ResolveModelResult,
-} from "@render-agents/engine";
-export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-agents/engine";
-export { ReplaySuspender, replaySuspender } from "@render-agents/engine";
-export { resolveModelSpec, isTierAlias, inferProvider } from "@render-agents/engine";
-export { defineTool as engineDefineTool, defineToolSource, ToolEnvironment, buildToolContext, ssrfFetch, validateToolInput } from "@render-agents/engine";
+} from "@render-factory/engine";
+export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-factory/engine";
+export { ReplaySuspender, replaySuspender } from "@render-factory/engine";
+export { resolveModelSpec, isTierAlias, inferProvider } from "@render-factory/engine";
+export { defineTool as engineDefineTool, defineToolSource, ToolEnvironment, buildToolContext, ssrfFetch, validateToolInput } from "@render-factory/engine";
 
 // --- SDK-defined (composition/orchestration) ---
 export type {

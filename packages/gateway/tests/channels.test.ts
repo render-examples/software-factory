@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
-import { workflow, bindWorkflow, idempotencyKey, slackChannel, type Channel, type WorkflowDefinition, type AgentDefinition } from "@render-agents/sdk";
-import { createTestRuntime, mockModel } from "@render-agents/sdk/testing";
-import { buildEventRecord } from "@render-agents/store";
+import { workflow, bindWorkflow, idempotencyKey, slackChannel, type Channel, type WorkflowDefinition, type AgentDefinition } from "@render-factory/sdk";
+import { createTestRuntime, mockModel } from "@render-factory/sdk/testing";
+import { buildEventRecord } from "@render-factory/store";
 import { createGatewayApp } from "../src/index.js";
 
 function assistantDef(): AgentDefinition {
@@ -130,8 +130,8 @@ describe("channels — inbound conversation mapping (P2)", () => {
   });
 
   it("rejects an oversized inbound payload with 413", async () => {
-    const prev = process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES;
-    process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES = "64";
+    const prev = process.env.RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES;
+    process.env.RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES = "64";
     try {
       const runtime = await createTestRuntime();
       const channel: Channel = {
@@ -155,14 +155,14 @@ describe("channels — inbound conversation mapping (P2)", () => {
       });
       expect(res.status).toBe(413);
     } finally {
-      if (prev === undefined) delete process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES;
-      else process.env.RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES = prev;
+      if (prev === undefined) delete process.env.RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES;
+      else process.env.RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES = prev;
     }
   });
 
   it("enforces content-type for non-empty payloads when strict mode is enabled", async () => {
-    const prev = process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE;
-    process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE = "1";
+    const prev = process.env.RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE;
+    process.env.RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE = "1";
     try {
       const runtime = await createTestRuntime();
       const channel: Channel = {
@@ -200,8 +200,8 @@ describe("channels — inbound conversation mapping (P2)", () => {
       });
       expect(jsonType.status).toBe(202);
     } finally {
-      if (prev === undefined) delete process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE;
-      else process.env.RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE = prev;
+      if (prev === undefined) delete process.env.RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE;
+      else process.env.RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE = prev;
     }
   });
 });

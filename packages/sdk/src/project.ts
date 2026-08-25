@@ -4,7 +4,7 @@
 // runtime, then bind agents/workflows/channels. `loadProject` is that block, so
 // an entrypoint is just "load the project, then start my role".
 
-import type { ModelClient } from "@render-agents/engine";
+import type { ModelClient } from "@render-factory/engine";
 import type { AgentRuntime, CreateRuntimeOptions } from "./runtime.js";
 import { createRuntime } from "./runtime.js";
 import type { AgentSet } from "./agents.js";

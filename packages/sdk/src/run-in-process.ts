@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { RunStore, Tracer, CancelStore, Logger, OAuthStore, DeltaBus } from "@render-agents/store";
-import { idempotencyKey } from "@render-agents/store";
+import type { RunStore, Tracer, CancelStore, Logger, OAuthStore, DeltaBus } from "@render-factory/store";
+import { idempotencyKey } from "@render-factory/store";
 import type {
   AgentDefinition,
   AgentInput,
@@ -10,8 +10,8 @@ import type {
   ToolSource,
   OAuthRefresher,
   Suspender,
-} from "@render-agents/engine";
-import { InProcessRunContext, buildSubagentToolSource } from "@render-agents/engine";
+} from "@render-factory/engine";
+import { InProcessRunContext, buildSubagentToolSource } from "@render-factory/engine";
 import type { RunnerRegistry, TaskDispatcher } from "./runtime.js";
 
 const inProcessLogger: Logger = {

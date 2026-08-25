@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentDefinition } from "@render-agents/engine";
-import { resolveModelSpec } from "@render-agents/engine";
+import type { AgentDefinition } from "@render-factory/engine";
+import { resolveModelSpec } from "@render-factory/engine";
 import type { AgentSet } from "../agents.js";
 import { discoverDirectory, readTextFile } from "./discovery.js";
 import { parseAgentMarkdown, type ParsedFrontmatter } from "./frontmatter.js";
