@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import type { CancelStore, RunRecord } from "@render-factory/store";
 import { runRetention, reapRuns, buildEventRecord } from "@render-factory/store";
 import type { AgentRuntime, WorkflowDefinition, Channel } from "@render-factory/sdk";
-import { resumeRun, submitRootRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-factory/sdk";
+import { resumeRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-factory/sdk";
 import {
   apiKeyAuth,
   defaultPublicPath,
@@ -164,12 +164,10 @@ export function createGatewayApp(opts: GatewayOptions) {
   // store (BUG-01); an explicit override still wins (tests).
   const cancel = cancelStore ?? runtime.cancelStore;
   const wf = workflows ?? new Map();
-  // HITL resume has two lanes: a paused **workflow** root re-drives via
-  // dispatch/replay (Lane A); a paused **agent/chat** turn resumes via a
-  // durable job or inline resumeRun (Lane B, mode chosen by submitRootRun).
-  //
-  // Lane A: replay-safe (memoized ctx.step + deterministic child ids), so
-  // re-driving resumes from where it parked even after a container recycled.
+  // HITL resume: a paused workflow root re-drives via dispatch/replay; a paused
+  // agent/chat turn re-drives via the same chat-turn task dispatch. Both are
+  // replay-safe (memoized ctx.step + deterministic child ids), so re-driving
+  // resumes from where it parked even after a container recycled.
   const redriveRoot = async (root: RunRecord): Promise<void> => {
     const def = runtime.workflows.get(root.workflow);
     const dispatcher = runtime.dispatcher;
@@ -224,8 +222,13 @@ export function createGatewayApp(opts: GatewayOptions) {
           return;
         }
       }
-      // Otherwise Lane B: durable resume job (queue) or inline resumeRun.
-      await submitRootRun(runtime, { runId, kind: "resume", driveInline: async () => { await resumeRun(runId, runtime); } });
+      // Resume via workflows dispatch (same chat-turn task re-drives the run).
+      const dispatcher = runtime.dispatcher;
+      if (dispatcher?.dispatchRoot) {
+        await dispatcher.dispatchRoot({ workflow: "chat-turn", runId });
+      } else {
+        await resumeRun(runId, runtime);
+      }
     });
 
   // Wired to a daily Render Cron.
@@ -242,12 +245,7 @@ export function createGatewayApp(opts: GatewayOptions) {
     return c.json(result);
   });
 
-  // Lane B queue depth for operator observability; Lane A is queued by Render.
-  app.get("/admin/jobs", async (c) => {
-    const counts = await runtime.jobQueue.countByStatus();
-    const backlog = counts.queued + counts.running;
-    return c.json({ counts, backlog });
-  });
+  // Job queue removed — agent turns now execute on Render Workflows.
 
   // Powers the operator UI's dispatch/schedule pickers; dispatch POST lives in runRoutes.
   app.get("/workflows", (c) => {
@@ -263,13 +261,11 @@ export function createGatewayApp(opts: GatewayOptions) {
   app.route("/", streamRoutes({ store, threadStore: runtime.threadStore, deltaBus: runtime.deltaBus }));
 
   const awaitResume = opts.awaitResume ?? false;
+  const isInline = !runtime.dispatcher?.dispatchRoot;
 
-  // Inline mode drives in-process and awaits here so the channel route can
-  // deliver the reply in the same request. Queue mode enqueues a resume job
-  // (awaited only when awaitResume is set, e.g. tests); worker delivers out of band.
   const driveResume = async (runId: string): Promise<void> => {
     const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
-    if (awaitResume || runtime.executionMode === "inline") await p;
+    if (awaitResume || isInline) await p;
   };
 
   // Each user message is its own short run joined to the thread by threadId;
@@ -290,20 +286,18 @@ export function createGatewayApp(opts: GatewayOptions) {
       buildEventRecord(o.runId, { type: "message.user", content: [{ type: "text", text: input }] }, { agentName }),
     );
 
-    await submitRootRun(runtime, {
-      runId: o.runId,
-      kind: "agent",
-      payload: { agent: agentName },
-      // Inline: drive now in-process. Queue: a chat worker claims the job and
-      // calls the same driveAgentTurn.
-      driveInline: async () => {
-        try {
-          await driveAgentTurn(runtime, o.runId);
-        } catch (err) {
-          if (!(err instanceof RunPaused)) throw err;
-        }
-      },
-    });
+    const dispatcher = runtime.dispatcher;
+    if (dispatcher?.dispatchRoot) {
+      await dispatcher.dispatchRoot({ workflow: "chat-turn", runId: o.runId });
+    } else {
+      // Fallback for local dev without Render Workflows: drive inline.
+      try {
+        await driveAgentTurn(runtime, o.runId);
+      } catch (err) {
+        if (!(err instanceof RunPaused)) throw err;
+      }
+      await deliverForRun(runtime, o.runId);
+    }
   };
 
   // Thread id derives deterministically from (channel, conversationId) so
@@ -414,9 +408,10 @@ export function createGatewayApp(opts: GatewayOptions) {
   // declarative signature policy (fail-closed via checkWebhookAuth).
   if (opts.channels) for (const [id, ch] of opts.channels) runtime.channels.set(id, ch);
   if (runtime.channels.size > 0) {
-    // Inline mode has no worker/producer, so the run is already terminal when
-    // the route returns — deliver inline. Queue mode delivers out of band.
-    const deliver = runtime.executionMode === "inline"
+    // When running without a dispatcher (local dev, no workflows host), deliver
+    // inline after the turn completes. With a dispatcher, the chat-turn task
+    // handles delivery.
+    const deliver = isInline
       ? (runId: string) => deliverForRun(runtime, runId)
       : undefined;
     app.route("/", channelRoutes({ channels: runtime.channels, workflows: wf, handleChannelMessage, deliver }));
@@ -435,8 +430,8 @@ export async function startGateway(opts: GatewayOptions): Promise<{ port: number
 
   const server = serve({ fetch: app.fetch, port });
 
-  // Front door only: in queue mode a separate runWorker service drives
-  // execution, keeping ingestion decoupled from compute.
+  // The gateway is a thin HTTP front door. Agent execution happens on the
+  // workflows host (or inline when no dispatcher is configured).
   return {
     port,
     close: () => {

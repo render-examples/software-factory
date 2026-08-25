@@ -42,14 +42,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify declared dependencies are materialized
-        # Guards against a partial/stale store where a package's declared deps
-        # (e.g. create-render-factory' @clack/prompts) never get linked, which
-        # otherwise surfaces only as a confusing tsc TS2307 at build time.
-        run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
-
       - name: Build
         run: pnpm turbo run build
+
+      - name: Verify declared dependencies are materialized
+        # Runs after build so workspace packages with `exports` pointing to
+        # `dist/` are resolvable. Guards against a partial/stale store where a
+        # package's declared deps never get linked.
+        run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
 
       - name: Typecheck
         run: pnpm turbo run typecheck

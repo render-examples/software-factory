@@ -106,6 +106,7 @@ export interface TaskDispatcher {
  * `agent.task()` child dispatch is unaffected either way — it always goes through
  * `runtime.dispatcher`.
  */
+/** @deprecated No longer used — all agent execution goes through Render Workflows or inline fallback. */
 export type ExecutionMode = "inline" | "queue";
 
 export interface AgentRuntime {
@@ -135,7 +136,7 @@ export interface AgentRuntime {
   readonly jobQueue: JobQueue;
   /** Transient token-delta bus (D13) for live streaming; never persisted. Postgres NOTIFY when available, else in-memory. */
   readonly deltaBus: DeltaBus;
-  /** Whether root runs/resumes execute inline at the trigger or are enqueued for a runner. Default `inline`. */
+  /** @deprecated Retained for backward compat; always returns "inline". */
   readonly executionMode: ExecutionMode;
   /** Cooperative cancellation store, shared across in-process runs/dispatch. */
   readonly cancelStore: CancelStore;
@@ -183,7 +184,7 @@ export interface CreateRuntimeOptions {
   suspender?: Suspender;
   jobQueue?: JobQueue;
   deltaBus?: DeltaBus;
-  /** Execution mode for root runs/resumes. Defaults to `RENDER_FACTORY_EXECUTION_MODE` env, else `inline`. */
+  /** @deprecated Ignored. Execution always dispatches to Render Workflows (or inline fallback). */
   executionMode?: ExecutionMode;
   cancelStore?: CancelStore;
   delegation?: Partial<DelegationLimits>;
@@ -269,8 +270,7 @@ export async function createRuntime(opts: CreateRuntimeOptions): Promise<AgentRu
   const cancelStore = opts.cancelStore ?? createCancelStore({ store, tenantId });
   const jobQueue = opts.jobQueue ?? createJobQueue({ store, tenantId });
   const deltaBus = opts.deltaBus ?? createDeltaBus({ store });
-  const executionMode: ExecutionMode =
-    opts.executionMode ?? (process.env.RENDER_FACTORY_EXECUTION_MODE === "queue" ? "queue" : "inline");
+  const executionMode: ExecutionMode = "inline";
   const agentDefinitions = new Map<string, AgentDefinition>();
   const workflows = new Map<string, WorkflowDefinition>();
   const toolSources = opts.toolSources ?? new Map();

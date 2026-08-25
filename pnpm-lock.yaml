@@ -36,37 +36,6 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@26.3.0)(lightningcss@1.33.0)
 
-  examples/demo:
-    dependencies:
-      '@render-factory/engine':
-        specifier: workspace:*
-        version: link:../../packages/engine
-      '@render-factory/gateway':
-        specifier: workspace:*
-        version: link:../../packages/gateway
-      '@render-factory/sandbox-render':
-        specifier: workspace:*
-        version: link:../../packages/sandbox/render
-      '@render-factory/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-      '@render-factory/store':
-        specifier: workspace:*
-        version: link:../../packages/store
-      '@renderinc/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.12
-    devDependencies:
-      '@types/node':
-        specifier: ^26.0.1
-        version: 26.3.0
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-
   packages/channels/slack:
     devDependencies:
       typescript:
@@ -249,6 +218,37 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@26.3.0)(lightningcss@1.33.0)
+
+  workflows:
+    dependencies:
+      '@render-factory/engine':
+        specifier: workspace:*
+        version: link:../packages/engine
+      '@render-factory/gateway':
+        specifier: workspace:*
+        version: link:../packages/gateway
+      '@render-factory/sandbox-render':
+        specifier: workspace:*
+        version: link:../packages/sandbox/render
+      '@render-factory/sdk':
+        specifier: workspace:*
+        version: link:../packages/sdk
+      '@render-factory/store':
+        specifier: workspace:*
+        version: link:../packages/store
+      '@renderinc/sdk':
+        specifier: ^0.6.0
+        version: 0.6.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.12
+    devDependencies:
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.3.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
 
 packages:
 
