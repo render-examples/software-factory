@@ -23,6 +23,11 @@ const CORE_MIGRATIONS = [
   "0009_channels.sql",
   "0010_deliver_jobs.sql",
   "0011_schedule_user.sql",
+  "0012_rls.sql",
+  "0013_event_envelope.sql",
+  "0014_lease_tokens.sql",
+  "0015_commands.sql",
+  "0016_inbound_queue.sql",
 ];
 
 /**

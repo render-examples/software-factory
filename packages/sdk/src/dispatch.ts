@@ -244,7 +244,7 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
   async dispatchRoot(job: RootDispatchJob): Promise<void> {
     const plan = job.plan ?? "standard";
     const taskSlug = `${this.workflowSlug}/workflow@${plan}`;
-    const taskInput = { workflow: job.workflow, runId: job.runId };
+    const taskInput = { workflow: job.workflow, runId: job.runId, ...(job.input ? { input: job.input } : {}) };
     assertSerializable(taskInput, `Serialized root payload for workflow "${job.workflow}"`);
 
     const { Render } = await importRenderSdk();
