@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 20 = floor (NFR), 22 = active LTS, 26 = the pinned dev line (.nvmrc).
-        node-version: [20, 22, 26]
+        # 22 = floor (pnpm 11 requires >=22.13), 24 = active LTS, 26 = the pinned dev line (.nvmrc).
+        node-version: [22, 24, 26]
 
     services:
       postgres:
