@@ -66,6 +66,8 @@ export interface RootDispatchJob {
   workflow: string;
   runId: string;
   plan?: RenderPlan;
+  /** Workflow-specific input payload (forwarded to the task handler). */
+  input?: Record<string, unknown>;
 }
 
 export interface TaskDispatcher {

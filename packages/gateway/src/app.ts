@@ -268,12 +268,9 @@ export function createGatewayApp(opts: GatewayOptions) {
     if (awaitResume || isInline) await p;
   };
 
-  // Each user message is its own short run joined to the thread by threadId;
-  // multi-turn memory comes from the thread transcript, not a parked run.
-  // RunPaused (HITL within the turn) is expected, not an error.
+  // Each user message creates a run row (for the active-run guard + streaming)
+  // then dispatches a chat-turn workflow to drive it.
   const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string; channel?: string; externalConversationId?: string; trigger?: string }): Promise<void> => {
-    // Record the run row up front (both modes) so it's the job's FK target;
-    // hasStarted() guard then avoids duplicating these events on drive.
     const def = runtime.agentDefinitions.get(agentName);
     await store.events.append(
       buildEventRecord(
@@ -290,7 +287,6 @@ export function createGatewayApp(opts: GatewayOptions) {
     if (dispatcher?.dispatchRoot) {
       await dispatcher.dispatchRoot({ workflow: "chat-turn", runId: o.runId });
     } else {
-      // Fallback for local dev without Render Workflows: drive inline.
       try {
         await driveAgentTurn(runtime, o.runId);
       } catch (err) {

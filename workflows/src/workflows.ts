@@ -5,10 +5,7 @@ import {
   agentTaskHandler,
   computeRequiredPlans,
   RenderWorkflowsDispatcher,
-  driveAgentTurn,
-  deliverForRun,
 } from "@render-factory/sdk";
-import { RunPaused } from "@render-factory/engine";
 import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
 import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
@@ -65,21 +62,7 @@ for (const plan of plans) {
   );
 }
 
-// Chat-turn task: drives one interactive agent turn + delivers the reply.
-// Replaces the warm worker — the gateway dispatches here instead of enqueuing
-// to run_jobs. The run's opening events (run.started, message.user) are already
-// in the log when this task fires.
-task({ name: "chat-turn", plan: "standard" }, async (args: { runId: string }) => {
-  try {
-    await driveAgentTurn(runtime, args.runId);
-  } catch (err) {
-    if (!(err instanceof RunPaused)) throw err;
-  }
-  await deliverForRun(runtime, args.runId);
-  return { runId: args.runId, status: "delivered" };
-});
-
-const taskNames = [...plans.flatMap((p) => [`agent@${p}`, `workflow@${p}`]), "chat-turn"].join(", ");
+const taskNames = plans.flatMap((p) => [`agent@${p}`, `workflow@${p}`]).join(", ");
 
 const underRenderRuntime = !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);
 if (underRenderRuntime) {
