@@ -264,12 +264,13 @@ describe("gateway threads — end-to-end", () => {
   // both turns active, so the loser can't "win" by the first run completing first.
   describeWithPg("concurrent-turn race over Postgres (E4)", () => {
     it("two simultaneous messages settle as exactly one 202 + one 409, one active run", async () => {
-      const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+      const store = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
       await store.init();
       try {
         const runtime = await createTestRuntime({
+          tenantId: "test-tenant",
           store,
-          executionMode: "queue", // no worker started → opened runs stay active
+          executionMode: "queue",
           model: mockModel(() => ({ content: [{ type: "text", text: "hi" }], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "end_turn" })),
         });
         runtime.agentDefinitions.set("assistant", {

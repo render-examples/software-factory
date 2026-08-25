@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@9.15.4",
+  "packageManager": "pnpm@11.9.0",
   "engines": {
     "node": ">=20"
   },
@@ -14,6 +14,7 @@
     "lint": "turbo run lint",
     "clean": "turbo run clean",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
+    "check:credential-boundary": "node scripts/check-credential-boundary.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "turbo run build && changeset publish"

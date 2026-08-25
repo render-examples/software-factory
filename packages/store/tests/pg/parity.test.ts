@@ -38,7 +38,7 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });
@@ -378,7 +378,7 @@ describeWithPg("channel conversation mapping parity", () => {
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });
@@ -426,7 +426,7 @@ describeWithPg("threads — metadata, run thread_id, and transcript parity", () 
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });
@@ -495,7 +495,7 @@ describeWithPg("OAuth connections — encryption at rest + single-flight refresh
   let pgStore: PgRunStore;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
   });
 
@@ -550,7 +550,7 @@ describeWithPg("ScheduleStore parity", () => {
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });
@@ -586,7 +586,7 @@ describeWithPg("retention cleanup parity", () => {
   let pgStore: PgRunStore;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
   });
   afterAll(async () => { await pgStore.close(); });
@@ -654,7 +654,7 @@ describeWithPg("schedule tenant scoping parity", () => {
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });
@@ -697,7 +697,7 @@ describeWithPg("schedule tenant scoping parity", () => {
 
 describeWithPg("PgRunStore.init() idempotency", () => {
   it("is safe to call multiple times (advisory lock)", async () => {
-    const store = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    const store = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await store.init();
     await store.init(); // second call should be a no-op
     await store.close();
@@ -708,7 +708,7 @@ describeWithPg("PgEventLogStore.tail", () => {
   let pgStore: PgRunStore;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
   });
 
@@ -752,7 +752,7 @@ describeWithPg("EventLogStore.readThread parity (BUG-07)", () => {
   let memStore: ReturnType<typeof createMemoryStore>;
 
   beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL! });
+    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
     await pgStore.init();
     memStore = createMemoryStore();
   });

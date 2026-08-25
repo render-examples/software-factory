@@ -41,3 +41,5 @@ export {
 export { uiRoutes } from "./routes/ui.js";
 export { buildSpanTree, flattenTree, perAgentCost, spanCostUsd, formatCost, formatDuration } from "./ui/trace.js";
 export type { SpanLike, SpanNode } from "./ui/trace.js";
+export { InboundWorker } from "./inbound-worker.js";
+export type { InboundWorkerOptions } from "./inbound-worker.js";

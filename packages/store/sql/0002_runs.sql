@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS runs (
     id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
     workflow        TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
     input           JSONB,
@@ -17,12 +18,13 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at     TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_runs_workflow ON runs(workflow);
-CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
-CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
+CREATE INDEX IF NOT EXISTS idx_runs_tenant ON runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_runs_tenant_status ON runs(tenant_id, status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_workflow ON runs(tenant_id, workflow);
+CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(tenant_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(tenant_id, user_id);
 
--- At most one active (pending/running/paused) run per thread.
+-- At most one active (pending/running/paused) run per thread within a tenant.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_thread_active
-    ON runs(thread_id)
+    ON runs(tenant_id, thread_id)
     WHERE status IN ('pending', 'running', 'paused');

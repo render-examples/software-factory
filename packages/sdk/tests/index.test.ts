@@ -4,17 +4,25 @@ import { mockModel, createTestRuntime } from "../src/testing.js";
 
 describe("@render-agents/sdk", () => {
   it("createRuntime returns an in-memory runtime with an in-process dispatcher", async () => {
-    const runtime = await createRuntime();
+    const model = mockModel(() => ({
+      content: [{ type: "text", text: "ok" }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      stopReason: "end_turn",
+    }));
+    const runtime = await createRuntime({ tenantId: "test-tenant", model });
     expect(runtime.store).toBeDefined();
     expect(runtime.runners.has("default")).toBe(true);
-    // Local fallback is a functional in-process dispatcher (not the dead-code
-    // undefined of earlier waves): `.task()` runs through it with idempotent
-    // re-dispatch and identical observable behavior to production.
     expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
   });
 
   it("loadAgents returns an AgentSet", async () => {
-    const agents = await loadAgents();
+    const model = mockModel(() => ({
+      content: [{ type: "text", text: "ok" }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      stopReason: "end_turn",
+    }));
+    const runtime = await createRuntime({ tenantId: "test-tenant", model });
+    const agents = await loadAgents(".", runtime);
     expect(agents.all()).toEqual([]);
   });
 

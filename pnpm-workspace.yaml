@@ -1,3 +1,7 @@
 packages:
   - "packages/*"
+  - "packages/channels/*"
+  - "packages/sandbox/*"
   - "examples/*"
+allowBuilds:
+  esbuild: true

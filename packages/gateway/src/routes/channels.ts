@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { WorkflowDefinition, Channel } from "@render-agents/sdk";
+import type { InboundStore } from "@render-agents/store";
 import { checkWebhookAuth } from "../verify.js";
 
 // Re-exported from @render-agents/sdk so importers of this module can grab it too.
@@ -116,9 +118,15 @@ export function channelRoutes(deps: {
    * returns). Omitted in `queue` mode; the worker's delivery producer handles it.
    */
   deliver?: (runId: string) => Promise<void>;
+  /**
+   * Durable inbound store. When provided, agent-target channel messages are
+   * persisted before acknowledging the webhook (persist-then-ack). An InboundWorker
+   * claims and processes them asynchronously. Omit for inline processing.
+   */
+  inboundStore?: InboundStore;
 }) {
   const app = new Hono();
-  const { channels, workflows, handleChannelMessage, deliver } = deps;
+  const { channels, workflows, handleChannelMessage, deliver, inboundStore } = deps;
   const maxBodyBytes = maxChannelBodyBytesFromEnv();
   const strictContentType = requireChannelContentType();
 
@@ -206,6 +214,25 @@ export function channelRoutes(deps: {
 
     // Agent-target channels bind to a thread keyed by (channel, conversationId),
     // so a re-entrant message continues the conversation.
+
+    // Durable path: persist the inbound message and ack immediately. The
+    // InboundWorker will claim and process it asynchronously.
+    if (inboundStore) {
+      const deliveryId = `${id}:${event.conversationId}:${hashInput(event.input)}`;
+      const accepted = await inboundStore.acceptMessage({
+        deliveryId,
+        channel: id,
+        conversationId: event.conversationId,
+        userId: event.user,
+        input: event.input,
+      });
+      if (!accepted) {
+        return c.json({ duplicate: true, channel: id }, 200);
+      }
+      return c.json({ accepted: true, channel: id, conversationId: event.conversationId }, 202);
+    }
+
+    // Inline path: process the message synchronously.
     if (!handleChannelMessage) {
       return c.json({ error: "agent-target channels require a chat-enabled gateway" }, 501);
     }
@@ -220,4 +247,11 @@ export function channelRoutes(deps: {
   });
 
   return app;
+}
+
+/** Stable hash of an inbound input for delivery deduplication (fallback when
+ *  the channel doesn't provide a natural delivery id like Slack's messageTs). */
+function hashInput(input: unknown): string {
+  const serialized = typeof input === "string" ? input : JSON.stringify(input);
+  return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
 }

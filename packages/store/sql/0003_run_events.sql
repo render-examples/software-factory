@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS run_events (
     id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
     run_id          TEXT NOT NULL REFERENCES runs(id),
     seq             BIGINT NOT NULL,
     ts              TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_events_seq ON run_events(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(run_id, type);
+CREATE INDEX IF NOT EXISTS idx_run_events_tenant ON run_events(tenant_id);
 
 -- Gap-free seq allocation per run. Called inside the append transaction.
 -- A transaction-scoped advisory lock keyed on the run id genuinely serializes

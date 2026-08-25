@@ -4,6 +4,7 @@
 // runtime, then bind agents/workflows/channels. `loadProject` is that block, so
 // an entrypoint is just "load the project, then start my role".
 
+import type { ModelClient } from "@render-agents/engine";
 import type { AgentRuntime, CreateRuntimeOptions } from "./runtime.js";
 import { createRuntime } from "./runtime.js";
 import type { AgentSet } from "./agents.js";
@@ -13,16 +14,20 @@ import type { Channel } from "./channel.js";
 import { loadToolSources, loadRunners, loadHooks, loadWorkflows, loadChannels } from "./loader/load-project.js";
 
 /** Runtime options `loadProject` derives from the project itself (callers can't double-set them). */
-type DerivedRuntimeOptions = "toolSources" | "extraRunners" | "hooks";
+type DerivedRuntimeOptions = "toolSources" | "extraRunners" | "hooks" | "model";
 
 export interface LoadProjectOptions {
+  /** Required. Scopes all data access to this tenant. */
+  tenantId: string;
+  /** Required. The LLM client used by the default runner. */
+  model: ModelClient;
   /**
    * Extra options forwarded to `createRuntime`, merged over the ones
    * `loadProject` derives from the project (`toolSources`, `extraRunners`,
-   * `hooks`). Use it for the overrides a host/test needs — e.g. a mock `model`,
+   * `hooks`, `model`). Use it for the overrides a host/test needs — e.g.
    * an explicit `store`, or `autoDetectDispatcher: false`.
    */
-  runtime?: Omit<CreateRuntimeOptions, DerivedRuntimeOptions>;
+  runtime?: Omit<CreateRuntimeOptions, DerivedRuntimeOptions | "tenantId">;
 }
 
 export interface LoadedProject {
@@ -48,16 +53,15 @@ export interface LoadedProject {
  * workflows + channels it doesn't itself serve) — cheap, and it fails fast on a
  * malformed module in any service rather than only in the gateway.
  */
-export async function loadProject(root: string, opts?: LoadProjectOptions): Promise<LoadedProject> {
+export async function loadProject(root: string, opts: LoadProjectOptions): Promise<LoadedProject> {
   const [toolSources, extraRunners, hooks] = await Promise.all([
     loadToolSources(root),
     loadRunners(root),
     loadHooks(root),
   ]);
-  const runtime = await createRuntime({ ...opts?.runtime, toolSources, extraRunners, hooks });
+  const runtime = await createRuntime({ ...opts.runtime, tenantId: opts.tenantId, model: opts.model, toolSources, extraRunners, hooks });
   const agents = await loadAgents(root, runtime);
   const [workflows, channels] = await Promise.all([loadWorkflows(root, runtime), loadChannels(root)]);
-  // Publish channels so outbound delivery can resolve a run's channel by id.
   for (const [id, channel] of channels) runtime.channels.set(id, channel);
   return { runtime, agents, workflows, channels };
 }

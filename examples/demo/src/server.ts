@@ -1,20 +1,16 @@
 import { loadProject } from "@render-agents/sdk";
+import { resolveClient, resolveModelSpec } from "@render-agents/engine";
 import { startGateway } from "@render-agents/gateway";
 import { ensureWorkflowSlug } from "./lib/render.js";
 
-// The project root (examples/demo) holds the convention directories
-// (agents/, workflows/, tools/, channels/, …); src/ holds the per-service
-// entrypoints. `loadProject` discovers + wires runtime/agents/workflows/channels.
 const root = new URL("..", import.meta.url).pathname;
 
-// Lane A trigger address: the gateway dispatches workflow roots to the separate
-// Workflows service as `<slug>/workflow@<plan>`. The slug lives in code (see
-// lib/render.ts), so deploy needs no RENDER_WORKFLOW_SLUG env var — only
-// RENDER_API_KEY (which also toggles Lane A on). Must precede loadProject
-// (createRuntime reads the slug when selecting the dispatcher).
 ensureWorkflowSlug();
 
-const { runtime, workflows, channels } = await loadProject(root);
+const tenantId = process.env.TENANT_ID ?? "default";
+const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
+const model = resolveClient(spec);
+const { runtime, workflows, channels } = await loadProject(root, { tenantId, model });
 
 const { port } = await startGateway({
   runtime,
