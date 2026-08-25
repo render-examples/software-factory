@@ -1,12 +1,6 @@
 # Builds the whole render-factory monorepo and runs the workflows service.
-# The library packages (engine/store/sdk/gateway) compile to dist via `pnpm build`;
-# the workflows package runs from source with tsx, importing the built deps.
-# One image, three commands (gateway / workflows) selected by compose or start command.
 FROM node:22.13-slim
 
-# git: the spec-to-pr workflow clones/commits/pushes the target repo.
-# curl + ca-certificates: the cron services POST to the gateway admin routes,
-# and git needs CA certs for HTTPS.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -17,15 +11,14 @@ RUN npm install -g pnpm@11.9.0
 
 WORKDIR /app
 
-COPY --chown=node:node . .
+COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
-USER node
+# Make /app writable by any user (Render runs containers as non-root)
+RUN chmod -R 777 /app
 
 ENV PORT=3000
 EXPOSE 3000
 
-# Use node+tsx directly to avoid pnpm's runtime deps check which tries
-# to write temp files to /app (fails on Render's read-only filesystem).
-CMD ["node", "--import", "tsx", "workflows/src/server.ts"]
+CMD ["pnpm", "--filter", "@render-factory/workflows", "start"]
