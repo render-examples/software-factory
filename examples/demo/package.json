@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Runnable demo wiring the gateway + chat worker + workflows host against the monorepo packages.",
+  "description": "Runnable demo wiring the gateway + workflows host against the monorepo packages.",
   "engines": {
     "node": ">=20"
   },
@@ -11,7 +11,6 @@
     "build": "tsc --noEmit",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "worker": "tsx src/worker.ts",
     "workflows": "tsx src/workflows.ts",
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },

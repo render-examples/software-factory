@@ -41,10 +41,12 @@ describe("Wave 0 walking skeleton (Authoring → Testing example)", () => {
     expect(viaTask.usage).toEqual(viaRun.usage);
   });
 
-  it("loadAgents binds agents to the default runtime when none is provided", async () => {
-    const agents = await loadAgents(VALID_PROJECT);
+  it("loadAgents binds agents to an explicit runtime", async () => {
+    const runtime = await createTestRuntime({
+      model: mockModel(() => { throw new Error("No model configured"); }),
+    });
+    const agents = await loadAgents(VALID_PROJECT, runtime);
     expect(agents.has("judge")).toBe(true);
-    // Bound, but the default runtime has no configured model — running surfaces a clear error.
     await expect(agents.get("judge").run("x")).rejects.toThrow(/No model configured/);
   });
 });
