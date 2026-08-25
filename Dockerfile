@@ -2,7 +2,7 @@
 # The library packages (engine/store/sdk/gateway) compile to dist via `pnpm build`;
 # the workflows package runs from source with tsx, importing the built deps.
 # One image, three commands (gateway / worker / workflows) selected by compose.
-FROM node:22-slim
+FROM node:22.13-slim
 
 # git: the spec-to-pr workflow clones/commits/pushes the target repo.
 # curl + ca-certificates: the cron services POST to the gateway admin routes,
