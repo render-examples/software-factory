@@ -31,6 +31,7 @@ export interface WorkflowContext {
   readonly trigger: string;
   readonly input: unknown;
   readonly agents: AgentSet;
+  readonly runtime: AgentRuntime;
   readonly threadStore: ThreadStore;
   readonly tracer: Tracer;
   readonly logger: Logger;
@@ -308,6 +309,7 @@ export async function executeHandler(handler: WorkflowHandler, opts: ExecuteOpts
     trigger: opts.trigger,
     input: opts.input,
     agents: createRunScopedAgentSet(runtime, runId, nextOrdinal, { threadId: opts.threadId, userId: opts.userId }),
+    runtime,
     threadStore: runtime.threadStore,
     tracer: runtime.tracer,
     logger: { debug: console.debug, info: console.info, warn: console.warn, error: console.error },
