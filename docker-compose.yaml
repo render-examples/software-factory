@@ -1,15 +1,13 @@
-# Full local stack for the render-factory monorepo. Builds every package into one
-# image and runs the canonical two-lane topology against Postgres:
+# Full local stack for the render-factory monorepo.
 #
-#   postgres     — event log + projections + the chat run_jobs queue
-#   gateway      — web front door + SSE; enqueues chat turns, triggers workflows
-#   chat-worker  — Lane B: drains run_jobs, drives interactive turns in-process
-#   workflows    — Lane A: the Render Workflows host image (idles locally)
+#   postgres     — event log + projections
+#   gateway      — web front door; dispatches all agent work to workflows host
+#   workflows    — Render Workflows host: runs chat turns, spec-to-pr, pr-review
 #
 # Usage:
-#   cp .env.example .env        # add ANTHROPIC_API_KEY / OPENAI_API_KEY to run agents
+#   cp .env.example .env
 #   docker compose up --build
-#   open http://localhost:3000/ui   (API key: RENDER_FACTORY_API_KEY, default dev-key)
+#   open http://localhost:3000/ui
 
 x-app-env: &app-env
   DATABASE_URL: postgres://postgres:postgres@postgres:5432/agents
@@ -26,9 +24,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: agents
-    # Host port is only for your own access; the app services connect over the
-    # Docker network at postgres:5432. Override with POSTGRES_HOST_PORT if 5433
-    # is taken too.
     ports:
       - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
@@ -41,10 +36,8 @@ services:
 
   gateway:
     build: .
-    image: render-factory-demo:latest
-    command: ["pnpm", "--filter", "@render-factory/example-demo", "start"]
-    # Operator UI / API on the host. Container always listens on 3000; override
-    # the host side with GATEWAY_HOST_PORT if 3010 is taken.
+    image: render-factory:latest
+    command: ["pnpm", "--filter", "@render-factory/workflows", "start"]
     ports:
       - "${GATEWAY_HOST_PORT:-3010}:3000"
     depends_on:
@@ -53,23 +46,11 @@ services:
     environment:
       <<: *app-env
       PORT: "3000"
-      # Enqueue chat turns so the chat-worker drains them (mirrors production).
-      RENDER_FACTORY_EXECUTION_MODE: queue
-
-  chat-worker:
-    build: .
-    image: render-factory-demo:latest
-    command: ["pnpm", "--filter", "@render-factory/example-demo", "worker"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      <<: *app-env
 
   workflows:
     build: .
-    image: render-factory-demo:latest
-    command: ["pnpm", "--filter", "@render-factory/example-demo", "workflows"]
+    image: render-factory:latest
+    command: ["pnpm", "--filter", "@render-factory/workflows", "workflows"]
     depends_on:
       postgres:
         condition: service_healthy

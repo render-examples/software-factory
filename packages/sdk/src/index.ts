@@ -169,10 +169,4 @@ export { NativeWorkflowsSuspender } from "./native-suspender.js";
 
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 
-export { runWorker, runWorkerLoop, buildJobProcessor } from "./worker.js";
-export type { RunWorkerOptions, WorkerHandle, JobProcessor } from "./worker.js";
-
 export { deliverForRun } from "./channel-delivery.js";
-
-export { submitRootRun } from "./submit.js";
-export type { SubmitRootRunOptions } from "./submit.js";
