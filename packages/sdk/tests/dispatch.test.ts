@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { isWorkflowsEnvironment, computeDispatchKey, computeRequiredPlans, workflowTaskHandler } from "../src/dispatch.js";
-import type { AgentDefinition } from "@render-agents/engine";
-import { RunPaused } from "@render-agents/engine";
+import type { AgentDefinition } from "@render-factory/engine";
+import { RunPaused } from "@render-factory/engine";
 import type { WorkflowDefinition } from "../src/workflow.js";
 
 const SOCKET = "RENDER_SDK_SOCKET_PATH";

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import type { RunStore } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
+import type { RunStore } from "@render-factory/store";
+import { buildEventRecord } from "@render-factory/store";
 import { getPrincipal, canAccess } from "../auth.js";
 
 const INPUT_STATUSES = new Set(["pending", "approved", "denied", "provided", "all"]);

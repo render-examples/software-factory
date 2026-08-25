@@ -5,14 +5,14 @@
  * A channel sets `verify` and the gateway enforces it — computing the expected
  * signature over the raw body and rejecting mismatches with 401 before the
  * request is routed. The runtime that executes these schemes lives in
- * `@render-agents/gateway` (`verify.ts`); this file is pure config (no crypto).
+ * `@render-factory/gateway` (`verify.ts`); this file is pure config (no crypto).
  *
  * Secrets are referenced by env-var *name* and read at request time — they are
  * never inlined into a `verify` config object.
  *
  * @example
- *   import { githubVerify } from "@render-agents/sdk";
- *   import type { Channel } from "@render-agents/sdk";
+ *   import { githubVerify } from "@render-factory/sdk";
+ *   import type { Channel } from "@render-factory/sdk";
  *   const channel: Channel = {
  *     target: { workflow: "code-review" },
  *     verify: githubVerify(), // reads GITHUB_WEBHOOK_SECRET
@@ -95,7 +95,7 @@ export interface NoVerify {
  * A webhook/connector verification policy. `"none"` (or `{ scheme: "none" }`)
  * explicitly opts out (e.g. the adapter authenticates internally, or the
  * endpoint is intentionally open). Omitting `verify` entirely is fail-closed:
- * rejected in production (see `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY`).
+ * rejected in production (see `RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY`).
  */
 export type WebhookVerify =
   | "none"

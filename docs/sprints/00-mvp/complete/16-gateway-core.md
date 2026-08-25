@@ -9,7 +9,7 @@
 
 ## Goal
 
-Stand up the `@render-agents/gateway` web service on Hono with the core run-facing routes (dispatch a workflow, list/inspect runs, spans, tool-calls, cancel), API-key bearer auth, and the shared composition (`createRuntime` + `loadAgents` at startup) — the single entry point for triggering and observing work.
+Stand up the `@render-factory/gateway` web service on Hono with the core run-facing routes (dispatch a workflow, list/inspect runs, spans, tool-calls, cancel), API-key bearer auth, and the shared composition (`createRuntime` + `loadAgents` at startup) — the single entry point for triggering and observing work.
 
 ---
 
@@ -32,7 +32,7 @@ Stand up the `@render-agents/gateway` web service on Hono with the core run-faci
   - `GET /runs/:id/tool-calls` — tool calls + results.
   - `POST /runs/:id/cancel` — cancel a running/paused run (→ `CancelStore`, Sprint 13).
   - `GET /health`.
-- **API-key bearer auth** (`Authorization: Bearer <key>`, `RENDER_AGENTS_API_KEY`): constant-time compare, fail-closed on missing key.
+- **API-key bearer auth** (`Authorization: Bearer <key>`, `RENDER_FACTORY_API_KEY`): constant-time compare, fail-closed on missing key.
 - **Input validation** on routes: non-empty inputs, agent/workflow name resolution, clear 4xx errors.
 - **Serialization** of `RunRecord`/`SpanRecord`/messages/tool-calls to JSON response shapes.
 
@@ -46,7 +46,7 @@ Stand up the `@render-agents/gateway` web service on Hono with the core run-faci
 
 ## Deliverables
 
-`@render-agents/gateway`:
+`@render-factory/gateway`:
 - Hono app + startup composition (runtime, agents, store init).
 - The core run routes above + serializers.
 - API-key auth middleware (constant-time, fail-closed).
@@ -67,7 +67,7 @@ Stand up the `@render-agents/gateway` web service on Hono with the core run-faci
 
 1. **One composition root, two services:** the gateway builds the same `AgentRuntime` as the workflow service ([D5](../specs/00-foundations.md#d5--injectable-runtime--composition-root)). Dispatching a workflow from the gateway uses `WorkflowDefinition.dispatch` (which triggers the Render Workflows root task or, locally, runs in-process).
 2. **Reads are projection reads** — `GET /runs*` map directly onto `RunStore` methods (`listRuns`, `getRun`, `getMessages`, `listSpans`, `getToolResult`/tool-calls projection). No new query paths. Note `getRun`/`listSpans` are **per-run**; for a delegating run, all-in cost and the cross-run delegation tree are a **read-layer aggregate** over child runs (via `subagent.spawned.childRunId`, per Sprints 10/14) — the gateway/viewer composes it, the store stays per-run.
-3. **Auth is fail-closed:** missing/empty `RENDER_AGENTS_API_KEY` config or missing bearer → 401; constant-time compare to avoid timing leaks.
+3. **Auth is fail-closed:** missing/empty `RENDER_FACTORY_API_KEY` config or missing bearer → 401; constant-time compare to avoid timing leaks.
 4. **Keep routes thin:** validation + store/dispatch calls + serialization. Business logic stays in the runtime/store.
 5. **Cancel route** sets the `CancelStore` flag (Sprint 13); the loop picks it up cooperatively.
 

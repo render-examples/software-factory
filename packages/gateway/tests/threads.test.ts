@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord, PgRunStore } from "@render-agents/store";
-import { workflow, bindWorkflow, type AgentDefinition, type WorkflowDefinition } from "@render-agents/sdk";
-import { createTestRuntime, mockModel } from "@render-agents/sdk/testing";
+import { buildEventRecord, PgRunStore } from "@render-factory/store";
+import { workflow, bindWorkflow, type AgentDefinition, type WorkflowDefinition } from "@render-factory/sdk";
+import { createTestRuntime, mockModel } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 import { threadRoutes, type ThreadRouteDeps } from "../src/routes/threads.js";
 

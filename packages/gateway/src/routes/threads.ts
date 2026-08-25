@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { RunStore, ThreadStore, Thread } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
-import type { WorkflowDefinition } from "@render-agents/sdk";
+import type { RunStore, ThreadStore, Thread } from "@render-factory/store";
+import { buildEventRecord } from "@render-factory/store";
+import type { WorkflowDefinition } from "@render-factory/sdk";
 import { getPrincipal, canAccess } from "../auth.js";
 
 export interface ThreadRouteDeps {

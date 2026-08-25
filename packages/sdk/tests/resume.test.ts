@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { buildEventRecord, idempotencyKey } from "@render-agents/store";
-import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-agents/engine";
+import { buildEventRecord, idempotencyKey } from "@render-factory/store";
+import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { resumeRun } from "../src/agents.js";
 import { defineTool } from "../src/authoring.js";
 
-const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
 
 afterEach(() => {
   delete process.env[KEY];

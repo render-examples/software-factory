@@ -31,10 +31,10 @@ Define and validate the production deployment: the canonical `render.yaml` topol
   - **Cron** (optional) — scheduled `POST /workflows/:name`.
   - **Private services** (optional) — MCP servers / custom tool backends.
 - **Configuration contract (env vars)** — documented + wired end-to-end:
-  - `DATABASE_URL` (Postgres vs in-memory), `RENDER_SDK_SOCKET_PATH`/`RENDER_USE_LOCAL_DEV` (dispatcher selection), `PORT`, provider API keys, and the SDK-owned (`RENDER_AGENTS_`-prefixed) settings `RENDER_AGENTS_API_KEY`, `RENDER_AGENTS_STRICT_APPROVAL`, `RENDER_AGENTS_ENCRYPTION_KEY` (OAuth token encryption), `RENDER_AGENTS_EVENT_RETENTION_DAYS`, `RENDER_AGENTS_RUN_RETENTION_DAYS`, retry/delegation overrides. (Naming convention per [Operations → Configuration](../specs/04-operations.md#configuration): SDK settings use `RENDER_AGENTS_`; platform/ecosystem names keep their standard form.)
+  - `DATABASE_URL` (Postgres vs in-memory), `RENDER_SDK_SOCKET_PATH`/`RENDER_USE_LOCAL_DEV` (dispatcher selection), `PORT`, provider API keys, and the SDK-owned (`RENDER_FACTORY_`-prefixed) settings `RENDER_FACTORY_API_KEY`, `RENDER_FACTORY_STRICT_APPROVAL`, `RENDER_FACTORY_ENCRYPTION_KEY` (OAuth token encryption), `RENDER_FACTORY_EVENT_RETENTION_DAYS`, `RENDER_FACTORY_RUN_RETENTION_DAYS`, retry/delegation overrides. (Naming convention per [Operations → Configuration](../specs/04-operations.md#configuration): SDK settings use `RENDER_FACTORY_`; platform/ecosystem names keep their standard form.)
 - **Retention cleanup job** ([Operations → Retention](../specs/04-operations.md#retention)):
-  - **Event-detail domain** (`run_events` + detail projections `spans`/`run_messages`/`tool_calls`/`workflow_steps`/`approval_requests`): default 30 days (`RENDER_AGENTS_EVENT_RETENTION_DAYS`), trimmed together.
-  - **Run-summary domain** (`runs`): default 90 days (`RENDER_AGENTS_RUN_RETENTION_DAYS`).
+  - **Event-detail domain** (`run_events` + detail projections `spans`/`run_messages`/`tool_calls`/`workflow_steps`/`approval_requests`): default 30 days (`RENDER_FACTORY_EVENT_RETENTION_DAYS`), trimmed together.
+  - **Run-summary domain** (`runs`): default 90 days (`RENDER_FACTORY_RUN_RETENTION_DAYS`).
   - Threads (incl. their `messages` transcript)/schedules: no auto-expiry — the transcript is a projection but is user data, kept beyond the event/run horizons (its `run_id` is a non-FK provenance column so trimming runs doesn't orphan it).
   - A daily background cleanup (or Render Cron trigger) that trims both domains in one pass.
 - **Startup ordering / `init()`:** both services call `RunStore.init()` (advisory-locked migrations, Sprint 05); document boot order/health.
@@ -49,7 +49,7 @@ Define and validate the production deployment: the canonical `render.yaml` topol
 
 - Canonical `render.yaml` (services, Postgres, optional cron) — the version the scaffolder emits.
 - Documented env-var configuration contract (and a `.env.example` shared with Sprint 21).
-- Retention cleanup job (SQL + scheduler) honoring the two domains + `RENDER_AGENTS_EVENT_RETENTION_DAYS`/`RENDER_AGENTS_RUN_RETENTION_DAYS`.
+- Retention cleanup job (SQL + scheduler) honoring the two domains + `RENDER_FACTORY_EVENT_RETENTION_DAYS`/`RENDER_FACTORY_RUN_RETENTION_DAYS`.
 - Deployment docs: deploy steps, health checks, scaling notes.
 
 ---
@@ -65,7 +65,7 @@ Define and validate the production deployment: the canonical `render.yaml` topol
 
 1. **One config file:** `render.yaml` is the deploy contract; agent config stays in markdown frontmatter, project metadata in `package.json`, secrets in env. No project-level config file ([Configuration](../specs/04-operations.md#configuration)).
 2. **Two services, one runtime wiring:** gateway + workflow service both `createRuntime()` identically ([D5](../specs/00-foundations.md#d5--injectable-runtime--composition-root)); the workflow service additionally registers `agent@<plan>` + workflow root tasks (Sprints 11/12).
-3. **Retention is two-domain:** keep `RENDER_AGENTS_RUN_RETENTION_DAYS > RENDER_AGENTS_EVENT_RETENTION_DAYS` (default 90 > 30) so operational history outlives high-volume detail; once event detail expires, full replay is no longer reconstructable for those runs (documented tradeoff). For strict replayability set them equal/`RUN <= EVENT`.
+3. **Retention is two-domain:** keep `RENDER_FACTORY_RUN_RETENTION_DAYS > RENDER_FACTORY_EVENT_RETENTION_DAYS` (default 90 > 30) so operational history outlives high-volume detail; once event detail expires, full replay is no longer reconstructable for those runs (documented tradeoff). For strict replayability set them equal/`RUN <= EVENT`.
 4. **Cleanup safety:** trim in a single daily pass; event-detail + detail-projection rows go together (projections are rebuildable only within the retained event horizon). Run via Render Cron or an internal daily job.
 5. **Encryption key + secrets** (Sprint 19 OAuth) provisioned via Render env vars; never committed.
 
@@ -76,7 +76,7 @@ Define and validate the production deployment: the canonical `render.yaml` topol
 - A `render.yaml`-defined deployment brings up gateway + workflow service + Postgres; both migrate via `init()` without conflict; health checks pass.
 - An end-to-end production-shaped run works: trigger → workflow → `agent.task()` isolation → durable log → SSE → (optional) approval/resume.
 - The configuration contract is documented and every listed env var is honored by the code.
-- The retention job trims event-detail at `RENDER_AGENTS_EVENT_RETENTION_DAYS` and run-summaries at `RENDER_AGENTS_RUN_RETENTION_DAYS`; threads/schedules are untouched; a run older than the event horizon keeps its summary but loses detailed replay.
+- The retention job trims event-detail at `RENDER_FACTORY_EVENT_RETENTION_DAYS` and run-summaries at `RENDER_FACTORY_RUN_RETENTION_DAYS`; threads/schedules are untouched; a run older than the event horizon keeps its summary but loses detailed replay.
 - The scaffolder's emitted `render.yaml` matches this canonical manifest.
 
 ---

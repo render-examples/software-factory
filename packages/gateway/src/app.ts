@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import type { CancelStore, RunRecord } from "@render-agents/store";
-import { runRetention, reapRuns, buildEventRecord } from "@render-agents/store";
-import type { AgentRuntime, WorkflowDefinition, Channel } from "@render-agents/sdk";
-import { resumeRun, submitRootRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-agents/sdk";
+import type { CancelStore, RunRecord } from "@render-factory/store";
+import { runRetention, reapRuns, buildEventRecord } from "@render-factory/store";
+import type { AgentRuntime, WorkflowDefinition, Channel } from "@render-factory/sdk";
+import { resumeRun, submitRootRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-factory/sdk";
 import {
   apiKeyAuth,
   defaultPublicPath,
@@ -64,7 +64,7 @@ export interface GatewayOptions {
    * multi-tenancy.
    */
   auth?: AuthResolver;
-  /** userId assigned to the shared-key operator (default `RENDER_AGENTS_OPERATOR_ID` env → `"operator"`). */
+  /** userId assigned to the shared-key operator (default `RENDER_FACTORY_OPERATOR_ID` env → `"operator"`). */
   operatorUserId?: string;
 }
 
@@ -76,19 +76,19 @@ export function createGatewayApp(opts: GatewayOptions) {
   const app = new Hono();
   const { runtime, workflows, cancelStore } = opts;
   const operatorUserId =
-    opts.operatorUserId ?? process.env.RENDER_AGENTS_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
+    opts.operatorUserId ?? process.env.RENDER_FACTORY_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
 
   // Production-readiness config audit: OAuth token encryption falls back to an
   // insecure dev key when this is unset — warn loudly so it isn't shipped.
-  if (!opts.disableAuth && !process.env.RENDER_AGENTS_ENCRYPTION_KEY) {
+  if (!opts.disableAuth && !process.env.RENDER_FACTORY_ENCRYPTION_KEY) {
     console.warn(
-      "[render-agents] RENDER_AGENTS_ENCRYPTION_KEY is not set; OAuth tokens use an INSECURE dev key. " +
+      "[render-factory] RENDER_FACTORY_ENCRYPTION_KEY is not set; OAuth tokens use an INSECURE dev key. " +
         "Set a strong 32+ char secret in production.",
     );
   }
-  if (!opts.disableAuth && !opts.auth && !process.env.RENDER_AGENTS_API_KEY) {
+  if (!opts.disableAuth && !opts.auth && !process.env.RENDER_FACTORY_API_KEY) {
     console.warn(
-      "[render-agents] RENDER_AGENTS_API_KEY is not set; all authenticated routes will reject (401). " +
+      "[render-factory] RENDER_FACTORY_API_KEY is not set; all authenticated routes will reject (401). " +
         "Set the key, pass a custom `auth` resolver, or use disableAuth for local dev.",
     );
   }
@@ -100,7 +100,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   // server-side with a correlation id; callers get an opaque message.
   app.onError((err, c) => {
     const errorId = randomUUID();
-    console.error(`[render-agents] unhandled error (${errorId}) on ${c.req.method} ${c.req.path}:`, err);
+    console.error(`[render-factory] unhandled error (${errorId}) on ${c.req.method} ${c.req.path}:`, err);
     return c.json({ error: "internal server error", errorId }, 500);
   });
 
@@ -116,12 +116,12 @@ export function createGatewayApp(opts: GatewayOptions) {
   // cookie, so the raw key never lives in JS/URL; API callers use Bearer.
   const cookieCfg = buildCookieConfig();
   const baseResolver: AuthResolver =
-    opts.auth ?? bearerKeyResolver("RENDER_AGENTS_API_KEY", operatorUserId);
+    opts.auth ?? bearerKeyResolver("RENDER_FACTORY_API_KEY", operatorUserId);
   const resolver: AuthResolver = uiEnabled ? wrapWithSession(baseResolver, cookieCfg) : baseResolver;
 
   if (uiEnabled && !opts.disableAuth) {
     // Must precede the auth middleware.
-    registerLoginRoutes(app, cookieCfg, { envKey: "RENDER_AGENTS_API_KEY", operatorUserId });
+    registerLoginRoutes(app, cookieCfg, { envKey: "RENDER_FACTORY_API_KEY", operatorUserId });
   }
 
   if (opts.disableAuth) {

@@ -6,8 +6,8 @@
  *   set -a; source ../../.env; source .env.localdev; set +a
  *   pnpm exec tsx scripts/test-sandbox.ts
  */
-import { RenderSandboxProvider } from "@render-agents/sandbox-render";
-import { collectExecOutput } from "@render-agents/engine";
+import { RenderSandboxProvider } from "@render-factory/sandbox-render";
+import { collectExecOutput } from "@render-factory/engine";
 
 async function main() {
   console.log("--- Render Sandbox E2E Test ---\n");

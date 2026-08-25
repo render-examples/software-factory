@@ -46,7 +46,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return (
     <div className="gate">
       <div className="box card">
-        <h3 style={{ marginTop: 0 }}>render-agents · operator</h3>
+        <h3 style={{ marginTop: 0 }}>render-factory · operator</h3>
         <p className="muted">
           Enter the gateway API key to sign in. It is exchanged for a secure
           session cookie and never stored in the browser.
@@ -56,7 +56,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           type="password"
           autoFocus
           value={key}
-          placeholder="RENDER_AGENTS_API_KEY"
+          placeholder="RENDER_FACTORY_API_KEY"
           onChange={(e) => setKeyInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         />

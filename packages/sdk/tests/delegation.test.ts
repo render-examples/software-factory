@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import type { CompleteArgs, CompleteResult } from "@render-agents/engine";
+import type { CompleteArgs, CompleteResult } from "@render-factory/engine";
 import { loadAgents } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
 

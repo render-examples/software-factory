@@ -1,4 +1,4 @@
-import type { Logger, ToolResult } from "@render-agents/store";
+import type { Logger, ToolResult } from "@render-factory/store";
 
 export interface OAuthTokens {
   accessToken: string;

@@ -1,11 +1,11 @@
 # Getting started
 
-Scaffold → run → deploy a render-agents project.
+Scaffold → run → deploy a render-factory project.
 
 ## 1. Scaffold
 
 ```sh
-npm create render-agents@latest my-agents
+npm create render-factory@latest my-agents
 cd my-agents
 npm install
 ```
@@ -17,7 +17,7 @@ fans out then decides, sample tools/skills/channels/hooks, and deploy config.
 ## 2. Run locally
 
 ```sh
-cp .env.example .env     # set ANTHROPIC_API_KEY (or OPENAI_API_KEY) + RENDER_AGENTS_API_KEY
+cp .env.example .env     # set ANTHROPIC_API_KEY (or OPENAI_API_KEY) + RENDER_FACTORY_API_KEY
 npm run dev              # gateway on :3000 (in-memory store unless DATABASE_URL is set)
 ```
 
@@ -25,7 +25,7 @@ Dispatch a run and watch it:
 
 ```sh
 curl -X POST localhost:3000/workflows/code-review \
-  -H "Authorization: Bearer $RENDER_AGENTS_API_KEY" \
+  -H "Authorization: Bearer $RENDER_FACTORY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts\n+ const x = 1"}}'
 ```

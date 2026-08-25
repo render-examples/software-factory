@@ -3,7 +3,7 @@ import type { DefineMcpSpec } from "./tool.js";
 import { assertUrlAllowed } from "./ssrf-fetch.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_INFO = { name: "render-agents", version: "0" };
+const CLIENT_INFO = { name: "render-factory", version: "0" };
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_HTTP_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
 

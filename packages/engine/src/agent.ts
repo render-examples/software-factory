@@ -1,4 +1,4 @@
-import type { TokenUsage } from "@render-agents/store";
+import type { TokenUsage } from "@render-factory/store";
 
 export type RenderPlan =
   | "starter"

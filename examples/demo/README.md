@@ -1,4 +1,4 @@
-# @render-agents/example-demo
+# @render-factory/example-demo
 
 A runnable demo that wires the monorepo packages (`engine` → `store` → `sdk` →
 `gateway`) into the canonical two-lane topology:
@@ -20,14 +20,14 @@ It also ships two **GitHub agent workflows** (see
 ```sh
 cp .env.example .env          # add ANTHROPIC_API_KEY or OPENAI_API_KEY to run agents
 docker compose up --build     # postgres + gateway + chat-worker + workflows host
-# operator UI → http://localhost:3000/ui  (API key: RENDER_AGENTS_API_KEY, default dev-key)
+# operator UI → http://localhost:3000/ui  (API key: RENDER_FACTORY_API_KEY, default dev-key)
 ```
 
 Dispatch a run:
 
 ```sh
 curl -X POST localhost:3000/workflows/code-review \
-  -H "Authorization: Bearer ${RENDER_AGENTS_API_KEY:-dev-key}" \
+  -H "Authorization: Bearer ${RENDER_FACTORY_API_KEY:-dev-key}" \
   -H "Content-Type: application/json" \
   -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts"}}'
 ```
@@ -47,8 +47,8 @@ below.
 pnpm install && pnpm build                          # build the workspace packages
 docker compose up -d postgres                        # just Postgres
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/agents \
-RENDER_AGENTS_API_KEY=dev-key \
-pnpm --filter @render-agents/example-demo dev        # gateway with hot reload
+RENDER_FACTORY_API_KEY=dev-key \
+pnpm --filter @render-factory/example-demo dev        # gateway with hot reload
 ```
 
 ## Hybrid local-dev: real Render Workflows runtime (Lane A)
@@ -80,13 +80,13 @@ cp .env.example .env          # add ANTHROPIC_API_KEY or OPENAI_API_KEY
 #   RENDER_USE_LOCAL_DEV=true
 #   RENDER_LOCAL_DEV_URL=http://localhost:8120
 #   RENDER_WORKFLOW_SLUG=local
-#   RENDER_AGENTS_API_KEY=dev-key
+#   RENDER_FACTORY_API_KEY=dev-key
 
 pnpm install && pnpm build
 docker compose up -d postgres                         # shared Postgres on :5433
 
 # 1. terminal A — workflows host under the Render local task server (port 8120):
-pnpm --filter @render-agents/example-demo dev:workflows
+pnpm --filter @render-factory/example-demo dev:workflows
 #   (== `render workflows dev --env-file .env --env-file .env.localdev -- pnpm exec tsx src/workflows.ts`)
 
 # 2. terminal B — gateway in local-dev mode:
@@ -175,8 +175,8 @@ create the durable **Workflow service** (Lane A) by hand.
 
 1. **Blueprint** — from the repo root `render.yaml`, create a Blueprint. It
    builds the repo-root `Dockerfile` (installs `git`) and provisions:
-   - `render-agents-demo-gateway` (web) — webhook ingress + `/ui`
-   - `render-agents-demo-db` (Postgres)
+   - `render-factory-demo-gateway` (web) — webhook ingress + `/ui`
+   - `render-factory-demo-db` (Postgres)
    - retention + reaper crons
 
 2. **Gateway secrets** — set `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`,
@@ -184,15 +184,15 @@ create the durable **Workflow service** (Lane A) by hand.
 
 3. **Workflow service** — **New > Workflow** in the Dashboard, same repo,
    **Language = Docker**, Dockerfile `./Dockerfile`, **Start Command**
-   `pnpm --filter @render-agents/example-demo workflows`. The slug is defined in
-   code as `render-agents` (`WORKFLOW_SLUG` in `src/lib/render.ts`), so no
+   `pnpm --filter @render-factory/example-demo workflows`. The slug is defined in
+   code as `render-factory` (`WORKFLOW_SLUG` in `src/lib/render.ts`), so no
    `RENDER_WORKFLOW_SLUG` env var is needed — just make sure this service's slug
    matches. Env vars: same `DATABASE_URL` (the demo-db Internal URL) and same
-   `RENDER_AGENTS_ENCRYPTION_KEY` as the gateway, plus `RENDER_API_KEY` (needed to
+   `RENDER_FACTORY_ENCRYPTION_KEY` as the gateway, plus `RENDER_API_KEY` (needed to
    `runTask` the reviewer fan-out), `GITHUB_TOKEN`, `GITHUB_BOT_LOGIN`,
    `ANTHROPIC_API_KEY`, `GIT_AUTHOR_NAME/EMAIL`. Deploying registers the
    `workflow@standard` / `agent@standard` tasks — confirm the slug before the `/`
-   on its Tasks page equals `render-agents` (if it differs, update the constant or
+   on its Tasks page equals `render-factory` (if it differs, update the constant or
    set `RENDER_WORKFLOW_SLUG`).
 
 4. **Enable Lane A** — set `RENDER_API_KEY` (a Render API key, `rnd_…`) on **the

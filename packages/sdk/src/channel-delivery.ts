@@ -5,9 +5,9 @@
 // `channel.delivered` marker (keyed by `inputRequestId`, or none for the final
 // reply) short-circuits redelivery, so at-least-once dispatch is effectively-once.
 
-import { buildEventRecord } from "@render-agents/store";
-import type { ContentBlock } from "@render-agents/store";
-import type { OAuthTokens } from "@render-agents/engine";
+import { buildEventRecord } from "@render-factory/store";
+import type { ContentBlock } from "@render-factory/store";
+import type { OAuthTokens } from "@render-factory/engine";
 import type { AgentRuntime } from "./runtime.js";
 
 /** Flatten text content blocks to a plain string (the outbound reply text). */

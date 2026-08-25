@@ -30,7 +30,7 @@ export interface ExecResult {
 
 /** Base directory that contains every run's checkout. Overridable via env. */
 export function workspaceRoot(): string {
-  return process.env.RENDER_WORKSPACE_DIR ?? path.join(os.tmpdir(), "render-agents-workspaces");
+  return process.env.RENDER_WORKSPACE_DIR ?? path.join(os.tmpdir(), "render-factory-workspaces");
 }
 
 /**

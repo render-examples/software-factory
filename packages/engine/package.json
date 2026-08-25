@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/engine",
+  "name": "@render-factory/engine",
   "version": "0.1.0",
   "type": "module",
   "publishConfig": {
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
-    "@render-agents/store": "workspace:*",
+    "@render-factory/store": "workspace:*",
     "ajv": "^8.20.0",
     "openai": "^6.45.0"
   },

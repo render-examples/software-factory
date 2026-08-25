@@ -49,7 +49,7 @@ Build the keystone: the append-only event log and the **projection-fold framewor
 
 ## Deliverables
 
-`@render-agents/store`:
+`@render-factory/store`:
 - In-memory `EventLogStore` with atomic append→fold→notify.
 - Projection folders (one per derived table), each pure over `(currentProjection, event) → nextProjection`, registered with the store.
 - In-memory `RunStore` implementing the [Type Reference contract](../specs/05-type-reference.md#runstore) (reads only over projections; **no** `createRun`/`startSpan`/`appendRunMessage` writers — those are internal effects of append).

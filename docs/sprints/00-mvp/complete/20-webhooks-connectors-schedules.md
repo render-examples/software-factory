@@ -40,7 +40,7 @@ Complete the trigger surfaces beyond direct HTTP: user-authored inbound webhook 
 
 ## Deliverables
 
-`@render-agents/gateway`:
+`@render-factory/gateway`:
 - `webhooks/` discovery + `POST /webhooks/:name` mount + dispatch.
 - Connector discovery (from tool packages' `connectors` export) + `POST /connectors/:key` mount + dispatch.
 - Cron trigger support documented for `render.yaml` (the route already exists: `POST /workflows/:name`).

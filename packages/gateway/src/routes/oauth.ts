@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import type { OAuthStore, OAuthConnection } from "@render-agents/store";
-import { encrypt, decrypt, encryptionKeyFromEnv } from "@render-agents/store";
+import type { OAuthStore, OAuthConnection } from "@render-factory/store";
+import { encrypt, decrypt, encryptionKeyFromEnv } from "@render-factory/store";
 import { getPrincipal } from "../auth.js";
 
 export interface OAuthProviderConfig {
@@ -180,9 +180,9 @@ async function exchangeCode(
   return json;
 }
 
-/** @deprecated import `encrypt` from `@render-agents/store`. Kept for back-compat. */
+/** @deprecated import `encrypt` from `@render-factory/store`. Kept for back-compat. */
 export const encryptToken = encrypt;
-/** @deprecated import `decrypt` from `@render-agents/store`. Kept for back-compat. */
+/** @deprecated import `decrypt` from `@render-factory/store`. Kept for back-compat. */
 export const decryptToken = decrypt;
 
 interface StatePayload {

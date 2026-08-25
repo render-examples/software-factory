@@ -29,9 +29,9 @@ export type AuthResolver = (req: Request) => Promise<Principal | null>;
 export const DEFAULT_OPERATOR_ID = "operator";
 
 export interface ApiKeyAuthOptions {
-  /** Env var holding the expected key (default `RENDER_AGENTS_API_KEY`). */
+  /** Env var holding the expected key (default `RENDER_FACTORY_API_KEY`). */
   envKey?: string;
-  /** userId assigned on a successful shared-key auth (default `RENDER_AGENTS_OPERATOR_ID` env → `"operator"`). */
+  /** userId assigned on a successful shared-key auth (default `RENDER_FACTORY_OPERATOR_ID` env → `"operator"`). */
   operatorUserId?: string;
   /**
    * Custom resolver (e.g. cookie session or JWT). When set it takes precedence;
@@ -60,9 +60,9 @@ export interface ApiKeyAuthOptions {
  * fixed-width digests to prevent timing/length leaks.
  */
 export function apiKeyAuth(options: ApiKeyAuthOptions = {}) {
-  const envKey = options.envKey ?? "RENDER_AGENTS_API_KEY";
+  const envKey = options.envKey ?? "RENDER_FACTORY_API_KEY";
   const operatorUserId =
-    options.operatorUserId ?? process.env.RENDER_AGENTS_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
+    options.operatorUserId ?? process.env.RENDER_FACTORY_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
   const isPublicPath = options.isPublicPath ?? (() => false);
   const allowQueryKey = options.allowQueryKey ?? (() => false);
   const resolver = options.resolver ?? bearerKeyResolver(envKey, operatorUserId);

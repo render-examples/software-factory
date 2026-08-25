@@ -1,6 +1,6 @@
-import { loadProject } from "@render-agents/sdk";
-import { resolveClient, resolveModelSpec } from "@render-agents/engine";
-import { startGateway } from "@render-agents/gateway";
+import { loadProject } from "@render-factory/sdk";
+import { resolveClient, resolveModelSpec } from "@render-factory/engine";
+import { startGateway } from "@render-factory/gateway";
 import { ensureWorkflowSlug } from "./lib/render.js";
 
 const root = new URL("..", import.meta.url).pathname;

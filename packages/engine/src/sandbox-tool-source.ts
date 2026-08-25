@@ -1,4 +1,4 @@
-import type { ToolResult } from "@render-agents/store";
+import type { ToolResult } from "@render-factory/store";
 import type { Tool, ToolSource, ResolvedSource, ToolContext, Environment } from "./tool.js";
 import type { Sandbox, SandboxProvider } from "./sandbox.js";
 import { collectExecOutput } from "./sandbox.js";

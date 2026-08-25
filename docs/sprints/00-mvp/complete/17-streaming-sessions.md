@@ -43,10 +43,10 @@ Add real-time streaming and multi-turn state to the gateway: the SSE endpoints a
 
 ## Deliverables
 
-`@render-agents/gateway`:
+`@render-factory/gateway`:
 - SSE handler over `EventLogStore.tail` with reconnect/`seq` resume + heartbeat.
 - Run stream + thread stream routes.
-- `ThreadStore` (interface + Postgres impl in `@render-agents/store`) + thread routes + message delivery/revival triggering (routes in gateway).
+- `ThreadStore` (interface + Postgres impl in `@render-factory/store`) + thread routes + message delivery/revival triggering (routes in gateway).
 - `409 thread_busy` enforcement.
 
 ---

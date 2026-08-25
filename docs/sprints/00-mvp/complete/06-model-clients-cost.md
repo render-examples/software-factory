@@ -40,7 +40,7 @@ Implement the provider-agnostic `ModelClient` with concrete Anthropic and OpenAI
 
 ## Deliverables
 
-`@render-agents/engine`:
+`@render-factory/engine`:
 - `ModelClient` + `AnthropicClient` + `OpenAIClient` with request/response adapters.
 - Provider inference + pricing layered over Sprint 02's `model-tiers` table (no second copy).
 - `RetryPolicy` + retrying wrapper around `complete`.

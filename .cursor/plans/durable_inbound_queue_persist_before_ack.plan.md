@@ -1,6 +1,6 @@
 ---
 name: Durable inbound queue - persist before ack
-overview: Lift factory's persist-before-ack pattern into render-coding-agents. Inbound channel messages are durably stored in Postgres before acknowledging the webhook, then processed by a worker with lease-based claiming. Survives process crashes, enables horizontal scaling, and adds thread-level serialization.
+overview: Lift factory's persist-before-ack pattern into render-factory. Inbound channel messages are durably stored in Postgres before acknowledging the webhook, then processed by a worker with lease-based claiming. Survives process crashes, enables horizontal scaling, and adds thread-level serialization.
 todos:
   - id: inbound-messages-migration
     content: Create SQL migration for inbound_messages table (delivery dedupe + status tracking) and conversation_jobs queue
@@ -230,8 +230,8 @@ flowchart TD
 - `DeltaBus` and streaming continue to work
 - The existing `run_jobs` queue handles agent turn execution and deliver jobs
 - `deliverForRun` outbound delivery is unaffected
-- Inline mode (local dev) can bypass the queue by setting `RENDER_AGENTS_INBOUND_MODE=inline`
+- Inline mode (local dev) can bypass the queue by setting `RENDER_FACTORY_INBOUND_MODE=inline`
 
 ## Migration path
 
-The feature is opt-in via `RENDER_AGENTS_INBOUND_MODE=queue` (default remains `inline` for backward compatibility during rollout). The gateway checks this flag to decide whether to persist-then-ack or process inline.
+The feature is opt-in via `RENDER_FACTORY_INBOUND_MODE=queue` (default remains `inline` for backward compatibility during rollout). The gateway checks this flag to decide whether to persist-then-ack or process inline.

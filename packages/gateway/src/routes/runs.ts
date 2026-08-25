@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
-import type { RunStore, CancelStore, RunRecord } from "@render-agents/store";
-import { aggregateRunCost } from "@render-agents/store";
-import type { WorkflowDefinition } from "@render-agents/sdk";
+import type { RunStore, CancelStore, RunRecord } from "@render-factory/store";
+import { aggregateRunCost } from "@render-factory/store";
+import type { WorkflowDefinition } from "@render-factory/sdk";
 import { getPrincipal, canAccess } from "../auth.js";
 
 /** Upper bound on a single `/runs` page (CR-22). */
@@ -76,7 +76,7 @@ export function runRoutes(deps: {
     if (statusRaw !== undefined && !RUN_STATUSES.has(statusRaw)) {
       return c.json({ error: `invalid status "${statusRaw}"` }, 400);
     }
-    const status = statusRaw as import("@render-agents/store").RunStatus | undefined;
+    const status = statusRaw as import("@render-factory/store").RunStatus | undefined;
     const threadId = c.req.query("threadId");
     const before = c.req.query("before");
     // Clamp to a sane max and reject non-finite/negative input (CR-22).
@@ -117,7 +117,7 @@ export function runRoutes(deps: {
           threadId,
           userId,
           roots,
-          status: status as import("@render-agents/store").RunStatus,
+          status: status as import("@render-factory/store").RunStatus,
         }),
       ),
     );

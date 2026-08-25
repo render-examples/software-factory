@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { createMemoryStore, buildEventRecord, type MemoryRunStore } from "@render-agents/store";
-import type { Tracer } from "@render-agents/store";
+import { createMemoryStore, buildEventRecord, type MemoryRunStore } from "@render-factory/store";
+import type { Tracer } from "@render-factory/store";
 import type { AgentDefinition } from "../src/agent.js";
 import type { ModelClient, CompleteResult } from "../src/model.js";
 import type { Tool } from "../src/tool.js";
@@ -39,7 +39,7 @@ function makeCtx(
   opts: {
     tools?: Map<string, Tool>;
     isCancelledFn?: () => boolean;
-    cancelStore?: import("@render-agents/store").CancelStore;
+    cancelStore?: import("@render-factory/store").CancelStore;
     cancelScopeId?: string;
   } = {},
 ): InProcessRunContext {
@@ -215,7 +215,7 @@ describe("DefaultRunner — control signals", () => {
   });
 
   it("cancel cascade (E3): a run is cancelled when its enclosing scope (root) is cancelled", async () => {
-    const { MemoryCancelStore } = await import("@render-agents/store");
+    const { MemoryCancelStore } = await import("@render-factory/store");
     const store = createMemoryStore();
     const agent = makeAgent();
     const cancelStore = new MemoryCancelStore();
@@ -229,7 +229,7 @@ describe("DefaultRunner — control signals", () => {
   });
 
   it("cancel cascade: the runner exits a child when its scope root is cancelled", async () => {
-    const { MemoryCancelStore } = await import("@render-agents/store");
+    const { MemoryCancelStore } = await import("@render-factory/store");
     const store = createMemoryStore();
     const agent = makeAgent();
     const cancelStore = new MemoryCancelStore();
@@ -246,7 +246,7 @@ describe("DefaultRunner — control signals", () => {
   });
 
   it("cancel cascade (E3): stops a child *mid-flight* (after the scope is cancelled while a tool runs)", async () => {
-    const { MemoryCancelStore } = await import("@render-agents/store");
+    const { MemoryCancelStore } = await import("@render-factory/store");
     const store = createMemoryStore();
     const cancelStore = new MemoryCancelStore();
 

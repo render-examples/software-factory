@@ -11,7 +11,7 @@
  *
  * Preserved on purpose:
  * - `TEST_DATABASE_URL` — the explicit opt-in for Postgres-gated suites.
- * - `RENDER_AGENTS_API_KEY` — the gateway's own auth key; auth tests set/clear
+ * - `RENDER_FACTORY_API_KEY` — the gateway's own auth key; auth tests set/clear
  *   it themselves within the test body.
  *
  * Individual tests that exercise env-driven behavior (e.g. dispatcher detection)

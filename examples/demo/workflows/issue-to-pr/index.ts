@@ -1,7 +1,7 @@
-import { workflow } from "@render-agents/sdk";
+import { workflow } from "@render-factory/sdk";
 import { githubFromEnv, type Issue, type IssueComment } from "../../src/lib/github.js";
-import { RenderSandboxProvider } from "@render-agents/sandbox-render";
-import { collectExecOutput } from "@render-agents/engine";
+import { RenderSandboxProvider } from "@render-factory/sandbox-render";
+import { collectExecOutput } from "@render-factory/engine";
 import type { NormalizedGitHubEvent } from "../../src/lib/github-events.js";
 
 const NEEDS_INFO = "agent:needs-info";

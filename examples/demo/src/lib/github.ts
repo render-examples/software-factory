@@ -96,7 +96,7 @@ export class GitHub {
       Authorization: `Bearer ${this.token}`,
       Accept: opts.accept ?? "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "render-agents-demo",
+      "User-Agent": "render-factory-demo",
     };
     if (opts.body !== undefined) headers["Content-Type"] = "application/json";
 

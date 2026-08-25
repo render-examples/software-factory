@@ -1,5 +1,5 @@
-import { PgRunStore, PgCommandStore } from "@render-agents/store";
-import { loadPolicyFile } from "@render-agents/policy";
+import { PgRunStore, PgCommandStore } from "@render-factory/store";
+import { loadPolicyFile } from "@render-factory/policy";
 import { ControlWorker } from "./worker.js";
 import { buildCommandHandler } from "./handler.js";
 

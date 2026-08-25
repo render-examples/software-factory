@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { createMemoryStore, type Tracer } from "@render-agents/store";
+import { createMemoryStore, type Tracer } from "@render-factory/store";
 import { defineMcpSource, ToolEnvironment } from "../src/tool-impl.js";
 import { InProcessRunContext } from "../src/run-context.js";
 import { passThroughContextManager } from "../src/context-manager.js";

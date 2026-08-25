@@ -1,5 +1,5 @@
-import type { ToolSource, DefineToolSpec, DefineMcpSpec, Hook } from "@render-agents/engine";
-import { defineTool as implDefineTool, defineMcpSource as implDefineMcpSource } from "@render-agents/engine";
+import type { ToolSource, DefineToolSpec, DefineMcpSpec, Hook } from "@render-factory/engine";
+import { defineTool as implDefineTool, defineMcpSource as implDefineMcpSource } from "@render-factory/engine";
 
 export function defineTool(spec: DefineToolSpec): ToolSource {
   return implDefineTool(spec);

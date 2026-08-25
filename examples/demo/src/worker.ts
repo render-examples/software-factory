@@ -1,5 +1,5 @@
-import { loadProject, runWorker } from "@render-agents/sdk";
-import { resolveClient, resolveModelSpec } from "@render-agents/engine";
+import { loadProject, runWorker } from "@render-factory/sdk";
+import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 
 const root = new URL("..", import.meta.url).pathname;
 const tenantId = process.env.TENANT_ID ?? "default";

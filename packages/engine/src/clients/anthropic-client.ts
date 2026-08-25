@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ContentBlock, Message, TokenUsage } from "@render-agents/store";
+import type { ContentBlock, Message, TokenUsage } from "@render-factory/store";
 import type { ModelClient, CompleteArgs, CompleteResult, ModelStreamEvent, ToolSchema } from "../model.js";
 
 /**

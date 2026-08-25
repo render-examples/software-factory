@@ -10,7 +10,7 @@ This layer documents how the system is deployed and operated today.
 
 ## Deployment Topology
 
-Generated production topology (from `create-render-agents` blueprint):
+Generated production topology (from `create-render-factory` blueprint):
 
 1. **Gateway** (`web`)
    - HTTP front door, auth, SSE, scheduling/admin endpoints.
@@ -29,7 +29,7 @@ Generated production topology (from `create-render-agents` blueprint):
 
 ## Execution Mode
 
-`RENDER_AGENTS_EXECUTION_MODE` controls root chat/resume execution:
+`RENDER_FACTORY_EXECUTION_MODE` controls root chat/resume execution:
 
 - `inline` (default): trigger process drives execution immediately.
 - `queue`: trigger process enqueues to `run_jobs`, worker drives execution.
@@ -46,16 +46,16 @@ Operationally important env vars:
 |---|---|
 | `DATABASE_URL` | Select Postgres store/queue/delta/cancel backends |
 | `PORT` | Gateway port |
-| `RENDER_AGENTS_API_KEY` | Shared-key API auth material (maps to the operator principal) |
-| `RENDER_AGENTS_OPERATOR_ID` | userId assigned to the shared-key operator (default `operator`) |
-| `RENDER_AGENTS_EXECUTION_MODE` | `inline` or `queue` |
-| `RENDER_AGENTS_ENCRYPTION_KEY` | OAuth token encryption + cookie/stream-token signing secret |
-| `RENDER_AGENTS_COOKIE_SECRET` | Optional explicit cookie/stream-token signing secret (falls back to `RENDER_AGENTS_ENCRYPTION_KEY`) |
-| `RENDER_AGENTS_STRICT_APPROVAL` | Toggle strict approval in non-production |
-| `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` | Require inbound webhook/connector signature verification (default on in production) |
-| `RENDER_AGENTS_EVENT_RETENTION_DAYS` | Event-detail retention horizon |
-| `RENDER_AGENTS_RUN_RETENTION_DAYS` | Run-summary retention horizon |
-| `RENDER_AGENTS_RUN_STALE_MS` | Stale-root threshold for reaper |
+| `RENDER_FACTORY_API_KEY` | Shared-key API auth material (maps to the operator principal) |
+| `RENDER_FACTORY_OPERATOR_ID` | userId assigned to the shared-key operator (default `operator`) |
+| `RENDER_FACTORY_EXECUTION_MODE` | `inline` or `queue` |
+| `RENDER_FACTORY_ENCRYPTION_KEY` | OAuth token encryption + cookie/stream-token signing secret |
+| `RENDER_FACTORY_COOKIE_SECRET` | Optional explicit cookie/stream-token signing secret (falls back to `RENDER_FACTORY_ENCRYPTION_KEY`) |
+| `RENDER_FACTORY_STRICT_APPROVAL` | Toggle strict approval in non-production |
+| `RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY` | Require inbound webhook/connector signature verification (default on in production) |
+| `RENDER_FACTORY_EVENT_RETENTION_DAYS` | Event-detail retention horizon |
+| `RENDER_FACTORY_RUN_RETENTION_DAYS` | Run-summary retention horizon |
+| `RENDER_FACTORY_RUN_STALE_MS` | Stale-root threshold for reaper |
 | `RENDER_API_KEY` + `RENDER_WORKFLOW_SLUG` | Render root trigger wiring for workflow lane |
 | `RENDER_SDK_SOCKET_PATH` / `RENDER_USE_LOCAL_DEV` | In-container/local Workflows detection |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Model auto-detection |

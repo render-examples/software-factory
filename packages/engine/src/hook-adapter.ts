@@ -1,5 +1,5 @@
-import type { RunEvent, EventInterceptor, EventCategory, Logger } from "@render-agents/store";
-import { categoryOf } from "@render-agents/store";
+import type { RunEvent, EventInterceptor, EventCategory, Logger } from "@render-factory/store";
+import { categoryOf } from "@render-factory/store";
 import type { Hook, HookResult, HookContext, HookRegistry } from "./hooks.js";
 
 const GATE_CATEGORIES: Set<EventCategory> = new Set(["tool"]);

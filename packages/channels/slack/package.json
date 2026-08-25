@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/channels-slack",
+  "name": "@render-factory/channels-slack",
   "version": "0.0.1",
   "type": "module",
   "exports": {

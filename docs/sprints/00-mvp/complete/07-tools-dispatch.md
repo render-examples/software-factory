@@ -51,7 +51,7 @@ Implement the full tool system: `defineTool`/`defineMcpSource`, single/multi/MCP
 
 ## Deliverables
 
-`@render-agents/engine` (+ `sdk` re-exports of authoring helpers):
+`@render-factory/engine` (+ `sdk` re-exports of authoring helpers):
 - `defineTool`, `defineMcpSource` (in `sdk` surface; impl may live in engine).
 - MCP client/transport integration (`@modelcontextprotocol/sdk` or equivalent) with schema fetch + namespacing.
 - `Environment` with `mount`/`dispose`; `MountedTools`.

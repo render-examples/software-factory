@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
-import { PgRunStore, PgCancelStore, buildEventRecord } from "@render-agents/store";
+import { PgRunStore, PgCancelStore, buildEventRecord } from "@render-factory/store";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { defineTool } from "../src/authoring.js";
-import type { AgentDefinition } from "@render-agents/engine";
+import type { AgentDefinition } from "@render-factory/engine";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeWithPg = TEST_DATABASE_URL ? describe : describe.skip;

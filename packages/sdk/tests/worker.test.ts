@@ -4,9 +4,9 @@ import {
   buildEventRecord,
   type JobRecord,
   type RunStore,
-} from "@render-agents/store";
-import { idempotencyKey } from "@render-agents/store";
-import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-agents/engine";
+} from "@render-factory/store";
+import { idempotencyKey } from "@render-factory/store";
+import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { runWorker, runWorkerLoop, buildJobProcessor } from "../src/worker.js";
 import { defineTool } from "../src/authoring.js";
@@ -235,7 +235,7 @@ describe("buildJobProcessor — agent/resume routing + D3 reconciliation", () =>
   });
 
   it("settles a paused agent turn (HITL within the turn) as done (not failed)", async () => {
-    const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+    const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
     process.env[KEY] = "1";
     try {
       const toolSources = new Map([
@@ -296,7 +296,7 @@ describe("buildJobProcessor — agent/resume routing + D3 reconciliation", () =>
   });
 
   it("drives a resume job: re-drives a paused run once the approval resolves", async () => {
-    const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+    const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
     process.env[KEY] = "1";
     try {
       let invoked = 0;

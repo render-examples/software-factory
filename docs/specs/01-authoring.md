@@ -161,12 +161,12 @@ or dispatch.
 
 `verify` accepts a built-in scheme factory — `githubVerify()`, `slackVerify()`,
 `stripeVerify()`, `standardWebhooksVerify()`, or generic
-`hmacVerify({ header, secretEnv, … })` (all from `@render-agents/sdk`; secrets
+`hmacVerify({ header, secretEnv, … })` (all from `@render-factory/sdk`; secrets
 referenced by env-var name, never inlined) — or `"none"` to opt out explicitly.
 Timestamped schemes (slack/stripe/standard-webhooks) also enforce a replay window.
 
 Omitting `verify` is **fail-closed**: the request is rejected (`401`) in
-production and warn-allowed in dev (see `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY` in
+production and warn-allowed in dev (see `RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY` in
 [`04-operations.md`](./04-operations.md)). Enforcement runs before `match`/`parse`,
 so an unverified request never reaches a workflow or agent.
 
@@ -179,7 +179,7 @@ run; an **agent** target resolves (or creates) the thread bound to
 `(channel, conversationId)` and drives a turn, so a re-entrant message continues
 the same conversation (multi-turn memory via the thread transcript).
 
-`@render-agents/sdk` ships a built-in **`slackChannel({ target?, … })`** reference
+`@render-factory/sdk` ships a built-in **`slackChannel({ target?, … })`** reference
 adapter (Slack Events API inbound + `chat.postMessage` outbound, authored on the
 same `Channel` contract): drop a `channels/slack.ts` that default-exports it. It
 verifies with `slackVerify()`, answers the URL-verification handshake, loop-guards

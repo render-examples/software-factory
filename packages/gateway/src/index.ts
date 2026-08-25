@@ -1,5 +1,5 @@
 export { channelRoutes } from "./routes/channels.js";
-export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget } from "@render-agents/sdk";
+export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget } from "@render-factory/sdk";
 export { createGatewayApp, startGateway } from "./app.js";
 export type { GatewayOptions } from "./app.js";
 export { apiKeyAuth, bearerKeyResolver, composeResolvers, canAccess, getPrincipal } from "./auth.js";
@@ -30,14 +30,14 @@ export type {
   StripeVerify,
   StandardWebhooksVerify,
   NoVerify,
-} from "@render-agents/sdk";
+} from "@render-factory/sdk";
 export {
   hmacVerify,
   githubVerify,
   slackVerify,
   stripeVerify,
   standardWebhooksVerify,
-} from "@render-agents/sdk";
+} from "@render-factory/sdk";
 export { uiRoutes } from "./routes/ui.js";
 export { buildSpanTree, flattenTree, perAgentCost, spanCostUsd, formatCost, formatDuration } from "./ui/trace.js";
 export type { SpanLike, SpanNode } from "./ui/trace.js";

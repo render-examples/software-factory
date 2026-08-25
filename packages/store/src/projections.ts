@@ -495,7 +495,7 @@ export class Projections {
       .map(m => ({ ...m }));
   }
 
-  /** The render-agents conversation bound to an external channel conversation. */
+  /** The render-factory conversation bound to an external channel conversation. */
   resolveConversation(channel: string, externalConversationId: string): ChannelConversation | undefined {
     const c = this.channelConversations.get(`${channel}\u0000${externalConversationId}`);
     return c ? { ...c } : undefined;

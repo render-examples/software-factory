@@ -25,7 +25,7 @@ Implement project discovery and the markdown authoring model: scan the conventio
 **In:**
 - **Project layout discovery** per [Authoring → Project Layout & Discovery](../specs/01-authoring.md#project-layout--discovery): the directory→key→glob→collision table for `agents/`, `tools/`, `skills/`, `workflows/`, `webhooks/`, `hooks/`, `runners/`. All directories optional; missing dirs skipped unless referenced.
 - **Frontmatter parsing + validation** per [Authoring → Agent Markdown Schema](../specs/01-authoring.md#agent-markdown-schema): every field, its type, default, and load-time validation. Unknown fields are hard errors.
-- **Model tier resolution** (`small`/`medium`/`large` → concrete `ModelSpec`) and the split validation: routing validity (hard error), tier validity (hard error), pricing availability (warning only — see Sprint 06/08 for cost). The tier table + `resolveModelSpec` are a **data-only `@render-agents/engine` module** — the single source of truth for tiers — which the loader imports for load-time validation; **Sprint 06 layers provider inference + pricing onto this same table** rather than defining a second one.
+- **Model tier resolution** (`small`/`medium`/`large` → concrete `ModelSpec`) and the split validation: routing validity (hard error), tier validity (hard error), pricing availability (warning only — see Sprint 06/08 for cost). The tier table + `resolveModelSpec` are a **data-only `@render-factory/engine` module** — the single source of truth for tiers — which the loader imports for load-time validation; **Sprint 06 layers provider inference + pricing onto this same table** rather than defining a second one.
 - **`_shared.md` merge semantics:** body prepend; frontmatter deep-merge per leaf (agent wins; arrays union+dedupe; scalars agent → shared → built-in default).
 - **Tool reference resolution:** bare source id mounts all tools; namespaced `sourceId__toolName` exposes only that tool; `requireApproval` matches expanded resolved names.
 - **Skill resolution:** skill ids → fully-resolved `SkillMetadata` stored on the definition.
@@ -42,11 +42,11 @@ Implement project discovery and the markdown authoring model: scan the conventio
 
 ## Deliverables
 
-`@render-agents/sdk` (or an internal `loader` module re-exported by sdk):
+`@render-factory/sdk` (or an internal `loader` module re-exported by sdk):
 - `loadAgents` discovery + validation pipeline (runtime binding stubbed/injected).
 - Frontmatter parser (YAML) → typed `AgentFrontmatter` → validated `AgentDefinition`.
 - `_shared.md` merge function (pure, unit-testable in isolation).
-- Tier table + `resolveModelSpec(model?, provider?)` as a data-only `@render-agents/engine` module (single source of tiers; Sprint 06 extends it with provider inference + pricing).
+- Tier table + `resolveModelSpec(model?, provider?)` as a data-only `@render-factory/engine` module (single source of tiers; Sprint 06 extends it with provider inference + pricing).
 - Tool-reference resolver (source id / namespaced name → expanded model-facing names; collision detection).
 - Skill resolver producing `SkillMetadata[]`.
 - `ToolRegistry` + `SkillRegistry` discovery loaders.

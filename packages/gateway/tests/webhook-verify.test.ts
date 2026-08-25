@@ -6,7 +6,7 @@ import {
   MemoryJobQueue,
   MemoryDeltaBus,
   type RunStore,
-} from "@render-agents/store";
+} from "@render-factory/store";
 import {
   createGatewayApp,
   verifyWebhookRequest,
@@ -21,7 +21,7 @@ import {
   standardWebhooksVerify,
   type Channel,
   type WorkflowDefinition,
-} from "@render-agents/sdk";
+} from "@render-factory/sdk";
 
 // --- helpers -------------------------------------------------------------
 
@@ -85,7 +85,7 @@ const ENV_KEYS = [
   "STRIPE_WEBHOOK_SECRET",
   "WEBHOOK_SECRET",
   "NODE_ENV",
-  "RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY",
+  "RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY",
 ];
 const saved: Record<string, string | undefined> = {};
 afterEach(() => {
@@ -200,9 +200,9 @@ describe("webhookVerifyRequired", () => {
   });
 
   it("honors an explicit override either way", () => {
-    expect(webhookVerifyRequired({ RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY: "1" } as NodeJS.ProcessEnv)).toBe(true);
+    expect(webhookVerifyRequired({ RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY: "1" } as NodeJS.ProcessEnv)).toBe(true);
     expect(
-      webhookVerifyRequired({ NODE_ENV: "production", RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY: "0" } as NodeJS.ProcessEnv),
+      webhookVerifyRequired({ NODE_ENV: "production", RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY: "0" } as NodeJS.ProcessEnv),
     ).toBe(false);
   });
 });

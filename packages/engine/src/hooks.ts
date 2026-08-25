@@ -1,4 +1,4 @@
-import type { RunEvent, EventCategory, Logger } from "@render-agents/store";
+import type { RunEvent, EventCategory, Logger } from "@render-factory/store";
 
 export type HookResult =
   | { action: "continue"; event?: RunEvent }
