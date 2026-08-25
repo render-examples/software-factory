@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { validateToolInput } from "../src/schema-validate.js";
 import { ssrfFetch } from "../src/ssrf-fetch.js";
 import { defineTool, defineToolSource, ToolEnvironment } from "../src/tool-impl.js";
-import type { Logger } from "@render-agents/store";
+import type { Logger } from "@render-factory/store";
 
 const silentLogger: Logger = {
   debug: () => {},

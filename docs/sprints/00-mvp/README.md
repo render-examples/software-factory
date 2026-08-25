@@ -1,9 +1,9 @@
-# render-agents — MVP Sprint Plan
+# render-factory — MVP Sprint Plan
 
 **Status:** ✅ COMPLETE — all sprints (00–24) implemented across Waves 0–4.
 **Date:** 2026-06-26
 
-This directory decomposes the [render-agents specification](../specs/00-foundations.md) into an ordered set of MVP sprints, built **sequentially** in the numbered order. Each sprint is a self-contained build spec; this file is the index that groups them into waves and records the per-wave exit criteria. (Each sprint doc lists its own depends-on/unblocks for context; because the build is sequential, the index does not re-track them.)
+This directory decomposes the [render-factory specification](../specs/00-foundations.md) into an ordered set of MVP sprints, built **sequentially** in the numbered order. Each sprint is a self-contained build spec; this file is the index that groups them into waves and records the per-wave exit criteria. (Each sprint doc lists its own depends-on/unblocks for context; because the build is sequential, the index does not re-track them.)
 
 Read the [Foundations](../specs/00-foundations.md) (especially decisions D1–D11) and the [Porting Map](../specs/porting-map.md) before starting any sprint.
 
@@ -102,14 +102,14 @@ Three principles drive the ordering:
 
 | # | Sprint |
 |---|---|
-| [21](complete/21-scaffolder.md) | Scaffolder (`create-render-agents`) + default example project |
+| [21](complete/21-scaffolder.md) | Scaffolder (`create-render-factory`) + default example project |
 | [22](complete/22-dev-trace-viewer.md) | Dev-mode trace viewer (`/ui`) |
 | [23](complete/23-deployment-retention.md) | Deployment (`render.yaml`), configuration, retention cleanup |
 | [24](complete/24-hardening-release.md) | NFR hardening, docs, release/publish |
 
 **Status:** ✅ Complete — all Wave 4 sprints implemented.
 
-**Wave exit:** `npm create render-agents` scaffolds a working project that deploys to Render with one `render.yaml`; packages publish to npm; NFR targets are met.
+**Wave exit:** `npm create render-factory` scaffolds a working project that deploys to Render with one `render.yaml`; packages publish to npm; NFR targets are met.
 
 > The full operator-UI SPA described in [L6](../specs/06-operator-ui.md) is **deferred post-MVP** (per the [Porting Map](../specs/porting-map.md#3-not-ported-intentionally-dropped)). Sprint 22 ships the template's existing trace viewer as a read-only dev-mode stopgap.
 

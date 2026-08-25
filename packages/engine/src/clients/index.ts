@@ -48,7 +48,7 @@ function readEnv(name: string): string | undefined {
   const value = process.env[name];
   if (!value) {
     console.warn(
-      `[render-agents] API key env "${name}" is not set. ` +
+      `[render-factory] API key env "${name}" is not set. ` +
       `Model calls will fail until it is configured.`,
     );
   }

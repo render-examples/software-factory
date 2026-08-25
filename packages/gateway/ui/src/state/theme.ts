@@ -2,7 +2,7 @@
 // the default), "light", or "dark". The choice is persisted and applied by
 // toggling `data-theme` on <html> — styles.css keys light/dark tokens off it.
 
-const KEY = "render-agents-theme";
+const KEY = "render-factory-theme";
 
 export type ThemeChoice = "system" | "light" | "dark";
 

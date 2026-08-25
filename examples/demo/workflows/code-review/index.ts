@@ -1,4 +1,4 @@
-import { workflow } from "@render-agents/sdk";
+import { workflow } from "@render-factory/sdk";
 
 // Fan out to security + performance reviewers as isolated tasks, then a judge
 // makes the final structured decision via a memoized step. Inside a handler,

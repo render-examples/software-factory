@@ -6,9 +6,9 @@ import type {
   AgentResult,
   RunOptions,
   TaskOptions,
-} from "@render-agents/engine";
-import { RunPaused } from "@render-agents/engine";
-import { idempotencyKey } from "@render-agents/store";
+} from "@render-factory/engine";
+import { RunPaused } from "@render-factory/engine";
+import { idempotencyKey } from "@render-factory/store";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
 import { loadAgentsFromDir } from "./loader/load-agents.js";

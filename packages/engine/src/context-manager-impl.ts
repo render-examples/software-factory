@@ -1,4 +1,4 @@
-import type { ContentBlock, Message, RunEvent } from "@render-agents/store";
+import type { ContentBlock, Message, RunEvent } from "@render-factory/store";
 import type { ModelSpec } from "./agent.js";
 import type { ModelClient, CompleteResult } from "./model.js";
 import type {

@@ -1,5 +1,5 @@
-import type { RunEvent } from "@render-agents/store";
-import type { Tracer, SpanInfo, SpanOutcome } from "@render-agents/store";
+import type { RunEvent } from "@render-factory/store";
+import type { Tracer, SpanInfo, SpanOutcome } from "@render-factory/store";
 
 /**
  * A Tracer implementation that bridges `onStart`/`onEnd` into event

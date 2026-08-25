@@ -42,7 +42,7 @@ Implement the `ContextManager` and the default `auto` compaction strategy so the
 
 ## Deliverables
 
-`@render-agents/engine`:
+`@render-factory/engine`:
 - `ContextManager` default implementation + `auto` `CompactionStrategy`.
 - Token-estimation helper (per-model window sizing → default `maxContextTokens`).
 - `context.compacted` emission via `ContextPrepareContext.emit`.
@@ -52,7 +52,7 @@ Implement the `ContextManager` and the default `auto` compaction strategy so the
 
 ## Porting source
 
-- **New (D11)** — no direct source ([Porting Map](../specs/porting-map.md#1-from-agent-workflows-template-orchestration-kernel)). New code in `@render-agents/engine`. The summarization step itself uses the runtime's `ModelClient` (a cheap tier) to produce summaries.
+- **New (D11)** — no direct source ([Porting Map](../specs/porting-map.md#1-from-agent-workflows-template-orchestration-kernel)). New code in `@render-factory/engine`. The summarization step itself uses the runtime's `ModelClient` (a cheap tier) to produce summaries.
 
 ---
 

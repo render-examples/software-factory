@@ -3,7 +3,7 @@ import { SignJWT, exportJWK, generateKeyPair, createLocalJWKSet, type JWTVerifyG
 import { jwtAuthResolver } from "../src/jwt-auth.js";
 
 const ISSUER = "https://issuer.test";
-const AUDIENCE = "render-agents";
+const AUDIENCE = "render-factory";
 const KID = "test-key";
 
 let privateKey: CryptoKey;

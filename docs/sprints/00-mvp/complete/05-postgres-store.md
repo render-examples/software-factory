@@ -35,13 +35,13 @@ Implement the durable Postgres `RunStore` and `EventLogStore`: the canonical `ru
 - Token-level `text.delta` streaming (post-MVP; Sprint 17 streams `message.assistant`).
 - The SSE HTTP endpoint (Sprint 17) — this sprint delivers `tail`; the route consumes it.
 - Retention/cleanup job (Sprint 23).
-- Thread/approval/oauth *runtime behavior* (Sprints 17–19) — the tables exist here; their routes come later. The `ThreadStore`/`ApprovalStore`/`OAuthStore`/`ScheduleStore` **interfaces are owned by `@render-agents/store`** (Sprint 01), so their Postgres implementations belong in this package; they may be stubbed against these tables now or filled in alongside their gateway routes (Sprints 17–19) — see notes.
+- Thread/approval/oauth *runtime behavior* (Sprints 17–19) — the tables exist here; their routes come later. The `ThreadStore`/`ApprovalStore`/`OAuthStore`/`ScheduleStore` **interfaces are owned by `@render-factory/store`** (Sprint 01), so their Postgres implementations belong in this package; they may be stubbed against these tables now or filled in alongside their gateway routes (Sprints 17–19) — see notes.
 
 ---
 
 ## Deliverables
 
-`@render-agents/store`:
+`@render-factory/store`:
 - SQL migration files (or in-code DDL) + advisory-lock migration runner.
 - Postgres `EventLogStore` (`append`/`read`/`tail`).
 - Postgres `RunStore` reads over projections.
@@ -88,4 +88,4 @@ Implement the durable Postgres `RunStore` and `EventLogStore`: the canonical `ru
 - **Transaction scope vs latency:** folding many projections inside one transaction must stay under the 5ms append target. Batch projection upserts; index for the upsert keys.
 - **`seq` contention** on high-fan-out runs (many parallel tool/agent events): the per-run serialization point could bottleneck. Measure; consider per-run advisory locks vs a sequence.
 - **`LISTEN` connection management:** one dedicated client per gateway instance; handle reconnect + missed-NOTIFY gap by re-reading from last `seq`.
-- **Which ops-table stores land now vs later:** recommend creating all tables here (migrations are cheap and ordering-sensitive) but implementing `ThreadStore`/`ApprovalStore`/`OAuthStore` behavior in Sprints 17–19. These implementations live in `@render-agents/store` (the interfaces are store-owned per Sprint 01); the gateway sprints add only the routes that call them. Flag if the team prefers to defer table creation to those sprints (riskier for FK ordering).
+- **Which ops-table stores land now vs later:** recommend creating all tables here (migrations are cheap and ordering-sensitive) but implementing `ThreadStore`/`ApprovalStore`/`OAuthStore` behavior in Sprints 17–19. These implementations live in `@render-factory/store` (the interfaces are store-owned per Sprint 01); the gateway sprints add only the routes that call them. Flag if the team prefers to defer table creation to those sprints (riskier for FK ordering).

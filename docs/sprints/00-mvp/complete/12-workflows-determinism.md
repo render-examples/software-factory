@@ -41,7 +41,7 @@ Implement the composition layer: the `workflow()` helper that binds a handler in
 
 ## Deliverables
 
-`@render-agents/sdk`:
+`@render-factory/sdk`:
 - `workflow()` helper + `WorkflowDefinition` + discovery loader for `workflows/`.
 - Root-task registration on Render Workflows (`retries=0` default).
 - `WorkflowContext` impl incl. run-scoped `ctx.agents` and `ctx.step` memoization (events → `workflow_steps`).

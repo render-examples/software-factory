@@ -1,6 +1,6 @@
 # Architecture
 
-A concise tour of how render-agents fits together. The normative contract is the
+A concise tour of how render-factory fits together. The normative contract is the
 [layered spec](specs/00-foundations.md); this is the orientation map.
 
 ## The keystone: an append-only event log
@@ -27,17 +27,17 @@ reconstructs every projection byte-for-byte (proven by the parity suite).
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ @render-agents/gateway  — Hono: runs, SSE, HITL, OAuth,    │
+│ @render-factory/gateway  — Hono: runs, SSE, HITL, OAuth,    │
 │                            webhooks, /ui, /admin/retention │
 ├──────────────────────────────────────────────────────────┤
-│ @render-agents/sdk      — authoring (markdown → AgentSet), │
+│ @render-factory/sdk      — authoring (markdown → AgentSet), │
 │   loadAgents/loadWorkflows/loadToolSources, createRuntime, │
 │   workflow(), dispatch (run vs task), resumeRun            │
 ├──────────────────────────────────────────────────────────┤
-│ @render-agents/engine   — the agent loop (DefaultRunner),  │
+│ @render-factory/engine   — the agent loop (DefaultRunner),  │
 │   RunContext, tools/skills, model clients, context mgmt    │
 ├──────────────────────────────────────────────────────────┤
-│ @render-agents/store    — EventLogStore + projections,     │
+│ @render-factory/store    — EventLogStore + projections,     │
 │   memory + Postgres, threads, OAuth, retention             │
 └──────────────────────────────────────────────────────────┘
 ```

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createMemoryStore, buildEventRecord, idempotencyKey, type Tracer } from "@render-agents/store";
+import { createMemoryStore, buildEventRecord, idempotencyKey, type Tracer } from "@render-factory/store";
 import { InProcessRunContext } from "../src/run-context.js";
 import { passThroughContextManager } from "../src/context-manager.js";
 import { RunPaused } from "../src/agent.js";

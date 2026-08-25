@@ -106,7 +106,7 @@ by `principal.userId`. Store records carry the owner: `runs.userId`,
 `threads.userId`, `schedules.userId`, `oauth_connections.userId`.
 
 Identity is a pluggable `AuthResolver` (`createGatewayApp({ auth })`); the default
-maps a shared `RENDER_AGENTS_API_KEY` bearer to a single **operator**. Built-ins:
+maps a shared `RENDER_FACTORY_API_KEY` bearer to a single **operator**. Built-ins:
 
 - `jwtAuthResolver({ issuer, audience, jwksUri, userIdClaim?, roleFrom? })` —
   verifies a bearer JWT against an IdP JWKS (jose; issuer/audience/expiry/signature
@@ -153,7 +153,7 @@ gateway enforces each channel's declarative `verify` policy here:
   replay window for timestamped schemes,
 - a failed or missing-secret verification returns `401` and never dispatches,
 - a **missing** `verify` is fail-closed: rejected in production, warn-allowed in
-  dev (`webhookVerifyRequired`, env `RENDER_AGENTS_REQUIRE_WEBHOOK_VERIFY`),
+  dev (`webhookVerifyRequired`, env `RENDER_FACTORY_REQUIRE_WEBHOOK_VERIFY`),
 - `verify: "none"` is an explicit opt-out.
 
 A channel targets a **workflow** (dispatch a run) or an **agent** (resolve/create
@@ -161,7 +161,7 @@ the thread bound to `(channel, conversationId)` and drive a turn — the binding
 folded into `channel_conversations` so a re-entrant message resumes the same
 conversation). Built-in schemes are `github`, `slack`, `stripe`,
 `standard-webhooks`, and generic `hmac` (`packages/gateway/src/verify.ts`; config
-helpers in `@render-agents/sdk`).
+helpers in `@render-factory/sdk`).
 
 ---
 

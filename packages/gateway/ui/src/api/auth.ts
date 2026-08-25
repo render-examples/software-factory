@@ -5,7 +5,7 @@
 // and EventSource rides that same-origin cookie automatically; there is no bearer
 // token stored client-side. The operator name is a local UI preference only.
 
-const OPERATOR = "render-agents-operator";
+const OPERATOR = "render-factory-operator";
 
 export interface Whoami {
   userId: string;

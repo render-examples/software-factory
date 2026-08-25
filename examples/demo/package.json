@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/example-demo",
+  "name": "@render-factory/example-demo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,11 +16,11 @@
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },
   "dependencies": {
-    "@render-agents/engine": "workspace:*",
-    "@render-agents/gateway": "workspace:*",
-    "@render-agents/sandbox-render": "workspace:*",
-    "@render-agents/sdk": "workspace:*",
-    "@render-agents/store": "workspace:*",
+    "@render-factory/engine": "workspace:*",
+    "@render-factory/gateway": "workspace:*",
+    "@render-factory/sandbox-render": "workspace:*",
+    "@render-factory/sdk": "workspace:*",
+    "@render-factory/store": "workspace:*",
     "@renderinc/sdk": "^0.6.0",
     "tsx": "^4.19.2"
   },

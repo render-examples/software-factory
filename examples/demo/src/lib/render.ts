@@ -7,7 +7,7 @@
 // so keep this in sync with what you name it in the Render Dashboard. If Render
 // appends a suffix on a name collision, or you rename the service, either update
 // this constant or set RENDER_WORKFLOW_SLUG (env always takes precedence).
-export const WORKFLOW_SLUG = "render-agents";
+export const WORKFLOW_SLUG = "render-factory";
 
 /** Provide the slug default without clobbering an explicit env override. */
 export function ensureWorkflowSlug(): void {

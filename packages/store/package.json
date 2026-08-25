@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/store",
+  "name": "@render-factory/store",
   "version": "0.1.0",
   "type": "module",
   "publishConfig": {

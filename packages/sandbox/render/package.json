@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/sandbox-render",
+  "name": "@render-factory/sandbox-render",
   "version": "0.0.1",
   "type": "module",
   "exports": {
@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@render-agents/engine": "workspace:*",
+    "@render-factory/engine": "workspace:*",
     "@renderinc/sdk": "^0.7.0"
   },
   "devDependencies": {

@@ -10,15 +10,15 @@ This is the concise, implementation-aligned type map. Exact signatures are in so
 
 ## How To Read This
 
-- **Public import surface** is primarily `@render-agents/sdk` (`packages/sdk/src/index.ts`).
+- **Public import surface** is primarily `@render-factory/sdk` (`packages/sdk/src/index.ts`).
 - `sdk` re-exports many contracts that are physically defined in:
-  - `@render-agents/engine` (runtime/loop/tool contracts),
-  - `@render-agents/store` (event/store/persistence contracts).
-- `@render-agents/gateway` exports HTTP-oriented contracts and helpers.
+  - `@render-factory/engine` (runtime/loop/tool contracts),
+  - `@render-factory/store` (event/store/persistence contracts).
+- `@render-factory/gateway` exports HTTP-oriented contracts and helpers.
 
 ---
 
-## SDK Public Surface (`@render-agents/sdk`)
+## SDK Public Surface (`@render-factory/sdk`)
 
 Authoritative file: `packages/sdk/src/index.ts`
 
@@ -68,7 +68,7 @@ Authoritative file: `packages/sdk/src/testing.ts`
 
 ---
 
-## Engine-Owned Contracts (`@render-agents/engine`)
+## Engine-Owned Contracts (`@render-factory/engine`)
 
 Authoritative file: `packages/engine/src/index.ts`
 
@@ -108,7 +108,7 @@ Authoritative file: `packages/engine/src/index.ts`
 
 ---
 
-## Store-Owned Contracts (`@render-agents/store`)
+## Store-Owned Contracts (`@render-factory/store`)
 
 Authoritative file: `packages/store/src/index.ts`
 
@@ -153,7 +153,7 @@ Authoritative file: `packages/store/src/index.ts`
 
 ---
 
-## Gateway Public Surface (`@render-agents/gateway`)
+## Gateway Public Surface (`@render-factory/gateway`)
 
 Authoritative file: `packages/gateway/src/index.ts`
 
@@ -161,16 +161,16 @@ Authoritative file: `packages/gateway/src/index.ts`
 - route builders (`runRoutes`, `streamRoutes`, `threadRoutes`, `hitlRoutes`, `oauthRoutes`, `channelRoutes`, `uiRoutes`)
 - auth: `apiKeyAuth` middleware; `Principal`, `AuthResolver`, `ApiKeyAuthOptions` types; resolvers `bearerKeyResolver`, `jwtAuthResolver` (+ `JwtAuthOptions`), `composeResolvers`; ownership helpers `canAccess`, `getPrincipal`
 - per-user SSE stream tokens (`issueStreamToken`, `verifyStreamToken`, `DEFAULT_STREAM_TOKEN_TTL_MS`)
-- channel contract re-export (`Channel` + `ChannelInboundEvent`/`ChannelDeliverContext`/`ChannelTarget` from `@render-agents/sdk`; mounted via `channelRoutes`)
-- inbound verification runtime (`verifyWebhookRequest`, `webhookVerifyRequired`, `checkWebhookAuth`, `REQUIRE_WEBHOOK_VERIFY_ENV`; `VerifyContext`, `VerifyResult`, `WebhookAuthCheck`); re-exports the `@render-agents/sdk` verify config helpers for channel authors
+- channel contract re-export (`Channel` + `ChannelInboundEvent`/`ChannelDeliverContext`/`ChannelTarget` from `@render-factory/sdk`; mounted via `channelRoutes`)
+- inbound verification runtime (`verifyWebhookRequest`, `webhookVerifyRequired`, `checkWebhookAuth`, `REQUIRE_WEBHOOK_VERIFY_ENV`; `VerifyContext`, `VerifyResult`, `WebhookAuthCheck`); re-exports the `@render-factory/sdk` verify config helpers for channel authors
 - OAuth route contracts (`OAuthProviderConfig`, `OAuthRouteDeps`, `buildRefresher`)
 - trace-tree helpers (`buildSpanTree`, `flattenTree`, `perAgentCost`, `formatCost`, `formatDuration`)
 
 ---
 
-## Scaffolder Public Surface (`create-render-agents`)
+## Scaffolder Public Surface (`create-render-factory`)
 
-Authoritative file: `packages/create-render-agents/src/index.ts`
+Authoritative file: `packages/create-render-factory/src/index.ts`
 
 - CLI entry: `main`
 - `parseArgs`, `optionsFromArgs`, `validateProjectName`

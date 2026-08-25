@@ -44,7 +44,7 @@ jobs:
 
       - name: Verify declared dependencies are materialized
         # Guards against a partial/stale store where a package's declared deps
-        # (e.g. create-render-agents' @clack/prompts) never get linked, which
+        # (e.g. create-render-factory' @clack/prompts) never get linked, which
         # otherwise surfaces only as a confusing tsc TS2307 at build time.
         run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
 
@@ -69,12 +69,12 @@ jobs:
       - name: Verify dependency graph
         run: |
           # Ensure engine/store never import from sdk (guards acyclic graph)
-          if grep -r "from ['\"]@render-agents/sdk" packages/engine/src/ packages/store/src/ 2>/dev/null; then
+          if grep -r "from ['\"]@render-factory/sdk" packages/engine/src/ packages/store/src/ 2>/dev/null; then
             echo "ERROR: engine or store must not import from sdk"
             exit 1
           fi
           # Ensure store never imports from engine
-          if grep -r "from ['\"]@render-agents/engine" packages/store/src/ 2>/dev/null; then
+          if grep -r "from ['\"]@render-factory/engine" packages/store/src/ 2>/dev/null; then
             echo "ERROR: store must not import from engine"
             exit 1
           fi

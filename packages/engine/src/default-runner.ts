@@ -1,5 +1,5 @@
-import type { ContentBlock, ToolResult } from "@render-agents/store";
-import { EventRejectedError } from "@render-agents/store";
+import type { ContentBlock, ToolResult } from "@render-factory/store";
+import { EventRejectedError } from "@render-factory/store";
 import type { AgentDefinition, AgentInput, AgentOutput, Budget, SkillMetadata } from "./agent.js";
 import { RunPaused, RunCancelled } from "./agent.js";
 import type { AgentRunner } from "./context.js";
@@ -346,11 +346,11 @@ export class DefaultRunner implements AgentRunner {
   private async structuredOutput(
     agent: AgentDefinition,
     systemPrompt: string,
-    history: import("@render-agents/store").Message[],
+    history: import("@render-factory/store").Message[],
     finalContent: ContentBlock[],
     ctx: RunContext,
     budget: ResolvedBudget,
-    state: { iterations: number; tokensUsed: number; costUsed: number; runStartedAt: number; usage: import("@render-agents/store").TokenUsage },
+    state: { iterations: number; tokensUsed: number; costUsed: number; runStartedAt: number; usage: import("@render-factory/store").TokenUsage },
   ): Promise<AgentOutput> {
     const schema = agent.output;
     if (!schema) {
@@ -490,7 +490,7 @@ function requiresApproval(agent: AgentDefinition, expandedToolName: string): boo
  * loop always emits the matching `message.tool` immediately after dispatch, so
  * an answered turn is never the last message).
  */
-function pendingToolUses(history: import("@render-agents/store").Message[]): ToolUseBlock[] {
+function pendingToolUses(history: import("@render-factory/store").Message[]): ToolUseBlock[] {
   const last = history[history.length - 1];
   if (!last || last.role !== "assistant") return [];
   return last.content.filter((b): b is ToolUseBlock => b.type === "tool_use");

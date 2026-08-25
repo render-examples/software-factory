@@ -1,5 +1,5 @@
-import type { Channel, ChannelMatch } from "@render-agents/sdk";
-import { githubVerify } from "@render-agents/sdk";
+import type { Channel, ChannelMatch } from "@render-factory/sdk";
+import { githubVerify } from "@render-factory/sdk";
 import { normalizeGitHubEvent } from "../src/lib/github-events.js";
 
 // GitHub redelivers a webhook (manual "Redeliver" or automatic retry on

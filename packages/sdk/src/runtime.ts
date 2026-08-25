@@ -8,9 +8,9 @@ import type {
   OAuthStore,
   ScheduleStore,
   ScheduleRecord,
-} from "@render-agents/store";
-import type { JobQueue, DeltaBus } from "@render-agents/store";
-import { createStore, createJobQueue, createDeltaBus, createCancelStore } from "@render-agents/store";
+} from "@render-factory/store";
+import type { JobQueue, DeltaBus } from "@render-factory/store";
+import { createStore, createJobQueue, createDeltaBus, createCancelStore } from "@render-factory/store";
 import type {
   ModelClient,
   AgentRunner,
@@ -26,8 +26,8 @@ import type {
   OAuthRefresher,
   Suspender,
   SandboxProvider,
-} from "@render-agents/engine";
-import { DefaultRunner, DefaultContextManager, noopTracer, buildHookInterceptor, createSandboxToolSource } from "@render-agents/engine";
+} from "@render-factory/engine";
+import { DefaultRunner, DefaultContextManager, noopTracer, buildHookInterceptor, createSandboxToolSource } from "@render-factory/engine";
 import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment, isRootTriggerEnvironment } from "./dispatch.js";
 import type { WorkflowDefinition } from "./workflow.js";
 import type { Channel } from "./channel.js";
@@ -150,7 +150,7 @@ export interface AgentRuntime {
   /** Optional delegation limits (depth/fanout) for subagents. */
   readonly delegation?: Partial<DelegationLimits>;
   /** Resolved tool sources from the tools/ directory, keyed by source id. */
-  readonly toolSources: Map<string, import("@render-agents/engine").ToolSource>;
+  readonly toolSources: Map<string, import("@render-factory/engine").ToolSource>;
   /**
    * Discovered channels keyed by id. Populated by `loadProject`; used by the
    * gateway's channel routes (inbound) and the outbound delivery path
@@ -183,14 +183,14 @@ export interface CreateRuntimeOptions {
   suspender?: Suspender;
   jobQueue?: JobQueue;
   deltaBus?: DeltaBus;
-  /** Execution mode for root runs/resumes. Defaults to `RENDER_AGENTS_EXECUTION_MODE` env, else `inline`. */
+  /** Execution mode for root runs/resumes. Defaults to `RENDER_FACTORY_EXECUTION_MODE` env, else `inline`. */
   executionMode?: ExecutionMode;
   cancelStore?: CancelStore;
   delegation?: Partial<DelegationLimits>;
   hooks?: Hook[];
   contextManager?: ContextManager;
   /** Pre-resolved tool sources, keyed by source id. When provided (e.g. from the loader), agents can mount tools at run time. */
-  toolSources?: Map<string, import("@render-agents/engine").ToolSource>;
+  toolSources?: Map<string, import("@render-factory/engine").ToolSource>;
   /** Per-provider OAuth token refreshers (token-endpoint exchange). */
   oauthRefreshers?: Map<string, OAuthRefresher>;
   /** Discovered channels (keyed by id); usually populated by `loadProject`. */
@@ -270,7 +270,7 @@ export async function createRuntime(opts: CreateRuntimeOptions): Promise<AgentRu
   const jobQueue = opts.jobQueue ?? createJobQueue({ store, tenantId });
   const deltaBus = opts.deltaBus ?? createDeltaBus({ store });
   const executionMode: ExecutionMode =
-    opts.executionMode ?? (process.env.RENDER_AGENTS_EXECUTION_MODE === "queue" ? "queue" : "inline");
+    opts.executionMode ?? (process.env.RENDER_FACTORY_EXECUTION_MODE === "queue" ? "queue" : "inline");
   const agentDefinitions = new Map<string, AgentDefinition>();
   const workflows = new Map<string, WorkflowDefinition>();
   const toolSources = opts.toolSources ?? new Map();
@@ -386,7 +386,7 @@ function asScheduleStore(store: RunStore): ScheduleStore {
 function asOAuthStore(store: RunStore): OAuthStore {
   const candidate = store as Partial<OAuthStore>;
   if (typeof candidate.getConnection === "function") return store as unknown as OAuthStore;
-  const conns = new Map<string, import("@render-agents/store").OAuthConnection>();
+  const conns = new Map<string, import("@render-factory/store").OAuthConnection>();
   const k = (u: string, p: string) => `${u}:${p}`;
   return {
     async getConnection(u, p) { const c = conns.get(k(u, p)); return c ? { ...c } : undefined; },

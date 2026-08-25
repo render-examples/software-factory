@@ -1,4 +1,4 @@
-import type { RunEvent, Message } from "@render-agents/store";
+import type { RunEvent, Message } from "@render-factory/store";
 import type { ModelSpec } from "./agent.js";
 
 export type { ModelSpec };

@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RunStore, CancelStore, Tracer } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
+import type { RunStore, CancelStore, Tracer } from "@render-factory/store";
+import { buildEventRecord } from "@render-factory/store";
 import type {
   AgentDefinition,
   AgentInput,
@@ -14,8 +14,8 @@ import type {
   DelegationLimits,
   ToolSource,
   Suspender,
-} from "@render-agents/engine";
-import { noopTracer, RunPaused, RunCancelled } from "@render-agents/engine";
+} from "@render-factory/engine";
+import { noopTracer, RunPaused, RunCancelled } from "@render-factory/engine";
 import type { AgentRuntime, TaskDispatcher, DispatchOptions, RunnerRegistry, RootDispatchJob } from "./runtime.js";
 import type { WorkflowDefinition } from "./workflow.js";
 import { runAgentInProcess } from "./run-in-process.js";
@@ -60,10 +60,10 @@ export interface InProcessDispatcherOptions {
   getWorkflow?: (name: string) => WorkflowDefinition | undefined;
   tracer?: Tracer;
   delegation?: Partial<DelegationLimits>;
-  oauthStore?: import("@render-agents/store").OAuthStore;
-  oauthRefreshers?: Map<string, import("@render-agents/engine").OAuthRefresher>;
+  oauthStore?: import("@render-factory/store").OAuthStore;
+  oauthRefreshers?: Map<string, import("@render-factory/engine").OAuthRefresher>;
   /** Transient token-delta bus (D13) for live streaming; never persisted. */
-  deltaBus?: import("@render-agents/store").DeltaBus;
+  deltaBus?: import("@render-factory/store").DeltaBus;
   /** HITL suspension strategy (default: resume-by-replay). */
   suspender?: Suspender;
 }

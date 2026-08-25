@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createMemoryStore, buildEventRecord, idempotencyKey, type MemoryRunStore } from "@render-agents/store";
-import type { Tracer } from "@render-agents/store";
+import { createMemoryStore, buildEventRecord, idempotencyKey, type MemoryRunStore } from "@render-factory/store";
+import type { Tracer } from "@render-factory/store";
 import type { AgentDefinition } from "../src/agent.js";
 import { RunPaused } from "../src/agent.js";
 import type { ModelClient, CompleteResult } from "../src/model.js";
@@ -75,7 +75,7 @@ describe("DefaultRunner — budget enforcement (C2)", () => {
 });
 
 describe("DefaultRunner — strict HITL pause & resume (M1)", () => {
-  const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+  const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
   afterEach(() => { delete process.env[KEY]; });
 
   it("pauses on a gated tool, then resumes by replay once approved", async () => {

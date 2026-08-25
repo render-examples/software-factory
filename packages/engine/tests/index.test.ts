@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { estimateCost, RunPaused, MODEL_PRICING } from "../src/index.js";
 
-describe("@render-agents/engine", () => {
+describe("@render-factory/engine", () => {
   it("estimateCost computes USD cost from per-1M pricing", () => {
     // 1M input @ $3.00 + 1M output @ $15.00
     expect(estimateCost("claude-sonnet-4-6", { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBeCloseTo(18, 10);

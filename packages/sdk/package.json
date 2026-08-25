@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/sdk",
+  "name": "@render-factory/sdk",
   "version": "0.1.0",
   "type": "module",
   "publishConfig": {
@@ -30,8 +30,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@render-agents/engine": "workspace:*",
-    "@render-agents/store": "workspace:*",
+    "@render-factory/engine": "workspace:*",
+    "@render-factory/store": "workspace:*",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },

@@ -13,7 +13,7 @@
  *
  *   auth: composeResolvers(
  *     jwtAuthResolver({ issuer, audience, jwksUri }),
- *     bearerKeyResolver("RENDER_AGENTS_API_KEY", "operator"),
+ *     bearerKeyResolver("RENDER_FACTORY_API_KEY", "operator"),
  *   )
  *
  * Fail-closed: any verification error (bad signature, wrong iss/aud, expired,

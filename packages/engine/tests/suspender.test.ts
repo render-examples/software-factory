@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createMemoryStore, buildEventRecord, type RunStore, type Tracer } from "@render-agents/store";
+import { createMemoryStore, buildEventRecord, type RunStore, type Tracer } from "@render-factory/store";
 import { InProcessRunContext } from "../src/run-context.js";
 import { passThroughContextManager } from "../src/context-manager.js";
 import { ReplaySuspender, type Suspender, type SuspendRequest } from "../src/suspender.js";
@@ -29,7 +29,7 @@ function nativeStyleSuspender(getStore: () => RunStore, resolution: Record<strin
 }
 
 describe("Suspender seam", () => {
-  const KEY = "RENDER_AGENTS_STRICT_APPROVAL";
+  const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
   afterEach(() => { delete process.env[KEY]; });
 
   it("default (ReplaySuspender) unwinds requestInput via RunPaused", async () => {

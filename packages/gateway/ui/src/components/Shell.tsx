@@ -30,7 +30,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
         <MenuIcon />
       </button>
       <aside className="rail" aria-label="Primary">
-        <div className="brand"><b>render-agents</b><div className="muted">operator</div></div>
+        <div className="brand"><b>render-factory</b><div className="muted">operator</div></div>
         <nav aria-label="Sections">
           {GROUP_ORDER.map((group) => {
             const items = visible.filter((n) => n.group === group.id);

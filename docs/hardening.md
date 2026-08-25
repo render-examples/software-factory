@@ -4,7 +4,7 @@ This document tracks remaining hardening items after the recent gateway security
 
 ## 1) Enforce strict channel content type in production
 
-- Current state: strict channel `Content-Type` validation is available, but opt-in via `RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE`.
+- Current state: strict channel `Content-Type` validation is available, but opt-in via `RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE`.
 - Hardening action: enable this env var in production deployments.
 - Why: fail closed on malformed/non-standard ingress payloads for public `/channels/:id`.
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { AgentDefinition, OAuthRefresher } from "@render-agents/engine";
-import type { OAuthConnection } from "@render-agents/store";
+import type { AgentDefinition, OAuthRefresher } from "@render-factory/engine";
+import type { OAuthConnection } from "@render-factory/store";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { defineTool } from "../src/authoring.js";
 

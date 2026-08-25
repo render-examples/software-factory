@@ -1,15 +1,15 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
-import type { WorkflowDefinition, Channel } from "@render-agents/sdk";
-import type { InboundStore } from "@render-agents/store";
+import type { WorkflowDefinition, Channel } from "@render-factory/sdk";
+import type { InboundStore } from "@render-factory/store";
 import { checkWebhookAuth } from "../verify.js";
 
-// Re-exported from @render-agents/sdk so importers of this module can grab it too.
+// Re-exported from @render-factory/sdk so importers of this module can grab it too.
 export type { Channel };
 
-const MAX_CHANNEL_BODY_BYTES_ENV = "RENDER_AGENTS_MAX_CHANNEL_BODY_BYTES";
+const MAX_CHANNEL_BODY_BYTES_ENV = "RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES";
 const DEFAULT_MAX_CHANNEL_BODY_BYTES = 1_000_000;
-const REQUIRE_CHANNEL_CONTENT_TYPE_ENV = "RENDER_AGENTS_REQUIRE_CHANNEL_CONTENT_TYPE";
+const REQUIRE_CHANNEL_CONTENT_TYPE_ENV = "RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE";
 
 function maxChannelBodyBytesFromEnv(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[MAX_CHANNEL_BODY_BYTES_ENV];

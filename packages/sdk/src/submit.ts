@@ -1,4 +1,4 @@
-import type { JobKind } from "@render-agents/store";
+import type { JobKind } from "@render-factory/store";
 import type { AgentRuntime } from "./runtime.js";
 
 /**

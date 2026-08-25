@@ -5,7 +5,7 @@
 // one pair per plan referenced across the loaded agents (plus the default).
 //
 // Run it under the Render CLI local task server for local dev:
-//   pnpm --filter @render-agents/example-demo dev:workflows
+//   pnpm --filter @render-factory/example-demo dev:workflows
 //   (== `render workflows dev -- tsx src/workflows.ts`)
 // The gateway/worker then trigger these tasks by setting RENDER_USE_LOCAL_DEV=true.
 //
@@ -18,9 +18,9 @@ import {
   agentTaskHandler,
   computeRequiredPlans,
   RenderWorkflowsDispatcher,
-} from "@render-agents/sdk";
-import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-agents/sdk";
-import { resolveClient, resolveModelSpec } from "@render-agents/engine";
+} from "@render-factory/sdk";
+import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
+import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "./lib/render.js";
 
 const root = new URL("..", import.meta.url).pathname;

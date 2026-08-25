@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import type { DefineToolSpec } from "@render-agents/sdk";
+import type { DefineToolSpec } from "@render-factory/sdk";
 import { resolveWithinRoot, runShell } from "../../src/lib/workspace.js";
 
 // Model-facing filesystem + shell tools (mounted as workspace__exec,

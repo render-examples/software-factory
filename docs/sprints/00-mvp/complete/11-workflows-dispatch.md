@@ -43,7 +43,7 @@ Make `agent.task()` real: auto-register a bounded set of plan-tier dispatch task
 
 ## Deliverables
 
-`@render-agents/sdk` (+ a workflow-service registration entrypoint):
+`@render-factory/sdk` (+ a workflow-service registration entrypoint):
 - `TaskDispatcher` over Render Workflows + the in-process fallback dispatcher.
 - Startup registration of `agent@<plan>` tasks (bounded by referenced plans).
 - `agentTaskHandler` (reload-by-name + run).

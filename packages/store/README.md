@@ -1,6 +1,6 @@
-# @render-agents/store
+# @render-factory/store
 
-The persistence substrate for [render-agents](../../README.md): the append-only
+The persistence substrate for [render-factory](../../README.md): the append-only
 event log and the projections folded from it, with in-memory and Postgres
 implementations behind one interface.
 
@@ -14,4 +14,4 @@ implementations behind one interface.
 - **`createStore()`** — auto-selects Postgres (`DATABASE_URL`) or in-memory.
 - **`runRetention(store)`** — env-driven daily cleanup.
 
-In-memory and Postgres are kept behavior-identical by a parity test suite (run with `TEST_DATABASE_URL`). Has no `@render-agents/*` dependencies (graph root).
+In-memory and Postgres are kept behavior-identical by a parity test suite (run with `TEST_DATABASE_URL`). Has no `@render-factory/*` dependencies (graph root).

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createMemoryStore, MemoryCancelStore, MemoryDeltaBus, type MemoryRunStore, type StreamDelta, type Tracer } from "@render-agents/store";
+import { createMemoryStore, MemoryCancelStore, MemoryDeltaBus, type MemoryRunStore, type StreamDelta, type Tracer } from "@render-factory/store";
 import type { AgentDefinition } from "../src/agent.js";
 import type { ModelClient, CompleteResult, ModelStreamEvent } from "../src/model.js";
 import { DefaultRunner } from "../src/default-runner.js";

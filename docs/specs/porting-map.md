@@ -13,23 +13,23 @@ It is intentionally implementation-focused and does not define product behavior 
 
 | Concern | Primary package | Key modules |
 |---|---|---|
-| Runtime composition and boot wiring | `@render-agents/sdk` | `src/runtime.ts`, `src/agents.ts` |
-| Workflow orchestration + deterministic replay | `@render-agents/sdk` | `src/workflow.ts` |
-| Dispatcher integration (Render vs in-process) | `@render-agents/sdk` | `src/dispatch.ts` |
-| Chat worker execution lane | `@render-agents/sdk` | `src/worker.ts`, `src/submit.ts` |
-| Markdown/frontmatter loading and validation | `@render-agents/sdk` | `src/loader/*` |
-| Agent loop behavior | `@render-agents/engine` | `src/default-runner.ts` |
-| Run context (input gating, cancel, history, OAuth, deltas) | `@render-agents/engine` | `src/run-context.ts` |
-| Tool mounting and MCP sources | `@render-agents/engine` | `src/tool-impl.ts`, `src/mcp-client.ts` |
-| Context compaction | `@render-agents/engine` | `src/context-manager-impl.ts` |
-| Event taxonomy and append contracts | `@render-agents/store` | `src/events.ts` |
-| Projection folding | `@render-agents/store` | `src/projections.ts` |
-| Postgres/memory persistence | `@render-agents/store` | `src/pg/postgres-store.ts`, `src/memory-store.ts` |
-| Durable queue + delta streaming infra | `@render-agents/store` | `src/job-queue.ts`, `src/delta-bus.ts` |
-| Gateway route behavior and lane routing | `@render-agents/gateway` | `src/app.ts`, `src/routes/*` |
-| Auth/session behavior | `@render-agents/gateway` | `src/auth.ts`, `src/ui-session.ts` |
-| Operator UI behavior | `@render-agents/gateway` | `ui/src/*` |
-| Scaffolded project defaults | `create-render-agents` | `src/blueprint.ts`, `src/index.ts` |
+| Runtime composition and boot wiring | `@render-factory/sdk` | `src/runtime.ts`, `src/agents.ts` |
+| Workflow orchestration + deterministic replay | `@render-factory/sdk` | `src/workflow.ts` |
+| Dispatcher integration (Render vs in-process) | `@render-factory/sdk` | `src/dispatch.ts` |
+| Chat worker execution lane | `@render-factory/sdk` | `src/worker.ts`, `src/submit.ts` |
+| Markdown/frontmatter loading and validation | `@render-factory/sdk` | `src/loader/*` |
+| Agent loop behavior | `@render-factory/engine` | `src/default-runner.ts` |
+| Run context (input gating, cancel, history, OAuth, deltas) | `@render-factory/engine` | `src/run-context.ts` |
+| Tool mounting and MCP sources | `@render-factory/engine` | `src/tool-impl.ts`, `src/mcp-client.ts` |
+| Context compaction | `@render-factory/engine` | `src/context-manager-impl.ts` |
+| Event taxonomy and append contracts | `@render-factory/store` | `src/events.ts` |
+| Projection folding | `@render-factory/store` | `src/projections.ts` |
+| Postgres/memory persistence | `@render-factory/store` | `src/pg/postgres-store.ts`, `src/memory-store.ts` |
+| Durable queue + delta streaming infra | `@render-factory/store` | `src/job-queue.ts`, `src/delta-bus.ts` |
+| Gateway route behavior and lane routing | `@render-factory/gateway` | `src/app.ts`, `src/routes/*` |
+| Auth/session behavior | `@render-factory/gateway` | `src/auth.ts`, `src/ui-session.ts` |
+| Operator UI behavior | `@render-factory/gateway` | `ui/src/*` |
+| Scaffolded project defaults | `create-render-factory` | `src/blueprint.ts`, `src/index.ts` |
 
 ---
 
@@ -61,6 +61,6 @@ Before implementing a feature/fix, answer:
 1. Is this a loop behavior change (`engine`) or composition/routing change (`sdk`/`gateway`)?
 2. Does it require a new event or projection (`store/events.ts` + `store/projections.ts`)?
 3. Does it alter API/route contracts (`gateway/routes/*`)?
-4. Does scaffolding need to emit new defaults (`create-render-agents/blueprint.ts`)?
+4. Does scaffolding need to emit new defaults (`create-render-factory/blueprint.ts`)?
 5. Which spec layer must be updated to keep docs aligned?
 

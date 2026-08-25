@@ -1,4 +1,4 @@
-import type { Suspender, SuspendRequest } from "@render-agents/engine";
+import type { Suspender, SuspendRequest } from "@render-factory/engine";
 
 /**
  * Lane A (Render Workflows) realization of the `Suspender`: parking `await`s the

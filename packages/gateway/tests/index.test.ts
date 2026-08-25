@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createGatewayApp } from "../src/index.js";
 import type { GatewayOptions } from "../src/index.js";
-import type { Channel } from "@render-agents/sdk";
-import { createMemoryStore, MemoryCancelStore, MemoryJobQueue, MemoryDeltaBus, buildEventRecord, type RunStore } from "@render-agents/store";
+import type { Channel } from "@render-factory/sdk";
+import { createMemoryStore, MemoryCancelStore, MemoryJobQueue, MemoryDeltaBus, buildEventRecord, type RunStore } from "@render-factory/store";
 
 /**
  * Build a minimal `AgentRuntime` satisfying the full interface for route tests.
@@ -32,7 +32,7 @@ function makeTestRuntime(store: RunStore): GatewayOptions["runtime"] {
   };
 }
 
-describe("@render-agents/gateway", () => {
+describe("@render-factory/gateway", () => {
   it("Channel type is assignable", () => {
     const channel: Channel = {
       target: { workflow: "code-review", trigger: "github.pull_request" },
@@ -105,8 +105,8 @@ describe("@render-agents/gateway", () => {
   it("admin endpoints are authed: POST /admin/runs/reap without a key → 401", async () => {
     const store = createMemoryStore();
     await store.init();
-    const prev = process.env.RENDER_AGENTS_API_KEY;
-    process.env.RENDER_AGENTS_API_KEY = "secret-key";
+    const prev = process.env.RENDER_FACTORY_API_KEY;
+    process.env.RENDER_FACTORY_API_KEY = "secret-key";
     try {
       const app = createGatewayApp({ runtime: makeTestRuntime(store) }); // auth ON
       // No Authorization header → rejected before the handler runs.
@@ -116,8 +116,8 @@ describe("@render-agents/gateway", () => {
       const ok = await app.request("/admin/runs/reap", { method: "POST", headers: { authorization: "Bearer secret-key" } });
       expect(ok.status).toBe(200);
     } finally {
-      if (prev === undefined) delete process.env.RENDER_AGENTS_API_KEY;
-      else process.env.RENDER_AGENTS_API_KEY = prev;
+      if (prev === undefined) delete process.env.RENDER_FACTORY_API_KEY;
+      else process.env.RENDER_FACTORY_API_KEY = prev;
     }
   });
 

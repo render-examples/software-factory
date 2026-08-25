@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { idempotencyKey, buildEventRecord } from "@render-agents/store";
+import { idempotencyKey, buildEventRecord } from "@render-factory/store";
 import {
   workflow,
   bindWorkflow,
@@ -10,8 +10,8 @@ import {
   type RootDispatchJob,
   type TaskDispatcher,
   type WorkflowDefinition,
-} from "@render-agents/sdk";
-import { createTestRuntime, mockModel } from "@render-agents/sdk/testing";
+} from "@render-factory/sdk";
+import { createTestRuntime, mockModel } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 
 /** A dispatcher that records workflow-root triggers (stands in for Render's startTask). */
@@ -279,7 +279,7 @@ describe("gateway queue mode — agent threads", () => {
 
 describe("gateway queue mode — durable resume", () => {
   it("resolving an approval enqueues a durable resume job that drives the run to completion", async () => {
-    process.env.RENDER_AGENTS_STRICT_APPROVAL = "1";
+    process.env.RENDER_FACTORY_STRICT_APPROVAL = "1";
     try {
       let toolRuns = 0;
       const toolSources = new Map([
@@ -330,7 +330,7 @@ describe("gateway queue mode — durable resume", () => {
       expect(toolRuns).toBe(1);
       expect((await runtime.store.getRun(runId))?.status).toBe("completed");
     } finally {
-      delete process.env.RENDER_AGENTS_STRICT_APPROVAL;
+      delete process.env.RENDER_FACTORY_STRICT_APPROVAL;
     }
   });
 });

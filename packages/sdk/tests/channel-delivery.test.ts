@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
+import { buildEventRecord } from "@render-factory/store";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { deliverForRun } from "../src/channel-delivery.js";
 import { runWorker } from "../src/worker.js";

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildEventRecord } from "@render-agents/store";
-import { workflow, bindWorkflow, type WorkflowDefinition } from "@render-agents/sdk";
-import { createTestRuntime } from "@render-agents/sdk/testing";
+import { buildEventRecord } from "@render-factory/store";
+import { workflow, bindWorkflow, type WorkflowDefinition } from "@render-factory/sdk";
+import { createTestRuntime } from "@render-factory/sdk/testing";
 import { createGatewayApp } from "../src/index.js";
 import type { AuthResolver } from "../src/auth.js";
 
@@ -108,7 +108,7 @@ describe("multi-tenancy — thread ownership (CR-D1)", () => {
 
 describe("UI cookie session (CR-D1 / CR-19)", () => {
   it("login exchanges the key for a session; /whoami reflects it", async () => {
-    process.env.RENDER_AGENTS_API_KEY = "sekret";
+    process.env.RENDER_FACTORY_API_KEY = "sekret";
     const runtime = await createTestRuntime();
     // UI enabled (default) so /ui/login is mounted and the resolver accepts the cookie.
     const app = createGatewayApp({ runtime });
@@ -141,17 +141,17 @@ describe("UI cookie session (CR-D1 / CR-19)", () => {
     expect(who.status).toBe(200);
     expect(await who.json()).toMatchObject({ userId: "operator", role: "operator" });
 
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 
   it("still accepts the bearer header for API/curl callers", async () => {
-    process.env.RENDER_AGENTS_API_KEY = "sekret";
+    process.env.RENDER_FACTORY_API_KEY = "sekret";
     const runtime = await createTestRuntime();
     const app = createGatewayApp({ runtime });
     const who = await app.request("/whoami", { headers: { authorization: "Bearer sekret" } });
     expect(who.status).toBe(200);
     expect(await who.json()).toMatchObject({ role: "operator" });
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 });
 

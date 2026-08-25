@@ -1,5 +1,5 @@
 {
-  "name": "@render-agents/control-worker",
+  "name": "@render-factory/control-worker",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@render-agents/store": "workspace:*",
-    "@render-agents/policy": "workspace:*"
+    "@render-factory/store": "workspace:*",
+    "@render-factory/policy": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

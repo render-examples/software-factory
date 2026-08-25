@@ -40,7 +40,7 @@ Complete the observability model: every execution unit (workflow run, step, agen
 
 ## Deliverables
 
-`@render-agents/store` (+ engine wiring):
+`@render-factory/store` (+ engine wiring):
 - `Tracer` implementation emitting span events through `RunContext.emit`.
 - Span-attribute population for all five kinds at start/end.
 - Cost rollup into agent spans + run total (verify against the `runs`/`spans` projections).

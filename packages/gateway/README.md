@@ -1,10 +1,10 @@
-# @render-agents/gateway
+# @render-factory/gateway
 
-The deployable web service for [render-agents](../../README.md): a [Hono](https://hono.dev)
+The deployable web service for [render-factory](../../README.md): a [Hono](https://hono.dev)
 app exposing runs, streaming, HITL, OAuth, webhooks, and a dev trace viewer.
 
 ```ts
-import { startGateway } from "@render-agents/gateway";
+import { startGateway } from "@render-factory/gateway";
 const { port } = await startGateway({ runtime, workflows, defaultWorkflow: "code-review" });
 ```
 
@@ -19,4 +19,4 @@ const { port } = await startGateway({ runtime, workflows, defaultWorkflow: "code
 - `POST /admin/retention` — two-domain cleanup (wire to a daily cron).
 - `GET /ui` — dependency-free dev trace viewer (run list, span tree, per-agent cost, live SSE).
 
-Auth is API-key bearer (`RENDER_AGENTS_API_KEY`), with a `?key=` fallback for EventSource. `/health` and the `/ui` shell are unauthenticated.
+Auth is API-key bearer (`RENDER_FACTORY_API_KEY`), with a `?key=` fallback for EventSource. `/health` and the `/ui` shell are unauthenticated.

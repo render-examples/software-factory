@@ -1,5 +1,5 @@
-import type { CommandRecord, CommandStore } from "@render-agents/store";
-import { LeaseLostError } from "@render-agents/store";
+import type { CommandRecord, CommandStore } from "@render-factory/store";
+import { LeaseLostError } from "@render-factory/store";
 
 /**
  * Claim and process durable commands.

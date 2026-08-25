@@ -1,4 +1,4 @@
-# Sprint 21 — Scaffolder (`create-render-agents`) + Default Example
+# Sprint 21 — Scaffolder (`create-render-factory`) + Default Example
 
 **Status:** COMPLETE
 **Wave:** 4 — DX, Operability & Ship
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Build the `npm create render-agents` scaffolder: an interactive wizard that emits a working project in the spec's layout — agents, tools, a default workflow (code-review), `render.yaml`, `compose.yaml`, `package.json`, `tsconfig.json`, `.env` — so a new user goes from zero to a runnable, deployable agent system in one command.
+Build the `npm create render-factory` scaffolder: an interactive wizard that emits a working project in the spec's layout — agents, tools, a default workflow (code-review), `render.yaml`, `compose.yaml`, `package.json`, `tsconfig.json`, `.env` — so a new user goes from zero to a runnable, deployable agent system in one command.
 
 ---
 
@@ -44,7 +44,7 @@ Build the `npm create render-agents` scaffolder: an interactive wizard that emit
 
 ## Deliverables
 
-`create-render-agents`:
+`create-render-factory`:
 - Wizard (`@clack/prompts`), `buildFileMap`, blueprint emission adapted to the spec layout.
 - The default code-review example project (agents + tools + workflow + skill).
 - Generated `package.json`/`tsconfig.json`/`.env.example`/`compose.yaml`/`render.yaml`.
@@ -63,24 +63,24 @@ Build the `npm create render-agents` scaffolder: an interactive wizard that emit
 
 1. **Generate the canonical layout** so discovery (Sprint 02) finds everything by convention with no manual registration.
 2. **Default example = code-review**, matching the spec's running example (security/performance/judge fan-out + `ctx.step`), so a new user sees multi-agent + HITL + structured output immediately.
-3. **`.env.example` documents the env contract** (Sprint 23): `DATABASE_URL`, provider API keys, `PORT`, and the `RENDER_AGENTS_`-prefixed settings (`RENDER_AGENTS_API_KEY`, retention/encryption/approval vars) — but ships as `.example` (no secrets).
+3. **`.env.example` documents the env contract** (Sprint 23): `DATABASE_URL`, provider API keys, `PORT`, and the `RENDER_FACTORY_`-prefixed settings (`RENDER_FACTORY_API_KEY`, retention/encryption/approval vars) — but ships as `.example` (no secrets).
 4. **Local-first:** generated project runs in-memory with no Postgres (Wave 0 parity) and with `compose.yaml` Postgres for the durable path.
-5. **Keep the scaffolder dependency-light** — no `@render-agents/*` runtime deps; it only writes files + prompts.
+5. **Keep the scaffolder dependency-light** — no `@render-factory/*` runtime deps; it only writes files + prompts.
 
 ---
 
 ## Exit criteria / acceptance
 
-- `npm create render-agents@latest my-app` runs the wizard and emits a project in the spec layout.
+- `npm create render-factory@latest my-app` runs the wizard and emits a project in the spec layout.
 - The generated project: `pnpm install` + `build` succeed; `loadAgents()` discovers the agents/tools/skills/workflow without errors; the code-review workflow runs against a mock model (and a real model with keys).
 - Generated `render.yaml`/`compose.yaml`/`.env.example` are present and coherent with Sprint 23.
-- The scaffolder package has no runtime dependencies on `@render-agents/*`.
+- The scaffolder package has no runtime dependencies on `@render-factory/*`.
 - A CI smoke test scaffolds to a temp dir and builds/runs the example.
 
 ---
 
 ## Risks / open questions
 
-- **Version pinning of generated deps:** the generated `package.json` must reference published `@render-agents/*` versions (Sprint 24) — coordinate release ordering (scaffolder may pin `latest` or a known-good range).
+- **Version pinning of generated deps:** the generated `package.json` must reference published `@render-factory/*` versions (Sprint 24) — coordinate release ordering (scaffolder may pin `latest` or a known-good range).
 - **Wizard scope creep:** keep prompts minimal for MVP (name, PM, provider, Postgres toggle); defer multi-example selection if it complicates.
 - **`render.yaml` duplication:** the canonical manifest lives in Sprint 23; ensure the scaffolder embeds the same one (single source — generate from a shared template).

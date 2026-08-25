@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
-import { createMemoryStore } from "@render-agents/store";
+import { createMemoryStore } from "@render-factory/store";
 import { oauthRoutes, type OAuthProviderConfig } from "../src/index.js";
 
 function provider(): OAuthProviderConfig {
@@ -87,7 +87,7 @@ describe("gateway OAuth — connect / persist / revoke", () => {
 describe("operator UI (/ui)", () => {
   it("serves the SPA shell + hashed assets without auth", async () => {
     const { createGatewayApp } = await import("../src/index.js");
-    const { createMemoryStore, MemoryCancelStore } = await import("@render-agents/store");
+    const { createMemoryStore, MemoryCancelStore } = await import("@render-factory/store");
     const store = createMemoryStore();
     await store.init();
     const runtime = {
@@ -101,7 +101,7 @@ describe("operator UI (/ui)", () => {
     } as unknown as Parameters<typeof createGatewayApp>[0]["runtime"];
 
     // Auth ENABLED — the UI shell must still load (registered before auth).
-    process.env.RENDER_AGENTS_API_KEY = "test-key";
+    process.env.RENDER_FACTORY_API_KEY = "test-key";
     const app = createGatewayApp({ runtime });
 
     const shell = await app.request("/ui");
@@ -130,14 +130,14 @@ describe("operator UI (/ui)", () => {
     // The `?key=` fallback is rejected on non-SSE routes so the key can't leak
     // via logs/history/Referer (CR-05). It stays available for EventSource paths.
     expect((await app.request("/runs?key=test-key")).status).toBe(401);
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 });
 
 describe("gateway auth carve-outs (CR-01/CR-05)", () => {
   async function buildAuthedGateway() {
     const { createGatewayApp } = await import("../src/index.js");
-    const { createMemoryStore, MemoryCancelStore } = await import("@render-agents/store");
+    const { createMemoryStore, MemoryCancelStore } = await import("@render-factory/store");
     const store = createMemoryStore();
     await store.init();
     const runtime = {
@@ -152,12 +152,12 @@ describe("gateway auth carve-outs (CR-01/CR-05)", () => {
       scheduleStore: store, jobQueue: { countByStatus: async () => ({ queued: 0, running: 0, completed: 0, failed: 0 }) },
     } as unknown as Parameters<typeof createGatewayApp>[0]["runtime"];
 
-    const channel: import("@render-agents/sdk").Channel = {
+    const channel: import("@render-factory/sdk").Channel = {
       target: { workflow: "x" },
       match: () => null,
       parse: async () => ({ conversationId: "c", input: {} }),
     };
-    process.env.RENDER_AGENTS_API_KEY = "test-key";
+    process.env.RENDER_FACTORY_API_KEY = "test-key";
     const app = createGatewayApp({
       runtime,
       oauthProviders: new Map([["github", provider()]]),
@@ -171,7 +171,7 @@ describe("gateway auth carve-outs (CR-01/CR-05)", () => {
     // No code/state → 400 from the handler (NOT 401): it got past auth.
     const res = await app.request("/oauth/github/callback");
     expect(res.status).toBe(400);
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 
   it("inbound channels are reachable without the operator key (authed by signature)", async () => {
@@ -179,12 +179,12 @@ describe("gateway auth carve-outs (CR-01/CR-05)", () => {
     // Channel returns no match → 400 from the handler (NOT 401): it got past auth.
     const res = await app.request("/channels/github", { method: "POST" });
     expect(res.status).toBe(400);
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 
   it("OAuth authorize still requires the operator key", async () => {
     const app = await buildAuthedGateway();
     expect((await app.request("/oauth/github/authorize?userId=u1")).status).toBe(401);
-    delete process.env.RENDER_AGENTS_API_KEY;
+    delete process.env.RENDER_FACTORY_API_KEY;
   });
 });

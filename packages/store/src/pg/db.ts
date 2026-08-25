@@ -35,7 +35,7 @@ export function createPool(config: PoolConfig): pg.Pool {
   return new Pool({
     connectionString,
     max: config.max ?? 10,
-    application_name: config.applicationName ?? "render-agents",
+    application_name: config.applicationName ?? "render-factory",
     keepAlive: true,
   });
 }

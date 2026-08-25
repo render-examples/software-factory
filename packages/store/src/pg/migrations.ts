@@ -6,8 +6,8 @@ import type { Pool } from "pg";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Stable 64-bit advisory lock ID for render-agents migrations.
- * Derived from a hash of "render-agents:migrations" — must never change.
+ * Stable 64-bit advisory lock ID for render-factory migrations.
+ * Derived from a hash of "render-factory:migrations" — must never change.
  */
 const MIGRATION_LOCK_ID = "5765329847";
 

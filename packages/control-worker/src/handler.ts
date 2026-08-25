@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { CommandRecord, EventLogStore } from "@render-agents/store";
-import { buildEventRecord } from "@render-agents/store";
-import { admit, type PolicyDocument, type TriggerContext, type WorkTarget } from "@render-agents/policy";
+import type { CommandRecord, EventLogStore } from "@render-factory/store";
+import { buildEventRecord } from "@render-factory/store";
+import { admit, type PolicyDocument, type TriggerContext, type WorkTarget } from "@render-factory/policy";
 
 export interface HandlerDeps {
   events: EventLogStore;
