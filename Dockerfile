@@ -13,6 +13,7 @@ RUN apt-get update \
 
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
+ENV npm_config_verify_deps_before_run=false
 RUN npm install -g pnpm@11.9.0
 
 WORKDIR /app
