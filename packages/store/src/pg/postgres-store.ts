@@ -909,10 +909,11 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
        ORDER BY seq`,
       [runId, agentName, this.tenantId],
     );
-    return res.rows.map((row) => ({
+    const messages = res.rows.map((row) => ({
       role: row.role as Message["role"],
       content: coerceJson(row.content) as Message["content"],
     }));
+    return repairOrphanedToolUse(messages);
   }
 
   async getThreadAgentMessages(threadId: string, agentName: string): Promise<Message[]> {
@@ -924,10 +925,11 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
        ORDER BY r.started_at, r.id, rm.seq`,
       [threadId, agentName, this.tenantId],
     );
-    return res.rows.map((row) => ({
+    const messages = res.rows.map((row) => ({
       role: row.role as Message["role"],
       content: coerceJson(row.content) as Message["content"],
     }));
+    return repairOrphanedToolUse(messages);
   }
 
   async listSpans(runId: string): Promise<SpanRecord[]> {
@@ -1686,6 +1688,42 @@ function coerceJson(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+/**
+ * Repair message sequences where an assistant message ending in tool_use blocks
+ * has no matching tool_result message after it. This happens when a run crashes
+ * mid-tool-call. Anthropic's API requires every tool_use to have a corresponding
+ * tool_result. We synthesize error results for orphaned calls.
+ */
+function repairOrphanedToolUse(messages: Message[]): Message[] {
+  if (messages.length === 0) return messages;
+
+  const result: Message[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    result.push(msg);
+
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+
+    const toolUseBlocks = msg.content.filter(
+      (b) => (b as { type: string }).type === "tool_use",
+    ) as Array<{ type: "tool_use"; id: string; name: string }>;
+    if (toolUseBlocks.length === 0) continue;
+
+    const next = messages[i + 1];
+    if (next && next.role === "tool") continue;
+
+    const errorResults = toolUseBlocks.map((tu) => ({
+      type: "tool_result" as const,
+      tool_use_id: tu.id,
+      content: "(tool call interrupted — previous run crashed before result was recorded)",
+      is_error: true,
+    }));
+    result.push({ role: "tool", content: errorResults as unknown as Message["content"] });
+  }
+
+  return result;
 }
 
 function flattenContent(content: Array<{ type: string; text?: string }>): string {
