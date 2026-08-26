@@ -1,6 +1,8 @@
 import { task } from "@renderinc/sdk/workflows";
 import {
-  loadProject,
+  createRuntime,
+  loadAgents,
+  bindWorkflow,
   workflowTaskHandler,
   agentTaskHandler,
   computeRequiredPlans,
@@ -9,6 +11,17 @@ import {
 import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
 import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
+
+// Explicit tool imports
+import sandboxToolSource from "../tools/sandbox/index.js";
+import deployToolSource from "../tools/deploy/index.js";
+import startWorkflowToolSource, { bindWorkflows } from "../tools/start_workflow/index.js";
+
+// Explicit workflow imports
+import chatTurnWorkflow from "../workflows/chat-turn/index.js";
+import specToPrWorkflow from "../workflows/spec-to-pr/index.js";
+import prReviewWorkflow from "../workflows/pr-review/index.js";
+import prFixWorkflow from "../workflows/pr-fix/index.js";
 
 const root = new URL("../..", import.meta.url).pathname;
 
@@ -45,7 +58,29 @@ const dispatcher = new NativeChainingDispatcher({ workflowSlug: WORKFLOW_SLUG })
 const tenantId = process.env.TENANT_ID ?? "default";
 const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
 const model = resolveClient(spec);
-const { runtime, workflows } = await loadProject(root, { tenantId, model, runtime: { dispatcher } });
+
+const toolSources = new Map([
+  ["sandbox", sandboxToolSource],
+  ["deploy", deployToolSource],
+  ["start_workflow", startWorkflowToolSource],
+]);
+
+const runtime = await createRuntime({ tenantId, model, toolSources, dispatcher });
+
+// Load agents from .md files (plain fs.readFile, no .ts import)
+await loadAgents(root, runtime);
+
+// Bind workflows explicitly
+const workflows = new Map([
+  ["chat-turn", chatTurnWorkflow],
+  ["spec-to-pr", specToPrWorkflow],
+  ["pr-review", prReviewWorkflow],
+  ["pr-fix", prFixWorkflow],
+]);
+for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
+
+// Late-bind the workflow registry to the start_workflow tool
+bindWorkflows(workflows);
 
 const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
 
@@ -69,7 +104,7 @@ if (underRenderRuntime) {
   console.log(`workflows host serving Render Workflows tasks: ${taskNames}`);
 } else {
   console.log(
-    `workflows host ready (idle; no Render Workflows runtime — set RENDER_USE_LOCAL_DEV or run under \`render workflows dev\`). ` +
+    `workflows host ready (idle; no Render Workflows runtime). ` +
       `${runtime.agentDefinitions.size} agents, ${workflows.size} workflows, tasks: ${taskNames}`,
   );
   const keepAlive = setInterval(() => {}, 1 << 30);
