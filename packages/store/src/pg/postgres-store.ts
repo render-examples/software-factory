@@ -48,9 +48,9 @@ function jsonbStringify(value: unknown): string {
  * Each entry maps an event type to the payload field that may be large.
  */
 const DEFLATABLE_FIELDS: Array<{ types: string[]; field: string }> = [
-  { types: ["run.completed", "step.completed"], field: "result" },
+  { types: ["run.completed", "step.completed", "tool.result"], field: "result" },
   { types: ["message.assistant", "message.user", "message.tool"], field: "content" },
-  { types: ["tool.result"], field: "content" },
+  { types: ["tool.called"], field: "input" },
   { types: ["run.started"], field: "input" },
 ];
 
@@ -1716,9 +1716,9 @@ function repairOrphanedToolUse(messages: Message[]): Message[] {
 
     const errorResults = toolUseBlocks.map((tu) => ({
       type: "tool_result" as const,
-      tool_use_id: tu.id,
+      toolUseId: tu.id,
       content: "(tool call interrupted — previous run crashed before result was recorded)",
-      is_error: true,
+      isError: true,
     }));
     result.push({ role: "tool", content: errorResults as unknown as Message["content"] });
   }

@@ -12,7 +12,7 @@ You define agents in markdown, compose them as durable multi-step workflows, and
 
 The template ships with four connected workflows:
 
-- **Assistant (`chat-turn`)** — Slack message or API prompt → persistent thread → assistant response. After confirming the scope and target repository, the assistant can dispatch `spec-to-pr`.
+- **Assistant (`chat-turn`)** — Slack message or API prompt → persistent thread → assistant response. After confirming the scope and target repository, the assistant can dispatch `spec-to-pr`. The assistant is given the Render MCP
 - **Spec to PR (`spec-to-pr`)** — GitHub issue or assistant-approved spec → triage (for issues) → isolated sandbox → research → plan → implementation → best-effort tests → branch and pull request → originating surface notified.
 - **PR review (`pr-review`)** — opened or updated non-draft PR → security, performance, correctness, tests, and lint reviewers fan out in parallel → judge agent combines their findings → one GitHub review.
 - **PR fix (`pr-fix`)** — submitted review on an agent-created branch → branch reopened in a sandbox → implementer attempts follow-up changes → fixes pushed and the PR/thread notified.
@@ -158,11 +158,190 @@ The `assistant` agent can trigger `spec-to-pr` via the `start_workflow` tool. Th
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `sandbox` | Exec, read, write, search in Render Sandboxes (explicit `sandbox_id` per call) |
-| `start_workflow` | Dispatch a background workflow from a chat conversation |
-| `deploy` | Deploy to an environment (approval-gated) |
+Tools are the boundary between model reasoning and side effects. Local TypeScript
+functions, Render Sandbox operations, and remote MCP servers all enter the agent
+runtime through the same tool interface, so they share schema validation, approval
+gates, tracing, and structured error handling.
+
+### Authoring model
+
+Tool sources are conventionally discovered from:
+
+```text
+app/tools/<source-id>/index.ts
+```
+
+The directory name is the source ID that agents reference. No central registry is
+required: add the directory, default-export a tool source, and add it to an agent's
+Markdown frontmatter.
+
+```md
+---
+tools:
+  - github_repos
+  - sandbox
+  - render
+permissions:
+  requireApproval:
+    - render__trigger_deploy
+---
+```
+
+An agent only sees the tools it declares. `tools` is the runtime allowlist, not just
+prompt guidance.
+
+Naming depends on the source shape:
+
+- A single local tool is exposed as `<source-id>`.
+- A multi-tool local source is exposed as `<source-id>__<tool-name>`.
+- MCP tools are always exposed as `<source-id>__<server-tool-name>`.
+- Referencing a bare source ID mounts every tool in that source.
+- Referencing a namespaced tool such as `github__get_file` mounts only that tool.
+
+Approvals can gate an entire source or one namespaced operation:
+
+```md
+tools: [github]
+permissions:
+  requireApproval:
+    - github__push_code
+```
+
+Source IDs and approval references are validated when the project loads. Dynamic MCP
+tool names are resolved from the server when an agent mounts the source; an unknown
+namespaced tool is skipped with a runtime warning.
+
+### Built-in tool sources
+
+| Source | Type | Description |
+|--------|------|-------------|
+| `sandbox` | Local multi-tool source | Execute commands and read, write, patch, or search files in Render Sandboxes. Calls use an explicit `sandbox_id`. |
+| `github_repos` | Local tool | List or search repositories available to the configured GitHub token. |
+| `start_workflow` | Local tool | Dispatch a durable background workflow while preserving the calling thread. |
+| `render` | HTTP MCP source | Mount tools advertised by the Render MCP server under `render__*`. |
+| `deploy` | Local demo tool | Demonstrates approval, pause, and resume. It currently returns a synthetic release rather than performing a real deployment. |
+
+### Add a local tool
+
+Create `app/tools/get_issue/index.ts`:
+
+```ts
+import { defineTool } from "@render-factory/sdk";
+
+export default defineTool({
+  name: "get_issue",
+  description: "Read one GitHub issue.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "Repository as owner/name" },
+      number: { type: "number", description: "Issue number" },
+    },
+    required: ["repo", "number"],
+  },
+  async invoke(input, ctx) {
+    const { repo, number } = input as { repo: string; number: number };
+    const token = ctx.env("GITHUB_TOKEN");
+    if (!token) return { content: "GITHUB_TOKEN is not set", isError: true };
+
+    const response = await ctx.fetch(
+      `https://api.github.com/repos/${repo}/issues/${number}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      return {
+        content: `GitHub returned ${response.status}`,
+        isError: true,
+      };
+    }
+
+    return JSON.stringify(await response.json());
+  },
+});
+```
+
+Then grant it to an agent:
+
+```md
+---
+tools: [get_issue]
+---
+```
+
+`defineTool` accepts a JSON Schema for model input and an async `invoke` function.
+The invocation can return a string or `{ content, isError }`. Its context provides
+the run's abort signal, logger, environment lookup, run ID, OAuth connections, and
+an SSRF-guarded `fetch`.
+
+For a group of related operations, export a source created with
+`defineToolSource(...)`. The tools are then namespaced, for example
+`github__get_file` and `github__push_code`, so agents can mount the whole source or
+individual operations.
+
+### Add an MCP server
+
+MCP servers use the same directory convention and agent allowlist. The runtime
+connects when the source is mounted, discovers the server's tools and input schemas,
+namespaces them with the directory ID, and closes the connection when the run
+environment is disposed.
+
+#### Streamable HTTP
+
+Create `app/tools/linear/index.ts`:
+
+```ts
+import { defineMcpSource } from "@render-factory/sdk";
+
+export default defineMcpSource({
+  transport: "http",
+  url: "https://mcp.example.com/mcp",
+  headers: () => ({
+    Authorization: `Bearer ${process.env.LINEAR_MCP_TOKEN}`,
+  }),
+});
+```
+
+If the server advertises `get_issue` and `update_issue`, agents see
+`linear__get_issue` and `linear__update_issue`:
+
+```md
+---
+tools:
+  - linear__get_issue
+  - linear__update_issue
+permissions:
+  requireApproval:
+    - linear__update_issue
+---
+```
+
+#### Stdio
+
+Local or packaged MCP servers can be started as subprocesses:
+
+```ts
+import { defineMcpSource } from "@render-factory/sdk";
+
+export default defineMcpSource({
+  transport: "stdio",
+  command: "npx",
+  args: ["-y", "@example/acme-mcp-server"],
+  env: {
+    ACME_API_KEY: process.env.ACME_API_KEY ?? "",
+  },
+});
+```
+
+Stdio servers do not inherit the service's full environment. They receive only a
+small process-launch environment plus values explicitly declared in `env`, which
+prevents unrelated model, database, and encryption credentials from leaking into
+tool subprocesses.
 
 ---
 
