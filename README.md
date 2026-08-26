@@ -48,10 +48,7 @@ render-factory/
 │   ├── sdk/                   # Runtime, workflows, dispatch, loading
 │   ├── store/                 # Event log, projections, surfaces, items
 │   ├── gateway/               # HTTP service, auth, routes, SSE, operator UI
-│   ├── sandbox/render/        # Render Sandbox provider
-│   ├── channels/slack/        # Slack streaming components
-│   ├── policy/                # Policy engine
-│   └── control-worker/        # Durable command queue
+│   └── sandbox/render/        # Render Sandbox provider
 ├── app/                       # Deployable application
 │   ├── agents/                # Agent definitions (.md)
 │   ├── tools/                 # sandbox, deploy, start_workflow
