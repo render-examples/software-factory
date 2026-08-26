@@ -11,8 +11,8 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/server.ts",
-    "start": "node dist/src/server.js",
-    "workflows": "node dist/src/workflows.js",
+    "start": "node --import tsx/esm dist/src/server.js",
+    "workflows": "node --import tsx/esm dist/src/workflows.js",
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },
   "dependencies": {
