@@ -101,9 +101,8 @@ export type {
   ResolveModelResult,
 } from "@render-factory/engine";
 export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-factory/engine";
-export { ReplaySuspender, replaySuspender } from "@render-factory/engine";
-export { resolveModelSpec, isTierAlias, inferProvider } from "@render-factory/engine";
-export { defineTool as engineDefineTool, defineToolSource, ToolEnvironment, buildToolContext, ssrfFetch, validateToolInput } from "@render-factory/engine";
+export { resolveModelSpec } from "@render-factory/engine";
+export { defineToolSource } from "@render-factory/engine";
 
 // --- SDK-defined (composition/orchestration) ---
 export type {
@@ -168,8 +167,6 @@ export {
   isRootTriggerEnvironment,
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
-
-export { NativeWorkflowsSuspender } from "./native-suspender.js";
 
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 
