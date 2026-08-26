@@ -23,6 +23,9 @@ import specToPrWorkflow from "../workflows/spec-to-pr/index.js";
 import prReviewWorkflow from "../workflows/pr-review/index.js";
 import prFixWorkflow from "../workflows/pr-fix/index.js";
 
+// Explicit channel imports (needed for outbound delivery in chat-turn)
+import slackChannel from "../channels/slack.js";
+
 const root = new URL("../..", import.meta.url).pathname;
 
 ensureWorkflowSlug();
@@ -65,7 +68,8 @@ const toolSources = new Map([
   ["start_workflow", startWorkflowToolSource],
 ]);
 
-const runtime = await createRuntime({ tenantId, model, toolSources, dispatcher });
+const channels = new Map([["slack", slackChannel]]);
+const runtime = await createRuntime({ tenantId, model, toolSources, dispatcher, channels });
 
 // Load agents from .md files (plain fs.readFile, no .ts import)
 await loadAgents(root, runtime);
