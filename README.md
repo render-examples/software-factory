@@ -1,6 +1,6 @@
 # render-factory
 
-A framework for building AI coding agents on Render. Markdown-first agent authoring, durable workflow orchestration, sandboxed code execution, and multi-channel delivery (Slack, GitHub).
+A framework for building and deploying coding agents on Render. Markdown-first agent authoring, durable workflow orchestration, sandboxed code execution, and multi-channel delivery (Slack, GitHub).
 
 ---
 
