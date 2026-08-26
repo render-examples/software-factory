@@ -3,12 +3,13 @@ import * as path from "node:path";
 import type { DefineToolSpec } from "@render-factory/sdk";
 import { resolveWithinRoot, runShell } from "../../lib/workspace.js";
 
-// Model-facing filesystem + shell tools (mounted as workspace__exec,
-// workspace__read_file, …). They operate on the run's checkout, confined under
-// the workspace root so a tool call can't read/write outside it. This is a
-// trusted-repo demo substrate (child_process), not a hardened sandbox — the
-// guardrails are: path confinement, a command denylist, an exec timeout, and an
-// output cap. Swap in a real sandbox (MCP/E2B) for untrusted code.
+// WARNING: These tools run commands on the HOST filesystem (the gateway/workflow
+// container), NOT inside a sandboxed environment. Only mount this source on
+// agents that operate on trusted repos in ephemeral containers. For untrusted
+// code or public-facing agents, use the `sandbox` tool source instead (which
+// executes in an isolated Render sandbox).
+//
+// Guardrails: path confinement, command denylist, exec timeout, output cap.
 
 const MAX_OUTPUT = 20_000;
 const MAX_FILE = 100_000;
@@ -157,5 +158,103 @@ const listDir: DefineToolSpec = {
   },
 };
 
-const tools: DefineToolSpec[] = [exec, readFile, writeFile, applyPatch, listDir];
+const grep: DefineToolSpec = {
+  name: "grep",
+  description:
+    "Search for a pattern (regex or literal) in the checkout using ripgrep. Returns " +
+    "structured matches with file paths and line numbers. Much better signal than " +
+    "raw `rg` output via exec.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      pattern: { type: "string", description: "Regex pattern to search for." },
+      path: { type: "string", description: "File or directory to search within (relative to checkout). Defaults to '.'." },
+      glob: { type: "string", description: "File glob filter, e.g. '*.ts' or '*.py'." },
+      maxResults: { type: "number", description: "Maximum matches to return (default 50)." },
+      caseSensitive: { type: "boolean", description: "Case-sensitive search (default true)." },
+    },
+    required: ["pattern"],
+  },
+  async invoke(input) {
+    const { pattern, path: searchPath, glob: fileGlob, maxResults, caseSensitive } = (input ?? {}) as {
+      pattern: string; path?: string; glob?: string; maxResults?: number; caseSensitive?: boolean;
+    };
+    if (!pattern) return { content: "grep: `pattern` is required", isError: true };
+
+    let dir: string;
+    try {
+      dir = resolveWithinRoot(searchPath ?? ".");
+    } catch (err) {
+      return { content: String(err instanceof Error ? err.message : err), isError: true };
+    }
+
+    const limit = Math.min(maxResults ?? 50, 200);
+    const args = ["rg", "--json", "-m", String(limit)];
+    if (caseSensitive === false) args.push("-i");
+    if (fileGlob) args.push("-g", fileGlob);
+    args.push("--", pattern, ".");
+
+    const r = await runShell(args.map((a) => (a.includes(" ") ? `'${a}'` : a)).join(" "), { cwd: dir });
+
+    if (r.code === 1 && !r.stdout.trim()) return "No matches found.";
+    if (r.code > 1) return { content: `grep failed: ${truncate(r.stderr, 500)}`, isError: true };
+
+    const matches: { file: string; line: number; text: string }[] = [];
+    for (const line of r.stdout.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === "match") {
+          const relPath = obj.data?.path?.text ?? "";
+          const lineNum = obj.data?.line_number ?? 0;
+          const text = obj.data?.lines?.text?.trimEnd() ?? "";
+          matches.push({ file: relPath, line: lineNum, text });
+        }
+      } catch { continue; }
+    }
+
+    if (matches.length === 0) return "No matches found.";
+    const out = matches.map((m) => `${m.file}:${m.line}: ${m.text}`).join("\n");
+    return truncate(out);
+  },
+};
+
+const diff: DefineToolSpec = {
+  name: "diff",
+  description:
+    "Show the current uncommitted changes (staged + unstaged) as a structured summary. " +
+    "Useful for reviewing what the implementer has changed before committing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      cwd: { type: "string", description: "Repo checkout path. Defaults to the workspace root." },
+      stat: { type: "boolean", description: "If true, return only the diffstat summary (default false)." },
+    },
+    required: [],
+  },
+  async invoke(input) {
+    const { cwd, stat } = (input ?? {}) as { cwd?: string; stat?: boolean };
+    let dir: string;
+    try {
+      dir = cwd ? resolveWithinRoot(cwd) : resolveWithinRoot(".");
+    } catch (err) {
+      return { content: String(err instanceof Error ? err.message : err), isError: true };
+    }
+
+    const statFlag = stat ? "--stat" : "";
+    const staged = await runShell(`git diff --cached ${statFlag}`, { cwd: dir });
+    const unstaged = await runShell(`git diff ${statFlag}`, { cwd: dir });
+    const untracked = await runShell("git ls-files --others --exclude-standard", { cwd: dir });
+
+    const parts: string[] = [];
+    if (staged.stdout.trim()) parts.push(`## Staged\n${staged.stdout.trim()}`);
+    if (unstaged.stdout.trim()) parts.push(`## Unstaged\n${unstaged.stdout.trim()}`);
+    if (untracked.stdout.trim()) parts.push(`## Untracked\n${untracked.stdout.trim()}`);
+
+    if (parts.length === 0) return "No uncommitted changes.";
+    return truncate(parts.join("\n\n"), MAX_OUTPUT);
+  },
+};
+
+const tools: DefineToolSpec[] = [exec, readFile, writeFile, applyPatch, listDir, grep, diff];
 export default tools;

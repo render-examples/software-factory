@@ -1,15 +1,8 @@
 import { workflow } from "@render-factory/sdk";
 import { githubFromEnv, type PullFile, type ReviewComment } from "../../lib/github.js";
 import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
-
-// PR reviewer (trigger: pull_request). Fans out to four specialist reviewers as
-// isolated Render Workflows tasks (.task()), then a judge makes the final
-// structured decision and the workflow submits a real GitHub review (APPROVE /
-// REQUEST_CHANGES) in a deterministic step.
-//
-// Each .task() dispatches an `agent@<plan>` task on the Workflows service, so the
-// four reviewers run concurrently in their own scale-to-zero containers — the
-// fan-out this demo showcases. (They only need the diff text; no shared FS.)
+import { RenderSandboxProvider } from "@render-factory/sandbox-render";
+import { collectExecOutput } from "@render-factory/engine";
 
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review"]);
 const MAX_DIFF_CHARS = 60_000;
@@ -52,36 +45,61 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
 
   if (files === 0) return { skipped: "no files changed" };
 
-  // Fan out to specialist reviewers as isolated, concurrent tasks.
-  const [security, performance, correctness, tests] = await Promise.all([
-    ctx.agents.get("security").task(diff),
-    ctx.agents.get("performance").task(diff),
-    ctx.agents.get("correctness").task(diff),
-    ctx.agents.get("tests").task(diff),
-  ]);
+  // Spin up a sandbox for the lint agent to run the project's linter
+  const provider = new RenderSandboxProvider();
+  const sandbox = await provider.create({ metadata: { pr: `${repo.owner}/${repo.repo}#${pull.number}` } });
+  const sandboxId = sandbox.id;
+  const dir = "/workspace";
 
-  const verdict = await ctx.step("judge", async () => {
-    const combined = [
-      `## Security\n${security.text}`,
-      `## Performance\n${performance.text}`,
-      `## Correctness\n${correctness.text}`,
-      `## Tests\n${tests.text}`,
-    ].join("\n\n");
-    const out = await ctx.agents.get("judge").run<Verdict>(
-      `Pull request #${pull.number}: ${pull.title}\n\n${pull.body}\n\n` +
-        `Specialist reviews:\n\n${combined}\n\nDiff under review:\n\n${diff}`,
+  try {
+    const token = process.env.GITHUB_TOKEN;
+    if (token) {
+      await sandbox.exec(
+        `git config --global credential.helper store && ` +
+        `printf 'https://x-access-token:%s@github.com\\n' '${token}' > ~/.git-credentials`,
+      );
+    }
+    await sandbox.exec(
+      `git clone https://github.com/${repo.owner}/${repo.repo}.git ${dir} && cd ${dir} && git fetch origin pull/${pull.number}/head:pr && git checkout pr`,
     );
-    return (out.data ?? { decision: "request_changes", summary: out.text }) as Verdict;
-  });
 
-  await ctx.step("submit-review", async () => {
-    await gh.createReview(repo, pull.number, {
-      event: verdict.decision === "approve" ? "APPROVE" : "REQUEST_CHANGES",
-      body: `🤖 **Automated review — ${verdict.decision === "approve" ? "Approved" : "Changes requested"}**\n\n${verdict.summary}`,
-      comments: verdict.inline_comments,
+    const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
+
+    // Fan out to specialist reviewers + lint as concurrent tasks
+    const [security, performance, correctness, tests, lint] = await Promise.all([
+      ctx.agents.get("security").task(diff),
+      ctx.agents.get("performance").task(diff),
+      ctx.agents.get("correctness").task(diff),
+      ctx.agents.get("tests").task(diff),
+      ctx.agents.get("lint").task(sandboxContext),
+    ]);
+
+    const verdict = await ctx.step("judge", async () => {
+      const combined = [
+        `## Security\n${security.text}`,
+        `## Performance\n${performance.text}`,
+        `## Correctness\n${correctness.text}`,
+        `## Tests\n${tests.text}`,
+        `## Lint\n${lint.text}`,
+      ].join("\n\n");
+      const out = await ctx.agents.get("judge").run<Verdict>(
+        `Pull request #${pull.number}: ${pull.title}\n\n${pull.body}\n\n` +
+          `Specialist reviews:\n\n${combined}\n\nDiff under review:\n\n${diff}`,
+      );
+      return (out.data ?? { decision: "request_changes", summary: out.text }) as Verdict;
     });
-    return { submitted: true };
-  });
 
-  return { decision: verdict.decision, pr: pull.htmlUrl };
+    await ctx.step("submit-review", async () => {
+      await gh.createReview(repo, pull.number, {
+        event: verdict.decision === "approve" ? "APPROVE" : "REQUEST_CHANGES",
+        body: `**Automated review — ${verdict.decision === "approve" ? "Approved" : "Changes requested"}**\n\n${verdict.summary}`,
+        comments: verdict.inline_comments,
+      });
+      return { submitted: true };
+    });
+
+    return { decision: verdict.decision, pr: pull.htmlUrl };
+  } finally {
+    await sandbox.terminate();
+  }
 });

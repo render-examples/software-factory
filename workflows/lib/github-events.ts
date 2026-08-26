@@ -123,11 +123,11 @@ export function normalizeGitHubEvent(event: string, payload: unknown): Normalize
     };
   }
 
-  if (event === "pull_request" && p.repository && p.pull_request) {
+  if ((event === "pull_request" || event === "pull_request_review") && p.repository && p.pull_request) {
     return {
       kind: "pull",
-      event,
-      action: p.action ?? "",
+      event: "pull_request",
+      action: event === "pull_request_review" ? "review_submitted" : (p.action ?? ""),
       repo: repoInfo(p.repository),
       pull: {
         number: p.pull_request.number,
