@@ -134,10 +134,13 @@ export function workflow(
         try {
           await dispatcher.dispatchRoot({ workflow: boundName, runId, plan: resolvedOpts.plan });
         } catch (err) {
+          const detail = err instanceof Error
+            ? (err.cause ? `${err.message} | cause: ${JSON.stringify(err.cause)}` : err.message)
+            : JSON.stringify(err);
           await store.events.append(
             buildEventRecord(
               runId,
-              { type: "run.failed", error: `failed to dispatch root to workflows host: ${err instanceof Error ? err.message : String(err)}` },
+              { type: "run.failed", error: `failed to dispatch root to workflows host: ${detail}` },
               { agentName: boundName, spanId: runId },
             ),
           );
