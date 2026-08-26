@@ -11,10 +11,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
-# Symlink tsx to a stable path so start commands can use it without pnpm
-RUN ln -s /app/node_modules/.bin/tsx /usr/local/bin/tsx
-
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["tsx", "workflows/dist/src/server.js"]
+CMD ["node", "workflows/dist/src/server.js"]
