@@ -8,10 +8,11 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "workflows": "tsx src/workflows.ts",
+    "start": "node dist/src/server.js",
+    "workflows": "node dist/src/workflows.js",
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },
   "dependencies": {
