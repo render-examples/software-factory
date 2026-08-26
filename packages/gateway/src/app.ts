@@ -318,8 +318,9 @@ export function createGatewayApp(opts: GatewayOptions) {
     const text = typeof input === "string" ? input : (JSON.stringify(input) ?? "");
 
     // Continue an in-flight conversation, or reject if busy / awaiting approval.
+    // Only interactive runs block new messages — background workflows run concurrently.
     const active = (await store.listRuns({ threadId, limit: 50 })).find(
-      (r) => r.status === "running" || r.status === "paused" || r.status === "pending",
+      (r) => (r.status === "running" || r.status === "paused" || r.status === "pending") && r.kind === "interactive",
     );
     if (active) {
       if (active.status !== "paused") {
