@@ -1,8 +1,26 @@
-import { loadProject } from "@render-factory/sdk";
+import {
+  createRuntime,
+  loadAgents,
+  bindWorkflow,
+} from "@render-factory/sdk";
 import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { startGateway } from "@render-factory/gateway";
 import { ensureWorkflowSlug } from "../lib/render.js";
-import { bindWorkflows } from "../tools/start_workflow/index.js";
+
+// Explicit tool imports
+import sandboxToolSource from "../tools/sandbox/index.js";
+import deployToolSource from "../tools/deploy/index.js";
+import startWorkflowToolSource, { bindWorkflows } from "../tools/start_workflow/index.js";
+
+// Explicit workflow imports
+import chatTurnWorkflow from "../workflows/chat-turn/index.js";
+import specToPrWorkflow from "../workflows/spec-to-pr/index.js";
+import prReviewWorkflow from "../workflows/pr-review/index.js";
+import prFixWorkflow from "../workflows/pr-fix/index.js";
+
+// Explicit channel imports
+import slackChannel from "../channels/slack.js";
+import githubChannel from "../channels/github.js";
 
 const root = new URL("../..", import.meta.url).pathname;
 
@@ -11,8 +29,33 @@ ensureWorkflowSlug();
 const tenantId = process.env.TENANT_ID ?? "default";
 const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
 const model = resolveClient(spec);
-const { runtime, workflows, channels } = await loadProject(root, { tenantId, model });
 
+const toolSources = new Map([
+  ["sandbox", sandboxToolSource],
+  ["deploy", deployToolSource],
+  ["start_workflow", startWorkflowToolSource],
+]);
+
+const channels = new Map([
+  ["slack", slackChannel],
+  ["github", githubChannel],
+]);
+
+const runtime = await createRuntime({ tenantId, model, toolSources });
+
+// Load agents from .md files
+await loadAgents(root, runtime);
+
+// Bind workflows
+const workflows = new Map([
+  ["chat-turn", chatTurnWorkflow],
+  ["spec-to-pr", specToPrWorkflow],
+  ["pr-review", prReviewWorkflow],
+  ["pr-fix", prFixWorkflow],
+]);
+for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
+
+// Late-bind the workflow registry to the start_workflow tool
 bindWorkflows(workflows);
 
 const { port } = await startGateway({
