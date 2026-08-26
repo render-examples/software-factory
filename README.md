@@ -218,6 +218,7 @@ namespaced tool is skipped with a runtime warning.
 | `sandbox` | Local multi-tool source | Execute commands and read, write, patch, or search files in Render Sandboxes. Calls use an explicit `sandbox_id`. |
 | `github_repos` | Local tool | List or search repositories available to the configured GitHub token. |
 | `start_workflow` | Local tool | Dispatch a durable background workflow while preserving the calling thread. |
+| `get_activity` | Local tool | Read a bounded recent window for a run or thread, with sequence and time filtering. |
 | `render` | HTTP MCP source | Mount tools advertised by the Render MCP server under `render__*`. |
 | `deploy` | Local demo tool | Demonstrates approval, pause, and resume. It currently returns a synthetic release rather than performing a real deployment. |
 

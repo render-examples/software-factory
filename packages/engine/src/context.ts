@@ -14,7 +14,16 @@ export interface RunContext {
   readonly runId: string;
   readonly parentSpanId?: string;
   readonly userId?: string;
+  readonly threadId?: string;
   readonly depth: number;
+  /** The human principal who initiated this run (for policy evaluation). */
+  readonly principal?: { id: string; roles?: string[] };
+  /** The workflow this agent is executing within (for policy matching). */
+  readonly workflow?: string;
+  /** Capabilities revoked by the trust ratchet during this run. */
+  readonly revokedCapabilities?: ReadonlySet<string>;
+  /** Set a resolved credential for tools to consume via ctx.env or ctx.connection. */
+  setCredential?(id: string, value: string | undefined): void;
   env(name: string): string | undefined;
   /**
    * Resolve the current user's OAuth tokens for a provider (decrypted, and

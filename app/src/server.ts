@@ -13,6 +13,7 @@ import deployToolSource from "../tools/deploy/index.js";
 import startWorkflowToolSource, { bindWorkflows, bindStore } from "../tools/start_workflow/index.js";
 import githubReposToolSource from "../tools/github_repos/index.js";
 import renderMcpToolSource from "../tools/render/index.js";
+import getActivityToolSource, { bindActivityRuntime } from "../tools/get_activity/index.js";
 
 // Explicit workflow imports
 import chatTurnWorkflow from "../workflows/chat-turn/index.js";
@@ -38,6 +39,7 @@ const toolSources = new Map([
   ["start_workflow", startWorkflowToolSource],
   ["github_repos", githubReposToolSource],
   ["render", renderMcpToolSource],
+  ["get_activity", getActivityToolSource],
 ]);
 
 const channels = new Map([
@@ -62,6 +64,7 @@ for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
 // Late-bind the workflow registry and store to the start_workflow tool
 bindWorkflows(workflows);
 bindStore(runtime.store);
+bindActivityRuntime(runtime);
 
 const { port } = await startGateway({
   runtime,

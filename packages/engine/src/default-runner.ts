@@ -38,6 +38,8 @@ interface ResolvedBudget {
 export interface DefaultRunnerOptions {
   /** Custom/unlisted model pricing, merged over the built-in table for cost estimation. */
   pricing?: Record<string, ModelPricing>;
+  /** Policy engine for access control + credential routing. When absent, all tools are allowed. */
+  policy?: import("./policy.js").PolicyEngine;
 }
 
 /**
@@ -299,8 +301,40 @@ export class DefaultRunner implements AgentRunner {
     const applied = await ctx.appliedToolResult(toolCallId);
     if (applied) return toolResultBlock(toolCallId, applied);
 
-    // --- beforeToolCall: approval gate ---
-    if (requiresApproval(agent, name)) {
+    // --- Policy evaluation (access control + credential routing) ---
+    if (this.options.policy) {
+      const decision = await this.options.policy.evaluate({
+        principal: ctx.principal,
+        agent: { name: agent.name, workflow: ctx.workflow, runId: ctx.runId },
+        tool: { name, input: toolUse.input, source: name.split("__")[0] },
+        context: { runId: ctx.runId, threadId: ctx.threadId, iteration: 0, costSoFar: 0, revokedCapabilities: ctx.revokedCapabilities ?? new Set() },
+      });
+
+      if (decision.effect === "deny") {
+        const denied: ToolResult = { content: `Denied by policy: ${decision.reason ?? "no matching rule"}`, isError: true };
+        await ctx.emit({ type: "tool.result", toolCallId, name, result: denied });
+        return toolResultBlock(toolCallId, denied);
+      }
+
+      if (decision.credential) {
+        ctx.setCredential?.(decision.credential.id, decision.credential.value);
+      }
+
+      if (decision.effect === "escalate") {
+        const inputGate = await ctx.requestInput(name, toolUse.input, toolCallId);
+        if ("status" in inputGate) {
+          throw new RunPaused(ctx.runId, "input", [inputGate.inputRequestId]);
+        }
+        if (inputGate.approved === false) {
+          const denied: ToolResult = { content: `Tool call denied${inputGate.reason ? `: ${inputGate.reason}` : ""}`, isError: true };
+          await ctx.emit({ type: "tool.result", toolCallId, name, result: denied });
+          return toolResultBlock(toolCallId, denied);
+        }
+      }
+    }
+
+    // --- Legacy approval gate (when no policy engine is configured) ---
+    if (!this.options.policy && requiresApproval(agent, name)) {
       const inputGate = await ctx.requestInput(name, toolUse.input, toolCallId);
       if ("status" in inputGate) {
         throw new RunPaused(ctx.runId, "input", [inputGate.inputRequestId]);

@@ -19,7 +19,20 @@ export interface AppendItemInput {
   data?: unknown;
 }
 
+export interface ThreadItemQueryOptions {
+  /** Return items strictly after this thread sequence. */
+  afterSeq?: number;
+  /** Return items strictly before this thread sequence. */
+  beforeSeq?: number;
+  /** Return items created at or after this ISO-8601 timestamp. */
+  since?: string;
+  /** Maximum number of items to return. */
+  limit?: number;
+  /** Result ordering. Defaults to ascending sequence order. */
+  order?: 'asc' | 'desc';
+}
+
 export interface ThreadItemStore {
   appendItem(input: AppendItemInput): Promise<ThreadItem>;
-  getItems(threadId: string, opts?: { limit?: number; afterSeq?: number }): Promise<ThreadItem[]>;
+  getItems(threadId: string, opts?: ThreadItemQueryOptions): Promise<ThreadItem[]>;
 }

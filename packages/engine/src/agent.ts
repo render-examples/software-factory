@@ -32,6 +32,7 @@ export interface Budget {
 
 export interface Permissions {
   requireApproval?: string[];
+  riskTier?: string;
 }
 
 export interface ContextConfig {

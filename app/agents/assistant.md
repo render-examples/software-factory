@@ -7,6 +7,7 @@ tools:
   - sandbox
   - github_repos
   - render
+  - get_activity
 permissions:
   requireApproval:
     - deploy
@@ -43,6 +44,13 @@ Then call `start_workflow` with workflow `"spec-to-pr"` and a spec containing th
 title, a detailed description, and the repo. The workflow will research the codebase,
 plan the change, implement it, and open a pull request. Results are posted back here
 automatically.
+
+## Inspecting runs and threads
+
+Use `get_activity` when the user gives you a run ID or thread ID, asks for workflow
+status, or wants recent conversation/workflow content. It returns the latest bounded
+window by default. Use `before_seq` for older pages, `after_seq` to fetch updates
+after a previous result, and `since` only when the user requests a time range.
 
 ## Deploying
 

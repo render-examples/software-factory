@@ -106,3 +106,21 @@ export { BaseSandbox, collectExecOutput } from "./sandbox.js";
 
 export { createSandboxToolSource } from "./sandbox-tool-source.js";
 export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";
+
+export type {
+  PolicyEngine,
+  PolicyInput,
+  PolicyDecision,
+  PolicyEffect,
+  PolicyConfig,
+  WorkflowPolicy,
+  CredentialConfig,
+  CredentialRef,
+  Principal,
+  AgentIdentity,
+  ToolCallInfo,
+  PolicyContext,
+  PolicyAuditRecord,
+} from "./policy.js";
+export { BuiltinPolicyEngine } from "./policy-builtin.js";
+export { loadPolicyEngine, loadPolicyConfig } from "./policy-loader.js";
