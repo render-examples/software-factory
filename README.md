@@ -6,7 +6,7 @@ An open-source, self-hosted platform and framework for building autonomous codin
 
 You define agents in markdown, wire them as durable multi-step workflows, and deploy them to Render. They receive work from Slack and GitHub, execute code in sandboxes, and deliver results back to those surfaces automatically.
 
-A GitHub issue comes in → the agent triages it, researches the codebase, plans a change, implements it in an isolated sandbox, and opens a pull request. A PR is opened → the agent fans out specialized reviewers (security, performance, correctness, tests), aggregates their findings, and posts a GitHub review. Someone asks for a fix in a PR comment → the agent applies it and pushes to the branch.
+A GitHub issue comes in → the agent triages it, researches the codebase, plans a change, requests approval → implements it in an isolated sandbox, and opens a pull request. A PR is opened → the agent fans out specialized reviewers (security, performance, correctness, tests), aggregates their findings, and posts a GitHub review. Someone asks for a fix in a PR comment → the agent applies it and pushes to the branch.
 
 ## Who is this for?
 
