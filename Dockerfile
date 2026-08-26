@@ -15,10 +15,8 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
-# Make /app writable by any user (Render runs containers as non-root)
-RUN chmod -R 777 /app
-
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["pnpm", "--filter", "@render-factory/workflows", "start"]
+# Run compiled JS directly — no pnpm at runtime.
+CMD ["node", "workflows/dist/src/server.js"]
