@@ -346,7 +346,7 @@ export class PgEventLogStore implements EventLogStore {
   private async foldRuns(client: PoolClient, rec: RunEventRecord): Promise<void> {
     const p = rec.payload;
     switch (p.type) {
-      case "run.started":
+      case "run.started": {
         if (p.threadId) {
           await client.query(
             `INSERT INTO threads (id, tenant_id, user_id, created_at, updated_at)
@@ -355,16 +355,20 @@ export class PgEventLogStore implements EventLogStore {
             [p.threadId, this.tenantId, p.userId ?? null, rec.ts],
           );
         }
+        const runKind = p.spanKind === "workflow" ? "workflow"
+          : rec.parentSpanId ? "background"
+          : "interactive";
         await client.query(
-          `INSERT INTO runs (id, tenant_id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id)
-           VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO runs (id, tenant_id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id, kind)
+           VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
              started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
              thread_id = COALESCE(EXCLUDED.thread_id, runs.thread_id),
              user_id = COALESCE(EXCLUDED.user_id, runs.user_id),
              agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version),
-             parent_span_id = COALESCE(EXCLUDED.parent_span_id, runs.parent_span_id)`,
+             parent_span_id = COALESCE(EXCLUDED.parent_span_id, runs.parent_span_id),
+             kind = EXCLUDED.kind`,
           [
             rec.runId,
             this.tenantId,
@@ -376,9 +380,11 @@ export class PgEventLogStore implements EventLogStore {
             p.userId ?? null,
             p.agentVersion ?? null,
             rec.parentSpanId ?? null,
+            runKind,
           ],
         );
         break;
+      }
 
       case "run.completed":
         await client.query(
@@ -714,7 +720,7 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
   async getRun(id: string): Promise<RunRecord | undefined> {
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, kind, started_at, finished_at
        FROM runs WHERE id = $1 AND tenant_id = $2`,
       [id, this.tenantId],
     );
@@ -766,7 +772,7 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
 
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, kind, started_at, finished_at
        FROM runs ${where}
        ORDER BY started_at DESC, id DESC
        ${limitClause}`,
@@ -778,7 +784,7 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
   async listChildRuns(runId: string): Promise<RunRecord[]> {
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, kind, started_at, finished_at
        FROM runs
        WHERE tenant_id = $2
          AND parent_span_id IS NOT NULL
@@ -1332,6 +1338,7 @@ interface PgRunRow {
   user_id: string | null;
   agent_version: string | null;
   parent_span_id: string | null;
+  kind: string | null;
   started_at: Date;
   finished_at: Date | null;
 }
@@ -1397,7 +1404,7 @@ function mapRunRow(row: PgRunRow): RunRecord {
     threadId: row.thread_id ?? undefined,
     userId: row.user_id ?? undefined,
     agentVersion: row.agent_version ?? undefined,
-    kind: 'interactive',
+    kind: (row.kind as RunRecord["kind"]) ?? "interactive",
     parentSpanId: row.parent_span_id ?? undefined,
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
