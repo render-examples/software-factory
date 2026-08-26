@@ -113,10 +113,7 @@ export class DefaultRunner implements AgentRunner {
         // tools; a now-resolved approval lets the previously-paused tool run.
         const pending = pendingToolUses(history);
         if (pending.length > 0) {
-          const toolResultBlocks: ContentBlock[] = [];
-          for (const toolUse of pending) {
-            toolResultBlocks.push(await this.dispatchTool(agent, toolUse, allMounted, ctx));
-          }
+          const toolResultBlocks = await this.dispatchToolsParallel(agent, pending, allMounted, ctx);
           await ctx.emit({ type: "message.tool", agentName: agent.name, content: toolResultBlocks });
           continue;
         }
@@ -158,17 +155,11 @@ export class DefaultRunner implements AgentRunner {
 
         const toolUses = result.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
         if (toolUses.length === 0) {
-          // No tools requested → terminal turn (regardless of stop reason).
           if (agent.output) {
             const structured = await this.structuredOutput(
               agent, systemPrompt, history, result.content, ctx, budget,
               { iterations, tokensUsed, costUsed, runStartedAt, usage },
             );
-            // Two-lane model (D12): a chat turn is one *run per message*; turn-end
-            // completes the run (it is NOT a pause). Multi-turn memory comes from
-            // the thread transcript (thread-scoped history), not a parked run.
-            // Only HITL *within* a turn pauses. `interactive` now just marks the
-            // agent as a chat surface; the runner treats it like any other agent.
             await ctx.emit({ type: "run.completed", result: structured.data });
             return structured;
           }
@@ -176,8 +167,10 @@ export class DefaultRunner implements AgentRunner {
           await ctx.emit({ type: "run.completed", result: text });
           return { text, usage };
         }
-        // Tools requested: the next loop iteration dispatches them (via the
-        // pending-tool-uses path), unifying the fresh and resume flows.
+        // Parallel tool dispatch: execute all tool_use blocks concurrently.
+        // Event ordering is preserved (tool.called/tool.result pairs per tool).
+        const toolResultBlocks = await this.dispatchToolsParallel(agent, toolUses, allMounted, ctx);
+        await ctx.emit({ type: "message.tool", agentName: agent.name, content: toolResultBlocks });
       }
     } catch (err) {
       if (err instanceof RunPaused) throw err;
@@ -264,6 +257,36 @@ export class DefaultRunner implements AgentRunner {
     }
   }
 
+  /**
+   * Dispatch multiple tool_use blocks in parallel. Returns results in the same
+   * order as the input (matching model's request order for correct message
+   * sequencing). RunPaused/RunCancelled from any tool aborts the batch.
+   */
+  private async dispatchToolsParallel(
+    agent: AgentDefinition,
+    toolUses: ToolUseBlock[],
+    mounted: MountedTools,
+    ctx: RunContext,
+  ): Promise<ContentBlock[]> {
+    // Sequential dispatch for approval-gated tools (can't approve in parallel).
+    // Parallel for the rest.
+    const hasGated = toolUses.some((tu) => requiresApproval(agent, tu.name));
+    if (hasGated || toolUses.length === 1) {
+      const results: ContentBlock[] = [];
+      for (const toolUse of toolUses) {
+        results.push(await this.dispatchTool(agent, toolUse, mounted, ctx));
+      }
+      return results;
+    }
+    return Promise.all(toolUses.map((tu) => this.dispatchTool(agent, tu, mounted, ctx)));
+  }
+
+  /**
+   * Dispatch a single tool call with guaranteed tool.result emission (the
+   * afterToolCall invariant). Every path — success, crash, policy veto,
+   * validation error — emits tool.result before returning. The only exception
+   * is RunPaused (intentionally incomplete — result comes on resume).
+   */
   private async dispatchTool(
     agent: AgentDefinition,
     toolUse: ToolUseBlock,
@@ -276,7 +299,7 @@ export class DefaultRunner implements AgentRunner {
     const applied = await ctx.appliedToolResult(toolCallId);
     if (applied) return toolResultBlock(toolCallId, applied);
 
-    // 2. Approval gate.
+    // --- beforeToolCall: approval gate ---
     if (requiresApproval(agent, name)) {
       const inputGate = await ctx.requestInput(name, toolUse.input, toolCallId);
       if ("status" in inputGate) {
@@ -287,13 +310,12 @@ export class DefaultRunner implements AgentRunner {
           content: `Tool call denied${inputGate.reason ? `: ${inputGate.reason}` : ""}`,
           isError: true,
         };
-        // Canonical error result; no `tool.called` is emitted for a denied call.
         await ctx.emit({ type: "tool.result", toolCallId, name, result: denied });
         return toolResultBlock(toolCallId, denied);
       }
     }
 
-    // 3. Lookup. An unknown tool (model hallucination) is a recoverable error.
+    // --- beforeToolCall: lookup + validate ---
     const tool = mounted.byName(name);
     if (!tool) {
       const err: ToolResult = { content: `Unknown tool: ${name}`, isError: true };
@@ -301,7 +323,6 @@ export class DefaultRunner implements AgentRunner {
       return toolResultBlock(toolCallId, err);
     }
 
-    // 4. Validate input vs inputSchema — error result so the model can self-correct.
     const validationError = validateToolInput(toolUse.input, tool.inputSchema);
     if (validationError) {
       const err: ToolResult = { content: validationError, isError: true };
@@ -310,9 +331,7 @@ export class DefaultRunner implements AgentRunner {
       return toolResultBlock(toolCallId, err);
     }
 
-    // 5. Dispatch. A gate hook may veto the call here by rejecting `tool.called`.
-    // A veto must NOT crash the run (D9): the tool is not invoked, and the block
-    // becomes a canonical error `tool_result` the model can recover from.
+    // --- emit tool.called (policy gate) ---
     try {
       await ctx.emit({ type: "tool.called", toolCallId, name, input: toolUse.input });
     } catch (err) {
@@ -323,18 +342,15 @@ export class DefaultRunner implements AgentRunner {
       }
       throw err;
     }
+
+    // --- execute + afterToolCall (guaranteed tool.result) ---
     let result: ToolResult;
     try {
       result = await tool.invoke(toolUse.input, toolContextFrom(ctx, toolCallId));
     } catch (err) {
-      // Control-flow signals from a nested run (e.g. a subagent tool that parks
-      // for HITL, or a cooperative cancel) must propagate — not be flattened into
-      // a recoverable error `tool_result`, which would silently swallow the pause
-      // or cancel and let the parent keep running (CR-04).
       if (err instanceof RunPaused || err instanceof RunCancelled) throw err;
       result = { content: err instanceof Error ? err.message : String(err), isError: true };
     }
-    // 6. Record.
     await ctx.emit({ type: "tool.result", toolCallId, name, result });
     return toolResultBlock(toolCallId, result);
   }
