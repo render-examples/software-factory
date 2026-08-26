@@ -23,10 +23,10 @@ interface PlanOut {
   risks?: string[];
 }
 
-const NEEDS_INFO = "agent:needs-info";
-const WORKING = "agent:working";
-const DONE = "agent:done";
-const FAILED = "agent:failed";
+const NEEDS_INFO = "factory:needs-info";
+const WORKING = "factory:working";
+const DONE = "factory:done";
+const FAILED = "factory:failed";
 const MAX_TEXT = 12_000;
 
 function isBot(sender: { login: string; type: string }): boolean {
