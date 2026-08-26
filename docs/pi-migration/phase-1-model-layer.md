@@ -117,7 +117,7 @@ export function resolveModelSpec(tier: string | undefined, models: Models): Mode
 
 ### 4. Boot path change
 
-**Before** (`workflows/src/server.ts`):
+**Before** (`app/src/server.ts` and `app/src/workflows.ts`):
 ```typescript
 import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
@@ -133,6 +133,8 @@ const models = builtinModels();
 const spec = resolveModelSpec(process.env.MODEL_TIER ?? "medium", models);
 const model = createPiModelClient(models);
 ```
+
+Note: both `app/src/server.ts` (gateway) and `app/src/workflows.ts` (task host) use identical model resolution and must both be updated.
 
 ### 5. Pricing table
 
@@ -199,8 +201,8 @@ The current `OpenAIClient` supports custom `baseURL` for Ollama, vLLM, etc. `pi-
 2. Write `pi-model-adapter.ts` (adapter + message translation)
 3. Rewrite `tiers.ts` to use catalog lookup
 4. Update `model.ts` pricing table to optionally pull from catalog
-5. Update `workflows/src/server.ts` boot path
-6. Update `workflows/src/workflows.ts` boot path (same change)
+5. Update `app/src/server.ts` boot path
+6. Update `app/src/workflows.ts` boot path (same model resolution pattern)
 7. Delete `clients/` directory
 8. Remove `@anthropic-ai/sdk` and `openai` from `engine/package.json`
 9. Update engine `index.ts` exports: remove `AnthropicClient`, `OpenAIClient`, `withRetry`, `resolveClient`; add `createPiModelClient`
