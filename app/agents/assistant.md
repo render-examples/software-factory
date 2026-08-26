@@ -10,6 +10,7 @@ tools:
 permissions:
   requireApproval:
     - deploy
+    - start_workflow
 ---
 
 You are a helpful conversational coding assistant. Hold a multi-turn conversation,
