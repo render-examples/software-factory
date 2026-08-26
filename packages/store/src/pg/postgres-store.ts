@@ -207,6 +207,9 @@ export class PgEventLogStore implements EventLogStore {
     }
     record = { ...record, payload, type: payload.type, category: categoryOf(payload.type) };
 
+    // Keep the full payload for projections (foldRunMessages etc.) which need
+    // the real content arrays, not artifact placeholders.
+    const fullPayload = payload;
     let serialized = jsonbStringify(payload);
     let artifactsToInsert: Array<{ id: string; fieldPath: string; content: unknown }> = [];
 
@@ -285,15 +288,18 @@ export class PgEventLogStore implements EventLogStore {
         ],
       );
 
-      await this.foldRuns(client, stored);
-      await this.foldSpans(client, stored);
-      await this.foldToolCalls(client, stored);
-      await this.foldRunMessages(client, stored);
-      await this.foldWorkflowSteps(client, stored);
-      await this.foldInputs(client, stored);
-      await this.foldThreadMessages(client, stored);
-      if (stored.payload.type === "run.started" && stored.payload.threadId) {
-        this.runThreadCache.set(stored.runId, stored.payload.threadId);
+      // Projections use the full (un-deflated) payload so run_messages etc.
+      // get the real content arrays, not artifact placeholder strings.
+      const forFold: RunEventRecord = { ...stored, payload: fullPayload };
+      await this.foldRuns(client, forFold);
+      await this.foldSpans(client, forFold);
+      await this.foldToolCalls(client, forFold);
+      await this.foldRunMessages(client, forFold);
+      await this.foldWorkflowSteps(client, forFold);
+      await this.foldInputs(client, forFold);
+      await this.foldThreadMessages(client, forFold);
+      if (fullPayload.type === "run.started" && fullPayload.threadId) {
+        this.runThreadCache.set(stored.runId, fullPayload.threadId);
       }
 
       // Pointer-only NOTIFY payload avoids the 8KB limit

@@ -6,6 +6,7 @@ tools:
   - start_workflow
   - sandbox
   - github_repos
+  - render
 permissions:
   requireApproval:
     - deploy
