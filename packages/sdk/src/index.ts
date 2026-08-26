@@ -24,13 +24,17 @@ export type {
   SpanRecord,
   ListRunsOptions,
   RunStore,
-  ChannelConversation,
   CancelStore,
   ScheduleRecord,
   ScheduleStore,
   Thread,
   ThreadMessage,
   ThreadStore,
+  ThreadSurface,
+  ThreadSurfaceStore,
+  ThreadItem,
+  AppendItemInput,
+  ThreadItemStore,
   ApprovalRequest,
   ApprovalStore,
   OAuthConnection,
@@ -169,4 +173,4 @@ export { NativeWorkflowsSuspender } from "./native-suspender.js";
 
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 
-export { deliverForRun } from "./channel-delivery.js";
+export { notifyThreadSurfaces } from "./notify-surfaces.js";

@@ -1,4 +1,4 @@
-import { workflow } from "@render-factory/sdk";
+import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
 import { githubFromEnv, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
@@ -90,6 +90,23 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
     });
 
     if (!pushed.changed) {
+      const noChangeRun = await ctx.runtime.store.getRun(ctx.runId);
+      if (noChangeRun?.threadId) {
+        const msg = `Review fix produced no changes for ${pull.htmlUrl}.`;
+        await ctx.runtime.itemStore.appendItem({
+          threadId: noChangeRun.threadId,
+          runId: ctx.runId,
+          kind: "result",
+          role: "system",
+          content: msg,
+          data: { status: "no_changes", pr: pull.htmlUrl },
+        });
+        await notifyThreadSurfaces(ctx.runtime, noChangeRun.threadId, {
+          kind: "result",
+          content: msg,
+          data: { status: "no_changes", pr: pull.htmlUrl },
+        });
+      }
       return { status: "no_changes", pr: pull.htmlUrl };
     }
 
@@ -101,6 +118,25 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
       );
       return { ok: true };
     });
+
+    // Notify the originating thread
+    const run = await ctx.runtime.store.getRun(ctx.runId);
+    if (run?.threadId) {
+      const resultMsg = `Pushed fixes for ${pull.htmlUrl} on branch ${branch}.`;
+      await ctx.runtime.itemStore.appendItem({
+        threadId: run.threadId,
+        runId: ctx.runId,
+        kind: "result",
+        role: "system",
+        content: resultMsg,
+        data: { status: "fixed", pr: pull.htmlUrl, branch },
+      });
+      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+        kind: "result",
+        content: resultMsg,
+        data: { status: "fixed", pr: pull.htmlUrl, branch },
+      });
+    }
 
     return { status: "fixed", pr: pull.htmlUrl, branch };
   } finally {

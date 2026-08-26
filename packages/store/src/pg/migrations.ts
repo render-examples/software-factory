@@ -28,6 +28,7 @@ const CORE_MIGRATIONS = [
   "0014_lease_tokens.sql",
   "0015_commands.sql",
   "0016_inbound_queue.sql",
+  "0017_thread_surfaces_items.sql",
 ];
 
 /**

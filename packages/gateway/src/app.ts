@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import type { CancelStore, RunRecord } from "@render-factory/store";
 import { runRetention, reapRuns, buildEventRecord } from "@render-factory/store";
 import type { AgentRuntime, WorkflowDefinition, Channel } from "@render-factory/sdk";
-import { resumeRun, driveAgentTurn, RunPaused, idempotencyKey, deliverForRun } from "@render-factory/sdk";
+import { resumeRun, driveAgentTurn, RunPaused, idempotencyKey } from "@render-factory/sdk";
 import {
   apiKeyAuth,
   defaultPublicPath,
@@ -270,12 +270,12 @@ export function createGatewayApp(opts: GatewayOptions) {
 
   // Each user message creates a run row (for the active-run guard + streaming)
   // then dispatches a chat-turn workflow to drive it.
-  const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string; channel?: string; externalConversationId?: string; trigger?: string }): Promise<void> => {
+  const startAgentRun = async (agentName: string, input: string, o: { runId: string; threadId: string; userId?: string; trigger?: string }): Promise<void> => {
     const def = runtime.agentDefinitions.get(agentName);
     await store.events.append(
       buildEventRecord(
         o.runId,
-        { type: "run.started", input, trigger: o.trigger ?? "thread_message", threadId: o.threadId, userId: o.userId, agentVersion: def?.version, model: def?.model.model, channel: o.channel, externalConversationId: o.externalConversationId },
+        { type: "run.started", input, trigger: o.trigger ?? "thread_message", threadId: o.threadId, userId: o.userId, agentVersion: def?.version, model: def?.model.model },
         { agentName, spanId: o.runId },
       ),
     );
@@ -292,7 +292,6 @@ export function createGatewayApp(opts: GatewayOptions) {
       } catch (err) {
         if (!(err instanceof RunPaused)) throw err;
       }
-      await deliverForRun(runtime, o.runId);
     }
   };
 
@@ -350,14 +349,15 @@ export function createGatewayApp(opts: GatewayOptions) {
       return { runId: active.id, threadId, status: 200, body: { runId: active.id, channel: binding.channel, delivered: true } };
     }
 
-    // No active run: new channel-bound turn (binding stamped for outbound delivery).
+    // Bind this channel surface to the thread so the workflow can notify it.
+    await runtime.surfaceStore.upsertSurface(threadId, binding.channel, binding.conversationId);
+    await runtime.itemStore.appendItem({ threadId, kind: 'message', role: 'user', content: text });
+
     const runId = randomUUID();
     try {
       await startAgentRun(agentName, text, {
         runId,
         threadId,
-        channel: binding.channel,
-        externalConversationId: binding.conversationId,
         trigger: `channel.${binding.channel}`,
       });
     } catch (err) {
@@ -404,13 +404,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   // declarative signature policy (fail-closed via checkWebhookAuth).
   if (opts.channels) for (const [id, ch] of opts.channels) runtime.channels.set(id, ch);
   if (runtime.channels.size > 0) {
-    // When running without a dispatcher (local dev, no workflows host), deliver
-    // inline after the turn completes. With a dispatcher, the chat-turn task
-    // handles delivery.
-    const deliver = isInline
-      ? (runId: string) => deliverForRun(runtime, runId)
-      : undefined;
-    app.route("/", channelRoutes({ channels: runtime.channels, workflows: wf, handleChannelMessage, deliver }));
+    app.route("/", channelRoutes({ channels: runtime.channels, workflows: wf, handleChannelMessage }));
   }
 
   return app;

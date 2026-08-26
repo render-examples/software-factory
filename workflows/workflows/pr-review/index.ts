@@ -1,4 +1,4 @@
-import { workflow } from "@render-factory/sdk";
+import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
 import { githubFromEnv, type PullFile, type ReviewComment } from "../../lib/github.js";
 import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
@@ -97,6 +97,25 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
       });
       return { submitted: true };
     });
+
+    // Notify the originating thread
+    const run = await ctx.runtime.store.getRun(ctx.runId);
+    if (run?.threadId) {
+      const resultMsg = `Review submitted for ${pull.htmlUrl}: ${verdict.decision}`;
+      await ctx.runtime.itemStore.appendItem({
+        threadId: run.threadId,
+        runId: ctx.runId,
+        kind: "result",
+        role: "system",
+        content: resultMsg,
+        data: { decision: verdict.decision, pr: pull.htmlUrl },
+      });
+      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+        kind: "result",
+        content: resultMsg,
+        data: { decision: verdict.decision, pr: pull.htmlUrl },
+      });
+    }
 
     return { decision: verdict.decision, pr: pull.htmlUrl };
   } finally {

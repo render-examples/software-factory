@@ -76,7 +76,10 @@ export default defineTool({
       };
     }
 
-    const run = await wf.dispatch(spec, "assistant.start_workflow");
+    const run = await wf.dispatch(spec, "assistant.start_workflow", {
+      // TODO: pass threadId from calling run's context so the workflow
+      // belongs to the same thread and can notify surfaces on completion
+    });
     return `Workflow "${name}" started (run ${run.id}). Results will be posted back when complete.`;
   },
 });

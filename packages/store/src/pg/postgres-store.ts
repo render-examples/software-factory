@@ -9,9 +9,11 @@ import type {
 } from "../events.js";
 import { EventRejectedError, buildEventRecord } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, ChannelConversation } from "../run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
 import type { InputRequestProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
+import type { ThreadSurface, ThreadSurfaceStore } from "../thread-surface-store.js";
+import type { ThreadItem, AppendItemInput, ThreadItemStore } from "../thread-item-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
 import type { ScheduleRecord, ScheduleStore } from "../schedule-store.js";
 import { encrypt, decrypt, encryptionKeyFromEnv } from "../crypto.js";
@@ -354,17 +356,15 @@ export class PgEventLogStore implements EventLogStore {
           );
         }
         await client.query(
-          `INSERT INTO runs (id, tenant_id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id)
-           VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          `INSERT INTO runs (id, tenant_id, workflow, status, input, trigger, started_at, thread_id, user_id, agent_version, parent_span_id)
+           VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (id) DO UPDATE SET
              status = 'running', input = EXCLUDED.input, trigger = EXCLUDED.trigger,
              started_at = EXCLUDED.started_at, workflow = EXCLUDED.workflow,
              thread_id = COALESCE(EXCLUDED.thread_id, runs.thread_id),
              user_id = COALESCE(EXCLUDED.user_id, runs.user_id),
              agent_version = COALESCE(EXCLUDED.agent_version, runs.agent_version),
-             parent_span_id = COALESCE(EXCLUDED.parent_span_id, runs.parent_span_id),
-             channel = COALESCE(EXCLUDED.channel, runs.channel),
-             external_conversation_id = COALESCE(EXCLUDED.external_conversation_id, runs.external_conversation_id)`,
+             parent_span_id = COALESCE(EXCLUDED.parent_span_id, runs.parent_span_id)`,
           [
             rec.runId,
             this.tenantId,
@@ -376,21 +376,8 @@ export class PgEventLogStore implements EventLogStore {
             p.userId ?? null,
             p.agentVersion ?? null,
             rec.parentSpanId ?? null,
-            p.channel ?? null,
-            p.externalConversationId ?? null,
           ],
         );
-        if (p.channel && p.externalConversationId) {
-          await client.query(
-            `INSERT INTO channel_conversations (tenant_id, channel, external_conversation_id, thread_id, last_run_id, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $6)
-             ON CONFLICT (tenant_id, channel, external_conversation_id) DO UPDATE SET
-               thread_id = COALESCE(channel_conversations.thread_id, EXCLUDED.thread_id),
-               last_run_id = EXCLUDED.last_run_id,
-               updated_at = EXCLUDED.updated_at`,
-            [this.tenantId, p.channel, p.externalConversationId, p.threadId ?? null, rec.runId, rec.ts],
-          );
-        }
         break;
 
       case "run.completed":
@@ -699,7 +686,7 @@ export interface PgRunStoreConfig extends PoolConfig {
   tenantId: string;
 }
 
-export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleStore {
+export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, ThreadItemStore, OAuthStore, ScheduleStore {
   /** Exposed so a `PgJobQueue` can share the store's connection pool. */
   readonly pool: Pool;
   readonly events: PgEventLogStore;
@@ -727,7 +714,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async getRun(id: string): Promise<RunRecord | undefined> {
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
        FROM runs WHERE id = $1 AND tenant_id = $2`,
       [id, this.tenantId],
     );
@@ -779,7 +766,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
 
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
        FROM runs ${where}
        ORDER BY started_at DESC, id DESC
        ${limitClause}`,
@@ -791,7 +778,7 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
   async listChildRuns(runId: string): Promise<RunRecord[]> {
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
-              thread_id, user_id, agent_version, parent_span_id, channel, external_conversation_id, started_at, finished_at
+              thread_id, user_id, agent_version, parent_span_id, started_at, finished_at
        FROM runs
        WHERE tenant_id = $2
          AND parent_span_id IS NOT NULL
@@ -904,22 +891,6 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
     return res.rows.map(mapApprovalRow);
   }
 
-  async resolveConversation(channel: string, externalConversationId: string): Promise<ChannelConversation | undefined> {
-    const res = await this.pool.query<{ channel: string; external_conversation_id: string; thread_id: string | null; last_run_id: string | null }>(
-      `SELECT channel, external_conversation_id, thread_id, last_run_id
-       FROM channel_conversations WHERE tenant_id = $1 AND channel = $2 AND external_conversation_id = $3`,
-      [this.tenantId, channel, externalConversationId],
-    );
-    const row = res.rows[0];
-    if (!row) return undefined;
-    return {
-      channel: row.channel,
-      externalConversationId: row.external_conversation_id,
-      threadId: row.thread_id ?? undefined,
-      lastRunId: row.last_run_id ?? "",
-    };
-  }
-
   // --- ThreadStore (metadata in `threads`; transcript in `messages`) ---
 
   async createThread(thread: Thread): Promise<void> {
@@ -980,6 +951,84 @@ export class PgRunStore implements RunStore, ThreadStore, OAuthStore, ScheduleSt
       [threadId, this.tenantId],
     );
     return res.rows.map(mapMessageRow);
+  }
+
+  // --- ThreadSurfaceStore ---
+
+  async upsertSurface(threadId: string, channel: string, address: string): Promise<ThreadSurface> {
+    const res = await this.pool.query<PgThreadSurfaceRow>(
+      `INSERT INTO thread_surfaces (id, tenant_id, thread_id, channel, address)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4)
+       ON CONFLICT (tenant_id, thread_id, channel, address) DO NOTHING
+       RETURNING *`,
+      [this.tenantId, threadId, channel, address],
+    );
+    if (res.rows.length > 0) return mapThreadSurfaceRow(res.rows[0]);
+    const existing = await this.pool.query<PgThreadSurfaceRow>(
+      `SELECT * FROM thread_surfaces WHERE tenant_id = $1 AND thread_id = $2 AND channel = $3 AND address = $4`,
+      [this.tenantId, threadId, channel, address],
+    );
+    return mapThreadSurfaceRow(existing.rows[0]);
+  }
+
+  async getSurfaces(threadId: string): Promise<ThreadSurface[]> {
+    const res = await this.pool.query<PgThreadSurfaceRow>(
+      `SELECT * FROM thread_surfaces WHERE tenant_id = $1 AND thread_id = $2 ORDER BY created_at`,
+      [this.tenantId, threadId],
+    );
+    return res.rows.map(mapThreadSurfaceRow);
+  }
+
+  async removeSurface(id: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM thread_surfaces WHERE id = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
+    );
+  }
+
+  // --- ThreadItemStore ---
+
+  async appendItem(input: AppendItemInput): Promise<ThreadItem> {
+    const res = await this.pool.query<PgThreadItemRow>(
+      `INSERT INTO thread_items (id, tenant_id, thread_id, run_id, seq, kind, role, content, data)
+       VALUES (
+         gen_random_uuid(),
+         $1,
+         $2,
+         $3,
+         COALESCE((SELECT MAX(seq) FROM thread_items WHERE thread_id = $2), 0) + 1,
+         $4, $5, $6, $7
+       )
+       RETURNING *`,
+      [
+        this.tenantId,
+        input.threadId,
+        input.runId ?? null,
+        input.kind,
+        input.role ?? null,
+        input.content ?? null,
+        input.data !== undefined ? jsonbStringify(input.data) : null,
+      ],
+    );
+    return mapThreadItemRow(res.rows[0]);
+  }
+
+  async getItems(threadId: string, opts?: { limit?: number; afterSeq?: number }): Promise<ThreadItem[]> {
+    const params: unknown[] = [this.tenantId, threadId];
+    const conditions = [`tenant_id = $1`, `thread_id = $2`];
+    let paramIdx = 3;
+    if (opts?.afterSeq !== undefined) {
+      conditions.push(`seq > $${paramIdx++}`);
+      params.push(opts.afterSeq);
+    }
+    const where = `WHERE ${conditions.join(" AND ")}`;
+    const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
+    if (opts?.limit !== undefined) params.push(opts.limit);
+    const res = await this.pool.query<PgThreadItemRow>(
+      `SELECT * FROM thread_items ${where} ORDER BY seq ${limitClause}`,
+      params,
+    );
+    return res.rows.map(mapThreadItemRow);
   }
 
   // --- ScheduleStore (operational table; never auto-expired) ---
@@ -1282,8 +1331,6 @@ interface PgRunRow {
   thread_id: string | null;
   user_id: string | null;
   agent_version: string | null;
-  channel: string | null;
-  external_conversation_id: string | null;
   parent_span_id: string | null;
   started_at: Date;
   finished_at: Date | null;
@@ -1350,8 +1397,7 @@ function mapRunRow(row: PgRunRow): RunRecord {
     threadId: row.thread_id ?? undefined,
     userId: row.user_id ?? undefined,
     agentVersion: row.agent_version ?? undefined,
-    channel: row.channel ?? undefined,
-    externalConversationId: row.external_conversation_id ?? undefined,
+    kind: 'interactive',
     parentSpanId: row.parent_span_id ?? undefined,
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at?.toISOString(),
@@ -1400,6 +1446,28 @@ interface PgOAuthRow {
   scopes: string[];
   created_at: Date;
   updated_at: Date;
+}
+
+interface PgThreadSurfaceRow {
+  id: string;
+  tenant_id: string;
+  thread_id: string;
+  channel: string;
+  address: string;
+  created_at: Date;
+}
+
+interface PgThreadItemRow {
+  id: string;
+  tenant_id: string;
+  thread_id: string;
+  run_id: string | null;
+  seq: string;
+  kind: string;
+  role: string | null;
+  content: string | null;
+  data: unknown;
+  created_at: Date;
 }
 
 function mapOAuthRow(row: PgOAuthRow, key: Buffer): OAuthConnection {
@@ -1510,6 +1578,30 @@ function flattenContent(content: Array<{ type: string; text?: string }>): string
     .filter((b): b is { type: string; text: string } => b.type === "text" && b.text !== undefined)
     .map((b) => b.text)
     .join("\n");
+}
+
+function mapThreadSurfaceRow(row: PgThreadSurfaceRow): ThreadSurface {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    channel: row.channel,
+    address: row.address,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+function mapThreadItemRow(row: PgThreadItemRow): ThreadItem {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    runId: row.run_id ?? undefined,
+    seq: Number(row.seq),
+    kind: row.kind as ThreadItem["kind"],
+    role: (row.role as ThreadItem["role"]) ?? undefined,
+    content: row.content ?? undefined,
+    data: row.data != null ? coerceJson(row.data) : undefined,
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 export function createPgStore(config: PgRunStoreConfig): PgRunStore {

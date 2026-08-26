@@ -9,7 +9,7 @@ import type {
 import { categoryOf } from "./categories.js";
 import { isTransientEvent } from "./events.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, ChannelConversation } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
@@ -246,10 +246,6 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
 
   async listInputs(opts?: ListInputsOptions): Promise<InputRequestProjectionRecord[]> {
     return this.projections.listInputs(opts);
-  }
-
-  async resolveConversation(channel: string, externalConversationId: string): Promise<ChannelConversation | undefined> {
-    return this.projections.resolveConversation(channel, externalConversationId);
   }
 
   async cleanup(opts: RetentionOptions): Promise<RetentionResult> {

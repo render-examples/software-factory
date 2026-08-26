@@ -113,12 +113,6 @@ export function channelRoutes(deps: {
     binding: { channel: string; conversationId: string; user?: string },
   ) => Promise<{ runId: string; threadId: string; status: 200 | 202 | 409; body: Record<string, unknown> }>;
   /**
-   * Deliver a completed run's reply — or a pending input prompt — inline (set only
-   * in `inline` mode, where the run is terminal/paused by the time the route
-   * returns). Omitted in `queue` mode; the worker's delivery producer handles it.
-   */
-  deliver?: (runId: string) => Promise<void>;
-  /**
    * Durable inbound store. When provided, agent-target channel messages are
    * persisted before acknowledging the webhook (persist-then-ack). An InboundWorker
    * claims and processes them asynchronously. Omit for inline processing.
@@ -126,20 +120,9 @@ export function channelRoutes(deps: {
   inboundStore?: InboundStore;
 }) {
   const app = new Hono();
-  const { channels, workflows, handleChannelMessage, deliver, inboundStore } = deps;
+  const { channels, workflows, handleChannelMessage, inboundStore } = deps;
   const maxBodyBytes = maxChannelBodyBytesFromEnv();
   const strictContentType = requireChannelContentType();
-
-  // Best-effort inline delivery: a delivery failure must not fail the inbound ack
-  // (the run already ran); the worker path is the one with real retries.
-  const runDeliver = async (runId: string): Promise<void> => {
-    if (!deliver) return;
-    try {
-      await deliver(runId);
-    } catch (err) {
-      console.error(`channel delivery failed for run ${runId}:`, err);
-    }
-  };
 
   app.post("/channels/:id", async (c) => {
     const id = c.req.param("id");
@@ -204,11 +187,7 @@ export function channelRoutes(deps: {
         return c.json({ error: `Target workflow "${target.workflow}" not found` }, 404);
       }
       // Stamp the binding so the run records its origin for outbound delivery.
-      const run = await workflow.dispatch(event.input, target.trigger ?? `channel.${id}`, {
-        channel: id,
-        externalConversationId: event.conversationId,
-      });
-      await runDeliver(run.id);
+      const run = await workflow.dispatch(event.input, target.trigger ?? `channel.${id}`);
       return c.json({ runId: run.id, channel: id, workflow: target.workflow }, 202);
     }
 
@@ -241,8 +220,6 @@ export function channelRoutes(deps: {
       conversationId: event.conversationId,
       user: event.user,
     });
-    // Idempotent + best-effort; a no-op in queue mode (the producer handles it).
-    await runDeliver(res.runId);
     return c.json(res.body, res.status);
   });
 
