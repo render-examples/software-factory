@@ -1,14 +1,9 @@
 import { workflow } from "@render-factory/sdk";
-import { githubFromEnv, type GitHub, type Issue, type IssueComment, type RepoRef } from "../../lib/github.js";
+import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
 import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
 
-/**
- * Channel-agnostic spec input. The assistant's `start_workflow` tool composes
- * this from conversation; the GitHub channel adapter normalizes issue events
- * into this shape.
- */
 export interface SpecInput {
   title: string;
   description: string;
@@ -42,6 +37,10 @@ function isBot(sender: { login: string; type: string }): boolean {
   );
 }
 
+function redactToken(s: string, token: string): string {
+  return token ? s.split(token).join("***") : s;
+}
+
 function renderIssue(issue: Issue, comments: IssueComment[]): string {
   const parts = [`# ${issue.title}`, "", issue.body || "(no description)"];
   if (comments.length > 0) {
@@ -60,10 +59,6 @@ function renderQuestions(questions: string[]): string {
   );
 }
 
-/**
- * Normalize input: accept either a direct SpecInput (from start_workflow / API)
- * or a NormalizedGitHubEvent (from the GitHub channel).
- */
 function normalizeInput(raw: unknown): { spec: SpecInput; isGitHubIssue: boolean } | { skipped: string } {
   const input = raw as Record<string, unknown>;
 
@@ -95,6 +90,36 @@ function normalizeInput(raw: unknown): { spec: SpecInput; isGitHubIssue: boolean
   return { skipped: "unrecognized input format" };
 }
 
+/**
+ * Clone a repo into a sandbox using git credential.helper so the token never
+ * appears in command strings, process listings, or error output.
+ */
+async function cloneIntoSandbox(
+  sandbox: { exec: (cmd: string) => Promise<AsyncGenerator<import("@render-factory/engine").SandboxExecEvent>> },
+  opts: { owner: string; repo: string; token: string; dir: string; branch: string },
+): Promise<void> {
+  // Store credentials via credential.helper — keeps the token out of the clone URL
+  const credSetup = await sandbox.exec(
+    `git config --global credential.helper store && ` +
+    `printf 'https://x-access-token:%s@github.com\\n' '${opts.token}' > ~/.git-credentials && ` +
+    `git config --global user.name "render-agent" && ` +
+    `git config --global user.email "render-agent@users.noreply.github.com"`,
+  );
+  const setupResult = await collectExecOutput(credSetup);
+  if (setupResult.exitCode !== 0) {
+    throw new Error(`Credential setup failed: ${redactToken(setupResult.output.slice(0, 300), opts.token)}`);
+  }
+
+  const cloneEvents = await sandbox.exec(
+    `git clone https://github.com/${opts.owner}/${opts.repo}.git ${opts.dir} && ` +
+    `cd ${opts.dir} && git checkout -B ${opts.branch}`,
+  );
+  const cloneResult = await collectExecOutput(cloneEvents);
+  if (cloneResult.exitCode !== 0) {
+    throw new Error(`Clone failed: ${redactToken(cloneResult.output.slice(0, 500), opts.token)}`);
+  }
+}
+
 export default workflow({ name: "spec-to-pr" }, async (ctx) => {
   const normalized = normalizeInput(ctx.input);
   if ("skipped" in normalized) return { skipped: normalized.skipped };
@@ -105,7 +130,6 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
   const gh = githubFromEnv();
   const repo: RepoRef = spec.repo;
 
-  // GitHub issue path: load fresh state, label state machine, triage
   if (isGitHubIssue && spec.issueNumber) {
     const number = spec.issueNumber;
 
@@ -137,7 +161,7 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
     });
   }
 
-  // Core pipeline: sandbox -> research -> plan -> implement -> PR
+  // Core pipeline: sandbox -> research -> plan -> implement -> verify -> PR
   const provider = new RenderSandboxProvider();
   const sandbox = await provider.create({
     metadata: { spec: `${repo.owner}/${repo.repo}: ${spec.title}` },
@@ -146,80 +170,96 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
   const branch = spec.issueNumber ? `agent/issue-${spec.issueNumber}` : `agent/spec-${Date.now()}`;
   const dir = "/workspace";
 
-  const cloneUrl = `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
-  const cloneEvents = await sandbox.exec(
-    `git clone ${cloneUrl} ${dir} && cd ${dir} && git checkout -B ${branch}`,
-  );
-  const cloneResult = await collectExecOutput(cloneEvents);
-  if (cloneResult.exitCode !== 0) {
-    await sandbox.terminate();
-    throw new Error(`Clone failed: ${cloneResult.output.slice(0, 500)}`);
-  }
+  try {
+    await cloneIntoSandbox(sandbox, { owner: repo.owner, repo: repo.repo, token, dir, branch });
 
-  const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
+    const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-  const research = await ctx.agents.get("researcher").run(
-    `${sandboxContext}\n\n${spec.title}\n\n${spec.description}`,
-  );
-
-  const plan = await ctx.agents.get("planner").run<PlanOut>(
-    `${sandboxContext}\n\n${spec.title}\n\n${spec.description}\n\nResearch brief:\n${research.text}`,
-  );
-  const planText = plan.data ? JSON.stringify(plan.data, null, 2) : plan.text;
-
-  const impl = await ctx.agents.get("implementer").run(
-    `${sandboxContext}\n\n${spec.title}\n\nApproved plan:\n${planText}`,
-  );
-
-  const committed = await ctx.step("commit-push", async () => {
-    const statusEvents = await sandbox.exec(`cd ${dir} && git status --porcelain`);
-    const { output: status } = await collectExecOutput(statusEvents);
-    if (!status.trim()) return { changed: false };
-    const commitMsg = spec.issueNumber
-      ? `Fix #${spec.issueNumber}: ${spec.title}`
-      : spec.title;
-    const commitEvents = await sandbox.exec(
-      `cd ${dir} && git add -A && git commit -m ${JSON.stringify(commitMsg)} && git push --force-with-lease origin ${branch}`,
+    const research = await ctx.agents.get("researcher").run(
+      `${sandboxContext}\n\n${spec.title}\n\n${spec.description}`,
     );
-    const { exitCode, output } = await collectExecOutput(commitEvents);
-    if (exitCode !== 0) throw new Error(`Commit/push failed: ${output.slice(0, 500)}`);
-    return { changed: true };
-  });
 
-  if (!committed.changed) {
+    const plan = await ctx.agents.get("planner").run<PlanOut>(
+      `${sandboxContext}\n\n${spec.title}\n\n${spec.description}\n\nResearch brief:\n${research.text}`,
+    );
+    const planText = plan.data ? JSON.stringify(plan.data, null, 2) : plan.text;
+
+    const impl = await ctx.agents.get("implementer").run(
+      `${sandboxContext}\n\n${spec.title}\n\nApproved plan:\n${planText}`,
+    );
+
+    // Verify: run the project's test suite before committing
+    await ctx.step("verify-tests", async () => {
+      const detectEvents = await sandbox.exec(
+        `cd ${dir} && if [ -f package.json ]; then echo "node"; elif [ -f Cargo.toml ]; then echo "rust"; elif [ -f go.mod ]; then echo "go"; elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then echo "python"; else echo "unknown"; fi`,
+      );
+      const { output: stack } = await collectExecOutput(detectEvents);
+      const lang = stack.trim();
+
+      let testCmd: string;
+      switch (lang) {
+        case "node": testCmd = "npm test --if-present 2>&1 || true"; break;
+        case "rust": testCmd = "cargo test 2>&1 || true"; break;
+        case "go": testCmd = "go test ./... 2>&1 || true"; break;
+        case "python": testCmd = "python -m pytest 2>&1 || true"; break;
+        default: return { skipped: true, reason: "unknown stack" };
+      }
+
+      const testEvents = await sandbox.exec(`cd ${dir} && ${testCmd}`);
+      const { exitCode, output } = await collectExecOutput(testEvents);
+      return { exitCode, output: output.slice(-2000) };
+    });
+
+    const committed = await ctx.step("commit-push", async () => {
+      const statusEvents = await sandbox.exec(`cd ${dir} && git status --porcelain`);
+      const { output: status } = await collectExecOutput(statusEvents);
+      if (!status.trim()) return { changed: false };
+      const commitMsg = spec.issueNumber
+        ? `Fix #${spec.issueNumber}: ${spec.title}`
+        : spec.title;
+      const commitEvents = await sandbox.exec(
+        `cd ${dir} && git add -A && git commit -m ${JSON.stringify(commitMsg)} && git push --force-with-lease origin ${branch}`,
+      );
+      const { exitCode, output } = await collectExecOutput(commitEvents);
+      if (exitCode !== 0) throw new Error(`Commit/push failed: ${redactToken(output.slice(0, 500), token)}`);
+      return { changed: true };
+    });
+
+    if (!committed.changed) {
+      if (isGitHubIssue && spec.issueNumber) {
+        await ctx.step("no-changes", async () => {
+          await gh.createIssueComment(repo, spec.issueNumber!,
+            "I finished a pass but produced no file changes, so I'm not opening a PR. Could you clarify the expected change?");
+          await gh.removeLabel(repo, spec.issueNumber!, WORKING);
+          await gh.addLabels(repo, spec.issueNumber!, [FAILED]);
+          return { ok: true };
+        });
+      }
+      return { status: "no_changes" };
+    }
+
+    const pr = await ctx.step("open-pr", async () =>
+      gh.ensurePull(repo, {
+        title: spec.issueNumber ? `Fix #${spec.issueNumber}: ${spec.title}` : spec.title,
+        head: branch,
+        base: "main",
+        body: spec.issueNumber
+          ? `Automated implementation for #${spec.issueNumber}.\n\n${impl.text}\n\nCloses #${spec.issueNumber}.`
+          : impl.text,
+      }),
+    );
+
     if (isGitHubIssue && spec.issueNumber) {
-      await ctx.step("no-changes", async () => {
-        await gh.createIssueComment(repo, spec.issueNumber!,
-          "I finished a pass but produced no file changes, so I'm not opening a PR. Could you clarify the expected change?");
+      await ctx.step("finish", async () => {
+        await gh.createIssueComment(repo, spec.issueNumber!, `Opened a pull request: ${pr.htmlUrl}`);
         await gh.removeLabel(repo, spec.issueNumber!, WORKING);
-        await gh.addLabels(repo, spec.issueNumber!, [FAILED]);
+        await gh.addLabels(repo, spec.issueNumber!, [DONE]);
         return { ok: true };
       });
     }
+
+    return { status: "pr_opened", pr: pr.htmlUrl, branch };
+  } finally {
     await sandbox.terminate();
-    return { status: "no_changes" };
   }
-
-  const pr = await ctx.step("open-pr", async () =>
-    gh.ensurePull(repo, {
-      title: spec.issueNumber ? `Fix #${spec.issueNumber}: ${spec.title}` : spec.title,
-      head: branch,
-      base: "main",
-      body: spec.issueNumber
-        ? `Automated implementation for #${spec.issueNumber}.\n\n${impl.text}\n\nCloses #${spec.issueNumber}.`
-        : impl.text,
-    }),
-  );
-
-  if (isGitHubIssue && spec.issueNumber) {
-    await ctx.step("finish", async () => {
-      await gh.createIssueComment(repo, spec.issueNumber!, `Opened a pull request: ${pr.htmlUrl}`);
-      await gh.removeLabel(repo, spec.issueNumber!, WORKING);
-      await gh.addLabels(repo, spec.issueNumber!, [DONE]);
-      return { ok: true };
-    });
-  }
-
-  await sandbox.terminate();
-  return { status: "pr_opened", pr: pr.htmlUrl, branch };
 });

@@ -2,23 +2,21 @@ import type { Channel, ChannelMatch } from "@render-factory/sdk";
 import { githubVerify } from "@render-factory/sdk";
 import { normalizeGitHubEvent } from "../lib/github-events.js";
 
-// GitHub redelivers a webhook (manual "Redeliver" or automatic retry on
-// timeout/5xx) using the SAME `x-github-delivery` id — unlike Slack, there's
-// no separate "this is a retry" header to key off of. Without de-duping,
-// a redelivered `issues`/`pull_request` event starts a second run (a second
-// PR, duplicate comments, etc.). Track recently seen delivery ids and ack a
-// duplicate without reprocessing (mirrors the Slack reference channel's
-// retry de-dupe in `match`). In-memory + TTL-bounded: sufficient for a
-// single-process demo; a multi-replica deployment needs a shared/durable
-// dedupe store instead.
+// Best-effort hot-path dedup: avoids unnecessary DB roundtrips for rapid GitHub
+// retries. DURABLE dedup is handled by the framework's one-active-run DB
+// constraint — same conversationId → same thread → unique index rejects a
+// second concurrent run.started. If this process restarts and the Map is empty,
+// a retry that slips through is caught at the DB level (returns 409).
 const SEEN_DELIVERY_TTL_MS = 10 * 60 * 1000;
 const seenDeliveries = new Map<string, number>();
 
 function isDuplicateDelivery(deliveryId: string | null): boolean {
   if (!deliveryId) return false;
   const now = Date.now();
-  for (const [id, ts] of seenDeliveries) {
-    if (now - ts > SEEN_DELIVERY_TTL_MS) seenDeliveries.delete(id);
+  if (seenDeliveries.size > 500) {
+    for (const [id, ts] of seenDeliveries) {
+      if (now - ts > SEEN_DELIVERY_TTL_MS) seenDeliveries.delete(id);
+    }
   }
   if (seenDeliveries.has(deliveryId)) return true;
   seenDeliveries.set(deliveryId, now);
@@ -34,27 +32,13 @@ function ackDuplicate(): ChannelMatch {
   };
 }
 
-// Auto-discovered at POST /channels/github. A channel is the single inbound/
-// outbound message surface. Inbound channels are NOT behind the operator API key
-// (third parties can't send it) — the signature IS the authentication. The
-// declarative `verify` makes the gateway check the GitHub HMAC signature (over
-// the raw body, using GITHUB_WEBHOOK_SECRET) BEFORE this channel runs, so
-// `match`/`parse` can trust the request.
-//
-// Inbound-only (no `deliver`): each event fans out to a workflow by type, and the
-// workflows own their GitHub side effects (comments, PRs, reviews) via ctx.step.
-//   issues / issue_comment  -> issue-to-pr
-//   pull_request            -> pr-review
-// Sub-action routing (opened vs. created vs. synchronize) happens inside the
-// workflows, since `match` only sees headers, not the body.
 const channel: Channel = {
-  // Default target; `parse` sets the per-event target + trigger below.
   target: { workflow: "spec-to-pr" },
   verify: githubVerify(),
 
   match(req: Request) {
     const event = req.headers.get("x-github-event");
-    if (event === "issues" || event === "issue_comment" || event === "pull_request") {
+    if (event === "issues" || event === "issue_comment" || event === "pull_request" || event === "pull_request_review") {
       if (isDuplicateDelivery(req.headers.get("x-github-delivery"))) {
         return ackDuplicate();
       }
@@ -67,12 +51,14 @@ const channel: Channel = {
     const raw = await req.text();
     const event = req.headers.get("x-github-event") ?? "";
     const normalized = normalizeGitHubEvent(event, JSON.parse(raw));
-    const target =
-      event === "pull_request"
-        ? { workflow: "pr-review", trigger: "github.pull_request" }
-        : { workflow: "spec-to-pr", trigger: `github.${event}` };
-    // conversationId keys the external conversation (issue/PR number) — the
-    // resume/outbound-delivery binding lands with channels' conversation support.
+    let target: { workflow: string; trigger: string };
+    if (event === "pull_request") {
+      target = { workflow: "pr-review", trigger: "github.pull_request" };
+    } else if (event === "pull_request_review") {
+      target = { workflow: "pr-fix", trigger: "github.pull_request_review" };
+    } else {
+      target = { workflow: "spec-to-pr", trigger: `github.${event}` };
+    }
     const conversationId =
       normalized.kind === "issue" ? `issue-${normalized.issue.number}`
         : normalized.kind === "pull" ? `pull-${normalized.pull.number}`
