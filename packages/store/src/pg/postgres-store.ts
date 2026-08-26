@@ -4,17 +4,18 @@ import type { Pool, PoolClient } from "pg";
 import type {
   EventLogStore,
   EventInterceptor,
+  EventQueryOptions,
   RunEvent,
   RunEventRecord,
   ToolResult,
 } from "../events.js";
 import { EventRejectedError, buildEventRecord } from "../memory-store.js";
 import type { Message } from "../messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListChildRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "../run-store.js";
 import type { InputRequestProjectionRecord } from "../projections.js";
 import type { Thread, ThreadMessage, ThreadStore } from "../thread-store.js";
 import type { ThreadSurface, ThreadSurfaceStore } from "../thread-surface-store.js";
-import type { ThreadItem, AppendItemInput, ThreadItemStore } from "../thread-item-store.js";
+import type { ThreadItem, AppendItemInput, ThreadItemQueryOptions, ThreadItemStore } from "../thread-item-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "../oauth-store.js";
 import type { ScheduleRecord, ScheduleStore } from "../schedule-store.js";
 import { encrypt, decrypt, encryptionKeyFromEnv } from "../crypto.js";
@@ -327,6 +328,43 @@ export class PgEventLogStore implements EventLogStore {
     const res = await this.pool.query<PgEventRow>(
       `SELECT id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version, artifact_refs
        FROM run_events WHERE ${where} ORDER BY seq`,
+      params,
+    );
+    const events = res.rows.map(mapEventRow);
+    return this.hydrateArtifacts(events, res.rows);
+  }
+
+  async query(runId: string, opts?: EventQueryOptions): Promise<RunEventRecord[]> {
+    const params: unknown[] = [runId, this.tenantId];
+    const conditions = ["run_id = $1", "tenant_id = $2"];
+    let paramIdx = 3;
+
+    if (opts?.afterSeq !== undefined) {
+      conditions.push(`seq > $${paramIdx++}`);
+      params.push(opts.afterSeq);
+    }
+    if (opts?.beforeSeq !== undefined) {
+      conditions.push(`seq < $${paramIdx++}`);
+      params.push(opts.beforeSeq);
+    }
+    if (opts?.since !== undefined) {
+      conditions.push(`ts >= $${paramIdx++}`);
+      params.push(opts.since);
+    }
+    if (opts?.types !== undefined) {
+      conditions.push(`type = ANY($${paramIdx++}::text[])`);
+      params.push(opts.types);
+    }
+
+    const order = opts?.order === "desc" ? "DESC" : "ASC";
+    const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
+    if (opts?.limit !== undefined) params.push(opts.limit);
+    const res = await this.pool.query<PgEventRow>(
+      `SELECT id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version, artifact_refs
+       FROM run_events
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY seq ${order}
+       ${limitClause}`,
       params,
     );
     const events = res.rows.map(mapEventRow);
@@ -888,7 +926,11 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
     return res.rows.map(mapRunRow);
   }
 
-  async listChildRuns(runId: string): Promise<RunRecord[]> {
+  async listChildRuns(runId: string, opts?: ListChildRunsOptions): Promise<RunRecord[]> {
+    const order = opts?.order === "desc" ? "DESC" : "ASC";
+    const limitClause = opts?.limit !== undefined ? "LIMIT $3" : "";
+    const params: unknown[] = [runId, this.tenantId];
+    if (opts?.limit !== undefined) params.push(opts.limit);
     const res = await this.pool.query<PgRunRow>(
       `SELECT id, workflow, status, input, result, error, trigger, total_cost_usd,
               thread_id, user_id, agent_version, parent_span_id, kind, started_at, finished_at
@@ -896,8 +938,9 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
        WHERE tenant_id = $2
          AND parent_span_id IS NOT NULL
          AND (parent_span_id = $1 OR parent_span_id IN (SELECT id FROM spans WHERE run_id = $1))
-       ORDER BY started_at ASC, id ASC`,
-      [runId, this.tenantId],
+       ORDER BY started_at ${order}, id ${order}
+       ${limitClause}`,
+      params,
     );
     return res.rows.map(mapRunRow);
   }
@@ -1128,7 +1171,7 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
     return mapThreadItemRow(res.rows[0]);
   }
 
-  async getItems(threadId: string, opts?: { limit?: number; afterSeq?: number }): Promise<ThreadItem[]> {
+  async getItems(threadId: string, opts?: ThreadItemQueryOptions): Promise<ThreadItem[]> {
     const params: unknown[] = [this.tenantId, threadId];
     const conditions = [`tenant_id = $1`, `thread_id = $2`];
     let paramIdx = 3;
@@ -1136,11 +1179,20 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
       conditions.push(`seq > $${paramIdx++}`);
       params.push(opts.afterSeq);
     }
+    if (opts?.beforeSeq !== undefined) {
+      conditions.push(`seq < $${paramIdx++}`);
+      params.push(opts.beforeSeq);
+    }
+    if (opts?.since !== undefined) {
+      conditions.push(`created_at >= $${paramIdx++}`);
+      params.push(opts.since);
+    }
     const where = `WHERE ${conditions.join(" AND ")}`;
     const limitClause = opts?.limit !== undefined ? `LIMIT $${paramIdx}` : "";
     if (opts?.limit !== undefined) params.push(opts.limit);
+    const order = opts?.order === "desc" ? "DESC" : "ASC";
     const res = await this.pool.query<PgThreadItemRow>(
-      `SELECT * FROM thread_items ${where} ORDER BY seq ${limitClause}`,
+      `SELECT * FROM thread_items ${where} ORDER BY seq ${order} ${limitClause}`,
       params,
     );
     return res.rows.map(mapThreadItemRow);

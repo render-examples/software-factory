@@ -252,6 +252,28 @@ describe("MemoryEventLogStore.append", () => {
     const fromSeq2 = await store.events.read("r1", 2);
     expect(fromSeq2.map(e => e.seq)).toEqual([2, 3]);
   });
+
+  it("query returns bounded forward or reverse windows with filters", async () => {
+    const store = createMemoryStore();
+    await store.events.append(buildEventRecord("r1", { type: "run.started" }, { agentName: AGENT, ts: "2026-01-01T00:00:01.000Z" }));
+    await store.events.append(buildEventRecord("r1", { type: "step.started", name: "work" }, { agentName: AGENT, ts: "2026-01-01T00:00:02.000Z" }));
+    await store.events.append(buildEventRecord("r1", { type: "message.assistant", agentName: AGENT, content: [{ type: "text", text: "update" }] }, { agentName: AGENT, ts: "2026-01-01T00:00:03.000Z" }));
+    await store.events.append(buildEventRecord("r1", { type: "run.completed", result: "done" }, { agentName: AGENT, ts: "2026-01-01T00:00:04.000Z" }));
+
+    const latest = await store.events.query("r1", {
+      since: "2026-01-01T00:00:02.500Z",
+      types: ["message.assistant", "run.completed"],
+      limit: 2,
+      order: "desc",
+    });
+    expect(latest.map((e) => e.seq)).toEqual([4, 3]);
+
+    const older = await store.events.query("r1", { beforeSeq: 4, limit: 1, order: "desc" });
+    expect(older.map((e) => e.seq)).toEqual([3]);
+
+    const newer = await store.events.query("r1", { afterSeq: 2, limit: 1, order: "asc" });
+    expect(newer.map((e) => e.seq)).toEqual([3]);
+  });
 });
 
 describe("projections", () => {

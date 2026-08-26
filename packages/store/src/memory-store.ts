@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   EventLogStore,
   EventInterceptor,
+  EventQueryOptions,
   RunEvent,
   RunEventRecord,
   ToolResult,
@@ -9,7 +10,7 @@ import type {
 import { categoryOf } from "./categories.js";
 import { isTransientEvent } from "./events.js";
 import type { Message } from "./messages.js";
-import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
+import type { RunStore, RunRecord, SpanRecord, ListRunsOptions, ListChildRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult } from "./run-store.js";
 import { TERMINAL_STATUSES } from "./run-store.js";
 import type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
 import type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
@@ -100,6 +101,20 @@ export class MemoryEventLogStore implements EventLogStore {
     const events = this.byRun.get(runId) ?? [];
     const slice = fromSeq !== undefined ? events.filter(e => e.seq >= fromSeq) : events;
     return slice.map(e => ({ ...e }));
+  }
+
+  async query(runId: string, opts?: EventQueryOptions): Promise<RunEventRecord[]> {
+    let events = [...(this.byRun.get(runId) ?? [])];
+    if (opts?.afterSeq !== undefined) events = events.filter((e) => e.seq > opts.afterSeq!);
+    if (opts?.beforeSeq !== undefined) events = events.filter((e) => e.seq < opts.beforeSeq!);
+    if (opts?.since !== undefined) events = events.filter((e) => e.ts >= opts.since!);
+    if (opts?.types !== undefined) {
+      const types = new Set(opts.types);
+      events = events.filter((e) => types.has(e.type));
+    }
+    if (opts?.order === "desc") events.reverse();
+    if (opts?.limit !== undefined) events = events.slice(0, opts.limit);
+    return events.map((e) => ({ ...e }));
   }
 
   async readThread(threadId: string): Promise<RunEventRecord[]> {
@@ -212,8 +227,11 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
     return this.projections.listRuns(opts);
   }
 
-  async listChildRuns(runId: string): Promise<RunRecord[]> {
-    return this.projections.listChildRuns(runId);
+  async listChildRuns(runId: string, opts?: ListChildRunsOptions): Promise<RunRecord[]> {
+    let runs = this.projections.listChildRuns(runId);
+    if (opts?.order === "desc") runs = runs.reverse();
+    if (opts?.limit !== undefined) runs = runs.slice(0, opts.limit);
+    return runs;
   }
 
   async getMessages(runId: string, agentName: string): Promise<Message[]> {

@@ -282,6 +282,33 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
     expect(pgFrom2.map(e => e.type)).toEqual(memFrom2.map(e => e.type));
   });
 
+  it("bounded event queries match for cursors, type filters, and ordering", async () => {
+    const runId = `parity-query-${Date.now()}`;
+    const scripted: Array<{ event: RunEvent; ts: string }> = [
+      { event: { type: "run.started" }, ts: "2026-01-01T00:00:01.000Z" },
+      { event: { type: "step.started", name: "work" }, ts: "2026-01-01T00:00:02.000Z" },
+      { event: { type: "message.assistant", agentName: AGENT, content: [{ type: "text", text: "update" }] }, ts: "2026-01-01T00:00:03.000Z" },
+      { event: { type: "run.completed", result: "done" }, ts: "2026-01-01T00:00:04.000Z" },
+    ];
+    for (const store of [pgStore, memStore]) {
+      for (const { event, ts } of scripted) {
+        await store.events.append(buildEventRecord(runId, event, { agentName: AGENT, ts }));
+      }
+    }
+
+    const opts = {
+      since: "2026-01-01T00:00:02.500Z",
+      types: ["message.assistant", "run.completed"] as RunEvent["type"][],
+      beforeSeq: 5,
+      limit: 2,
+      order: "desc" as const,
+    };
+    const pgEvents = await pgStore.events.query(runId, opts);
+    const memEvents = await memStore.events.query(runId, opts);
+    expect(pgEvents.map((e) => [e.seq, e.type])).toEqual(memEvents.map((e) => [e.seq, e.type]));
+    expect(pgEvents.map((e) => e.seq)).toEqual([4, 3]);
+  });
+
   it("listRuns returns runs in descending start order", async () => {
     const run1 = `parity-list1-${Date.now()}`;
     const run2 = `parity-list2-${Date.now()}`;
