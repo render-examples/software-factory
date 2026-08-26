@@ -22,10 +22,10 @@ Those tools are great for interactive, developer-in-the-loop coding. render-fact
 |---|---|---|
 | **Runs where?** | Your laptop, your terminal session | Always-on cloud service on Render |
 | **Triggered by** | You typing a prompt | Slack messages, GitHub issues/PRs, HTTP API |
-| **Execution model** | Single session, lost if you close the terminal | Durable workflows with event-sourced replay — survives crashes and restarts |
-| **Code execution** | Your local filesystem | Isolated Render Sandboxes — no risk to your machine or production code |
-| **Multi-step work** | You manually chain prompts | Orchestrated pipelines: research -> plan -> implement -> PR, or fan-out 4 reviewers -> judge |
-| **Team visibility** | Only you see it | Results posted to Slack threads, GitHub PR reviews — the whole team sees the work |
+| **Execution model** | Single session, lost if you close the terminal | Durable workflows with event-sourced replay. Survives crashes and restarts |
+| **Code execution** | Your local filesystem | Isolated Render Sandboxes. No risk to your machine or production code |
+| **Multi-step work** | You manually chain prompts | Orchestrated pipelines. For example, research -> plan -> implement -> PR, or fan-out 4 reviewers -> fan-in to a judge agent |
+| **Team visibility** | Only you see it | Results posted to Slack threads, GitHub PR reviews |
 | **Human-in-the-loop** | Always (you're driving) | Selective: deploys require approval, code changes get PR review, everything else runs autonomously |
 | **Cost control** | Per-session token limits | Per-agent budgets (max iterations, max USD, wall-clock timeout) baked into agent definitions |
 
