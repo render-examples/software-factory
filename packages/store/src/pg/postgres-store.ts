@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { Pool, PoolClient } from "pg";
 import type {
@@ -40,6 +41,52 @@ const MAX_PAYLOAD_BYTES = 8_000;
  */
 function jsonbStringify(value: unknown): string {
   return JSON.stringify(value).replace(/\\u0000/g, "");
+}
+
+/**
+ * Fields eligible for deflation, checked in priority order (largest first).
+ * Each entry maps an event type to the payload field that may be large.
+ */
+const DEFLATABLE_FIELDS: Array<{ types: string[]; field: string }> = [
+  { types: ["run.completed", "step.completed"], field: "result" },
+  { types: ["message.assistant", "message.user"], field: "content" },
+  { types: ["run.started"], field: "input" },
+];
+
+interface DeflationResult {
+  payload: RunEvent;
+  artifactRefs: Record<string, string>;
+  artifacts: Array<{ id: string; fieldPath: string; content: unknown }>;
+}
+
+/**
+ * Extract large fields from an oversized payload into separate artifacts.
+ * Iteratively deflates the largest eligible field until the payload fits
+ * within MAX_PAYLOAD_BYTES, or all candidates are exhausted.
+ */
+function deflatePayload(payload: RunEvent): DeflationResult {
+  const refs: Record<string, string> = {};
+  const artifacts: Array<{ id: string; fieldPath: string; content: unknown }> = [];
+  let working = { ...payload } as Record<string, unknown>;
+
+  for (const { types, field } of DEFLATABLE_FIELDS) {
+    if (!types.includes(payload.type)) continue;
+    const value = working[field];
+    if (value === undefined || value === null) continue;
+
+    const fieldSize = Buffer.byteLength(JSON.stringify(value), "utf-8");
+    if (fieldSize < 200) continue;
+
+    const artifactId = randomUUID();
+    refs[field] = artifactId;
+    artifacts.push({ id: artifactId, fieldPath: field, content: value });
+    working = { ...working, [field]: `__artifact_ref:${artifactId}` };
+
+    const check = Buffer.byteLength(jsonbStringify(working), "utf-8");
+    if (check <= MAX_PAYLOAD_BYTES) break;
+  }
+
+  return { payload: working as unknown as RunEvent, artifactRefs: refs, artifacts };
 }
 
 /**
@@ -159,11 +206,20 @@ export class PgEventLogStore implements EventLogStore {
     }
     record = { ...record, payload, type: payload.type, category: categoryOf(payload.type) };
 
-    const serialized = jsonbStringify(payload);
+    let serialized = jsonbStringify(payload);
+    let artifactsToInsert: Array<{ id: string; fieldPath: string; content: unknown }> = [];
+
     if (Buffer.byteLength(serialized, "utf-8") > MAX_PAYLOAD_BYTES) {
-      throw new EventRejectedError(
-        `Payload exceeds ${MAX_PAYLOAD_BYTES} bytes. Use artifact_refs for large content.`,
-      );
+      const deflated = deflatePayload(payload);
+      if (deflated.artifacts.length === 0) {
+        throw new EventRejectedError(
+          `Payload exceeds ${MAX_PAYLOAD_BYTES} bytes and no deflatable fields found.`,
+        );
+      }
+      payload = deflated.payload;
+      record = { ...record, payload, artifactRefs: { ...record.artifactRefs, ...deflated.artifactRefs } };
+      serialized = jsonbStringify(payload);
+      artifactsToInsert = deflated.artifacts;
     }
 
     const client = await this.pool.connect();
@@ -194,6 +250,15 @@ export class PgEventLogStore implements EventLogStore {
         category,
         type: record.payload.type,
       };
+
+      // Persist deflated artifacts within the same transaction.
+      for (const art of artifactsToInsert) {
+        await client.query(
+          `INSERT INTO artifacts (id, tenant_id, run_id, field_path, content)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [art.id, this.tenantId, stored.runId, art.fieldPath, jsonbStringify(art.content)],
+        );
+      }
 
       await client.query(
         `INSERT INTO run_events (id, tenant_id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version, artifact_refs, classification, correlation_id, causation_id, idempotency_key)
@@ -253,23 +318,58 @@ export class PgEventLogStore implements EventLogStore {
       params.push(fromSeq);
     }
     const res = await this.pool.query<PgEventRow>(
-      `SELECT id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version
+      `SELECT id, run_id, seq, ts, category, type, agent_name, span_id, parent_span_id, payload, version, artifact_refs
        FROM run_events WHERE ${where} ORDER BY seq`,
       params,
     );
-    return res.rows.map(mapEventRow);
+    const events = res.rows.map(mapEventRow);
+    return this.hydrateArtifacts(events, res.rows);
   }
 
   async readThread(threadId: string): Promise<RunEventRecord[]> {
     const res = await this.pool.query<PgEventRow>(
-      `SELECT e.id, e.run_id, e.seq, e.ts, e.category, e.type, e.agent_name, e.span_id, e.parent_span_id, e.payload, e.version
+      `SELECT e.id, e.run_id, e.seq, e.ts, e.category, e.type, e.agent_name, e.span_id, e.parent_span_id, e.payload, e.version, e.artifact_refs
        FROM run_events e
        JOIN runs r ON r.id = e.run_id
        WHERE r.thread_id = $1 AND r.tenant_id = $2
        ORDER BY e.ts, e.run_id, e.seq`,
       [threadId, this.tenantId],
     );
-    return res.rows.map(mapEventRow);
+    const events = res.rows.map(mapEventRow);
+    return this.hydrateArtifacts(events, res.rows);
+  }
+
+  private async hydrateArtifacts(events: RunEventRecord[], rows: PgEventRow[]): Promise<RunEventRecord[]> {
+    const allRefs: string[] = [];
+    const refMap = new Map<string, { eventIdx: number; field: string }>();
+
+    for (let i = 0; i < rows.length; i++) {
+      const refs = rows[i].artifact_refs as Record<string, string> | null;
+      if (!refs) continue;
+      for (const [field, artifactId] of Object.entries(refs)) {
+        allRefs.push(artifactId);
+        refMap.set(artifactId, { eventIdx: i, field });
+      }
+    }
+
+    if (allRefs.length === 0) return events;
+
+    const artRes = await this.pool.query<{ id: string; content: unknown }>(
+      `SELECT id, content FROM artifacts WHERE id = ANY($1)`,
+      [allRefs],
+    );
+
+    const contentById = new Map<string, unknown>();
+    for (const row of artRes.rows) contentById.set(row.id, row.content);
+
+    for (const [artifactId, { eventIdx, field }] of refMap) {
+      const content = contentById.get(artifactId);
+      if (content === undefined) continue;
+      const event = events[eventIdx];
+      (event.payload as Record<string, unknown>)[field] = content;
+    }
+
+    return events;
   }
 
   tail(
@@ -1323,6 +1423,7 @@ interface PgEventRow {
   parent_span_id: string | null;
   payload: RunEvent;
   version: number;
+  artifact_refs: Record<string, string> | null;
 }
 
 interface PgRunRow {
