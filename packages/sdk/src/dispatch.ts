@@ -249,7 +249,17 @@ export class RenderWorkflowsDispatcher implements TaskDispatcher {
 
     const { Render } = await importRenderSdk();
     const client = new Render(renderClientOptions());
-    await client.workflows.startTask(taskSlug, [taskInput]);
+    try {
+      await client.workflows.startTask(taskSlug, [taskInput]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const extra = (err as { response?: unknown })?.response
+        ? ` | response: ${JSON.stringify((err as { response?: unknown }).response)}`
+        : (err as { cause?: unknown })?.cause
+          ? ` | cause: ${JSON.stringify((err as { cause?: unknown }).cause)}`
+          : "";
+      throw new Error(`Failed to startTask("${taskSlug}"): ${msg}${extra}`);
+    }
   }
 }
 
