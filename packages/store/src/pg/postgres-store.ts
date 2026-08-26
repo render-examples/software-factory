@@ -49,7 +49,8 @@ function jsonbStringify(value: unknown): string {
  */
 const DEFLATABLE_FIELDS: Array<{ types: string[]; field: string }> = [
   { types: ["run.completed", "step.completed"], field: "result" },
-  { types: ["message.assistant", "message.user"], field: "content" },
+  { types: ["message.assistant", "message.user", "message.tool"], field: "content" },
+  { types: ["tool.result"], field: "content" },
   { types: ["run.started"], field: "input" },
 ];
 
