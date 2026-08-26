@@ -1,148 +1,159 @@
 # render-factory
 
-A framework for building production-grade AI agents on Render with markdown-first authoring, durable orchestration, and built-in ops.
-
-`render-factory` gives you a full platform for agent systems:
-
-- **Authoring that stays simple**: agents are `agents/*.md` files (prompt + config).
-- **Runtime that scales**: same code path locally and on Render.
-- **Durability by default**: append-only event log, replay-safe workflows, queue-backed chat lane.
-- **Operational features built in**: approvals (HITL), context management, OAuth connections, schedules, and retention.
-- **Deep observability**: spans, messages, tool calls, and costs from one canonical event stream.
+A framework for building AI coding agents on Render. Markdown-first agent authoring, durable workflow orchestration, sandboxed code execution, and multi-channel delivery (Slack, GitHub).
 
 ---
 
-## Why choose render-factory
+## Architecture
 
-- **Fast to start**: `npm create render-factory` scaffolds a complete, deployable project.
-- **Clear mental model**: `agent.run()` for in-process calls, `agent.task()` for isolated durable calls.
-- **Debuggable systems**: every meaningful event is persisted and streamable.
-- **Production-ready architecture**: gateway + worker lanes + Postgres, not a toy loop.
+Two services, one Postgres database:
 
----
-
-## Key Features and Capabilities
-
-- **Markdown agents** with frontmatter for model, tools, budget, approvals, plan, and structured output.
-- **Workflow orchestration** with deterministic `ctx.step()` replay semantics.
-- **Two execution lanes**:
-  - durable, isolated tasks on Render Workflows,
-  - interactive chat on warm workers backed by `run_jobs`.
-- **Event-sourced platform model**: `run_events` is canonical; runs/spans/messages/approvals are projections.
-- **Tooling support** for local tools, MCP sources, and dynamic subagent delegation (in-process or isolated).
-- **Operator UI at `/ui`** for runs, traces, event log, approvals, chat, schedules, and ops.
-
----
-
-## Architecture Overview
-
-```text
-Triggers (HTTP / webhook / cron / chat)
-                 |
-              Gateway
-    (ui, auth, API, SSE, routing)
-          /                 \
-   Lane A (durable)      Lane B (interactive)
- workflow roots via      run_jobs queue
- Render Workflows        + warm chat worker
-          \                 /
-             Postgres Store
-   run_events (canonical log) + projections
+```
+Triggers (Slack / GitHub webhooks / HTTP API)
+                    |
+                 Gateway
+       (auth, webhooks, thread management)
+                    |
+            Render Workflows
+   (chat turns, spec-to-pr, pr-review, pr-fix)
+                    |
+              Postgres Store
+    run_events (canonical log) + projections
+    thread_items + thread_surfaces
 ```
 
-Monorepo package responsibilities:
+- **Gateway** — thin HTTP front door. Verifies webhooks, creates threads/surfaces, dispatches workflow tasks. No agent execution.
+- **Workflows Host** — runs all agent compute. Chat turns, multi-step pipelines (spec-to-pr), code reviews. Uses Render Sandboxes for isolated code execution.
 
-| Package | Role |
-|---|---|
-| [`@render-factory/sdk`](packages/sdk) | Public API: runtime creation, loading, workflows, dispatch, worker |
-| [`@render-factory/engine`](packages/engine) | Agent loop, tools, model clients, context management |
-| [`@render-factory/store`](packages/store) | Event log, projections, queue, delta bus, retention, persistence |
-| [`@render-factory/gateway`](packages/gateway) | HTTP service, auth, routes, SSE, OAuth, operator UI |
-| [`create-render-factory`](packages/create-render-factory) | Scaffolder (`npm create`) |
+### Data Model
+
+| Entity | Purpose |
+|--------|---------|
+| **Thread** | Persistent conversation. Owns surfaces and items. |
+| **ThreadSurface** | Where to deliver notifications (Slack channel:ts, GitHub issue). |
+| **ThreadItem** | User-facing timeline: messages, workflow results, status updates. |
+| **Run** | Unit of execution on a thread. Interactive (chat turn) or background (spec-to-pr). |
+| **RunEvent** | Internal append-only log per run. |
+
+Workflows dispatched from a conversation inherit the thread. When they complete, results are appended as thread items and all surfaces are notified automatically.
 
 ---
 
-## Agent Authoring Overview
+## Project Structure
 
-Agents are markdown files in `agents/`.
+```
+render-factory/
+├── packages/                  # Reusable libraries
+│   ├── engine/                # Agent loop, tools, model clients, context
+│   ├── sdk/                   # Runtime, workflows, dispatch, loading
+│   ├── store/                 # Event log, projections, surfaces, items
+│   ├── gateway/               # HTTP service, auth, routes, SSE, operator UI
+│   ├── sandbox/render/        # Render Sandbox provider
+│   ├── channels/slack/        # Slack streaming components
+│   ├── policy/                # Policy engine
+│   └── control-worker/        # Durable command queue
+├── app/                       # Deployable application
+│   ├── agents/                # Agent definitions (.md)
+│   ├── tools/                 # sandbox, deploy, start_workflow
+│   ├── channels/              # slack.ts, github.ts
+│   ├── workflows/             # chat-turn, spec-to-pr, pr-review, pr-fix
+│   └── src/                   # server.ts (gateway), workflows.ts (host)
+├── Dockerfile
+├── docker-compose.yaml
+└── render.yaml                # Render Blueprint
+```
+
+---
+
+## Agents
+
+Agents are markdown files in `app/agents/`:
 
 ```md
 ---
-model: medium
-description: Security reviewer
-tools: [github]
-skills: [security-patterns]
-permissions:
-  requireApproval: [github]
+description: Implements the plan, edits files, and runs tests
+tools: [sandbox]
 budget:
-  maxIterations: 20
-  maxCostUsd: 5
-output:
-  type: object
-  properties:
-    decision: { type: string, enum: [approve, reject] }
+  maxIterations: 60
+  maxCostUsd: 15
 ---
 
-Review the patch for security risks and return a decision.
+You are the Implement phase of a Research -> Plan -> Implement loop.
+Your input provides sandbox_id and repoDir...
 ```
 
-Common authoring building blocks:
-
-- **Tools**: `tools/<name>/index.ts` (`defineTool` or `defineMcpSource`)
-- **Skills**: `skills/<name>/SKILL.md`
-- **Workflows**: `workflows/<name>/index.ts` (`workflow(async (ctx) => { ... })`)
-- **Shared defaults**: `agents/_shared.md`
+Current agents: `assistant`, `triage`, `researcher`, `planner`, `implementer`, `security`, `performance`, `correctness`, `tests`, `judge`, `deployer`, `lint`.
 
 ---
 
-## Quickstart Commands
+## Workflows
 
-### 1) Scaffold a new project
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `chat-turn` | Slack message / API thread | Drives one interactive agent turn, posts reply |
+| `spec-to-pr` | `start_workflow` tool | Triage, research, plan, implement in a sandbox, open PR |
+| `pr-review` | GitHub `pull_request` webhook | Fan-out 4 reviewers, judge, post GitHub review |
+| `pr-fix` | GitHub PR comment | Apply fixes in sandbox, push to branch |
 
-```sh
-npm create render-factory@latest my-agents
-cd my-agents
-npm install
-```
-
-### 2) Configure and run locally
-
-```sh
-cp .env.example .env
-# set ANTHROPIC_API_KEY or OPENAI_API_KEY
-# set RENDER_FACTORY_API_KEY
-npm run dev
-```
-
-This starts the gateway on `http://localhost:3000` (inline mode by default).
-
-### 3) Dispatch a workflow
-
-```sh
-curl -X POST localhost:3000/workflows/code-review \
-  -H "Authorization: Bearer $RENDER_FACTORY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"input":{"diff":"--- a/app.ts\n+++ b/app.ts\n+ const x = 1"}}'
-```
-
-### 4) Open the operator UI
-
-- Visit `http://localhost:3000/ui`
-- Sign in with your API key
-- Inspect runs, traces, approvals, and chat live
+The `assistant` agent can trigger `spec-to-pr` via the `start_workflow` tool. The workflow runs on the same thread, so results are posted back to the originating Slack conversation automatically.
 
 ---
 
+## Tools
 
-## Contributing to this repo
+| Tool | Description |
+|------|-------------|
+| `sandbox` | Exec, read, write, search in Render Sandboxes (explicit `sandbox_id` per call) |
+| `start_workflow` | Dispatch a background workflow from a chat conversation |
+| `deploy` | Deploy to an environment (approval-gated) |
+
+---
+
+## Local Development
+
+```sh
+# Prerequisites: Node 22+, pnpm, Docker, Render CLI
+
+# 1. Install
+pnpm install
+pnpm build
+
+# 2. Start Postgres
+docker compose up -d postgres
+
+# 3. Start workflows host (terminal 1)
+cd app && source ../.env && render workflows dev -- tsx src/workflows.ts
+
+# 4. Start gateway (terminal 2)
+cd app && source ../.env && RENDER_USE_LOCAL_DEV=true PORT=3010 tsx src/server.ts
+
+# 5. Test
+curl -X POST localhost:3010/threads \
+  -H "Authorization: Bearer dev-key" \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+---
+
+## Deploy to Render
+
+The gateway deploys via the `render.yaml` Blueprint (Docker). The Workflows service is created manually in the Dashboard:
+
+- **Gateway**: Docker, `render.yaml` Blueprint handles it
+- **Workflows**: Docker (same Dockerfile), start command: `node app/dist/src/workflows.js`
+- **Postgres**: Managed, provisioned by Blueprint
+
+Required env vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `RENDER_API_KEY`, `RENDER_WORKFLOW_SLUG`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `GITHUB_TOKEN`.
+
+---
+
+## Contributing
 
 ```sh
 pnpm install
 pnpm build
 pnpm typecheck
-pnpm lint
 pnpm test
-pnpm check:bundle-size
 ```
 
-Node 20+, ESM-only, strict TypeScript.
+Node 22+, ESM-only, strict TypeScript, pnpm workspace.
