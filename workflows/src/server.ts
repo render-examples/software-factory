@@ -4,7 +4,7 @@ import { startGateway } from "@render-factory/gateway";
 import { ensureWorkflowSlug } from "../lib/render.js";
 import { bindWorkflows } from "../tools/start_workflow/index.js";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = new URL("../..", import.meta.url).pathname;
 
 ensureWorkflowSlug();
 

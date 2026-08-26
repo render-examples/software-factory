@@ -9,14 +9,19 @@ import { RunPaused } from "@render-factory/engine";
  * mid-stream via hasStarted() guard) and deliver the reply.
  */
 export default workflow({ name: "chat-turn" }, async (ctx) => {
-  await ctx.step("drive", async () => {
+  const driveResult = await ctx.step("drive", async () => {
     try {
       await driveAgentTurn(ctx.runtime, ctx.runId);
+      return { ok: true, paused: false };
     } catch (err) {
-      if (!(err instanceof RunPaused)) throw err;
+      if (err instanceof RunPaused) return { ok: true, paused: true };
+      throw err;
     }
-    return { ok: true };
   });
+
+  if (driveResult.paused) {
+    return { status: "paused" };
+  }
 
   await ctx.step("deliver", async () => {
     await deliverForRun(ctx.runtime, ctx.runId);

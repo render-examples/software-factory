@@ -10,7 +10,7 @@ import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@
 import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = new URL("../..", import.meta.url).pathname;
 
 ensureWorkflowSlug();
 
