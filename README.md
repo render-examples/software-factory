@@ -4,13 +4,13 @@ An open-source, self-hosted platform and framework for building autonomous codin
 
 ## What is render-factory?
 
-You define agents in markdown, wire them into durable multi-step workflows, and deploy them to Render. They receive work from Slack and GitHub, execute code in sandboxes, and deliver results back to those surfaces automatically.
+You define agents in markdown, wire them as durable multi-step workflows, and deploy them to Render. They receive work from Slack and GitHub, execute code in sandboxes, and deliver results back to those surfaces automatically.
 
 A GitHub issue comes in → the agent triages it, researches the codebase, plans a change, implements it in an isolated sandbox, and opens a pull request. A PR is opened → the agent fans out specialized reviewers (security, performance, correctness, tests), aggregates their findings, and posts a GitHub review. Someone asks for a fix in a PR comment → the agent applies it and pushes to the branch.
 
 ## Who is this for?
 
-- **Teams that want self-hosted coding agent embedded in their existing workflow.** The agent meets you where you already are instead of requiring a new tool or UI.
+- **Teams that want self-hosted cloud coding agents embedded in their existing workflow.** The agent meets you where you already are instead of requiring a new tool or UI.
 - **Platform teams building internal developer tools.** render-factory is a framework, not a product. You own the agents, workflows, tools, and deployment. Fork it and customize the behavior for your codebase and process.
 - **Anyone outgrowing one-shot CLI agents.** If you've been using Claude Code, Codex, or similar tools and want an agent that persists across sessions, handles multi-step work durably, runs in CI-like isolation, and integrates with your team's channels: this is the next step.
 
@@ -29,30 +29,13 @@ Those tools are great for interactive, developer-in-the-loop coding. render-fact
 | **Human-in-the-loop** | Always (you're driving) | Selective: deploys require approval, code changes get PR review, everything else runs autonomously |
 | **Cost control** | Per-session token limits | Per-agent budgets (max iterations, max USD, wall-clock timeout) baked into agent definitions |
 
-In short: CLI agents are a power tool for one developer. render-factory is infrastructure for a team's autonomous coding agents that work in the background, durably, across your existing surfaces.
-
 ---
 
 ## Architecture
 
-Two services, one Postgres database:
-
-```
-Triggers (Slack / GitHub webhooks / HTTP API)
-                    |
-                 Gateway
-       (auth, webhooks, thread management)
-                    |
-            Render Workflows
-   (chat turns, spec-to-pr, pr-review, pr-fix)
-                    |
-              Postgres Store
-    run_events (canonical log) + projections
-    thread_items + thread_surfaces
-```
-
 - **Gateway** — thin HTTP front door. Verifies webhooks, creates threads/surfaces, dispatches workflow tasks. No agent execution.
-- **Workflows Host** — runs all agent compute. Chat turns, multi-step pipelines (spec-to-pr), code reviews. Uses Render Sandboxes for isolated code execution.
+- **Workflows Host** — runs all agent compute. Chat turns, multi-step pipelines (spec-to-pr), code reviews. Agents use Render Sandboxes for isolated code execution.
+- **Postgres** — event-sourced store. `run_events` (canonical append-only log) + projections (`thread_items`, `thread_surfaces`).
 
 ### Data Model
 
