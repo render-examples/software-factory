@@ -1,5 +1,5 @@
 {
-  "name": "@render-factory/workflows",
+  "name": "@render-factory/app",
   "version": "0.0.0",
   "private": true,
   "type": "module",

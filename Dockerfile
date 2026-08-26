@@ -14,4 +14,4 @@ RUN pnpm build
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["node", "workflows/dist/src/server.js"]
+CMD ["node", "app/dist/src/server.js"]
