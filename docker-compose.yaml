@@ -1,7 +1,7 @@
 # Full local stack for the render-factory monorepo.
 #
 #   postgres     — event log + projections
-#   gateway      — web front door; dispatches all agent work to workflows host
+#   gateway      — web front door; dispatches all agent work to the workflows host
 #   workflows    — Render Workflows host: runs chat turns, spec-to-pr, pr-review
 #
 # Usage:
@@ -37,7 +37,7 @@ services:
   gateway:
     build: .
     image: render-factory:latest
-    command: ["pnpm", "--filter", "@render-factory/workflows", "start"]
+    command: ["pnpm", "--filter", "@render-factory/app", "start"]
     ports:
       - "${GATEWAY_HOST_PORT:-3010}:3000"
     depends_on:
@@ -50,7 +50,7 @@ services:
   workflows:
     build: .
     image: render-factory:latest
-    command: ["pnpm", "--filter", "@render-factory/workflows", "workflows"]
+    command: ["pnpm", "--filter", "@render-factory/app", "workflows"]
     depends_on:
       postgres:
         condition: service_healthy

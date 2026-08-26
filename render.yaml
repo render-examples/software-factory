@@ -17,7 +17,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: pnpm --filter @render-factory/workflows start
+    dockerCommand: pnpm --filter @render-factory/app start
     plan: standard
     healthCheckPath: /health
     envVars:
