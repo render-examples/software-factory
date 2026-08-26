@@ -5,6 +5,11 @@ import type {
   ThreadStore,
   Thread,
   ThreadMessage,
+  ThreadSurfaceStore,
+  ThreadSurface,
+  ThreadItemStore,
+  ThreadItem,
+  AppendItemInput,
   OAuthStore,
   ScheduleStore,
   ScheduleRecord,
@@ -115,6 +120,10 @@ export interface AgentRuntime {
   readonly store: RunStore;
   /** Thread metadata + transcript store. Defaults to the run store when it implements ThreadStore. */
   readonly threadStore: ThreadStore;
+  /** Thread surface bindings (channel + address per thread). Defaults to the run store when it implements ThreadSurfaceStore. */
+  readonly surfaceStore: ThreadSurfaceStore;
+  /** Thread-level item log (user messages, results, errors). Defaults to the run store when it implements ThreadItemStore. */
+  readonly itemStore: ThreadItemStore;
   /** OAuth connection store (per-user tokens). Defaults to the run store when it implements OAuthStore. */
   readonly oauthStore: OAuthStore;
   /** Runtime-managed schedule store. Defaults to the run store when it implements ScheduleStore. */
@@ -157,7 +166,7 @@ export interface AgentRuntime {
   /**
    * Discovered channels keyed by id. Populated by `loadProject`; used by the
    * gateway's channel routes (inbound) and the outbound delivery path
-   * (`deliverForRun` + the worker's delivery producer).
+   * (`notifyThreadSurfaces`).
    */
   readonly channels: Map<string, Channel>;
 }
@@ -198,6 +207,8 @@ export interface CreateRuntimeOptions {
   oauthRefreshers?: Map<string, OAuthRefresher>;
   /** Discovered channels (keyed by id); usually populated by `loadProject`. */
   channels?: Map<string, Channel>;
+  surfaceStore?: ThreadSurfaceStore;
+  itemStore?: ThreadItemStore;
   /**
    * Pluggable sandbox provider. When set, a "sandbox" tool source is
    * automatically registered that connects to sandboxes by ID. Agents
@@ -314,6 +325,8 @@ export async function createRuntime(opts: CreateRuntimeOptions): Promise<AgentRu
   return {
     store,
     threadStore: asThreadStore(store),
+    surfaceStore: opts.surfaceStore ?? asSurfaceStore(store),
+    itemStore: opts.itemStore ?? asItemStore(store),
     oauthStore,
     scheduleStore: asScheduleStore(store),
     oauthRefreshers,
@@ -378,6 +391,72 @@ function asScheduleStore(store: RunStore): ScheduleStore {
     async deleteSchedule(id: string) { schedules.delete(id); },
     async listSchedules() { return [...schedules.values()].map(s => ({ ...s })); },
     async listEnabled() { return [...schedules.values()].filter(s => s.enabled).map(s => ({ ...s })); },
+  };
+}
+
+/**
+ * Use the run store as the surface store when it implements that surface (the
+ * bundled Postgres store does). Falls back to an in-memory store.
+ */
+function asSurfaceStore(store: RunStore): ThreadSurfaceStore {
+  const candidate = store as Partial<ThreadSurfaceStore>;
+  if (typeof candidate.upsertSurface === "function") return store as unknown as ThreadSurfaceStore;
+  const surfaces = new Map<string, ThreadSurface[]>();
+  let nextId = 0;
+  return {
+    async upsertSurface(threadId: string, channel: string, address: string): Promise<ThreadSurface> {
+      const list = surfaces.get(threadId) ?? [];
+      const existing = list.find((s) => s.channel === channel && s.address === address);
+      if (existing) return { ...existing };
+      const surface: ThreadSurface = { id: String(++nextId), threadId, channel, address, createdAt: new Date().toISOString() };
+      list.push(surface);
+      surfaces.set(threadId, list);
+      return { ...surface };
+    },
+    async getSurfaces(threadId: string): Promise<ThreadSurface[]> {
+      return (surfaces.get(threadId) ?? []).map((s) => ({ ...s }));
+    },
+    async removeSurface(id: string): Promise<void> {
+      for (const [tid, list] of surfaces) {
+        const idx = list.findIndex((s) => s.id === id);
+        if (idx >= 0) { list.splice(idx, 1); if (list.length === 0) surfaces.delete(tid); return; }
+      }
+    },
+  };
+}
+
+/**
+ * Use the run store as the item store when it implements that surface (the
+ * bundled Postgres store does). Falls back to an in-memory store.
+ */
+function asItemStore(store: RunStore): ThreadItemStore {
+  const candidate = store as Partial<ThreadItemStore>;
+  if (typeof candidate.appendItem === "function") return store as unknown as ThreadItemStore;
+  const items = new Map<string, ThreadItem[]>();
+  return {
+    async appendItem(input: AppendItemInput): Promise<ThreadItem> {
+      const list = items.get(input.threadId) ?? [];
+      const item: ThreadItem = {
+        id: String(list.length + 1),
+        threadId: input.threadId,
+        runId: input.runId,
+        seq: list.length + 1,
+        kind: input.kind,
+        role: input.role,
+        content: input.content,
+        data: input.data,
+        createdAt: new Date().toISOString(),
+      };
+      list.push(item);
+      items.set(input.threadId, list);
+      return { ...item };
+    },
+    async getItems(threadId: string, opts?: { limit?: number; afterSeq?: number }): Promise<ThreadItem[]> {
+      let list = items.get(threadId) ?? [];
+      if (opts?.afterSeq != null) list = list.filter((i) => i.seq > opts.afterSeq!);
+      if (opts?.limit != null) list = list.slice(0, opts.limit);
+      return list.map((i) => ({ ...i }));
+    },
   };
 }
 

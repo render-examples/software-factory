@@ -43,10 +43,6 @@ export interface WorkflowContext {
 export interface WorkflowDispatchOptions {
   threadId?: string;
   userId?: string;
-  /** External channel this run was triggered from (outbound delivery + resume mapping). */
-  channel?: string;
-  /** The channel's conversation id (Slack `channel:ts`, GitHub issue #, …). */
-  externalConversationId?: string;
 }
 
 export interface WorkflowDefinition {
@@ -121,10 +117,6 @@ export function workflow(
           trigger,
           threadId: dispatchOpts?.threadId,
           userId: dispatchOpts?.userId,
-          channel: dispatchOpts?.channel,
-          externalConversationId: dispatchOpts?.externalConversationId,
-          // Root span is `workflow`-kind, not agent: the handler orchestrates
-          // (steps + agent dispatches); child agent runs nest under this span.
           spanKind: "workflow",
         }, { agentName: boundName, spanId: runId }),
       );
@@ -153,6 +145,7 @@ export function workflow(
             id: runId,
             workflow: boundName,
             status: "failed",
+            kind: "interactive" as const,
             totalCostUsd: 0,
             startedAt: new Date().toISOString(),
             input,
@@ -173,6 +166,7 @@ export function workflow(
         id: runId,
         workflow: boundName,
         status: "running",
+        kind: "interactive" as const,
         totalCostUsd: 0,
         startedAt: new Date().toISOString(),
         input,
