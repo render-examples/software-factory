@@ -1,7 +1,9 @@
 import { defineTool } from "@render-factory/sdk";
 import type { WorkflowDefinition } from "@render-factory/sdk";
+import type { RunStore } from "@render-factory/store";
 
 let _workflows: Map<string, WorkflowDefinition> | undefined;
+let _store: RunStore | undefined;
 
 /**
  * Late-bind the workflow registry. Called by the server entrypoint after
@@ -9,6 +11,13 @@ let _workflows: Map<string, WorkflowDefinition> | undefined;
  */
 export function bindWorkflows(wf: Map<string, WorkflowDefinition>): void {
   _workflows = wf;
+}
+
+/**
+ * Late-bind the run store so the tool can look up the calling run's threadId.
+ */
+export function bindStore(store: RunStore): void {
+  _store = store;
 }
 
 export default defineTool({
@@ -51,7 +60,7 @@ export default defineTool({
     },
     required: ["workflow", "spec"],
   },
-  async invoke(input) {
+  async invoke(input, ctx) {
     const { workflow: name, spec } = (input ?? {}) as {
       workflow?: string;
       spec?: unknown;
@@ -76,10 +85,13 @@ export default defineTool({
       };
     }
 
-    const run = await wf.dispatch(spec, "assistant.start_workflow", {
-      // TODO: pass threadId from calling run's context so the workflow
-      // belongs to the same thread and can notify surfaces on completion
-    });
+    let threadId: string | undefined;
+    if (_store && ctx.runId) {
+      const callingRun = await _store.getRun(ctx.runId);
+      threadId = callingRun?.threadId;
+    }
+
+    const run = await wf.dispatch(spec, "assistant.start_workflow", { threadId });
     return `Workflow "${name}" started (run ${run.id}). Results will be posted back when complete.`;
   },
 });
