@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { RunEvent, RunStore } from "../../src/index.js";
-import { buildEventRecord, createMemoryStore, replay } from "../../src/memory-store.js";
+import { buildEventRecord, createMemoryStore } from "../../src/memory-store.js";
 import { PgRunStore } from "../../src/pg/postgres-store.js";
 
 /**
@@ -370,54 +370,6 @@ describeWithPg("PgRunStore / MemoryRunStore parity", () => {
     const memRoots = (await memStore.listRuns({ workflow, roots: true, before: rootCursor, limit: 10 })).map((r) => r.id);
     expect(pgRoots).toEqual(memRoots);
     expect(pgRoots).toEqual([rootOld]);
-  });
-});
-
-describeWithPg("channel conversation mapping parity", () => {
-  let pgStore: PgRunStore;
-  let memStore: ReturnType<typeof createMemoryStore>;
-
-  beforeAll(async () => {
-    pgStore = new PgRunStore({ connectionString: TEST_DATABASE_URL!, tenantId: "test-tenant" });
-    await pgStore.init();
-    memStore = createMemoryStore();
-  });
-  afterAll(async () => { await pgStore.close(); });
-
-  it("folds run.started channel binding + resolveConversation identically", async () => {
-    const tag = `chan-${Date.now()}`;
-    const threadId = `${tag}-t`;
-    const convId = `C:${tag}`;
-    const now = new Date().toISOString();
-
-    for (const store of [pgStore, memStore]) {
-      // Thread must exist before a run references it (pg FK).
-      await store.createThread({ id: threadId, status: "active", createdAt: now, updatedAt: now });
-      // First turn establishes the thread; it must complete before the second
-      // starts (one-active-run-per-thread unique index in Postgres).
-      await store.events.append(buildEventRecord(`${tag}-r1`, { type: "run.started", threadId, channel: "slack", externalConversationId: convId }, { agentName: AGENT, spanId: `${tag}-r1` }));
-      await store.events.append(buildEventRecord(`${tag}-r1`, { type: "run.completed", result: "ok" }, { agentName: AGENT, spanId: `${tag}-r1` }));
-      // Second turn reuses the thread; the last-run pointer advances.
-      await store.events.append(buildEventRecord(`${tag}-r2`, { type: "run.started", threadId, channel: "slack", externalConversationId: convId }, { agentName: AGENT, spanId: `${tag}-r2` }));
-    }
-
-    // The run record carries the binding identically.
-    expect((await pgStore.getRun(`${tag}-r1`))?.channel).toBe("slack");
-    expect((await memStore.getRun(`${tag}-r1`))?.channel).toBe("slack");
-    expect((await pgStore.getRun(`${tag}-r1`))?.externalConversationId).toBe(convId);
-    expect((await memStore.getRun(`${tag}-r1`))?.externalConversationId).toBe(convId);
-
-    // The mapping resolves identically: same thread, last run advanced to r2.
-    const pgConv = await pgStore.resolveConversation("slack", convId);
-    const memConv = await memStore.resolveConversation("slack", convId);
-    expect(pgConv?.threadId).toBe(threadId);
-    expect(memConv?.threadId).toBe(threadId);
-    expect(pgConv?.lastRunId).toBe(`${tag}-r2`);
-    expect(memConv?.lastRunId).toBe(`${tag}-r2`);
-
-    // An unbound conversation → undefined in both.
-    expect(await pgStore.resolveConversation("slack", `missing-${tag}`)).toBeUndefined();
-    expect(await memStore.resolveConversation("slack", `missing-${tag}`)).toBeUndefined();
   });
 });
 

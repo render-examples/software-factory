@@ -12,6 +12,8 @@ export interface ToolContext {
   readonly logger: Logger;
   /** The model-assigned id of the tool call being executed (for correlation). */
   readonly toolCallId?: string;
+  /** The id of the run that invoked this tool (for store lookups). */
+  readonly runId?: string;
   connection(provider: string): Promise<OAuthTokens | undefined>;
   fetch(url: string, init?: RequestInit): Promise<Response>;
 }

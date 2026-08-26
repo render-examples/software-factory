@@ -10,7 +10,7 @@ import { ensureWorkflowSlug } from "../lib/render.js";
 // Explicit tool imports
 import sandboxToolSource from "../tools/sandbox/index.js";
 import deployToolSource from "../tools/deploy/index.js";
-import startWorkflowToolSource, { bindWorkflows } from "../tools/start_workflow/index.js";
+import startWorkflowToolSource, { bindWorkflows, bindStore } from "../tools/start_workflow/index.js";
 
 // Explicit workflow imports
 import chatTurnWorkflow from "../workflows/chat-turn/index.js";
@@ -55,8 +55,9 @@ const workflows = new Map([
 ]);
 for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
 
-// Late-bind the workflow registry to the start_workflow tool
+// Late-bind the workflow registry and store to the start_workflow tool
 bindWorkflows(workflows);
+bindStore(runtime.store);
 
 const { port } = await startGateway({
   runtime,

@@ -217,12 +217,14 @@ export function buildToolContext(opts: {
   signal: AbortSignal;
   logger: Logger;
   userId?: string;
+  runId?: string;
   ssrfFetch: (url: string, init?: RequestInit) => Promise<Response>;
 }): ToolContext {
   return {
     env: opts.env,
     signal: opts.signal,
     logger: opts.logger,
+    runId: opts.runId,
     connection: async (_provider: string): Promise<OAuthTokens | undefined> => undefined,
     fetch: opts.ssrfFetch,
   };
