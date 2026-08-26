@@ -2,7 +2,7 @@ export type { EventCategory, ContentBlock, ToolResult, TokenUsage, RunEvent, Run
 export type { MessageRole, Message } from "./messages.js";
 export type { Logger } from "./logger.js";
 export type { SpanKind, SpanInfo, SpanOutcome, Tracer, SpanStatus } from "./tracer.js";
-export type { RunStatus, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, RunStore, ChannelConversation } from "./run-store.js";
+export type { RunStatus, RunRecord, SpanRecord, ListRunsOptions, ListInputsOptions, RetentionOptions, RetentionResult, ReapOptions, ReapResult, RunStore } from "./run-store.js";
 export { TERMINAL_STATUSES } from "./run-store.js";
 export { runRetention, reapRuns } from "./retention.js";
 export { aggregateRunCost } from "./aggregate.js";
@@ -10,6 +10,8 @@ export type { CancelStore } from "./cancel-store.js";
 export type { ScheduleRecord, ScheduleStore } from "./schedule-store.js";
 export { parseCron, matchesCron, validateCron, dueSchedules } from "./cron.js";
 export type { Thread, ThreadMessage, ThreadStore } from "./thread-store.js";
+export type { ThreadSurface, ThreadSurfaceStore } from "./thread-surface-store.js";
+export type { ThreadItem, AppendItemInput, ThreadItemStore } from "./thread-item-store.js";
 export type { ApprovalRequest, ApprovalStore } from "./approval-store.js";
 export type { OAuthConnection, OAuthStore, RefreshedTokens } from "./oauth-store.js";
 export { encrypt, decrypt, deriveKey, encryptionKeyFromEnv } from "./crypto.js";

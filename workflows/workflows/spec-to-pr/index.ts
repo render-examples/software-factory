@@ -1,4 +1,4 @@
-import { workflow } from "@render-factory/sdk";
+import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
@@ -235,6 +235,23 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
           return { ok: true };
         });
       }
+      const noChangeRun = await ctx.runtime.store.getRun(ctx.runId);
+      if (noChangeRun?.threadId) {
+        const msg = "Workflow completed but no changes were made.";
+        await ctx.runtime.itemStore.appendItem({
+          threadId: noChangeRun.threadId,
+          runId: ctx.runId,
+          kind: "result",
+          role: "system",
+          content: msg,
+          data: { status: "no_changes" },
+        });
+        await notifyThreadSurfaces(ctx.runtime, noChangeRun.threadId, {
+          kind: "result",
+          content: msg,
+          data: { status: "no_changes" },
+        });
+      }
       return { status: "no_changes" };
     }
 
@@ -255,6 +272,24 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
         await gh.removeLabel(repo, spec.issueNumber!, WORKING);
         await gh.addLabels(repo, spec.issueNumber!, [DONE]);
         return { ok: true };
+      });
+    }
+
+    // Notify the originating thread
+    const run = await ctx.runtime.store.getRun(ctx.runId);
+    if (run?.threadId) {
+      await ctx.runtime.itemStore.appendItem({
+        threadId: run.threadId,
+        runId: ctx.runId,
+        kind: "result",
+        role: "system",
+        content: `PR opened: ${pr.htmlUrl}`,
+        data: { status: "pr_opened", pr: pr.htmlUrl, branch },
+      });
+      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+        kind: "result",
+        content: `PR opened: ${pr.htmlUrl}`,
+        data: { status: "pr_opened", pr: pr.htmlUrl, branch },
       });
     }
 
