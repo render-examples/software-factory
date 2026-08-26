@@ -17,7 +17,7 @@ import sandboxToolSource from "../tools/sandbox/index.js";
 import deployToolSource from "../tools/deploy/index.js";
 import startWorkflowToolSource, { bindWorkflows, bindStore } from "../tools/start_workflow/index.js";
 import githubReposToolSource from "../tools/github_repos/index.js";
-import renderMcpToolSource from "../tools/render_mcp/index.js";
+import renderMcpToolSource from "../tools/render/index.js";
 
 // Explicit workflow imports
 import chatTurnWorkflow from "../workflows/chat-turn/index.js";
