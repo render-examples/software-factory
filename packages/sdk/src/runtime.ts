@@ -10,6 +10,7 @@ import type {
   ThreadItemStore,
   ThreadItem,
   AppendItemInput,
+  ThreadItemQueryOptions,
   OAuthStore,
   ScheduleStore,
   ScheduleRecord,
@@ -451,9 +452,12 @@ function asItemStore(store: RunStore): ThreadItemStore {
       items.set(input.threadId, list);
       return { ...item };
     },
-    async getItems(threadId: string, opts?: { limit?: number; afterSeq?: number }): Promise<ThreadItem[]> {
-      let list = items.get(threadId) ?? [];
+    async getItems(threadId: string, opts?: ThreadItemQueryOptions): Promise<ThreadItem[]> {
+      let list = [...(items.get(threadId) ?? [])];
       if (opts?.afterSeq != null) list = list.filter((i) => i.seq > opts.afterSeq!);
+      if (opts?.beforeSeq != null) list = list.filter((i) => i.seq < opts.beforeSeq!);
+      if (opts?.since != null) list = list.filter((i) => i.createdAt >= opts.since!);
+      if (opts?.order === "desc") list.reverse();
       if (opts?.limit != null) list = list.slice(0, opts.limit);
       return list.map((i) => ({ ...i }));
     },

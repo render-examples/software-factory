@@ -93,9 +93,29 @@ export interface RunEventRecord {
   idempotencyKey?: string;
 }
 
+export interface EventQueryOptions {
+  /** Return events strictly after this per-run sequence. */
+  afterSeq?: number;
+  /** Return events strictly before this per-run sequence. */
+  beforeSeq?: number;
+  /** Return events at or after this ISO-8601 timestamp. */
+  since?: string;
+  /** Restrict the result to these durable event types. */
+  types?: RunEvent["type"][];
+  /** Maximum number of events to return. */
+  limit?: number;
+  /** Result ordering. Defaults to ascending sequence order. */
+  order?: "asc" | "desc";
+}
+
 export interface EventLogStore {
   append(event: RunEventRecord): Promise<void>;
   read(runId: string, fromSeq?: number): Promise<RunEventRecord[]>;
+  /**
+   * Bounded, filterable run-event query. Unlike `read`, this supports an
+   * efficient newest-first scan for model/tool result windows.
+   */
+  query(runId: string, opts?: EventQueryOptions): Promise<RunEventRecord[]>;
   /**
    * Durable events across every run belonging to a thread, in a single canonical
    * order (`ts`, then `runId`, then `seq`). Powers SSE catch-up replay for the

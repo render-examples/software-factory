@@ -14,7 +14,7 @@ export function bindWorkflows(wf: Map<string, WorkflowDefinition>): void {
 }
 
 /**
- * Late-bind the run store so the tool can look up the calling run's threadId.
+ * Late-bind the run store so the tool can propagate the calling run's thread and owner.
  */
 export function bindStore(store: RunStore): void {
   _store = store;
@@ -86,12 +86,14 @@ export default defineTool({
     }
 
     let threadId: string | undefined;
+    let userId: string | undefined;
     if (_store && ctx.runId) {
       const callingRun = await _store.getRun(ctx.runId);
       threadId = callingRun?.threadId;
+      userId = callingRun?.userId;
     }
 
-    const run = await wf.dispatch(spec, "assistant.start_workflow", { threadId });
+    const run = await wf.dispatch(spec, "assistant.start_workflow", { threadId, userId });
     return `Workflow "${name}" started (run ${run.id}). Results will be posted back when complete.`;
   },
 });

@@ -99,6 +99,13 @@ export interface ListRunsOptions {
   roots?: boolean;
 }
 
+export interface ListChildRunsOptions {
+  /** Maximum number of direct child runs to return. */
+  limit?: number;
+  /** Result ordering by start time. Defaults to oldest first. */
+  order?: "asc" | "desc";
+}
+
 
 export interface RunStore {
   init(): Promise<void>;
@@ -108,9 +115,9 @@ export interface RunStore {
   /**
    * Child runs spawned by `runId` — runs whose `parentSpanId` points at a span
    * within `runId` (workflow `.task()`/`.run()` fan-out or LLM subagents),
-   * oldest first. Used to stitch the parent's trace across runs.
+   * oldest first by default. Used to stitch the parent's trace across runs.
    */
-  listChildRuns(runId: string): Promise<RunRecord[]>;
+  listChildRuns(runId: string, opts?: ListChildRunsOptions): Promise<RunRecord[]>;
   getMessages(runId: string, agentName: string): Promise<Message[]>;
   /**
    * Model-visible history folded across *every run sharing a thread* (ordered by
