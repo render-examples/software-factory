@@ -48,8 +48,8 @@ jobs:
       - name: Verify declared dependencies are materialized
         # Runs after build so workspace packages with `exports` pointing to
         # `dist/` are resolvable. Guards against a partial/stale store where a
-        # package's declared deps never get linked.
-        run: pnpm -r exec node -e "for (const d of Object.keys({...(require('./package.json').dependencies||{})})) require.resolve(d)"
+        # package's declared deps never get linked. Uses import() for ESM packages.
+        run: pnpm -r exec node --input-type=module -e "import {readFileSync} from 'fs'; const pkg = JSON.parse(readFileSync('./package.json','utf8')); for (const d of Object.keys(pkg.dependencies||{})) { try { await import(d); } catch(e) { if(e.code==='ERR_MODULE_NOT_FOUND') { console.error('Missing: '+d); process.exit(1); } } }"
 
       - name: Typecheck
         run: pnpm turbo run typecheck
