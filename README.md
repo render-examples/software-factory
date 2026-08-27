@@ -12,7 +12,7 @@ You define agents in markdown, compose them as durable multi-step workflows, and
 
 The template ships with four connected workflows:
 
-- **Assistant (`chat-turn`)** — Slack message or API prompt → persistent thread → assistant response. After confirming the scope and target repository, the assistant can dispatch `spec-to-pr`. The assistant is given the Render MCP
+- **Assistant (`chat-turn`)** — Slack message or API prompt → persistent thread → assistant response. After confirming the scope and target repository, the assistant can dispatch `spec-to-pr`. The assistant is given the Render MCP server as a tool.
 - **Spec to PR (`spec-to-pr`)** — GitHub issue or assistant-approved spec → triage (for issues) → isolated sandbox → research → plan → implementation → best-effort tests → branch and pull request → originating surface notified.
 - **PR review (`pr-review`)** — opened or updated non-draft PR → security, performance, correctness, tests, and lint reviewers fan out in parallel → judge agent combines their findings → one GitHub review.
 - **PR fix (`pr-fix`)** — submitted review on an agent-created branch → branch reopened in a sandbox → implementer attempts follow-up changes → fixes pushed and the PR/thread notified.
