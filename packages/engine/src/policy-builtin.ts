@@ -7,6 +7,7 @@ import type {
   CredentialRef,
   WorkflowPolicy,
 } from "./policy.js";
+import { getInstallationToken } from "./credentials/github-app.js";
 
 /**
  * Built-in policy engine: workflow-scoped access control + credential routing.
@@ -57,33 +58,41 @@ export class BuiltinPolicyEngine implements PolicyEngine {
     }
 
     // 4. Allow + credential routing
-    const credential = this.resolveCredentialForSource(source, wfPolicy);
+    const credential = await this.resolveCredentialForSource(source, wfPolicy);
     return { effect: "allow", credential };
   }
 
-  private resolveCredentialForSource(
+  private async resolveCredentialForSource(
     source: string,
     wfPolicy: WorkflowPolicy | undefined,
-  ): CredentialRef | undefined {
+  ): Promise<CredentialRef | undefined> {
     const credentialId = wfPolicy?.credentials?.[source];
     if (!credentialId) return undefined;
 
     const config = this.config.credentials[credentialId];
     if (!config) return undefined;
 
-    const value = resolveCredentialValue(config);
+    const value = await resolveCredentialValue(config);
     return { id: credentialId, value };
   }
 }
 
-function resolveCredentialValue(config: CredentialConfig): string | undefined {
+async function resolveCredentialValue(config: CredentialConfig): Promise<string | undefined> {
   switch (config.type) {
     case "env":
       return config.envVar ? process.env[config.envVar] : undefined;
     case "static":
       return config.value;
-    case "github-app":
-      return config.envVar ? process.env[config.envVar] : undefined;
+    case "github-app": {
+      const appId = config.appId;
+      const privateKey = config.privateKeyEnv ? process.env[config.privateKeyEnv] : undefined;
+      const installationId = config.installationId;
+      if (!appId || !privateKey || !installationId) {
+        console.warn(`[policy] github-app credential "${config.id}" missing appId, privateKey, or installationId`);
+        return undefined;
+      }
+      return getInstallationToken({ appId, privateKey, installationId });
+    }
     default:
       return undefined;
   }

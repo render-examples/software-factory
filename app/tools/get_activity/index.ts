@@ -115,7 +115,6 @@ export default defineTool({
     },
     required: ["scope", "id"],
     additionalProperties: false,
-    allOf: [{ not: { required: ["before_seq", "after_seq"] } }],
   },
   async invoke(rawInput, ctx) {
     if (!runtime) {
@@ -188,8 +187,8 @@ function inaccessible(): { content: string; isError: true } {
 }
 
 function clampLimit(value: number | undefined): number {
-  if (!Number.isFinite(value)) return DEFAULT_LIMIT;
-  return Math.max(1, Math.min(MAX_LIMIT, Math.floor(value!)));
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_LIMIT;
+  return Math.max(1, Math.min(MAX_LIMIT, Math.floor(value)));
 }
 
 async function canAccessRun(

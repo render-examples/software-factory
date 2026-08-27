@@ -61,7 +61,7 @@ const workflows = new Map([
 ]);
 for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
 
-// Late-bind the workflow registry and store to the start_workflow tool
+// Late-bind runtime state required by local tools.
 bindWorkflows(workflows);
 bindStore(runtime.store);
 bindActivityRuntime(runtime);
