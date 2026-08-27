@@ -344,3 +344,53 @@ describe("gateway threads — end-to-end", () => {
     expect((await res.json()).error).toContain("no pending message input");
   });
 });
+
+describe("POST /threads input validation", () => {
+  it("returns 201 for a valid empty-object body", async () => {
+    const { app } = await buildApp();
+    const res = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.id).toBeTruthy();
+    expect(body.status).toBe("active");
+  });
+
+  it("returns 400 with an error message when no body is sent", async () => {
+    const { app } = await buildApp();
+    const res = await app.request("/threads", {
+      method: "POST",
+      // no Content-Type, no body
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBeTruthy();
+  });
+
+  it("returns 400 with an error message when metadata is a string", async () => {
+    const { app } = await buildApp();
+    const res = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metadata: "oops" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("metadata");
+  });
+
+  it("returns 400 with an error message when metadata is an array", async () => {
+    const { app } = await buildApp();
+    const res = await app.request("/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metadata: [1, 2] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("metadata");
+  });
+});
