@@ -105,9 +105,12 @@ export class MemoryEventLogStore implements EventLogStore {
 
   async query(runId: string, opts?: EventQueryOptions): Promise<RunEventRecord[]> {
     let events = [...(this.byRun.get(runId) ?? [])];
-    if (opts?.afterSeq !== undefined) events = events.filter((e) => e.seq > opts.afterSeq!);
-    if (opts?.beforeSeq !== undefined) events = events.filter((e) => e.seq < opts.beforeSeq!);
-    if (opts?.since !== undefined) events = events.filter((e) => e.ts >= opts.since!);
+    const afterSeq = opts?.afterSeq;
+    const beforeSeq = opts?.beforeSeq;
+    const since = opts?.since;
+    if (afterSeq !== undefined) events = events.filter((e) => e.seq > afterSeq);
+    if (beforeSeq !== undefined) events = events.filter((e) => e.seq < beforeSeq);
+    if (since !== undefined) events = events.filter((e) => e.ts >= since);
     if (opts?.types !== undefined) {
       const types = new Set(opts.types);
       events = events.filter((e) => types.has(e.type));

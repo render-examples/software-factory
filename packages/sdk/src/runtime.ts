@@ -454,9 +454,12 @@ function asItemStore(store: RunStore): ThreadItemStore {
     },
     async getItems(threadId: string, opts?: ThreadItemQueryOptions): Promise<ThreadItem[]> {
       let list = [...(items.get(threadId) ?? [])];
-      if (opts?.afterSeq != null) list = list.filter((i) => i.seq > opts.afterSeq!);
-      if (opts?.beforeSeq != null) list = list.filter((i) => i.seq < opts.beforeSeq!);
-      if (opts?.since != null) list = list.filter((i) => i.createdAt >= opts.since!);
+      const afterSeq = opts?.afterSeq;
+      const beforeSeq = opts?.beforeSeq;
+      const since = opts?.since;
+      if (afterSeq != null) list = list.filter((i) => i.seq > afterSeq);
+      if (beforeSeq != null) list = list.filter((i) => i.seq < beforeSeq);
+      if (since != null) list = list.filter((i) => i.createdAt >= since);
       if (opts?.order === "desc") list.reverse();
       if (opts?.limit != null) list = list.slice(0, opts.limit);
       return list.map((i) => ({ ...i }));
