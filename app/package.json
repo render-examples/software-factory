@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run tests",
     "dev": "tsx watch src/server.ts",
     "start": "tsx dist/src/server.js",
     "workflows": "tsx dist/src/workflows.js",

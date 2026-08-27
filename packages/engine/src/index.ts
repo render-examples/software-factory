@@ -124,3 +124,4 @@ export type {
 } from "./policy.js";
 export { BuiltinPolicyEngine } from "./policy-builtin.js";
 export { loadPolicyEngine, loadPolicyConfig } from "./policy-loader.js";
+export { getInstallationToken } from "./credentials/github-app.js";
