@@ -141,6 +141,8 @@ Use:
 - `agent.task()` for an isolated durable child run
 - `ctx.step()` for replay-safe side effects
 
+> **`run()` vs `task()`:** Use `run()` for sequential steps (research, then plan, then implement). Use `task()` for parallel steps (fan out reviewers at once). When in doubt, use `run()` — it's simpler and faster.
+
 ---
 
 ## Pre-built Workflows
@@ -162,6 +164,8 @@ Tools are the boundary between model reasoning and side effects. Local TypeScrip
 functions, Render Sandbox operations, and remote MCP servers all enter the agent
 runtime through the same tool interface, so they share schema validation, approval
 gates, tracing, and structured error handling.
+
+> **Import from `@render-factory/sdk` for all authoring.** You should never need to import from `@render-factory/engine`, `@render-factory/store`, or `@render-factory/gateway` when writing agents, workflows, or tools. Those packages are internal infrastructure.
 
 ### Authoring model
 

@@ -4,6 +4,10 @@ import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
 
+// Fan-out: five specialist reviewers run in parallel, then judge synthesizes.
+// Uses task() because reviewers are independent and benefit from separate
+// containers. Uses run() for the final judge step (sequential, needs all results).
+
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review"]);
 const MAX_DIFF_CHARS = 60_000;
 

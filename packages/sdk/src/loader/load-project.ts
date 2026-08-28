@@ -192,6 +192,40 @@ export async function loadRunners(dir: string): Promise<Map<string, AgentRunner>
   return out;
 }
 
+/**
+ * Context passed to a tool source's optional `bind()` export after the full
+ * project is assembled. Tool sources that need runtime state (e.g.
+ * `start_workflow` needs the workflow map, `get_activity` needs the store)
+ * export a `bind(ctx)` function instead of relying on manual late-binding in
+ * every entrypoint.
+ */
+export interface ToolBindContext {
+  runtime: AgentRuntime;
+  workflows: Map<string, WorkflowDefinition>;
+  channels: Map<string, Channel>;
+}
+
+/**
+ * Call `bind(ctx)` on every tool source module that exports one. This replaces
+ * manual `bindWorkflows()` / `bindStore()` / `bindActivityRuntime()` calls in
+ * entrypoints. Safe to call on sources that don't export `bind` — they're
+ * silently skipped.
+ */
+export async function lateBindToolSources(
+  root: string,
+  ctx: ToolBindContext,
+): Promise<void> {
+  const toolsDir = join(root, "tools");
+  for (const name of await listSubdirs(toolsDir)) {
+    const entry = await resolveIndex(join(toolsDir, name));
+    if (!entry) continue;
+    const mod = (await import(pathToFileURL(entry).href)) as Record<string, unknown>;
+    if (typeof mod.bind === "function") {
+      (mod.bind as (ctx: ToolBindContext) => void)(ctx);
+    }
+  }
+}
+
 function coerceToolSource(key: string, exported: unknown): ToolSource {
   if (isToolSource(exported)) return exported;
   if (Array.isArray(exported)) return defineToolSource(key, exported as DefineToolSpec[]);

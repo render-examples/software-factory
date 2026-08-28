@@ -1,5 +1,5 @@
 import { defineTool } from "@render-factory/sdk";
-import type { WorkflowDefinition } from "@render-factory/sdk";
+import type { WorkflowDefinition, AgentRuntime } from "@render-factory/sdk";
 import type { RunStore } from "@render-factory/store";
 
 let _workflows: Map<string, WorkflowDefinition> | undefined;
@@ -18,6 +18,15 @@ export function bindWorkflows(wf: Map<string, WorkflowDefinition>): void {
  */
 export function bindStore(store: RunStore): void {
   _store = store;
+}
+
+/**
+ * Convention-based late-bind called by `lateBindToolSources` after the full
+ * project is assembled. Replaces manual `bindWorkflows` + `bindStore` calls.
+ */
+export function bind(ctx: { runtime: AgentRuntime; workflows: Map<string, WorkflowDefinition> }): void {
+  _workflows = ctx.workflows;
+  _store = ctx.runtime.store;
 }
 
 export default defineTool({
