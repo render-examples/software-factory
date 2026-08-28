@@ -71,6 +71,15 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  packages/cli:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.3.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   packages/engine:
     dependencies:
       '@anthropic-ai/sdk':

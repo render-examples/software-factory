@@ -1,35 +1,13 @@
 import { task } from "@renderinc/sdk/workflows";
 import {
-  createRuntime,
-  loadAgents,
-  bindWorkflow,
+  bootFactory,
   workflowTaskHandler,
   agentTaskHandler,
   computeRequiredPlans,
   RenderWorkflowsDispatcher,
 } from "@render-factory/sdk";
 import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
-import { resolveClient, resolveModelSpec } from "@render-factory/engine";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
-
-// Explicit tool imports
-import sandboxToolSource from "../tools/sandbox/index.js";
-import deployToolSource from "../tools/deploy/index.js";
-import startWorkflowToolSource, { bindWorkflows, bindStore } from "../tools/start_workflow/index.js";
-import githubReposToolSource from "../tools/github_repos/index.js";
-import renderMcpToolSource from "../tools/render/index.js";
-import getActivityToolSource, { bindActivityRuntime } from "../tools/get_activity/index.js";
-
-// Explicit workflow imports
-import chatTurnWorkflow from "../workflows/chat-turn/index.js";
-import specToPrWorkflow from "../workflows/spec-to-pr/index.js";
-import prReviewWorkflow from "../workflows/pr-review/index.js";
-import prFixWorkflow from "../workflows/pr-fix/index.js";
-
-// Explicit channel imports (needed for outbound delivery in chat-turn)
-import slackChannel from "../channels/slack.js";
-
-const root = new URL("../..", import.meta.url).pathname;
 
 ensureWorkflowSlug();
 
@@ -61,38 +39,11 @@ class NativeChainingDispatcher extends RenderWorkflowsDispatcher {
 }
 
 const dispatcher = new NativeChainingDispatcher({ workflowSlug: WORKFLOW_SLUG });
-const tenantId = process.env.TENANT_ID ?? "default";
-const { spec } = resolveModelSpec(process.env.MODEL_TIER ?? "medium");
-const model = resolveClient(spec);
 
-const toolSources = new Map([
-  ["sandbox", sandboxToolSource],
-  ["deploy", deployToolSource],
-  ["start_workflow", startWorkflowToolSource],
-  ["github_repos", githubReposToolSource],
-  ["render", renderMcpToolSource],
-  ["get_activity", getActivityToolSource],
-]);
-
-const channels = new Map([["slack", slackChannel]]);
-const runtime = await createRuntime({ tenantId, model, toolSources, dispatcher, channels });
-
-// Load agents from .md files (plain fs.readFile, no .ts import)
-await loadAgents(root, runtime);
-
-// Bind workflows explicitly
-const workflows = new Map([
-  ["chat-turn", chatTurnWorkflow],
-  ["spec-to-pr", specToPrWorkflow],
-  ["pr-review", prReviewWorkflow],
-  ["pr-fix", prFixWorkflow],
-]);
-for (const [name, wf] of workflows) bindWorkflow(wf, name, runtime);
-
-// Late-bind runtime state required by local tools.
-bindWorkflows(workflows);
-bindStore(runtime.store);
-bindActivityRuntime(runtime);
+const root = new URL("../..", import.meta.url).pathname;
+const { runtime, workflows } = await bootFactory(root, {
+  runtime: { dispatcher },
+});
 
 const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
 

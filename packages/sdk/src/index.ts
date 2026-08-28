@@ -121,10 +121,14 @@ export { createRuntime } from "./runtime.js";
 
 export type { AgentSet, Agent } from "./agents.js";
 export { loadAgents, resumeRun, driveAgentTurn } from "./agents.js";
-export { loadWorkflows, loadChannels, loadToolSources, loadHooks, loadRunners } from "./loader/load-project.js";
+export { loadWorkflows, loadChannels, loadToolSources, loadHooks, loadRunners, lateBindToolSources } from "./loader/load-project.js";
+export type { ToolBindContext } from "./loader/load-project.js";
 
 export { loadProject } from "./project.js";
 export type { LoadProjectOptions, LoadedProject } from "./project.js";
+
+export { bootFactory, defineFactory, matchesRepoAllowlist } from "./factory.js";
+export type { FactoryConfig, BootFactoryResult } from "./factory.js";
 
 export type {
   WorkflowOptions,

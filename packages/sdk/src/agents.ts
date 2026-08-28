@@ -23,7 +23,30 @@ export interface AgentSet {
 export interface Agent {
   readonly name: string;
   readonly definition: AgentDefinition;
+
+  /**
+   * Run the agent in-process within the current workflow.
+   *
+   * Use for sequential pipeline steps where the next step depends on this
+   * result. Faster than task() (no dispatch overhead), but shares the workflow
+   * process — if it crashes, the workflow restarts from its last memoized step.
+   *
+   * Both run() and task() are replay-safe: deterministic child run IDs ensure
+   * re-drives return the memoized result instead of re-running the agent.
+   */
   run<T = unknown>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>>;
+
+  /**
+   * Dispatch the agent as a durable isolated task on Render Workflows.
+   *
+   * Use when:
+   * - Multiple agents should run in parallel: `Promise.all([a.task(), b.task()])`
+   * - The agent needs a different compute plan than the workflow host
+   * - You want the agent's work to survive independently of the parent process
+   *
+   * Both run() and task() are replay-safe: deterministic child run IDs ensure
+   * re-drives return the memoized result instead of re-dispatching.
+   */
   task<T = unknown>(input: AgentInput, opts?: TaskOptions): Promise<AgentOutput<T>>;
 }
 

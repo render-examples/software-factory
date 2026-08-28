@@ -72,6 +72,14 @@ export function bindActivityRuntime(value: ActivityRuntime): void {
   runtime = value;
 }
 
+/**
+ * Convention-based late-bind called by `lateBindToolSources` after the full
+ * project is assembled. Replaces manual `bindActivityRuntime` calls.
+ */
+export function bind(ctx: { runtime: ActivityRuntime }): void {
+  runtime = ctx.runtime;
+}
+
 export default defineTool({
   name: "get_activity",
   description:
