@@ -1,6 +1,6 @@
 import type { Channel, ChannelMatch } from "@render-factory/sdk";
-import { githubVerify } from "@render-factory/sdk";
-import { normalizeGitHubEvent } from "../lib/github-events.js";
+import { githubVerify, matchesRepoAllowlist } from "@render-factory/sdk";
+import { normalizeGitHubEvent, type NormalizedGitHubEvent } from "../lib/github-events.js";
 
 // Best-effort hot-path dedup: avoids unnecessary DB roundtrips for rapid GitHub
 // retries. DURABLE dedup is handled by the framework's one-active-run DB
@@ -50,7 +50,19 @@ const channel: Channel = {
   async parse(req: Request) {
     const raw = await req.text();
     const event = req.headers.get("x-github-event") ?? "";
-    const normalized = normalizeGitHubEvent(event, JSON.parse(raw));
+    let normalized: NormalizedGitHubEvent = normalizeGitHubEvent(event, JSON.parse(raw));
+
+    if (normalized.kind !== "skip") {
+      const repoAllowlist = process.env.RENDER_FACTORY_REPOS;
+      if (repoAllowlist) {
+        const patterns = repoAllowlist.split(",").map((s) => s.trim()).filter(Boolean);
+        const repoFullName = `${normalized.repo.owner}/${normalized.repo.repo}`;
+        if (!matchesRepoAllowlist(repoFullName, patterns)) {
+          normalized = { kind: "skip", event: `repo ${repoFullName} not in allowlist` };
+        }
+      }
+    }
+
     let target: { workflow: string; trigger: string };
     if (event === "pull_request") {
       target = { workflow: "pr-review", trigger: "github.pull_request" };

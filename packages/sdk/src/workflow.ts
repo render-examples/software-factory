@@ -437,6 +437,10 @@ function createRunScopedAgent(
     // `.run()` executes in-process within the workflow's span tree; `.task()`
     // dispatches an isolated durable child run. Both derive a deterministic
     // child run id from parent + call ordinal for replay idempotency.
+    /**
+     * Run the agent in-process within the current workflow. Use for sequential
+     * pipeline steps where the next step depends on this result.
+     */
     async run<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       const def = resolveScopedDefinition(name, runtime);
       const childRunId = opts?.runId ?? idempotencyKey(parentRunId, `run:${name}:${nextOrdinal(name)}`);
@@ -469,6 +473,10 @@ function createRunScopedAgent(
       if (await runtime.cancelStore.isCancelled(parentRunId)) throw new RunCancelled(childRunId, parentRunId);
       return out;
     },
+    /**
+     * Dispatch the agent as a durable isolated task on Render Workflows. Use
+     * for parallel fan-out, different compute plans, or independent durability.
+     */
     async task<T>(input: AgentInput, opts?: RunOptions): Promise<AgentOutput<T>> {
       resolveScopedDefinition(name, runtime);
       const dispatcher = runtime.dispatcher ?? inlineWorkflowDispatcher(runtime);

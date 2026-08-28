@@ -1,8 +1,12 @@
-import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
+import { workflow, notifyThreadSurfaces, matchesRepoAllowlist } from "@render-factory/sdk";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
 import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
+
+// Pipeline: research → plan → implement (sequential, each feeds the next).
+// Uses run() because each step's output is the next step's input.
+// task() is used in pr-review where reviewers fan out in parallel.
 
 export interface SpecInput {
   title: string;
@@ -125,6 +129,16 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
   if ("skipped" in normalized) return { skipped: normalized.skipped };
 
   const { spec, isGitHubIssue } = normalized;
+
+  const repoAllowlist = process.env.RENDER_FACTORY_REPOS;
+  if (repoAllowlist) {
+    const patterns = repoAllowlist.split(",").map((s) => s.trim()).filter(Boolean);
+    const repoFullName = `${spec.repo.owner}/${spec.repo.repo}`;
+    if (!matchesRepoAllowlist(repoFullName, patterns)) {
+      return { skipped: `repo ${repoFullName} not in allowlist` };
+    }
+  }
+
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN is not set");
   const gh = githubFromEnv();
