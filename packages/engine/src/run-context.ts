@@ -23,10 +23,10 @@ import type { RunContext, InputResult } from "./context.js";
 import type { Suspender } from "./suspender.js";
 import { replaySuspender } from "./suspender.js";
 
-/** Refreshes a provider's tokens (provided by the composition root that knows token endpoints). */
+// --- Types & Constants ---
+
 export type OAuthRefresher = (conn: OAuthConnection) => Promise<RefreshedTokens>;
 
-/** Seconds of clock skew before expiry at which a token is considered stale. */
 const TOKEN_EXPIRY_SKEW_MS = 60_000;
 import { ToolEnvironment } from "./tool-impl.js";
 
@@ -178,14 +178,14 @@ export class InProcessRunContext implements RunContext {
     }
   }
 
+  // --- Environment & Credentials ---
+
   env(name: string): string | undefined {
     return this.envFn(name);
   }
 
   /**
-   * Resolve the current user's OAuth tokens for a provider. Reads the connection
-   * from the OAuth store, and if it is expired (or about to be) and refreshable,
-   * performs a single-flight refresh via the registered provider refresher.
+   * Resolve the current user's OAuth tokens for a provider. Refreshes if expired.
    */
   async connection(provider: string): Promise<OAuthTokens | undefined> {
     if (!this.oauthStore || !this.userId) return undefined;
@@ -206,6 +206,8 @@ export class InProcessRunContext implements RunContext {
 
     return { accessToken: conn.accessToken, refreshToken: conn.refreshToken, expiresAt: conn.expiresAt };
   }
+
+  // --- Event Emission & Streaming ---
 
   async emit(event: RunEvent): Promise<void> {
     // Enrich the opening event with thread/user identity from the context so the
@@ -289,6 +291,8 @@ export class InProcessRunContext implements RunContext {
     }
   }
 
+  // --- History & Replay ---
+
   async hasStarted(): Promise<boolean> {
     const events = await this.store.events.read(this.runId);
     return events.some((e) => e.payload.type === "run.started");
@@ -317,6 +321,8 @@ export class InProcessRunContext implements RunContext {
   async isCancelled(): Promise<boolean> {
     return this.isCancelledFn();
   }
+
+  // --- Tool Mounting ---
 
   async mountTools(toolIds: string[]): Promise<MountedTools> {
     // Dispose a previously-mounted environment before remounting so MCP
@@ -350,16 +356,14 @@ export class InProcessRunContext implements RunContext {
     this.toolEnv = undefined;
   }
 
+  // --- HITL (Human-in-the-Loop) ---
+
   /**
-   * HITL gate, resolved by replay against the event log (D7). The approval id is
-   * deterministic per `(runId, toolCallId)` so a resumed run looks up the same
-   * request:
-   * 1. Already resolved in the log → return that decision (approved/denied).
-   * 2. Pre-approved tool-call id (in-process resume convenience) → approve.
-   * 3. Auto-approve (default) → emit `input.auto`, auditable.
-   * 4. Strict + already requested (pending) → re-pause without a duplicate request.
-   * 5. Strict + first encounter → emit `input.requested` + `run.paused`, pause.
-   * 6. Strict + interactive TTY → prompt directly.
+   * Approval gate, resolved by replay against the event log (D7). Deterministic
+   * approval id per `(runId, toolCallId)`. Resolution paths:
+   * 1. Already resolved → return decision. 2. Pre-approved → approve.
+   * 3. Auto-approve (default). 4/5. Strict → emit request + pause.
+   * 6. Strict + TTY → prompt directly.
    */
   async requestInput(toolName: string, input: unknown, toolCallId: string): Promise<InputResult> {
     const inputRequestId = idempotencyKey(this.runId, `input:approval:${toolCallId}`);
@@ -547,6 +551,8 @@ export class InProcessRunContext implements RunContext {
       ordinal,
     };
   }
+
+  // --- Span Correlation ---
 
   private spanCorrelation(event: RunEvent): { spanId: string; parentSpanId?: string } | undefined {
     switch (event.type) {

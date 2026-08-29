@@ -8,6 +8,8 @@
  * reclaimed the command and another worker grabbed it), the operation is rejected.
  */
 
+// --- Record & Types ---
+
 export interface CommandRecord {
   id: string;
   kind: string;
@@ -44,12 +46,16 @@ export interface FailCommandOptions {
   error?: string;
 }
 
+// --- Errors ---
+
 export class LeaseLostError extends Error {
   constructor(commandId: string) {
     super(`Lease lost on command ${commandId}`);
     this.name = "LeaseLostError";
   }
 }
+
+// --- Store Interface ---
 
 export interface CommandStore {
   enqueue(opts: EnqueueCommandOptions): Promise<CommandRecord>;

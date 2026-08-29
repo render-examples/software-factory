@@ -1,6 +1,8 @@
 import { timingSafeEqual, createHash } from "node:crypto";
 import type { Context, Next } from "hono";
 
+// --- Types ---
+
 /** Make the resolved principal available (and typed) on every Hono context. */
 declare module "hono" {
   interface ContextVariableMap {
@@ -53,6 +55,8 @@ export interface ApiKeyAuthOptions {
   streamTokenResolver?: (token: string) => Principal | null;
 }
 
+// --- Auth Middleware ---
+
 /**
  * API-key bearer auth middleware. Resolves the caller to a {@link Principal} and
  * stashes it on the context (`c.get("principal")`). Fail-closed: an unresolved
@@ -90,6 +94,8 @@ export function apiKeyAuth(options: ApiKeyAuthOptions = {}) {
     await next();
   };
 }
+
+// --- Resolvers ---
 
 /** Default resolver: `Authorization: Bearer <key>` validated against the shared
  *  key. Returns an operator principal on success, null otherwise (fail closed
@@ -132,6 +138,8 @@ function queryKeyPrincipal(
   return constantTimeEqual(expected, key) ? { userId: operatorUserId, role: "operator" } : null;
 }
 
+// --- Access Control ---
+
 /** Read the resolved principal, defaulting to a local operator when auth is
  *  disabled (dev) or the route ran without the middleware (tests). */
 export function getPrincipal(c: Context): Principal {
@@ -162,6 +170,8 @@ export function canAccess(ownerUserId: string | undefined | null, principal: Pri
   return ownerUserId != null && ownerUserId === principal.userId;
 }
 
+// --- Path Matchers ---
+
 /** Default public-path matcher: OAuth callback + inbound channels (signature-authed). */
 export function defaultPublicPath(path: string): boolean {
   return (
@@ -182,6 +192,8 @@ export function allowsQueryKey(path: string): boolean {
     /^\/oauth\/[^/]+\/authorize$/.test(path)
   );
 }
+
+// --- Crypto ---
 
 /**
  * Constant-time key comparison. Hashes both sides to a fixed 32-byte digest so

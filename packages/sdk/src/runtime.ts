@@ -38,6 +38,8 @@ import { RenderWorkflowsDispatcher, InProcessDispatcher, isWorkflowsEnvironment,
 import type { WorkflowDefinition } from "./workflow.js";
 import type { Channel } from "./channel.js";
 
+// --- Interfaces ---
+
 export interface RunnerRegistry {
   get(name: string): AgentRunner;
   has(name: string): boolean;
@@ -219,6 +221,8 @@ export interface CreateRuntimeOptions {
 }
 
 
+// --- Registry builders ---
+
 function buildHookRegistry(hooks: Hook[]): HookRegistry {
   const byName = new Map<string, Hook>();
   for (const hook of hooks) byName.set(hook.name, hook);
@@ -250,6 +254,8 @@ function buildRunnerRegistry(
   };
 }
 
+// --- Dispatcher detection ---
+
 /**
  * Detect whether a Render Workflows dispatcher should be used (production) vs
  * undefined (local dev/test). Either signal means "drive through Render":
@@ -262,6 +268,8 @@ function detectDispatcher(): TaskDispatcher | undefined {
   const slug = process.env.RENDER_WORKFLOW_SLUG ?? "default";
   return new RenderWorkflowsDispatcher({ workflowSlug: slug });
 }
+
+// --- Runtime creation ---
 
 /**
  * Builds the composition root (D5). Each dependency is an optional override;
@@ -349,6 +357,8 @@ export async function createRuntime(opts: CreateRuntimeOptions): Promise<AgentRu
     channels,
   };
 }
+
+// --- Store adapters ---
 
 /**
  * Use the run store as the thread store when it implements the ThreadStore

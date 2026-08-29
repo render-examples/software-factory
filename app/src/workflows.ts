@@ -11,6 +11,8 @@ import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
 
 ensureWorkflowSlug();
 
+// --- Dispatcher ---
+
 const nativeAgentTasks = new Map<string, (input: AgentTaskInput) => Promise<AgentOutput>>();
 
 class NativeChainingDispatcher extends RenderWorkflowsDispatcher {
@@ -47,6 +49,8 @@ const { runtime, workflows } = await bootFactory(root, {
 
 const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
 
+// --- Task Registration ---
+
 const plans = computeRequiredPlans([...runtime.agentDefinitions.values()]);
 for (const plan of plans) {
   const agentTask = task(
@@ -61,6 +65,8 @@ for (const plan of plans) {
 }
 
 const taskNames = plans.flatMap((p) => [`agent@${p}`, `workflow@${p}`]).join(", ");
+
+// --- Startup ---
 
 const underRenderRuntime = !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);
 if (underRenderRuntime) {

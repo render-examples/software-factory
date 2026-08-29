@@ -88,7 +88,6 @@ function contentText(content: unknown): string {
   );
 }
 
-/** Extract concatenated text from a ContentBlock[] (for chat / messages). */
 export function blocksToText(content: unknown): string {
   if (!Array.isArray(content)) return typeof content === "string" ? content : "";
   return content

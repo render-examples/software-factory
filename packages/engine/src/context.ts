@@ -2,6 +2,8 @@ import type { RunEvent, Message, Logger, Tracer, ContentBlock, ToolResult } from
 import type { MountedTools, OAuthTokens } from "./tool.js";
 import type { AgentDefinition, AgentInput, AgentOutput } from "./agent.js";
 
+// --- Input Result ---
+
 export type InputResult =
   | { approved: true }
   | { approved: false; reason?: string }
@@ -60,6 +62,8 @@ export interface RunContext {
    */
   hasStarted(): Promise<boolean>;
 }
+
+// --- Agent Runner ---
 
 export interface AgentRunner {
   run(agent: AgentDefinition, input: AgentInput, ctx: RunContext): Promise<AgentOutput>;

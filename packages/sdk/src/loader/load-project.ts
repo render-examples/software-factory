@@ -45,7 +45,6 @@ async function listModuleFiles(dir: string): Promise<Array<{ key: string; path: 
     for (const e of entries) {
       if (!e.isFile()) continue;
       const ext = FILE_EXTS.find((x) => e.name.endsWith(x));
-      // Skip declaration/sourcemap files and non-modules.
       if (!ext || e.name.endsWith(".d.ts")) continue;
       out.push({ key: e.name.slice(0, -ext.length), path: join(dir, e.name) });
     }

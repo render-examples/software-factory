@@ -31,6 +31,8 @@ export function threadRoutes(deps: ThreadRouteDeps) {
   const app = new Hono();
   const { store, threadStore, workflows, defaultWorkflow, defaultAgent, startAgentRun, resume, awaitResume } = deps;
 
+  // --- Helpers ---
+
   const toApproval = (input: Awaited<ReturnType<RunStore["getInputs"]>>[number]) => ({
     id: input.inputRequestId,
     runId: input.runId,
@@ -52,6 +54,8 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
     return awaitResume ? p : Promise.resolve();
   };
+
+  // --- Thread CRUD ---
 
   app.post("/threads", async (c) => {
     const principal = getPrincipal(c);
@@ -108,7 +112,9 @@ export function threadRoutes(deps: ThreadRouteDeps) {
     return c.json({ thread, messages });
   });
 
-  // Consolidated chat-view payload to avoid N+1 fetches.
+  // --- Thread View ---
+
+  // Consolidated payload to avoid N+1 fetches from the chat UI.
   app.get("/threads/:id/view", async (c) => {
     const principal = getPrincipal(c);
     const id = c.req.param("id");
@@ -135,6 +141,8 @@ export function threadRoutes(deps: ThreadRouteDeps) {
       approvals,
     });
   });
+
+  // --- Send Message ---
 
   app.post("/threads/:id/messages", async (c) => {
     const principal = getPrincipal(c);

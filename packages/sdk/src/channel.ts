@@ -14,6 +14,8 @@ import type { Logger } from "@render-factory/store";
 import type { OAuthTokens } from "@render-factory/engine";
 import type { WebhookVerify } from "./webhook-verify.js";
 
+// --- Routing types ---
+
 /** What drives the turn an inbound event starts. */
 export type ChannelTarget =
   | { agent: string }
@@ -29,6 +31,8 @@ export type ChannelTarget =
  */
 export type ChannelMatch = { ack: Response } | { event: string } | null;
 
+// --- Inbound event ---
+
 /** The normalized result of `parse` — a verified inbound event turned into a turn. */
 export interface ChannelInboundEvent {
   /**
@@ -43,6 +47,8 @@ export interface ChannelInboundEvent {
   /** Overrides the channel's default `target` for this event. */
   target?: ChannelTarget;
 }
+
+// --- Deliver context ---
 
 /** Context handed to `deliver` when pushing a reply — or an input prompt — to the surface. */
 export interface ChannelDeliverContext {
@@ -62,6 +68,8 @@ export interface ChannelDeliverContext {
   /** Resolve an OAuth connection for the acting user, when the surface needs one. */
   connection?(provider: string): Promise<OAuthTokens | undefined>;
 }
+
+// --- Channel contract ---
 
 /**
  * A channel: one module owning a surface's inbound + (optional) outbound.

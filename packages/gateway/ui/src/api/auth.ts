@@ -12,7 +12,6 @@ export interface Whoami {
   role: string;
 }
 
-/** POST the key to `/ui/login`; on success the server sets the session cookie. */
 export async function login(key: string): Promise<boolean> {
   try {
     const res = await fetch("/ui/login", {

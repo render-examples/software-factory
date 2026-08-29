@@ -29,6 +29,8 @@ const NOTIFY_CHANNEL = "run_events";
 const MAX_EVENT_TAIL_QUEUE = 10_000;
 const MAX_PAYLOAD_BYTES = 8_000;
 
+// --- Payload serialization and deflation ---
+
 /**
  * Postgres's `jsonb` type rejects a literal NUL byte inside a JSON string
  * value ("unsupported Unicode escape sequence", SQLSTATE 22P05) — a hard
@@ -256,7 +258,6 @@ export class PgEventLogStore implements EventLogStore {
         type: record.payload.type,
       };
 
-      // Persist deflated artifacts within the same transaction.
       for (const art of artifactsToInsert) {
         await client.query(
           `INSERT INTO artifacts (id, tenant_id, run_id, field_path, content)
@@ -618,7 +619,6 @@ export class PgEventLogStore implements EventLogStore {
         break;
 
       case "tool.result":
-        // Close the span and fold toolName/ok/latencyMs attributes.
         await client.query(
           `UPDATE spans SET
              status = $2,
@@ -1266,6 +1266,8 @@ export class PgRunStore implements RunStore, ThreadStore, ThreadSurfaceStore, Th
     );
     return res.rows.map(mapScheduleRow);
   }
+
+  // --- Retention and cleanup ---
 
   async cleanup(opts: RetentionOptions): Promise<RetentionResult> {
     const now = opts.now ?? new Date();

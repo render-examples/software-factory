@@ -13,7 +13,8 @@ import type { WorkflowDefinition } from "./workflow.js";
 import type { Channel } from "./channel.js";
 import { loadToolSources, loadRunners, loadHooks, loadWorkflows, loadChannels } from "./loader/load-project.js";
 
-/** Runtime options `loadProject` derives from the project itself (callers can't double-set them). */
+// --- Types ---
+
 type DerivedRuntimeOptions = "toolSources" | "extraRunners" | "hooks" | "model";
 
 export interface LoadProjectOptions {
@@ -40,6 +41,8 @@ export interface LoadedProject {
   /** Channels discovered from `channels/*.ts` (the gateway mounts them at `POST /channels/:id`). */
   channels: Map<string, Channel>;
 }
+
+// --- Loader ---
 
 /**
  * Discover and wire a project rooted at `root` (the directory holding the

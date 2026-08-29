@@ -1,3 +1,5 @@
+// --- Event Categories ---
+
 export type EventCategory =
   | "lifecycle"
   | "message"
@@ -24,6 +26,8 @@ export interface TokenUsage {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
 }
+
+// --- Event Taxonomy ---
 
 export type RunEvent =
   // lifecycle
@@ -69,6 +73,8 @@ export function isTransientEvent(type: RunEvent["type"]): boolean {
   return TRANSIENT_EVENT_TYPES.has(type);
 }
 
+// --- Event Record ---
+
 export interface RunEventRecord {
   id: string;
   runId: string;
@@ -107,6 +113,8 @@ export interface EventQueryOptions {
   /** Result ordering. Defaults to ascending sequence order. */
   order?: "asc" | "desc";
 }
+
+// --- Store Interface ---
 
 export interface EventLogStore {
   append(event: RunEventRecord): Promise<void>;

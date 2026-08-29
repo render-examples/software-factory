@@ -78,6 +78,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   const operatorUserId =
     opts.operatorUserId ?? process.env.RENDER_FACTORY_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
 
+  // --- Configuration & Safety Checks ---
+
   // Production-readiness config audit: OAuth token encryption falls back to an
   // insecure dev key when this is unset — warn loudly so it isn't shipped.
   if (!opts.disableAuth && !process.env.RENDER_FACTORY_ENCRYPTION_KEY) {
@@ -105,6 +107,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   });
 
   app.get("/health", (c) => c.json({ status: "ok" }));
+
+  // --- Authentication & Session ---
 
   // UI shell registered before auth middleware so it stays unauthenticated.
   const uiEnabled = opts.serveUI !== false;
@@ -158,6 +162,8 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Short-lived per-user SSE token: caller authenticates normally here, then
   // opens EventSource(...?token=...) since it can't carry headers otherwise.
   app.post("/auth/stream-token", (c) => c.json(issueStreamToken(getPrincipal(c), cookieCfg.secret)));
+
+  // --- Resume & HITL Logic ---
 
   const store = runtime.store;
   // The loop polls runtime.cancelStore, so cancel routes must write to the same
@@ -231,6 +237,8 @@ export function createGatewayApp(opts: GatewayOptions) {
       }
     });
 
+  // --- Admin & API Routes ---
+
   // Wired to a daily Render Cron.
   app.post("/admin/retention", async (c) => {
     const result = await runRetention(store);
@@ -267,6 +275,8 @@ export function createGatewayApp(opts: GatewayOptions) {
     const p = Promise.resolve(resume(runId)).then(() => {}).catch((err) => console.error(`resume(${runId}) failed`, err));
     if (awaitResume || isInline) await p;
   };
+
+  // --- Thread & Channel Messaging ---
 
   // Each user message creates a run row (for the active-run guard + streaming)
   // then dispatches a chat-turn workflow to drive it.

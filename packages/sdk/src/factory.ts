@@ -10,6 +10,8 @@ import type { Channel } from "./channel.js";
 import { loadProject, type LoadProjectOptions } from "./project.js";
 import { lateBindToolSources } from "./loader/load-project.js";
 
+// --- Config schema ---
+
 const FactoryConfigSchema = z.object({
   repos: z.array(z.string()).optional(),
 });
@@ -25,6 +27,8 @@ export interface BootFactoryResult {
 }
 
 const CONFIG_CANDIDATES = ["factory.config.ts", "factory.config.js", "factory.config.mjs"];
+
+// --- Config loading ---
 
 async function loadFactoryConfig(root: string): Promise<FactoryConfig> {
   for (const filename of CONFIG_CANDIDATES) {
@@ -46,6 +50,8 @@ async function loadFactoryConfig(root: string): Promise<FactoryConfig> {
   return {};
 }
 
+// --- Helpers ---
+
 /**
  * Match a repo string ("owner/repo") against a list of glob patterns.
  * Supports `*` as a wildcard for a single path segment.
@@ -66,6 +72,8 @@ export function matchesRepoAllowlist(repo: string, patterns: string[]): boolean 
 export function defineFactory(config: FactoryConfig): FactoryConfig {
   return config;
 }
+
+// --- Boot ---
 
 /**
  * Load and wire the full factory from a project root. Discovers agents, tools,

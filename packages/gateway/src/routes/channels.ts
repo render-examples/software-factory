@@ -7,6 +7,8 @@ import { checkWebhookAuth } from "../verify.js";
 // Re-exported from @render-factory/sdk so importers of this module can grab it too.
 export type { Channel };
 
+// --- Request Helpers ---
+
 const MAX_CHANNEL_BODY_BYTES_ENV = "RENDER_FACTORY_MAX_CHANNEL_BODY_BYTES";
 const DEFAULT_MAX_CHANNEL_BODY_BYTES = 1_000_000;
 const REQUIRE_CHANNEL_CONTENT_TYPE_ENV = "RENDER_FACTORY_REQUIRE_CHANNEL_CONTENT_TYPE";
@@ -87,6 +89,8 @@ async function readRawBodyLimited(
   }
   return { ok: true, rawBody: new TextDecoder().decode(bytes) };
 }
+
+// --- Channel Route Handler ---
 
 /**
  * Channel routes — the single inbound message surface (supersedes webhooks +

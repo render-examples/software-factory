@@ -36,6 +36,10 @@ interface Subscriber {
 }
 const MAX_EVENT_TAIL_QUEUE = 10_000;
 
+// --- Event Log (in-memory) ---
+
+// --- Event Log (in-memory) ---
+
 /**
  * In-memory append-only event log. `append` is the single write path: it runs
  * the optional pre-commit interceptor, assigns a gap-free per-run `seq`, folds
@@ -193,6 +197,10 @@ export class MemoryEventLogStore implements EventLogStore {
     }
   }
 }
+
+// --- Run Store (in-memory) ---
+
+// --- Run Store (in-memory) ---
 
 /**
  * In-memory `RunStore`: reads are pure projections folded from the event log.
@@ -440,6 +448,10 @@ export class MemoryRunStore implements RunStore, ThreadStore, OAuthStore, Schedu
     return this.projections.dump(runId);
   }
 }
+
+// --- Factory & Replay Helpers ---
+
+// --- Factory & Replay Helpers ---
 
 export function createMemoryStore(): MemoryRunStore {
   return new MemoryRunStore();

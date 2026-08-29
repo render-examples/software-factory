@@ -46,6 +46,8 @@ export class InboundWorker {
     this.concurrency = opts.concurrency ?? 5;
   }
 
+  // --- Lifecycle ---
+
   start(): void {
     if (this.running) return;
     this.running = true;
@@ -70,6 +72,8 @@ export class InboundWorker {
     }
   }
 
+  // --- Poll & Dispatch ---
+
   private schedulePoll(delay: number): void {
     if (!this.running) return;
     this.pollTimer = setTimeout(() => {
@@ -92,6 +96,8 @@ export class InboundWorker {
 
     this.schedulePoll(this.pollIntervalMs);
   }
+
+  // --- Job Processing ---
 
   private async processJob(job: ConversationJob): Promise<void> {
     const heartbeat = setInterval(async () => {
@@ -125,6 +131,8 @@ export class InboundWorker {
       await this.store.failJob(job.id, job.leaseToken, errorMsg, retry).catch(() => {});
     }
   }
+
+  // --- Maintenance ---
 
   private async reap(): Promise<void> {
     const staleBefore = new Date(Date.now() - this.staleThresholdMs);

@@ -3,6 +3,8 @@ import type { RunStore } from "@render-factory/store";
 import { buildEventRecord } from "@render-factory/store";
 import { getPrincipal, canAccess } from "../auth.js";
 
+// --- Constants & Helpers ---
+
 const INPUT_STATUSES = new Set(["pending", "approved", "denied", "provided", "all"]);
 const INPUT_KINDS = new Set(["approval", "message"]);
 
@@ -70,6 +72,8 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
       },
     };
   };
+
+  // --- List & Count ---
 
   // Defaults to pending approvals to power the operator action queue.
   app.get("/inputs", async (c) => {
@@ -162,6 +166,8 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     return c.json({ count: records.length, pendingApprovals });
   });
 
+  // --- Resolve Input ---
+
   app.post("/inputs/:id/provide", async (c) => {
     const inputId = c.req.param("id");
     const actor = getPrincipal(c);
@@ -216,6 +222,8 @@ export function hitlRoutes(deps: { store: RunStore; resume?: (runId: string) => 
     await driveResume(targetRunId);
     return c.json({ provided: true, inputId, runId: targetRunId });
   });
+
+  // --- Run-Scoped Input ---
 
   app.post("/runs/:id/input", async (c) => {
     const actor = getPrincipal(c);

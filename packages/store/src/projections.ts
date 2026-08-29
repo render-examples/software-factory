@@ -3,6 +3,8 @@ import type { Message } from "./messages.js";
 import type { RunRecord, SpanRecord, ListRunsOptions } from "./run-store.js";
 import type { ThreadMessage } from "./thread-store.js";
 
+// --- Types ---
+
 /**
  * A folded approval record. Not part of the public `RunStore` read surface in
  * Wave 0 (the gateway consumes it later), but maintained here so the log stays
@@ -52,6 +54,8 @@ function flattenContent(content: ContentBlock[]): string {
     .map((b) => b.text)
     .join("\n");
 }
+
+// --- Projection Engine ---
 
 /**
  * The projection-fold framework. Every read model (runs, messages, spans,
