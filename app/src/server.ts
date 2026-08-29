@@ -1,11 +1,11 @@
 import { bootFactory } from "@render-factory/sdk";
 import { startGateway } from "@render-factory/gateway";
+import factoryDef from "../factory.js";
 import { ensureWorkflowSlug } from "../lib/render.js";
 
 ensureWorkflowSlug();
 
-const root = new URL("../..", import.meta.url).pathname;
-const { runtime, workflows, channels } = await bootFactory(root);
+const { runtime, workflows, channels } = await bootFactory(factoryDef);
 
 const { port } = await startGateway({
   runtime,

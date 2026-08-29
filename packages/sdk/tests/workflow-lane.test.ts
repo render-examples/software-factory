@@ -5,7 +5,7 @@ import type { AgentDefinition } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { workflow, bindWorkflow } from "../src/workflow.js";
 import { workflowTaskHandler } from "../src/dispatch.js";
-import { defineTool } from "../src/authoring.js";
+import { defineTool } from "@render-factory/engine";
 import type { RootDispatchJob, TaskDispatcher } from "../src/runtime.js";
 
 describe("workflow lane (Lane A) — dispatchRoot", () => {

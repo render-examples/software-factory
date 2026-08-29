@@ -10,14 +10,15 @@ when asked to add, modify, or extend anything in the render-factory.
 ```
 render-factory/
 ├── app/                    ← YOU CUSTOMIZE THIS
-│   ├── agents/             Markdown agent definitions
+│   ├── agents/             TypeScript agent definitions (index.ts barrel)
 │   ├── workflows/          Durable workflow orchestration
 │   ├── tools/              Tool sources (local, MCP)
 │   ├── channels/           Inbound webhook adapters
+│   ├── factory.ts          Explicit factory root (workflows, channels, interactive agents)
 │   └── src/                Entrypoints (server.ts, workflows.ts)
 ├── packages/               ← INFRASTRUCTURE, DON'T TOUCH
 │   ├── engine/             Agent loop, model clients, tools runtime
-│   ├── sdk/                Public API, loaders, dispatch, workflow()
+│   ├── sdk/                Public API, define*, bootFactory, dispatch
 │   ├── store/              Event log, projections, Postgres
 │   ├── gateway/            HTTP service, auth, operator UI
 │   └── sandbox/render/     Render Sandbox provider
@@ -29,57 +30,49 @@ render-factory/
 
 ## How it boots
 
-Both entrypoints (`server.ts`, `workflows.ts`) call `bootFactory(root)` which
-auto-discovers agents, tools, workflows, channels, hooks, and runners from the
-`app/` directory by convention. Adding or removing a file is all it takes to
-add or remove a capability — no manual imports or registration.
-
-### Factory config (optional)
-
-Create `app/factory.config.mjs` to set factory-wide settings:
-
-```js
-/** @type {import("@render-factory/sdk").FactoryConfig} */
-export default {
-  repos: ["myorg/*"],  // restrict which repos the factory can operate on
-};
-```
-
-Use `.mjs` (not `.ts`) so the config works under plain `node` in production.
-Omit the file entirely to accept all defaults (all repos the GitHub token can reach).
+Both entrypoints (`server.ts`, `workflows.ts`) import the factory definition
+from `app/factory.ts` and call `bootFactory(factoryDef)`, which traverses the
+typed dependency graph, validates all references, and materializes the runtime.
+No filesystem discovery or compilation is involved.
 
 ---
 
 ## Authoring Agents
 
-Agents live in `app/agents/<name>.md`. The file name (without extension) is the
-agent's ID, referenced from workflows as `ctx.agents.get("<name>")`.
+Agents are TypeScript definitions in `app/agents/index.ts`. Each is created
+with `defineAgent()` and exported as a named constant.
 
-### Format
+### Example
 
-```md
----
-description: One-line description of what this agent does
-model: large
-tools: [sandbox]
-budget:
-  maxIterations: 60
-  maxCostUsd: 15
----
+```ts
+import { defineAgent, md } from "@render-factory/sdk";
+import sandboxTool from "../tools/sandbox/index.js";
 
-You are a... (system prompt body)
+export const researcher = defineAgent({
+  id: "researcher",
+  description: "Explores the repository to understand how to implement an issue",
+  tools: [sandboxTool],
+  budget: { maxIterations: 30, maxCostUsd: 8 },
+  prompt: md`
+    You are the **Research** phase of a Research → Plan → Implement loop.
+    ...
+  `,
+});
 ```
 
-### Frontmatter Fields
+### Agent Definition Fields
 
 **Common (use these):**
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `description` | string | What the agent does (required for subagent routing) |
+| `id` | string | Unique agent identifier (required) |
+| `description` | string | What the agent does |
 | `model` | string | Model tier: `small`, `medium`, `large` (or a specific model ID) |
-| `tools` | string[] | Tool sources this agent can access (enforced allowlist) |
+| `tools` | ToolSource[] | Tool sources this agent can access (imported objects) |
+| `subagents` | AgentDef[] | Subagent definitions this agent can delegate to |
 | `budget` | object | Execution limits (see below) |
+| `prompt` | string | System prompt, typically using the `md` tagged template |
 
 **Budget fields:**
 
@@ -95,76 +88,66 @@ You are a... (system prompt body)
 | Field | Type | Purpose |
 |-------|------|---------|
 | `provider` | `"anthropic"` \| `"openai"` | Override the default provider |
-| `output` | JSON Schema object | Enforce structured output (agent must return valid JSON) |
-| `permissions.requireApproval` | string[] | Tool IDs that pause for human approval |
+| `output` | z.ZodType | Structured output schema (Zod, converted to JSON Schema) |
+| `requireApproval` | ToolSource[] | Tools that pause for human approval |
 | `plan` | string | Render Workflows compute plan (`starter`, `standard`, `pro`) |
-| `interactive` | boolean | Marks this as a conversational agent (thread-scoped memory) |
+| `interactive` | boolean | Marks this as a conversational agent |
 | `sampling.temperature` | number | Model temperature |
 | `sampling.topP` | number | Top-p sampling |
 | `sampling.maxOutputTokens` | number | Max output tokens per model call |
-| `context.compaction` | string | Context compaction strategy |
-| `context.maxContextTokens` | number | Max context window budget |
-| `subagents` | string[] | Named subagents this agent can delegate to |
-| `skills` | string[] | Skill documents loaded into context |
-| `runner` | string | Custom runner name (advanced) |
+| `input` | z.ZodType | Zod schema for validating/typing agent input |
 
-### Discovery
+### Adding an agent
 
-Agents are auto-discovered by `bootFactory()` (or `loadAgents()`) from the
-`agents/` directory. Just create a `.md` file — no imports or registration
-needed. Files starting with `_` (like `_shared.md`) are merged into all agents
-as shared defaults.
+1. Define the agent in `app/agents/index.ts` using `defineAgent()`.
+2. Import it in the workflow that uses it and add it to the workflow's `agents` array.
+3. The factory graph is traversed automatically — no separate registration needed.
 
 ---
 
 ## Composing Workflows
 
 Workflows live in `app/workflows/<name>/index.ts`. They default-export a
-`workflow()` definition.
+`defineWorkflow()` definition that declares its agent dependencies.
 
 ### Minimal workflow
 
 ```ts
-import { workflow } from "@render-factory/sdk";
+import { defineWorkflow } from "@render-factory/sdk";
+import { researcher } from "../../agents/index.js";
 
-export default workflow({ name: "my-workflow" }, async (ctx) => {
-  const result = await ctx.agents.get("researcher").run(ctx.input);
-  return { summary: result.text };
+export default defineWorkflow({
+  id: "my-workflow",
+  agents: [researcher] as const,
+  run: async (ctx) => {
+    const result = await ctx.task(researcher, ctx.input);
+    return { summary: result.text };
+  },
 });
 ```
 
-### `run()` vs `task()`
+### `ctx.task()` — the only execution API
 
-Use `run()` when the next line needs this agent's output. Use `task()` when you
-want durability, parallelism, or a different compute plan.
+Every agent invocation is a durable isolated task. Use `await` for sequential
+steps and `Promise.all()` for parallel fan-out:
 
 ```ts
 // Sequential — each step feeds the next
-const research = await ctx.agents.get("researcher").run(input);
-const plan = await ctx.agents.get("planner").run(research.text);
-const impl = await ctx.agents.get("implementer").run(plan.data);
+const research = await ctx.task(researcher, input);
+const plan = await ctx.task(planner, research.text);
+const impl = await ctx.task(implementer, plan.text);
 
 // Parallel — independent work fans out
 const [security, perf, tests] = await Promise.all([
-  ctx.agents.get("security").task(diff),
-  ctx.agents.get("performance").task(diff),
-  ctx.agents.get("tests").task(diff),
+  ctx.task(securityAgent, diff),
+  ctx.task(perfAgent, diff),
+  ctx.task(testsAgent, diff),
 ]);
 ```
 
-**Decision rule:**
-
-- Is this one of several agents that can run at the same time? → `task()`
-- Does this agent need a bigger compute plan? → `task()`
-- Otherwise → `run()` (simpler, faster, no dispatch overhead)
-
-Both return `AgentOutput<T>` with `.text` and `.data`. Both are replay-safe
-(deterministic child run IDs, memoized on completion).
-
 ### `ctx.step()` for side effects
 
-Wrap all side effects (API calls, file I/O, anything non-deterministic) in
-`ctx.step()` for replay-safe memoization:
+Wrap all side effects in `ctx.step()` for replay-safe memoization:
 
 ```ts
 const pr = await ctx.step("open-pr", async () => {
@@ -172,24 +155,27 @@ const pr = await ctx.step("open-pr", async () => {
 });
 ```
 
-If the workflow crashes and restarts, completed steps return their cached result
-instead of re-executing. Step names must be unique within a single handler.
-
 ### Registration
 
-Workflows are auto-discovered by `bootFactory()` from `app/workflows/<name>/index.ts`.
-Just create the directory and file — no manual imports needed. The directory name
-becomes the workflow name.
+Workflows must be added to the factory root in `app/factory.ts`:
 
-If you've ejected to explicit imports (not using `bootFactory`), add the workflow
-to both `app/src/server.ts` and `app/src/workflows.ts` manually.
+```ts
+export default defineFactory({
+  workflows: [specToPr, prReview, prFix],
+  channels: [github, slack],
+  interactive: [assistant],
+});
+```
+
+Only workflows listed here (or reachable through channels) are dispatchable.
+Agent dependencies are declared per-workflow and collected transitively at boot.
 
 ---
 
 ## Adding Tools
 
-Tools live in `app/tools/<source-id>/index.ts`. The directory name is the source
-ID that agents reference in their `tools:` frontmatter.
+Tools live in `app/tools/<source-id>/index.ts`. Each default-exports a
+`ToolSource` created by `defineTool()` or `defineMcpSource()`.
 
 ### Single local tool
 
@@ -197,7 +183,7 @@ ID that agents reference in their `tools:` frontmatter.
 import { defineTool } from "@render-factory/sdk";
 
 export default defineTool({
-  name: "get_issue",
+  id: "get_issue",
   description: "Read one GitHub issue.",
   inputSchema: {
     type: "object",
@@ -209,27 +195,10 @@ export default defineTool({
   },
   async invoke(input, ctx) {
     const { repo, number } = input as { repo: string; number: number };
-    // ... implementation
     return JSON.stringify(result);
   },
 });
 ```
-
-Agent mounts it as: `tools: [get_issue]`
-
-### Multi-tool source
-
-```ts
-import { defineToolSource } from "@render-factory/sdk";
-
-export default defineToolSource({
-  name: "github",
-  tools: [getFileTool, pushCodeTool, createPrTool],
-});
-```
-
-Agent mounts all tools: `tools: [github]`
-Agent mounts one tool: `tools: [github__get_file]`
 
 ### MCP server (HTTP)
 
@@ -243,107 +212,52 @@ export default defineMcpSource({
 });
 ```
 
-### MCP server (stdio)
+### Using tools in agents
+
+Import the tool source and reference it in the agent's `tools` array:
 
 ```ts
-import { defineMcpSource } from "@render-factory/sdk";
+import sandboxTool from "../tools/sandbox/index.js";
 
-export default defineMcpSource({
-  transport: "stdio",
-  command: "npx",
-  args: ["-y", "@example/mcp-server"],
-  env: { API_KEY: process.env.API_KEY ?? "" },
+export const implementer = defineAgent({
+  tools: [sandboxTool],
+  // ...
 });
 ```
-
-### Namespacing rules
-
-- Single tool → exposed as `<source-id>`
-- Multi-tool source → exposed as `<source-id>__<tool-name>`
-- MCP tools → always `<source-id>__<server-tool-name>`
-
-### Registration
-
-Tools are auto-discovered by `bootFactory()` from `app/tools/<source-id>/index.ts`.
-Just create the directory and file — no manual imports needed. The directory name
-becomes the source ID that agents reference in `tools:`.
-
-If a tool needs runtime state (like access to the workflow map or the store),
-export a `bind(ctx)` function alongside the default export:
-
-```ts
-export default defineTool({ ... });
-
-export function bind(ctx: { runtime: AgentRuntime; workflows: Map<string, WorkflowDefinition> }) {
-  // receive runtime state after the full project is assembled
-}
-```
-
-`bootFactory()` calls `bind()` automatically on every tool source that exports it.
-
----
-
-## Configuring Policies
-
-### Approval gates
-
-Add `permissions.requireApproval` to an agent's frontmatter with tool IDs that
-should pause for human approval before executing:
-
-```yaml
----
-tools: [sandbox, deploy]
-permissions:
-  requireApproval:
-    - deploy
----
-```
-
-Tool IDs follow the namespacing rules above. For a namespaced tool:
-
-```yaml
-permissions:
-  requireApproval:
-    - github__push_code
-```
-
-When a gated tool is called, the run emits `input.requested` and pauses. An
-operator resolves it via the operator UI or `POST /inputs/:id/provide`.
-
-### Budget enforcement
-
-Budget fields in agent frontmatter are enforced at runtime. When any limit is
-hit, the agent run terminates with a budget-exceeded error:
-
-- `maxIterations` — counts each model-call-then-tool-execution cycle
-- `maxCostUsd` — estimated from model pricing tables (input + output tokens)
-- `maxWallSeconds` — wall-clock time from run start
-- `maxTokens` — total tokens consumed across all model calls
 
 ---
 
 ## Adding Channels
 
-Channels live in `app/channels/<name>.ts`. They are auto-discovered by
-`bootFactory()` — the filename (without extension) becomes the channel ID,
-and the gateway mounts it at `POST /channels/<name>`.
-
-A channel default-exports an object with `target`, `verify`, `match`, and `parse`:
+Channels live in `app/channels/<name>.ts`. They default-export a `defineChannel()`
+definition that references workflow or agent targets as imported objects.
 
 ```ts
-import type { Channel } from "@render-factory/sdk";
-import { githubVerify } from "@render-factory/sdk";
+import { defineChannel, githubVerify } from "@render-factory/sdk";
+import specToPr from "../workflows/spec-to-pr/index.js";
 
-const channel: Channel = {
-  target: { workflow: "my-workflow" },
+export default defineChannel({
+  id: "github",
+  target: { workflow: specToPr },
   verify: githubVerify(),
   match(req) { /* return { event } or null */ },
   async parse(req) { /* return { conversationId, input, target? } */ },
-};
-export default channel;
+});
 ```
 
-Optionally add a `deliver` method for outbound replies (e.g., posting to Slack).
+Channels must be added to the factory root in `app/factory.ts`.
+
+---
+
+## The Factory Root
+
+`app/factory.ts` is the single composition boundary. It lists:
+- **workflows** — publicly dispatchable via the HTTP API
+- **channels** — inbound/outbound message surfaces
+- **interactive** — conversational agents exposed as chat entrypoints
+
+All agent, tool, and subagent dependencies are collected transitively from
+workflows and interactive agents. You never list pipeline agents in the factory.
 
 ---
 
@@ -354,4 +268,5 @@ Optionally add a `deliver` method for outbound replies (e.g., posting to Slack).
 - **Strict TypeScript** — `noEmit` for typecheck, no `any`
 - **pnpm workspace** — run commands from root or use `pnpm --filter`
 - **Tests** — Vitest, run with `pnpm test`
-- **Build** — `pnpm build` compiles all packages
+- **App runs through tsx** — no compilation needed for the private app
+- **Published packages compile** — `pnpm build` compiles all packages

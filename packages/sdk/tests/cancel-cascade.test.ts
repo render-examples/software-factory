@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import { PgRunStore, PgCancelStore, buildEventRecord } from "@render-factory/store";
 import { createTestRuntime, mockModel } from "../src/testing.js";
-import { defineTool } from "../src/authoring.js";
+import { defineTool } from "@render-factory/engine";
 import type { AgentDefinition } from "@render-factory/engine";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;

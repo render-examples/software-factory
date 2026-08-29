@@ -35,7 +35,7 @@ describe("gateway HITL — provide resumes the paused run", () => {
     process.env[KEY] = "1";
     let invoked = 0;
     const toolSources = new Map([
-      ["deploy", defineTool({ name: "deploy", description: "ship", inputSchema: {}, async invoke() { invoked += 1; return "deployed"; } })],
+      ["deploy", defineTool({ id: "deploy", description: "ship", inputSchema: {}, async invoke() { invoked += 1; return "deployed"; } })],
     ]);
     const runtime = await createTestRuntime({ model: deployModel(), toolSources });
     runtime.agentDefinitions.set("deployer", deployerDef());
@@ -90,7 +90,7 @@ describe("gateway HITL — workflow root resumes when a child input resolves", (
     process.env[KEY] = "1";
     let invoked = 0;
     const toolSources = new Map([
-      ["deploy", defineTool({ name: "deploy", description: "ship", inputSchema: {}, async invoke() { invoked += 1; return "deployed"; } })],
+      ["deploy", defineTool({ id: "deploy", description: "ship", inputSchema: {}, async invoke() { invoked += 1; return "deployed"; } })],
     ]);
     const runtime = await createTestRuntime({ model: deployModel(), toolSources });
     runtime.agentDefinitions.set("deployer", deployerDef());

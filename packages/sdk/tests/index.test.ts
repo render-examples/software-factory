@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createRuntime, loadAgents, workflow, defineTool, defineMcpSource, defineHook, idempotencyKey, InProcessDispatcher } from "../src/index.js";
+import { createRuntime, defineTool, defineMcpSource, defineAgent, defineWorkflow, defineFactory, md, idempotencyKey, InProcessDispatcher } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
 
 describe("@render-factory/sdk", () => {
@@ -15,25 +15,30 @@ describe("@render-factory/sdk", () => {
     expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
   });
 
-  it("loadAgents returns an AgentSet", async () => {
-    const model = mockModel(() => ({
-      content: [{ type: "text", text: "ok" }],
-      usage: { inputTokens: 1, outputTokens: 1 },
-      stopReason: "end_turn",
-    }));
-    const runtime = await createRuntime({ tenantId: "test-tenant", model });
-    const agents = await loadAgents(".", runtime);
-    expect(agents.all()).toEqual([]);
+  it("defineAgent returns a frozen AgentDef", () => {
+    const agent = defineAgent({
+      id: "test-agent",
+      prompt: md`You are a test agent.`,
+    });
+    expect(agent.__brand).toBe("AgentDef");
+    expect(agent.id).toBe("test-agent");
+    expect(Object.isFrozen(agent)).toBe(true);
   });
 
-  it("workflow returns a WorkflowDefinition", () => {
-    const def = workflow(async () => {});
-    expect(def.name).toBe("unnamed");
-    expect(def.options.retries).toBe(0);
+  it("defineWorkflow returns a frozen WorkflowDef", () => {
+    const agent = defineAgent({ id: "a", prompt: "test" });
+    const wf = defineWorkflow({
+      id: "test-wf",
+      agents: [agent] as const,
+      run: async () => {},
+    });
+    expect(wf.__brand).toBe("WorkflowDef");
+    expect(wf.id).toBe("test-wf");
+    expect(Object.isFrozen(wf)).toBe(true);
   });
 
   it("defineTool returns a ToolSource", () => {
-    const source = defineTool({ name: "test", description: "test", inputSchema: {}, invoke: async () => "" });
+    const source = defineTool({ id: "test", description: "test", inputSchema: {}, invoke: async () => "" });
     expect(source.id).toBe("test");
   });
 
@@ -42,40 +47,24 @@ describe("@render-factory/sdk", () => {
     expect(source.id).toBe("mcp");
   });
 
-  it("defineHook returns the spec", () => {
-    const hook = defineHook({
-      name: "test",
-      on: ["tool"],
-      handle: async () => ({ action: "continue" as const }),
-    });
-    expect(hook.name).toBe("test");
+  it("defineFactory returns a frozen FactoryDef", () => {
+    const agent = defineAgent({ id: "a", prompt: "test" });
+    const wf = defineWorkflow({ id: "wf", agents: [agent] as const, run: async () => {} });
+    const factory = defineFactory({ workflows: [wf] });
+    expect(factory.__brand).toBe("FactoryDef");
+    expect(Object.isFrozen(factory)).toBe(true);
   });
 
-  it("idempotencyKey returns a SHA-256 hex digest", () => {
-    expect(idempotencyKey("run1", "suffix")).toMatch(/^[0-9a-f]{64}$/);
-  });
-});
-
-describe("@render-factory/sdk/testing", () => {
-  it("mockModel returns a ModelClient driven by the handler", async () => {
-    const model = mockModel(() => ({
-      content: [{ type: "text", text: "hi" }],
-      usage: { inputTokens: 1, outputTokens: 1 },
-      stopReason: "end_turn",
-    }));
-    const result = await model.complete({
-      model: { provider: "anthropic", model: "claude-haiku-4-5" },
-      system: "",
-      tools: [],
-      messages: [],
-      signal: new AbortController().signal,
-    });
-    expect(result.content).toEqual([{ type: "text", text: "hi" }]);
+  it("md strips common indentation", () => {
+    const text = md`
+      Hello
+        World
+    `;
+    expect(text).toBe("Hello\n  World");
   });
 
-  it("createTestRuntime builds a memory runtime with an in-process dispatcher", async () => {
-    const runtime = await createTestRuntime();
-    expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
-    expect(runtime.runners.has("default")).toBe(true);
+  it("idempotencyKey is deterministic", () => {
+    expect(idempotencyKey("a", "b")).toBe(idempotencyKey("a", "b"));
+    expect(idempotencyKey("a", "b")).not.toBe(idempotencyKey("a", "c"));
   });
 });

@@ -8,12 +8,11 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests",
     "dev": "tsx watch src/server.ts",
-    "start": "tsx dist/src/server.js",
-    "workflows": "tsx dist/src/workflows.js",
+    "start": "tsx src/server.ts",
+    "workflows": "tsx src/workflows.ts",
     "dev:workflows": "render workflows dev -- tsx src/workflows.ts"
   },
   "dependencies": {
@@ -23,7 +22,8 @@
     "@render-factory/sdk": "workspace:*",
     "@render-factory/store": "workspace:*",
     "@renderinc/sdk": "^0.6.0",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",

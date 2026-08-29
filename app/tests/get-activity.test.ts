@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolContext } from "@render-factory/sdk";
 import { createTestRuntime } from "@render-factory/sdk/testing";
 import { buildEventRecord } from "@render-factory/store";
-import getActivityToolSource, {
-  bindActivityRuntime,
-} from "../tools/get_activity/index.js";
+import getActivityToolSource, { setRuntime as bindActivityRuntime } from "../tools/get_activity/index.js";
 
 const logger = {
   debug() {},

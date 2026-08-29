@@ -7,6 +7,7 @@ import {
   RenderWorkflowsDispatcher,
 } from "@render-factory/sdk";
 import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
+import factoryDef from "../factory.js";
 import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
 
 ensureWorkflowSlug();
@@ -42,8 +43,7 @@ class NativeChainingDispatcher extends RenderWorkflowsDispatcher {
 
 const dispatcher = new NativeChainingDispatcher({ workflowSlug: WORKFLOW_SLUG });
 
-const root = new URL("../..", import.meta.url).pathname;
-const { runtime, workflows } = await bootFactory(root, {
+const { runtime, workflows } = await bootFactory(factoryDef, {
   runtime: { dispatcher },
 });
 

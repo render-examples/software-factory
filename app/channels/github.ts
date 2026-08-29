@@ -1,12 +1,10 @@
-import type { Channel, ChannelMatch } from "@render-factory/sdk";
+import { defineChannel, md } from "@render-factory/sdk";
 import { githubVerify, matchesRepoAllowlist } from "@render-factory/sdk";
 import { normalizeGitHubEvent, type NormalizedGitHubEvent } from "../lib/github-events.js";
+import specToPr from "../workflows/spec-to-pr/index.js";
+import prReview from "../workflows/pr-review/index.js";
+import prFix from "../workflows/pr-fix/index.js";
 
-// Best-effort hot-path dedup: avoids unnecessary DB roundtrips for rapid GitHub
-// retries. DURABLE dedup is handled by the framework's one-active-run DB
-// constraint — same conversationId → same thread → unique index rejects a
-// second concurrent run.started. If this process restarts and the Map is empty,
-// a retry that slips through is caught at the DB level (returns 409).
 const SEEN_DELIVERY_TTL_MS = 10 * 60 * 1000;
 const seenDeliveries = new Map<string, number>();
 
@@ -23,7 +21,7 @@ function isDuplicateDelivery(deliveryId: string | null): boolean {
   return false;
 }
 
-function ackDuplicate(): ChannelMatch {
+function ackDuplicate() {
   return {
     ack: new Response(JSON.stringify({ ok: true, duplicate: true }), {
       status: 200,
@@ -32,8 +30,9 @@ function ackDuplicate(): ChannelMatch {
   };
 }
 
-const channel: Channel = {
-  target: { workflow: "spec-to-pr" },
+const github = defineChannel({
+  id: "github",
+  target: { workflow: specToPr, trigger: "github.issues" },
   verify: githubVerify(),
 
   match(req: Request) {
@@ -63,13 +62,13 @@ const channel: Channel = {
       }
     }
 
-    let target: { workflow: string; trigger: string };
+    let target: { workflow: typeof specToPr | typeof prReview | typeof prFix; trigger: string };
     if (event === "pull_request") {
-      target = { workflow: "pr-review", trigger: "github.pull_request" };
+      target = { workflow: prReview, trigger: "github.pull_request" };
     } else if (event === "pull_request_review") {
-      target = { workflow: "pr-fix", trigger: "github.pull_request_review" };
+      target = { workflow: prFix, trigger: "github.pull_request_review" };
     } else {
-      target = { workflow: "spec-to-pr", trigger: `github.${event}` };
+      target = { workflow: specToPr, trigger: `github.${event}` };
     }
     const conversationId =
       normalized.kind === "issue" ? `issue-${normalized.issue.number}`
@@ -77,6 +76,6 @@ const channel: Channel = {
           : "unknown";
     return { conversationId, input: normalized, target };
   },
-};
+});
 
-export default channel;
+export default github;

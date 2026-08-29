@@ -7,7 +7,7 @@ import { defineTool } from "@render-factory/sdk";
  * decision in the Approvals view before it actually "runs".
  */
 export default defineTool({
-  name: "deploy",
+  id: "deploy",
   description:
     "Deploy the application to an environment. This performs a real, " +
     "side-effectful release and should be used when the user asks to deploy, " +

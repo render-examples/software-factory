@@ -67,21 +67,13 @@ const ACTIVITY_EVENT_TYPES: RunEvent["type"][] = [
 
 let runtime: ActivityRuntime | undefined;
 
-/** Late-bind runtime read stores after createRuntime() completes. */
-export function bindActivityRuntime(value: ActivityRuntime): void {
+/** @internal Test helper to inject runtime stores. */
+export function setRuntime(value: ActivityRuntime): void {
   runtime = value;
 }
 
-/**
- * Convention-based late-bind called by `lateBindToolSources` after the full
- * project is assembled. Replaces manual `bindActivityRuntime` calls.
- */
-export function bind(ctx: { runtime: ActivityRuntime }): void {
-  runtime = ctx.runtime;
-}
-
 export default defineTool({
-  name: "get_activity",
+  id: "get_activity",
   description:
     "Read recent activity for a Render Factory run or thread. Use this when the " +
     "user provides a run ID or thread ID, asks for status, or wants the latest " +

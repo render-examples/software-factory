@@ -1,4 +1,6 @@
-import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
+import { defineWorkflow, notifyThreadSurfaces } from "@render-factory/sdk";
+import type { AgentRuntime } from "@render-factory/sdk";
+import { security, performance, correctness, tests, lint, judge } from "../../agents/index.js";
 import { githubFromEnv, type PullFile, type ReviewComment } from "../../lib/github.js";
 import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
@@ -31,7 +33,11 @@ function renderDiff(files: PullFile[]): string {
   return out || "_(empty diff)_";
 }
 
-export default workflow({ name: "pr-review" }, async (ctx) => {
+export default defineWorkflow({
+  id: "pr-review",
+  agents: [security, performance, correctness, tests, lint, judge] as const,
+  run: async (ctx) => {
+  const rt = ctx.runtime as AgentRuntime;
   const ev = ctx.input as NormalizedGitHubEvent;
 
   if (ev.kind !== "pull") return { skipped: "not a pull_request event" };
@@ -68,23 +74,23 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
 
     const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-    const [security, performance, correctness, tests, lint] = await Promise.all([
-      ctx.agents.get("security").task(diff),
-      ctx.agents.get("performance").task(diff),
-      ctx.agents.get("correctness").task(diff),
-      ctx.agents.get("tests").task(diff),
-      ctx.agents.get("lint").task(sandboxContext),
+    const [secReview, perfReview, corrReview, testsReview, lintReview] = await Promise.all([
+      ctx.task(security, diff),
+      ctx.task(performance, diff),
+      ctx.task(correctness, diff),
+      ctx.task(tests, diff),
+      ctx.task(lint, sandboxContext),
     ]);
 
     const verdict = await ctx.step("judge", async () => {
       const combined = [
-        `## Security\n${security.text}`,
-        `## Performance\n${performance.text}`,
-        `## Correctness\n${correctness.text}`,
-        `## Tests\n${tests.text}`,
-        `## Lint\n${lint.text}`,
+        `## Security\n${secReview.text}`,
+        `## Performance\n${perfReview.text}`,
+        `## Correctness\n${corrReview.text}`,
+        `## Tests\n${testsReview.text}`,
+        `## Lint\n${lintReview.text}`,
       ].join("\n\n");
-      const out = await ctx.agents.get("judge").run<Verdict>(
+      const out = await ctx.task<Verdict>(judge,
         `Pull request #${pull.number}: ${pull.title}\n\n${pull.body}\n\n` +
           `Specialist reviews:\n\n${combined}\n\nDiff under review:\n\n${diff}`,
       );
@@ -100,10 +106,10 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
       return { submitted: true };
     });
 
-    const run = await ctx.runtime.store.getRun(ctx.runId);
+    const run = await rt.store.getRun(ctx.runId);
     if (run?.threadId) {
       const resultMsg = `Review submitted for ${pull.htmlUrl}: ${verdict.decision}`;
-      await ctx.runtime.itemStore.appendItem({
+      await rt.itemStore.appendItem({
         threadId: run.threadId,
         runId: ctx.runId,
         kind: "result",
@@ -111,7 +117,7 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
         content: resultMsg,
         data: { decision: verdict.decision, pr: pull.htmlUrl },
       });
-      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+      await notifyThreadSurfaces(rt, run.threadId, {
         kind: "result",
         content: resultMsg,
         data: { decision: verdict.decision, pr: pull.htmlUrl },
@@ -122,4 +128,5 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
   } finally {
     await sandbox.terminate();
   }
+},
 });

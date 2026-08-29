@@ -1,11 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { join } from "node:path";
-import { loadAgents } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
+import { bindAgentSet } from "../src/agents.js";
+import type { AgentDefinition } from "@render-factory/engine";
 
-const VALID_PROJECT = join(import.meta.dirname, "__fixtures__/valid-project");
+const judgeAgent: AgentDefinition = {
+  name: "judge",
+  model: { provider: "anthropic", model: "claude-haiku-4-5" },
+  systemPrompt: "You are a judge.",
+  tools: [],
+  output: { type: "object", properties: { decision: { type: "string" } }, required: ["decision"] },
+};
 
-describe("Wave 0 walking skeleton (Authoring → Testing example)", () => {
+const securityAgent: AgentDefinition = {
+  name: "security",
+  model: { provider: "anthropic", model: "claude-haiku-4-5" },
+  systemPrompt: "You are a security reviewer.",
+  tools: [],
+};
+
+describe("Agent run/task walking skeleton", () => {
   it("runs the real loop against a mock model and resolves with text, fully event-sourced", async () => {
     const model = mockModel(() => ({
       content: [{ type: "text", text: '{"decision":"approve"}' }],
@@ -13,12 +26,11 @@ describe("Wave 0 walking skeleton (Authoring → Testing example)", () => {
       stopReason: "end_turn",
     }));
     const runtime = await createTestRuntime({ model });
-    const agents = await loadAgents(VALID_PROJECT, runtime);
+    const agents = bindAgentSet([judgeAgent], runtime);
 
     const out = await agents.get("judge").run<{ decision: string }>({ findings: [] });
     expect(out.text).toBe('{"decision":"approve"}');
 
-    // The run is event-sourced: exactly one completed run exists in the store.
     const runs = await runtime.store.listRuns();
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("completed");
@@ -33,20 +45,11 @@ describe("Wave 0 walking skeleton (Authoring → Testing example)", () => {
       stopReason: "end_turn",
     }));
     const runtime = await createTestRuntime({ model });
-    const agents = await loadAgents(VALID_PROJECT, runtime);
+    const agents = bindAgentSet([securityAgent], runtime);
 
     const viaRun = await agents.get("security").run("review");
     const viaTask = await agents.get("security").task("review");
     expect(viaTask.text).toBe(viaRun.text);
     expect(viaTask.usage).toEqual(viaRun.usage);
-  });
-
-  it("loadAgents binds agents to an explicit runtime", async () => {
-    const runtime = await createTestRuntime({
-      model: mockModel(() => { throw new Error("No model configured"); }),
-    });
-    const agents = await loadAgents(VALID_PROJECT, runtime);
-    expect(agents.has("judge")).toBe(true);
-    await expect(agents.get("judge").run("x")).rejects.toThrow(/No model configured/);
   });
 });

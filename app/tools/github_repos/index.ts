@@ -10,7 +10,7 @@ interface RepoEntry {
 }
 
 export default defineTool({
-  name: "github_repos",
+  id: "github_repos",
   description:
     "List GitHub repositories accessible to the configured GITHUB_TOKEN. " +
     "Returns repo names, visibility, language, and default branch. Use this to " +

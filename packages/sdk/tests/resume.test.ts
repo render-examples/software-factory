@@ -3,7 +3,7 @@ import { buildEventRecord, idempotencyKey } from "@render-factory/store";
 import { RunPaused, type AgentDefinition, type CompleteResult } from "@render-factory/engine";
 import { createTestRuntime, mockModel } from "../src/testing.js";
 import { resumeRun } from "../src/agents.js";
-import { defineTool } from "../src/authoring.js";
+import { defineTool } from "@render-factory/engine";
 
 const KEY = "RENDER_FACTORY_STRICT_APPROVAL";
 

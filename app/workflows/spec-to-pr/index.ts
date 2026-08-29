@@ -1,4 +1,6 @@
-import { workflow, notifyThreadSurfaces, matchesRepoAllowlist } from "@render-factory/sdk";
+import { defineWorkflow, notifyThreadSurfaces, matchesRepoAllowlist } from "@render-factory/sdk";
+import type { AgentRuntime } from "@render-factory/sdk";
+import { triage, researcher, planner, implementer } from "../../agents/index.js";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
@@ -102,7 +104,6 @@ async function cloneIntoSandbox(
   sandbox: { exec: (cmd: string) => Promise<AsyncGenerator<import("@render-factory/engine").SandboxExecEvent>> },
   opts: { owner: string; repo: string; token: string; dir: string; branch: string },
 ): Promise<void> {
-  // Store credentials via credential.helper — keeps the token out of the clone URL
   const credSetup = await sandbox.exec(
     `git config --global credential.helper store && ` +
     `printf 'https://x-access-token:%s@github.com\\n' '${opts.token}' > ~/.git-credentials && ` +
@@ -124,7 +125,11 @@ async function cloneIntoSandbox(
   }
 }
 
-export default workflow({ name: "spec-to-pr" }, async (ctx) => {
+export default defineWorkflow({
+  id: "spec-to-pr",
+  agents: [triage, researcher, planner, implementer] as const,
+  run: async (ctx) => {
+  const rt = ctx.runtime as AgentRuntime;
   const normalized = normalizeInput(ctx.input);
   if ("skipped" in normalized) return { skipped: normalized.skipped };
 
@@ -155,8 +160,8 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
     if (issue.labels.includes(DONE)) return { skipped: "already done" };
     if (issue.labels.includes(WORKING)) return { skipped: "already in progress" };
 
-    const triage = await ctx.agents.get("triage").run<TriageOut>(renderIssue(issue, comments));
-    const t: TriageOut = triage.data ?? { hasEnoughDetail: false, questions: [] };
+    const triageResult = await ctx.task<TriageOut>(triage, renderIssue(issue, comments));
+    const t: TriageOut = triageResult.data ?? { hasEnoughDetail: false, questions: [] };
 
     if (!t.hasEnoughDetail) {
       const questions = t.questions.length > 0 ? t.questions : ["Could you share more detail about the desired outcome?"];
@@ -189,16 +194,16 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
 
     const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-    const research = await ctx.agents.get("researcher").run(
+    const research = await ctx.task(researcher,
       `${sandboxContext}\n\n${spec.title}\n\n${spec.description}`,
     );
 
-    const plan = await ctx.agents.get("planner").run<PlanOut>(
+    const plan = await ctx.task<PlanOut>(planner,
       `${sandboxContext}\n\n${spec.title}\n\n${spec.description}\n\nResearch brief:\n${research.text}`,
     );
     const planText = plan.data ? JSON.stringify(plan.data, null, 2) : plan.text;
 
-    const impl = await ctx.agents.get("implementer").run(
+    const impl = await ctx.task(implementer,
       `${sandboxContext}\n\n${spec.title}\n\nApproved plan:\n${planText}`,
     );
 
@@ -248,10 +253,10 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
           return { ok: true };
         });
       }
-      const noChangeRun = await ctx.runtime.store.getRun(ctx.runId);
+      const noChangeRun = await rt.store.getRun(ctx.runId);
       if (noChangeRun?.threadId) {
         const msg = "Workflow completed but no changes were made.";
-        await ctx.runtime.itemStore.appendItem({
+        await rt.itemStore.appendItem({
           threadId: noChangeRun.threadId,
           runId: ctx.runId,
           kind: "result",
@@ -259,7 +264,7 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
           content: msg,
           data: { status: "no_changes" },
         });
-        await notifyThreadSurfaces(ctx.runtime, noChangeRun.threadId, {
+        await notifyThreadSurfaces(rt, noChangeRun.threadId, {
           kind: "result",
           content: msg,
           data: { status: "no_changes" },
@@ -288,9 +293,9 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
       });
     }
 
-    const run = await ctx.runtime.store.getRun(ctx.runId);
+    const run = await rt.store.getRun(ctx.runId);
     if (run?.threadId) {
-      await ctx.runtime.itemStore.appendItem({
+      await rt.itemStore.appendItem({
         threadId: run.threadId,
         runId: ctx.runId,
         kind: "result",
@@ -298,7 +303,7 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
         content: `PR opened: ${pr.htmlUrl}`,
         data: { status: "pr_opened", pr: pr.htmlUrl, branch },
       });
-      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+      await notifyThreadSurfaces(rt, run.threadId, {
         kind: "result",
         content: `PR opened: ${pr.htmlUrl}`,
         data: { status: "pr_opened", pr: pr.htmlUrl, branch },
@@ -309,4 +314,5 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
   } finally {
     await sandbox.terminate();
   }
+},
 });

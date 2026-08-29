@@ -1,5 +1,4 @@
 // @render-factory/sdk — Public API surface
-// Re-exports all of engine + store + sdk-defined types
 
 // --- Store (persistence/event vocabulary) ---
 export type {
@@ -107,7 +106,7 @@ export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-fa
 export { resolveModelSpec } from "@render-factory/engine";
 export { defineToolSource } from "@render-factory/engine";
 
-// --- SDK-defined (composition/orchestration) ---
+// --- SDK composition / orchestration ---
 export type {
   RunnerRegistry,
   DispatchOptions,
@@ -120,29 +119,14 @@ export type {
 export { createRuntime } from "./runtime.js";
 
 export type { AgentSet, Agent } from "./agents.js";
-export { loadAgents, resumeRun, driveAgentTurn } from "./agents.js";
-export { loadWorkflows, loadChannels, loadToolSources, loadHooks, loadRunners, lateBindToolSources } from "./loader/load-project.js";
-export type { ToolBindContext } from "./loader/load-project.js";
+export { resumeRun, driveAgentTurn } from "./agents.js";
 
-export { loadProject } from "./project.js";
-export type { LoadProjectOptions, LoadedProject } from "./project.js";
-
-export { bootFactory, defineFactory, matchesRepoAllowlist } from "./factory.js";
-export type { FactoryConfig, BootFactoryResult } from "./factory.js";
-
-export type {
-  WorkflowOptions,
-  WorkflowContext,
-  WorkflowDefinition,
-  WorkflowDispatchOptions,
-} from "./workflow.js";
+// Internal workflow runtime (used by boot, dispatch, and gateway tests)
+export type { WorkflowDefinition, WorkflowContext, WorkflowOptions, WorkflowDispatchOptions } from "./workflow.js";
 export { workflow, bindWorkflow } from "./workflow.js";
 
 // --- Channels & webhook verification ---
 export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget, ChannelMatch } from "./channel.js";
-
-export { slackChannel } from "./channels/slack.js";
-export type { SlackChannelOptions } from "./channels/slack.js";
 
 export type {
   WebhookVerify,
@@ -176,8 +160,42 @@ export {
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
 
-// --- Authoring helpers ---
-export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
+// --- Typed authoring API ---
+export {
+  md,
+  defineAgent,
+  defineTool,
+  defineWorkflow,
+  defineChannel,
+  defineFactory,
+  defineMcpSource,
+  matchesRepoAllowlist,
+  isAgentDef,
+  isWorkflowDef,
+  isChannelDef,
+  isFactoryDef,
+} from "./define.js";
+export type {
+  AgentDef,
+  AgentDefinitionSpec,
+  ToolSetupContext,
+  TypedToolSpec,
+  TypedToolWithSetup,
+  ToolDef,
+  WorkflowDef,
+  WorkflowDefinitionSpec,
+  WorkflowTaskContext,
+  TaskResult,
+  ChannelDef,
+  ChannelDefSpec,
+  ChannelTargetDef,
+  FactoryDef,
+  FactorySpec,
+} from "./define.js";
+
+// --- Factory boot ---
+export { bootFactory } from "./boot.js";
+export type { BootedFactory, BootFactoryOverrides } from "./boot.js";
 
 // --- Thread surface notifications ---
 export { notifyThreadSurfaces } from "./notify-surfaces.js";

@@ -11,7 +11,6 @@ import { RunPaused } from "@render-factory/engine";
 import { idempotencyKey } from "@render-factory/store";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
-import { loadAgentsFromDir } from "./loader/load-agents.js";
 
 // --- Interfaces ---
 
@@ -54,13 +53,7 @@ export interface Agent {
 
 // --- Loading and binding ---
 
-export async function loadAgents(dir: string, runtime: AgentRuntime): Promise<AgentSet> {
-  const inert = await loadAgentsFromDir(dir);
-  const definitions = inert.all().map((a) => a.definition);
-  return bindAgentSet(definitions, runtime);
-}
-
-function bindAgentSet(definitions: AgentDefinition[], runtime: AgentRuntime): AgentSet {
+export function bindAgentSet(definitions: AgentDefinition[], runtime: AgentRuntime): AgentSet {
   const byName = new Map<string, AgentDefinition>();
   for (const def of definitions) byName.set(def.name, def);
 

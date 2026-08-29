@@ -1,4 +1,6 @@
-import { workflow, notifyThreadSurfaces } from "@render-factory/sdk";
+import { defineWorkflow, notifyThreadSurfaces } from "@render-factory/sdk";
+import type { AgentRuntime } from "@render-factory/sdk";
+import { implementer } from "../../agents/index.js";
 import { githubFromEnv, type RepoRef } from "../../lib/github.js";
 import { RenderSandboxProvider } from "@render-factory/sandbox-render";
 import { collectExecOutput } from "@render-factory/engine";
@@ -8,12 +10,15 @@ import type { NormalizedGitHubEvent } from "../../lib/github-events.js";
  * Responds to review feedback on a PR opened by the agent. Reads the review
  * comments, fixes the issues in a sandbox, pushes, and re-requests review.
  */
-export default workflow({ name: "pr-fix" }, async (ctx) => {
+export default defineWorkflow({
+  id: "pr-fix",
+  agents: [implementer] as const,
+  run: async (ctx) => {
+  const rt = ctx.runtime as AgentRuntime;
   const ev = ctx.input as NormalizedGitHubEvent;
 
   if (ev.kind !== "pull") return { skipped: "not a pull event" };
   if (ev.sender.type === "Bot") return { skipped: "bot sender" };
-  // Only respond to changes_requested on agent branches
   if (ev.action !== "submitted") return { skipped: `action ${ev.action}` };
 
   const { repo, pull } = ev;
@@ -63,7 +68,7 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
 
     const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-    const impl = await ctx.agents.get("implementer").run(
+    const impl = await ctx.task(implementer,
       `${sandboxContext}\n\n` +
       `PR #${pull.number}: ${reviewContext.title}\n\n` +
       `This PR received review feedback requesting changes. ` +
@@ -86,10 +91,10 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
     });
 
     if (!pushed.changed) {
-      const noChangeRun = await ctx.runtime.store.getRun(ctx.runId);
+      const noChangeRun = await rt.store.getRun(ctx.runId);
       if (noChangeRun?.threadId) {
         const msg = `Review fix produced no changes for ${pull.htmlUrl}.`;
-        await ctx.runtime.itemStore.appendItem({
+        await rt.itemStore.appendItem({
           threadId: noChangeRun.threadId,
           runId: ctx.runId,
           kind: "result",
@@ -97,7 +102,7 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
           content: msg,
           data: { status: "no_changes", pr: pull.htmlUrl },
         });
-        await notifyThreadSurfaces(ctx.runtime, noChangeRun.threadId, {
+        await notifyThreadSurfaces(rt, noChangeRun.threadId, {
           kind: "result",
           content: msg,
           data: { status: "no_changes", pr: pull.htmlUrl },
@@ -115,10 +120,10 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
       return { ok: true };
     });
 
-    const run = await ctx.runtime.store.getRun(ctx.runId);
+    const run = await rt.store.getRun(ctx.runId);
     if (run?.threadId) {
       const resultMsg = `Pushed fixes for ${pull.htmlUrl} on branch ${branch}.`;
-      await ctx.runtime.itemStore.appendItem({
+      await rt.itemStore.appendItem({
         threadId: run.threadId,
         runId: ctx.runId,
         kind: "result",
@@ -126,7 +131,7 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
         content: resultMsg,
         data: { status: "fixed", pr: pull.htmlUrl, branch },
       });
-      await notifyThreadSurfaces(ctx.runtime, run.threadId, {
+      await notifyThreadSurfaces(rt, run.threadId, {
         kind: "result",
         content: resultMsg,
         data: { status: "fixed", pr: pull.htmlUrl, branch },
@@ -137,4 +142,5 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
   } finally {
     await sandbox.terminate();
   }
+},
 });
