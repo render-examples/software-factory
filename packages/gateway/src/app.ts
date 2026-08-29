@@ -230,7 +230,7 @@ export function createGatewayApp(opts: GatewayOptions) {
       }
       // Resume via workflows dispatch (same chat-turn task re-drives the run).
       const dispatcher = runtime.dispatcher;
-      if (dispatcher?.dispatchRoot) {
+      if (dispatcher?.dispatchRoot && runtime.workflows.has("chat-turn")) {
         await dispatcher.dispatchRoot({ workflow: "chat-turn", runId });
       } else {
         await resumeRun(runId, runtime);
@@ -294,7 +294,7 @@ export function createGatewayApp(opts: GatewayOptions) {
     );
 
     const dispatcher = runtime.dispatcher;
-    if (dispatcher?.dispatchRoot) {
+    if (dispatcher?.dispatchRoot && runtime.workflows.has("chat-turn")) {
       await dispatcher.dispatchRoot({ workflow: "chat-turn", runId: o.runId });
     } else {
       try {
