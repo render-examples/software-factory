@@ -36,16 +36,16 @@ add or remove a capability — no manual imports or registration.
 
 ### Factory config (optional)
 
-Create `app/factory.config.ts` to set factory-wide settings:
+Create `app/factory.config.mjs` to set factory-wide settings:
 
-```ts
-import { defineFactory } from "@render-factory/sdk";
-
-export default defineFactory({
+```js
+/** @type {import("@render-factory/sdk").FactoryConfig} */
+export default {
   repos: ["myorg/*"],  // restrict which repos the factory can operate on
-});
+};
 ```
 
+Use `.mjs` (not `.ts`) so the config works under plain `node` in production.
 Omit the file entirely to accept all defaults (all repos the GitHub token can reach).
 
 ---
