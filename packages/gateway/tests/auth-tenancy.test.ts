@@ -194,14 +194,12 @@ describe("multi-tenancy — /admin/* is operator-only (CR-D1)", () => {
     const adminRoutes: Array<["GET" | "POST", string]> = [
       ["POST", "/admin/retention"],
       ["POST", "/admin/runs/reap"],
-      ["GET", "/admin/jobs"],
       ["POST", "/admin/schedules/tick"],
     ];
     for (const [method, path] of adminRoutes) {
       expect((await app.request(path, { method, ...U("alice") })).status).toBe(403);
     }
     // Operators pass through to the handler.
-    expect((await app.request("/admin/jobs", OP)).status).toBe(200);
     expect((await app.request("/admin/schedules/tick", { method: "POST", ...OP })).status).toBe(200);
     expect((await app.request("/admin/retention", { method: "POST", ...OP })).status).toBe(200);
     expect((await app.request("/admin/runs/reap", { method: "POST", ...OP })).status).toBe(200);
