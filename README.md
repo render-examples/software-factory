@@ -2,8 +2,54 @@
 
 An open-source, self-hosted fork-and-deploy template for building autonomous coding agent workflows that run on Render.
 
-[Quickstart](#quickstart) · [Deploy](#deploy-to-render) · [Customize](#customize-your-factory) · [Architecture](#architecture)
+[Quickstart](#quickstart) · [Deploy](#deploy-to-render) · [CLI](#cli) · [Customize](#customize-your-factory) · [Architecture](#architecture)
 
+---
+
+## Quickstart
+
+Get a working factory in three steps:
+
+```sh
+# 1. Fork and clone
+git clone https://github.com/<you>/render-factory.git
+cd render-factory
+pnpm install && pnpm build
+
+# 2. Run the guided setup (creates services, validates credentials, syncs env vars)
+npx render-factory init
+
+# 3. Verify everything is healthy
+npx render-factory doctor
+```
+
+`render-factory init` walks you through connecting Render, your LLM provider, and GitHub. When it finishes, label a GitHub issue on your target repo and the factory takes it from there — triage, research, plan, implement, and open a draft PR.
+
+For local development without deploying:
+
+```sh
+# 1. Copy and fill in your API keys
+cp .env.example .env
+
+# 2. Check local prerequisites
+npx render-factory doctor --local
+
+# 3. Start Postgres
+docker compose up -d postgres
+
+# 4. Start the workflows host (terminal 1)
+cd app && source ../.env && render workflows dev -- tsx src/workflows.ts
+
+# 5. Start the gateway (terminal 2)
+cd app && source ../.env && RENDER_USE_LOCAL_DEV=true PORT=3010 tsx src/server.ts
+
+# 6. Test
+curl -X POST localhost:3010/threads \
+  -H "Authorization: Bearer dev-key" \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+---
 
 ## What it does
 
@@ -350,25 +396,64 @@ tool subprocesses.
 
 ---
 
-## Local Development
+## CLI
+
+The `render-factory` CLI helps you set up and manage your factory deployment.
+
+### `render-factory init`
+
+Interactive guided setup that walks through connecting Render, your LLM provider, GitHub, and optionally Slack. It validates every credential, syncs environment variables to both services, and writes a local `.env` file.
 
 ```sh
-# Prerequisites: Node 22+, pnpm, Docker, Render CLI
+npx render-factory init
+```
 
-# 1. Install
-pnpm install
-pnpm build
+| Flag | Effect |
+|------|--------|
+| `--slack` | Run only the Slack setup step |
+| `--github` | Run only the GitHub setup step |
+| `--env-only` | Skip service creation; just collect credentials and write `.env` |
 
-# 2. Start Postgres
+### `render-factory doctor`
+
+Non-interactive diagnostic that checks every prerequisite and reports what's healthy, what's missing, and how to fix each issue.
+
+```sh
+npx render-factory doctor
+```
+
+Checks include: Render services running, env vars set and synced between gateway and workflows, LLM key valid, GitHub token permissions, webhooks configured, recent deploys healthy.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Structured JSON output (for CI) |
+| `--fix` | Attempt to fix issues (e.g., sync missing env vars from gateway to workflows) |
+| `--local` | Check local dev prerequisites (Docker, Render CLI, `.env` file, LLM key) |
+
+---
+
+## Local Development
+
+Prerequisites: Node 22+, pnpm, Docker, Render CLI.
+
+```sh
+# 1. Install and build
+pnpm install && pnpm build
+
+# 2. Set up credentials
+cp .env.example .env    # fill in your API keys
+npx render-factory doctor --local   # verify prerequisites
+
+# 3. Start Postgres
 docker compose up -d postgres
 
-# 3. Start workflows host (terminal 1)
+# 4. Start workflows host (terminal 1)
 cd app && source ../.env && render workflows dev -- tsx src/workflows.ts
 
-# 4. Start gateway (terminal 2)
+# 5. Start gateway (terminal 2)
 cd app && source ../.env && RENDER_USE_LOCAL_DEV=true PORT=3010 tsx src/server.ts
 
-# 5. Test
+# 6. Test
 curl -X POST localhost:3010/threads \
   -H "Authorization: Bearer dev-key" \
   -H "Content-Type: application/json" -d '{}'
@@ -377,31 +462,49 @@ curl -X POST localhost:3010/threads \
 ---
 
 ## Deploy to Render
+
+The fastest path is `npx render-factory init`, which walks you through every step interactively. The manual steps below are for reference.
+
 > [!IMPORTANT]
 > Render Blueprints do not currently create Render Workflows. The Blueprint provisions the gateway, Postgres, and maintenance cron jobs; the Workflows service must be created separately.
+
 ### Prerequisites
 - A Render workspace with access to Workflows and Sandboxes
 - An Anthropic or OpenAI API key
 - A fine-grained GitHub token for the repositories the factory will modify
 - Optional Slack app credentials
-### 1. Fork the repository
+
+### Using the CLI (recommended)
+
+```sh
+# Fork and clone the repo, then:
+pnpm install && pnpm build
+npx render-factory init    # guided setup — ~5 minutes
+npx render-factory doctor  # verify everything is healthy
+```
+
+The CLI handles credential validation, env var syncing between services, and tells you exactly what to do for the steps it can't automate (Workflows service creation, GitHub webhook setup).
+
+### Manual setup
+
+#### 1. Fork the repository
 Create your own fork so agent definitions, workflow behavior, and infrastructure configuration remain under your control.
-### 2. Create the Blueprint
+
+#### 2. Create the Blueprint
 Create a Render Blueprint from `render.yaml`. It provisions:
 - `render-factory-gateway`
 - `render-factory-db`
 - Retention cron
 - Stale-run reaper cron
-### 3. Create the Workflows service
+#### 3. Create the Workflows service
 Create a Render Workflows service manually using the same repository and Dockerfile.
 Start command:
 ```sh
 node app/dist/src/workflows.js
 ```
 Set `RENDER_WORKFLOW_SLUG` to the service’s workflow slug.
-### 4. Configure environment variables
-Use `.env.example` as the source of truth.
-Core variables include:
+#### 4. Configure environment variables
+Use `.env.example` as the source of truth. Core variables:
 ```text
 DATABASE_URL
 RENDER_FACTORY_API_KEY
@@ -416,25 +519,33 @@ GITHUB_BOT_LOGIN
 SLACK_BOT_TOKEN          # optional
 SLACK_SIGNING_SECRET     # optional
 ```
-The manually created Workflows service also needs access to its database, model, Render, GitHub, and notification credentials.
-### 5. Configure GitHub
+The Workflows service needs the same credentials as the gateway. Use `npx render-factory doctor --fix` to sync missing env vars automatically.
+
+#### 5. Configure GitHub
 Create a webhook pointing to:
 ```text
 https://<gateway-host>/channels/github
 ```
-Use the same secret as `GITHUB_WEBHOOK_SECRET`.
-The current reference app uses a fine-grained personal access token with:
+Use the same secret as `GITHUB_WEBHOOK_SECRET`. Select events: Issues, Issue comments, Pull requests, Pull request reviews.
+
+The factory uses a fine-grained personal access token with:
 - Contents: read/write
 - Pull requests: read/write
 - Issues: read/write
 Restrict it to only the repositories the factory should modify.
-### 6. Configure Slack
+#### 6. Configure Slack (optional)
 Configure the Slack app with:
 ```text
 Event Subscriptions: https://<gateway-host>/channels/slack
 Interactivity:       https://<gateway-host>/slack/interactions
 ```
-Required bot scopes are documented in `.env.example`.
+Required bot scopes are documented in `.env.example`. You can add Slack later with `npx render-factory init --slack`.
+
+#### 7. Verify
+
+```sh
+npx render-factory doctor
+```
 
 ---
 
