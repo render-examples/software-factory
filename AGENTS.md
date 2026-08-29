@@ -27,6 +27,27 @@ render-factory/
 **Import from `@render-factory/sdk` for all authoring.** Never import from
 `engine`, `store`, or `gateway` when writing agents, workflows, or tools.
 
+## How it boots
+
+Both entrypoints (`server.ts`, `workflows.ts`) call `bootFactory(root)` which
+auto-discovers agents, tools, workflows, channels, hooks, and runners from the
+`app/` directory by convention. Adding or removing a file is all it takes to
+add or remove a capability — no manual imports or registration.
+
+### Factory config (optional)
+
+Create `app/factory.config.ts` to set factory-wide settings:
+
+```ts
+import { defineFactory } from "@render-factory/sdk";
+
+export default defineFactory({
+  repos: ["myorg/*"],  // restrict which repos the factory can operate on
+});
+```
+
+Omit the file entirely to accept all defaults (all repos the GitHub token can reach).
+
 ---
 
 ## Authoring Agents
@@ -89,9 +110,10 @@ You are a... (system prompt body)
 
 ### Discovery
 
-Agents are discovered by `loadAgents()` which walks the `agents/` directory
-relative to the app root. Files starting with `_` (like `_shared.md`) are
-merged into all agents as shared defaults.
+Agents are auto-discovered by `bootFactory()` (or `loadAgents()`) from the
+`agents/` directory. Just create a `.md` file — no imports or registration
+needed. Files starting with `_` (like `_shared.md`) are merged into all agents
+as shared defaults.
 
 ---
 
@@ -155,18 +177,12 @@ instead of re-executing. Step names must be unique within a single handler.
 
 ### Registration
 
-Currently workflows must be imported in both `app/src/server.ts` and
-`app/src/workflows.ts` and added to the `workflows` Map. After adding a new
-workflow file, add it to both entrypoints:
+Workflows are auto-discovered by `bootFactory()` from `app/workflows/<name>/index.ts`.
+Just create the directory and file — no manual imports needed. The directory name
+becomes the workflow name.
 
-```ts
-import myWorkflow from "../workflows/my-workflow/index.js";
-// ...
-const workflows = new Map([
-  // ... existing workflows
-  ["my-workflow", myWorkflow],
-]);
-```
+If you've ejected to explicit imports (not using `bootFactory`), add the workflow
+to both `app/src/server.ts` and `app/src/workflows.ts` manually.
 
 ---
 
@@ -248,17 +264,22 @@ export default defineMcpSource({
 
 ### Registration
 
-Currently tools must be imported in both `app/src/server.ts` and
-`app/src/workflows.ts` and added to the `toolSources` Map:
+Tools are auto-discovered by `bootFactory()` from `app/tools/<source-id>/index.ts`.
+Just create the directory and file — no manual imports needed. The directory name
+becomes the source ID that agents reference in `tools:`.
+
+If a tool needs runtime state (like access to the workflow map or the store),
+export a `bind(ctx)` function alongside the default export:
 
 ```ts
-import myToolSource from "../tools/my_tool/index.js";
-// ...
-const toolSources = new Map([
-  // ... existing tools
-  ["my_tool", myToolSource],
-]);
+export default defineTool({ ... });
+
+export function bind(ctx: { runtime: AgentRuntime; workflows: Map<string, WorkflowDefinition> }) {
+  // receive runtime state after the full project is assembled
+}
 ```
+
+`bootFactory()` calls `bind()` automatically on every tool source that exports it.
 
 ---
 
@@ -298,6 +319,31 @@ hit, the agent run terminates with a budget-exceeded error:
 - `maxCostUsd` — estimated from model pricing tables (input + output tokens)
 - `maxWallSeconds` — wall-clock time from run start
 - `maxTokens` — total tokens consumed across all model calls
+
+---
+
+## Adding Channels
+
+Channels live in `app/channels/<name>.ts`. They are auto-discovered by
+`bootFactory()` — the filename (without extension) becomes the channel ID,
+and the gateway mounts it at `POST /channels/<name>`.
+
+A channel default-exports an object with `target`, `verify`, `match`, and `parse`:
+
+```ts
+import type { Channel } from "@render-factory/sdk";
+import { githubVerify } from "@render-factory/sdk";
+
+const channel: Channel = {
+  target: { workflow: "my-workflow" },
+  verify: githubVerify(),
+  match(req) { /* return { event } or null */ },
+  async parse(req) { /* return { conversationId, input, target? } */ },
+};
+export default channel;
+```
+
+Optionally add a `deliver` method for outbound replies (e.g., posting to Slack).
 
 ---
 
