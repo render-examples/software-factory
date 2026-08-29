@@ -19,17 +19,18 @@ The fix is two things:
 
 ## What the factory config covers
 
-```ts
-// app/factory.config.ts
-import { defineFactory } from "@render-factory/sdk";
-
-export default defineFactory({
+```js
+// app/factory.config.mjs
+/** @type {import("@render-factory/sdk").FactoryConfig} */
+export default {
   // Which repos the factory may clone, push to, and open PRs on.
   // Glob patterns matched against "owner/repo". Omit to allow any repo
   // the GITHUB_TOKEN can reach.
   repos: ["myorg/*"],
-});
+};
 ```
+
+Use `.mjs` (not `.ts`) so the config works under plain `node` in production without a TypeScript loader.
 
 That's it. One field.
 
