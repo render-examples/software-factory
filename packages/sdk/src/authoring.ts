@@ -1,3 +1,5 @@
+// --- SDK authoring helpers (thin wrappers over engine primitives) ---
+
 import type { ToolSource, DefineToolSpec, DefineMcpSpec, Hook } from "@render-factory/engine";
 import { defineTool as implDefineTool, defineMcpSource as implDefineMcpSource } from "@render-factory/engine";
 

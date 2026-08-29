@@ -32,6 +32,8 @@ const STATUS_MAP: Record<string, SandboxStatus> = {
 
 type SandboxesClient = InstanceType<typeof Render>["experimental"]["sandboxes"];
 
+// --- Provider ---
+
 export class RenderSandboxProvider implements SandboxProvider {
   readonly name = "render";
   private readonly client: SandboxesClient;
@@ -85,6 +87,8 @@ export class RenderSandboxProvider implements SandboxProvider {
     throw new Error(`Sandbox ${sandboxId} did not become ready within ${this.readyTimeoutMs}ms`);
   }
 }
+
+// --- Sandbox Instance ---
 
 class RenderSandbox extends BaseSandbox {
   constructor(

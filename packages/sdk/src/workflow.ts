@@ -19,6 +19,12 @@ import type { AgentSet, Agent } from "./agents.js";
 import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
 
+// --- Interfaces ---
+
+// --- Interfaces ---
+
+// --- Interfaces ---
+
 export interface WorkflowOptions {
   name?: string;
   timeout?: number;
@@ -61,6 +67,10 @@ export interface WorkflowDefinition {
 }
 
 type WorkflowHandler = (ctx: WorkflowContext) => Promise<unknown>;
+
+// --- Workflow definition ---
+
+// --- Workflow definition ---
 
 /**
  * Define a workflow — a root-task handler that composes agent invocations
@@ -217,10 +227,9 @@ export interface WorkflowDefinitionInternal extends WorkflowDefinition {
   __bind(name: string, runtime: AgentRuntime): void;
 }
 
-/**
- * Bind a workflow to a runtime and give it its discovered name.
- * Called by the workflow loader at startup.
- */
+// --- Binding ---
+
+/** Bind a workflow to a runtime and give it its discovered name. */
 export function bindWorkflow(def: WorkflowDefinition, name: string, runtime: AgentRuntime): void {
   (def as WorkflowDefinitionInternal).__bind(name, runtime);
   // Register so dispatchRoot and HITL resume routing can resolve it by name.

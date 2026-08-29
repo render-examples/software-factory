@@ -52,7 +52,6 @@ export function verifyStreamToken(
   const payload = token.slice(0, dot);
   const provided = token.slice(dot + 1);
 
-  // Constant-time compare against the expected signature (length-guarded).
   const expected = sign(payload, secret);
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);

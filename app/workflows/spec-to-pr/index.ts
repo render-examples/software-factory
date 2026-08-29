@@ -202,7 +202,6 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
       `${sandboxContext}\n\n${spec.title}\n\nApproved plan:\n${planText}`,
     );
 
-    // Verify: run the project's test suite before committing
     await ctx.step("verify-tests", async () => {
       const detectEvents = await sandbox.exec(
         `cd ${dir} && if [ -f package.json ]; then echo "node"; elif [ -f Cargo.toml ]; then echo "rust"; elif [ -f go.mod ]; then echo "go"; elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then echo "python"; else echo "unknown"; fi`,
@@ -289,7 +288,6 @@ export default workflow({ name: "spec-to-pr" }, async (ctx) => {
       });
     }
 
-    // Notify the originating thread
     const run = await ctx.runtime.store.getRun(ctx.runId);
     if (run?.threadId) {
       await ctx.runtime.itemStore.appendItem({

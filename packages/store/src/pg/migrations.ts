@@ -5,6 +5,8 @@ import type { Pool } from "pg";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// --- Migration registry ---
+
 /**
  * Stable 64-bit advisory lock ID for render-factory migrations.
  * Derived from a hash of "render-factory:migrations" — must never change.
@@ -31,6 +33,8 @@ const CORE_MIGRATIONS = [
   "0017_thread_surfaces_items.sql",
   "0018_artifacts.sql",
 ];
+
+// --- Migration runner ---
 
 /**
  * Apply all schema migrations under a Postgres advisory lock.
@@ -75,6 +79,8 @@ export async function applyMigrations(pool: Pool): Promise<string[]> {
   }
   return applied;
 }
+
+// --- SQL file loader ---
 
 function loadMigrationSql(name: string): string {
   // Resolve from both src and dist layouts.

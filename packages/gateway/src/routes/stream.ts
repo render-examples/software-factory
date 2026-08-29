@@ -18,6 +18,8 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
   const app = new Hono();
   const { store, threadStore, deltaBus } = deps;
 
+  // --- Single-Run Stream ---
+
   app.get("/runs/:id/stream", async (c) => {
     const runId = c.req.param("id");
     const run = await store.getRun(runId);
@@ -38,7 +40,6 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
         await writeEvent(stream, event.category, event.payload, String(event.seq));
       }
 
-      // If the run is already terminal, close the stream.
       const currentRun = await store.getRun(runId);
       if (currentRun && isTerminal(currentRun.status)) {
         return;
@@ -73,6 +74,8 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
       }
     });
   });
+
+  // --- Global Event Stream ---
 
   // Global tail (operator rail), no token deltas since it only counts
   // runs/approvals. Live-tail only by design: a full replay would be
@@ -114,6 +117,8 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
       }
     });
   });
+
+  // --- Thread Stream ---
 
   app.get("/threads/:id/stream", async (c) => {
     const threadId = c.req.param("id");
@@ -182,6 +187,8 @@ export function streamRoutes(deps: { store: RunStore; threadStore?: ThreadStore;
 
   return app;
 }
+
+// --- Stream Helpers ---
 
 /**
  * Write a durable event with an explicit SSE `id` so `Last-Event-ID` reconnect

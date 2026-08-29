@@ -49,7 +49,6 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
 
   if (files === 0) return { skipped: "no files changed" };
 
-  // Spin up a sandbox for the lint agent to run the project's linter
   const provider = new RenderSandboxProvider();
   const sandbox = await provider.create({ metadata: { pr: `${repo.owner}/${repo.repo}#${pull.number}` } });
   const sandboxId = sandbox.id;
@@ -69,7 +68,6 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
 
     const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-    // Fan out to specialist reviewers + lint as concurrent tasks
     const [security, performance, correctness, tests, lint] = await Promise.all([
       ctx.agents.get("security").task(diff),
       ctx.agents.get("performance").task(diff),
@@ -102,7 +100,6 @@ export default workflow({ name: "pr-review" }, async (ctx) => {
       return { submitted: true };
     });
 
-    // Notify the originating thread
     const run = await ctx.runtime.store.getRun(ctx.runId);
     if (run?.threadId) {
       const resultMsg = `Review submitted for ${pull.htmlUrl}: ${verdict.decision}`;

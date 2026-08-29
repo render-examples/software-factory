@@ -59,9 +59,7 @@ async function readFromUiDirs(relative: string): Promise<Buffer | null> {
     try {
       // Buffer (no encoding) avoids corrupting binary assets via UTF-8 round-trip (CR-23).
       return await readFile(join(dir, relative));
-    } catch {
-      /* try next */
-    }
+    } catch {}
   }
   return null;
 }
