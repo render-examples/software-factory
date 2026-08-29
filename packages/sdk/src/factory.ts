@@ -26,9 +26,12 @@ export interface BootFactoryResult {
   config: FactoryConfig;
 }
 
-const CONFIG_CANDIDATES = ["factory.config.ts", "factory.config.js", "factory.config.mjs"];
-
-// --- Config loading ---
+/**
+ * Config file candidates in priority order. `.js` and `.mjs` work under plain
+ * `node` (production). `.ts` is tried last so dev flows with `tsx` still work,
+ * but production builds should ship `.mjs`.
+ */
+const CONFIG_CANDIDATES = ["factory.config.js", "factory.config.mjs", "factory.config.ts"];
 
 async function loadFactoryConfig(root: string): Promise<FactoryConfig> {
   for (const filename of CONFIG_CANDIDATES) {
@@ -38,14 +41,22 @@ async function loadFactoryConfig(root: string): Promise<FactoryConfig> {
     } catch {
       continue;
     }
-    const mod = (await import(pathToFileURL(configPath).href)) as { default?: unknown };
-    const raw = mod.default ?? {};
-    const result = FactoryConfigSchema.safeParse(raw);
-    if (!result.success) {
-      const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-      throw new Error(`${filename}: invalid factory config — ${issues}`);
+    try {
+      const mod = (await import(pathToFileURL(configPath).href)) as { default?: unknown };
+      const raw = mod.default ?? {};
+      const result = FactoryConfigSchema.safeParse(raw);
+      if (!result.success) {
+        const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+        throw new Error(`${filename}: invalid factory config — ${issues}`);
+      }
+      return result.data;
+    } catch (err) {
+      if (filename.endsWith(".ts")) {
+        // .ts import failed under plain node — skip silently, config is optional
+        continue;
+      }
+      throw err;
     }
-    return result.data;
   }
   return {};
 }
