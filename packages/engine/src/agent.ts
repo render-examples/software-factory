@@ -1,5 +1,7 @@
 import type { TokenUsage } from "@render-factory/store";
 
+// --- Types ---
+
 export type RenderPlan =
   | "starter"
   | "standard"
@@ -48,6 +50,8 @@ export interface SkillMetadata {
   content: string;
 }
 
+// --- Agent Definition ---
+
 export interface AgentDefinition {
   name: string;
   description?: string;
@@ -74,6 +78,8 @@ export interface AgentDefinition {
   interactive?: boolean;
 }
 
+// --- Input / Output ---
+
 export type AgentInput = string | Record<string, unknown>;
 
 export interface AgentOutput<T = unknown> {
@@ -91,6 +97,8 @@ export interface PausedResult {
 export type AgentResult<T = unknown> =
   | ({ status: "completed" } & AgentOutput<T>)
   | PausedResult;
+
+// --- Run Control Errors ---
 
 export class RunPaused extends Error {
   readonly runId: string;
@@ -124,6 +132,8 @@ export class RunCancelled extends Error {
     this.scopeId = scopeId ?? runId;
   }
 }
+
+// --- Run Options ---
 
 export interface RunOptions {
   signal?: AbortSignal;

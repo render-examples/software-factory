@@ -1,5 +1,7 @@
 import type { Logger, ToolResult } from "@render-factory/store";
 
+// --- Tool Context ---
+
 export interface OAuthTokens {
   accessToken: string;
   refreshToken?: string;
@@ -17,6 +19,8 @@ export interface ToolContext {
   connection(provider: string): Promise<OAuthTokens | undefined>;
   fetch(url: string, init?: RequestInit): Promise<Response>;
 }
+
+// --- Tool & Source ---
 
 export interface Tool {
   readonly name: string;
@@ -43,6 +47,8 @@ export interface ResolvedSource {
   close(): Promise<void>;
 }
 
+// --- Definition Specs ---
+
 export interface DefineToolSpec {
   name: string;
   description: string;
@@ -59,6 +65,8 @@ export interface DefineMcpSpec {
   url?: string;
   headers?: () => Record<string, string>;
 }
+
+// --- Environment & Registries ---
 
 export interface Environment {
   readonly logger: Logger;

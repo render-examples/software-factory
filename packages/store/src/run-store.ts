@@ -3,6 +3,8 @@ import type { Message } from "./messages.js";
 import type { SpanKind, SpanStatus } from "./tracer.js";
 import type { InputRequestProjectionRecord } from "./projections.js";
 
+// --- Query & Retention Types ---
+
 export interface ListInputsOptions {
   status?: "pending" | "approved" | "denied" | "provided";
   kind?: "approval" | "message";
@@ -43,6 +45,8 @@ export interface ReapResult {
   /** The ids that were reaped (handy for tests/observability). */
   runIds: string[];
 }
+
+// --- Run & Span Records ---
 
 export type RunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
@@ -106,6 +110,8 @@ export interface ListChildRunsOptions {
   order?: "asc" | "desc";
 }
 
+
+// --- Store Interface ---
 
 export interface RunStore {
   init(): Promise<void>;

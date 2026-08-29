@@ -46,6 +46,8 @@ export function runRoutes(deps: {
     reason: input.reason,
   });
 
+  // --- Dispatch ---
+
   app.post("/workflows/:name", async (c) => {
     const principal = getPrincipal(c);
     const name = c.req.param("name");
@@ -68,6 +70,8 @@ export function runRoutes(deps: {
     const run = await workflow.dispatch(body.input, body.trigger, { userId: principal.userId });
     return c.json(run, 202);
   });
+
+  // --- List & Inspect ---
 
   app.get("/runs", async (c) => {
     const workflow = c.req.query("workflow");
@@ -257,6 +261,8 @@ export function runRoutes(deps: {
     }
     return c.json({ events });
   });
+
+  // --- Cancel ---
 
   app.post("/runs/:id/cancel", async (c) => {
     const id = c.req.param("id");

@@ -138,9 +138,9 @@ export type {
 } from "./workflow.js";
 export { workflow, bindWorkflow } from "./workflow.js";
 
+// --- Channels & webhook verification ---
 export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget, ChannelMatch } from "./channel.js";
 
-// Built-in reference channels (platform adapters authored on the Channel contract).
 export { slackChannel } from "./channels/slack.js";
 export type { SlackChannelOptions } from "./channels/slack.js";
 
@@ -163,6 +163,7 @@ export {
   standardWebhooksVerify,
 } from "./webhook-verify.js";
 
+// --- Dispatch ---
 export {
   InProcessDispatcher,
   RenderWorkflowsDispatcher,
@@ -175,6 +176,8 @@ export {
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
 
+// --- Authoring helpers ---
 export { defineTool, defineMcpSource, defineHook } from "./authoring.js";
 
+// --- Thread surface notifications ---
 export { notifyThreadSurfaces } from "./notify-surfaces.js";

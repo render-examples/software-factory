@@ -1,5 +1,7 @@
 import type { RunStore } from "./run-store.js";
 
+// --- Public API ---
+
 /**
  * All-in cost for a run: its own `totalCostUsd` plus every subagent descendant's
  * (discovered by following `subagent.spawned.childRunId` across runs). Per-run
@@ -10,6 +12,8 @@ export async function aggregateRunCost(store: RunStore, runId: string): Promise<
   const total = await sum(store, runId, new Set<string>());
   return Math.round(total * 1e12) / 1e12;
 }
+
+// --- Internals ---
 
 async function sum(store: RunStore, runId: string, seen: Set<string>): Promise<number> {
   if (seen.has(runId)) return 0;

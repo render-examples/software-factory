@@ -8,20 +8,12 @@ import type { MountedTools, Tool, ToolContext } from "./tool.js";
 import type { ModelClient, ModelPricing, ToolSchema, CompleteArgs, CompleteResult } from "./model.js";
 import { estimateCost, addUsage } from "./model.js";
 
-/**
- * Token-delta coalescing (D13): flush the streamed text buffer to the DeltaBus
- * on whichever comes first — a short time slice or a character budget — plus a
- * final flush at turn end. ~20 updates/sec reads as real-time without a
- * NOTIFY-per-token firehose (a 500-token answer → ~10-20 publishes, not 500).
- */
+// --- Constants ---
+
+// Delta coalescing (D13): flush on time or char budget (~20 updates/sec).
 const DELTA_FLUSH_MS = 50;
 const DELTA_FLUSH_CHARS = 120;
-/**
- * How often, during an in-flight model call, to poll cooperative cancellation
- * and abort the provider request. Bounds how long a streamed answer keeps
- * generating after the operator hits Stop (plus provider abort latency). Cheap:
- * one cancel check per interval, only while a call is active.
- */
+// Cancel polling interval during model calls. Bounds latency after Stop.
 const CANCEL_POLL_MS = 250;
 import { validateToolInput } from "./schema-validate.js";
 import { ssrfFetch } from "./ssrf-fetch.js";
@@ -35,10 +27,10 @@ interface ResolvedBudget {
   maxWallSeconds: number | null;
 }
 
+// --- Runner Options ---
+
 export interface DefaultRunnerOptions {
-  /** Custom/unlisted model pricing, merged over the built-in table for cost estimation. */
   pricing?: Record<string, ModelPricing>;
-  /** Policy engine for access control + credential routing. When absent, all tools are allowed. */
   policy?: import("./policy.js").PolicyEngine;
 }
 

@@ -29,7 +29,6 @@ export function canonicalizePath(): void {
   }
 }
 
-/** Split a raw hash (without the leading `#/`) into [segments, queryString]. */
 function splitRaw(raw: string): { segments: string[]; query: string } {
   const [pathPart, queryPart] = raw.split("?");
   const segments = pathPart.split("/").filter(Boolean).map(decodeURIComponent);
@@ -52,7 +51,6 @@ export function navigate(to: string): void {
   location.hash = next;
 }
 
-/** If the current hash points at an alias section, rewrite it to the canonical id. */
 function rewriteAlias(): boolean {
   const raw = location.hash.replace(/^#\/?/, "");
   const { segments, query } = splitRaw(raw);

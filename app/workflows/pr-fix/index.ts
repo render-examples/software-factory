@@ -23,13 +23,11 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN is not set");
 
-  // Load the review comments to understand what needs fixing
   const reviewData = await ctx.step("load-reviews", async () => {
     const files = await gh.listPullFiles(repo, pull.number);
     return { files: files.length, fileList: files.map((f) => f.filename) };
   });
 
-  // Build context from the PR for the implementer
   const reviewContext = await ctx.step("build-context", async () => {
     const pullDetail = await gh.getPull(repo, pull.number);
     return {
@@ -48,7 +46,6 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
   const branch = reviewContext.head;
 
   try {
-    // Clone and check out the PR branch
     await sandbox.exec(
       `git config --global credential.helper store && ` +
       `printf 'https://x-access-token:%s@github.com\\n' '${token}' > ~/.git-credentials && ` +
@@ -66,7 +63,6 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
 
     const sandboxContext = `sandbox_id: ${sandboxId}\nrepoDir: ${dir}`;
 
-    // Let the implementer fix the review feedback
     const impl = await ctx.agents.get("implementer").run(
       `${sandboxContext}\n\n` +
       `PR #${pull.number}: ${reviewContext.title}\n\n` +
@@ -119,7 +115,6 @@ export default workflow({ name: "pr-fix" }, async (ctx) => {
       return { ok: true };
     });
 
-    // Notify the originating thread
     const run = await ctx.runtime.store.getRun(ctx.runId);
     if (run?.threadId) {
       const resultMsg = `Pushed fixes for ${pull.htmlUrl} on branch ${branch}.`;

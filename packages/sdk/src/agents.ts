@@ -13,6 +13,8 @@ import type { AgentRuntime } from "./runtime.js";
 import { runAgentInProcess } from "./run-in-process.js";
 import { loadAgentsFromDir } from "./loader/load-agents.js";
 
+// --- Interfaces ---
+
 export interface AgentSet {
   get(id: string): Agent;
   get(ids: string[]): Agent[];
@@ -49,6 +51,8 @@ export interface Agent {
    */
   task<T = unknown>(input: AgentInput, opts?: TaskOptions): Promise<AgentOutput<T>>;
 }
+
+// --- Loading and binding ---
 
 export async function loadAgents(dir: string, runtime: AgentRuntime): Promise<AgentSet> {
   const inert = await loadAgentsFromDir(dir);
@@ -107,6 +111,8 @@ function bindAgent(definition: AgentDefinition, runtime: AgentRuntime): Agent {
     },
   };
 }
+
+// --- Run resumption (HITL) ---
 
 /**
  * Resume a paused agent run (HITL pause → out-of-band approval/input → resume).
@@ -179,6 +185,8 @@ interface InternalRunOptions extends RunOptions {
   threadScopedHistory?: boolean;
 }
 
+// --- Chat-lane driver ---
+
 /**
  * Drive a single chat-lane agent turn in-process (Lane B, warm worker). The
  * gateway has already recorded the opening turn (`run.started` + `message.user`)
@@ -209,6 +217,8 @@ export async function driveAgentTurn(
     signal: opts?.signal,
   });
 }
+
+// --- Internal helpers ---
 
 function runInProcess<T>(
   definition: AgentDefinition,

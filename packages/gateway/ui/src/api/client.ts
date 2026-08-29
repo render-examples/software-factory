@@ -23,7 +23,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const body = await res.json();
       if (body?.error) detail = body.error;
-    } catch { /* non-JSON body */ }
+    } catch {}
     throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
