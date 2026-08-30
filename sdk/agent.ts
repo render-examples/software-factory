@@ -1,12 +1,15 @@
 /**
- * Render-native agent framework. ~100 lines total.
+ * Render-native agent framework.
  *
  * Agent() — pure config describing an agent (prompt, tools, budget).
- * agentTask() — turns an Agent into a Render Workflows task using Claude Agent SDK.
+ * agentTask() — turns an Agent into a Render Workflows task using a pluggable
+ *               runner and tool registry.
  */
 import { task } from "@renderinc/sdk/workflows";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getThread, appendMessage } from "./threads.js";
+import { createRegistry, type ToolRegistry } from "./tools.js";
+import { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
+import type { AgentRunner } from "./runner.js";
 
 // ---------------------------------------------------------------------------
 // Agent — pure config, no behavior
@@ -52,7 +55,7 @@ export function md(strings: TemplateStringsArray, ...values: unknown[]): string 
 }
 
 // ---------------------------------------------------------------------------
-// agentTask — bridge Agent config to a Render task via Claude Agent SDK
+// agentTask — bridge Agent config to a Render task via pluggable runner
 // ---------------------------------------------------------------------------
 
 export interface AgentTaskInput {
@@ -60,12 +63,42 @@ export interface AgentTaskInput {
   threadId?: string;
 }
 
-export function agentTask(agent: AgentDef) {
+export interface AgentTaskOptions {
+  runner?: AgentRunner;
+  registry?: ToolRegistry;
+}
+
+let _defaultRunner: AgentRunner | undefined;
+let _defaultRegistry: ToolRegistry | undefined;
+
+function defaultRunner(): AgentRunner {
+  _defaultRunner ??= new ClaudeRunner();
+  return _defaultRunner;
+}
+
+function defaultRegistry(): ToolRegistry {
+  _defaultRegistry ??= createRegistry().register(new ClaudeBuiltInToolSource());
+  return _defaultRegistry;
+}
+
+/**
+ * Override the shared default runner and/or registry for all agent tasks.
+ * Call once at startup (e.g. in workflows.ts) before tasks execute.
+ */
+export function configure(opts: AgentTaskOptions): void {
+  if (opts.runner) _defaultRunner = opts.runner;
+  if (opts.registry) _defaultRegistry = opts.registry;
+}
+
+export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
   return task(
     { name: agent.id, plan: agent.spec.plan },
     async function run(input: AgentTaskInput): Promise<string> {
-      const history: string[] = [];
+      const runner = opts?.runner ?? defaultRunner();
+      const registry = opts?.registry ?? defaultRegistry();
 
+      // --- Thread history (interactive agents) ---
+      const history: string[] = [];
       if (agent.spec.interactive && input.threadId) {
         const thread = await getThread(input.threadId);
         if (thread) {
@@ -75,24 +108,30 @@ export function agentTask(agent: AgentDef) {
         }
       }
 
-      const contextPrefix = history.length > 0
-        ? `Previous conversation:\n${history.join("\n")}\n\nNew message: `
-        : "";
+      const contextPrefix =
+        history.length > 0
+          ? `Previous conversation:\n${history.join("\n")}\n\nNew message: `
+          : "";
 
+      // --- Resolve tools ---
+      const toolNames = agent.spec.tools ?? [];
+      const tools = await registry.resolve(toolNames);
+
+      // --- Run ---
       let result = "";
-      for await (const msg of query({
+      for await (const event of runner.run({
+        agentId: agent.id,
         prompt: `${contextPrefix}${input.message}`,
-        options: {
-          systemPrompt: agent.spec.prompt,
-          allowedTools: agent.spec.tools ? [...agent.spec.tools] : undefined,
-          maxTurns: agent.spec.budget?.maxIterations,
-        },
+        systemPrompt: agent.spec.prompt,
+        tools,
+        maxTurns: agent.spec.budget?.maxIterations,
       })) {
-        if (msg.type === "result") {
-          result = typeof msg.result === "string" ? msg.result : JSON.stringify(msg.result);
+        if (event.type === "result") {
+          result = event.result;
         }
       }
 
+      // --- Persist assistant reply (interactive agents) ---
       if (agent.spec.interactive && input.threadId) {
         await appendMessage(input.threadId, "assistant", result);
       }
