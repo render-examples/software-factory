@@ -87,3 +87,25 @@ async connect(sandboxId: string): Promise<Sandbox> {
 ```
 
 This requires storing creation options alongside the sandbox ID in the step output, or passing them through the workflow context.
+
+## Hooks and Replay
+
+Hooks (see `docs/hooks.md`) intercept the `AgentEvent` stream inside agent execution. They interact with durability replay as follows:
+
+**Hooks fire on live execution only, not replay.** When `ctx.step()` returns a cached result from the durable log, no agent code runs — so no events are emitted and no hooks fire. This prevents duplicate side effects (double audit logs, re-sent Slack notifications, re-evaluated cost guards for already-approved tool calls).
+
+**The durable log records post-hook state.** If a transform hook rewrites an event (e.g., redacts secrets from output), the durable log stores the redacted version. On replay, the redacted result is returned directly.
+
+**Veto hooks are step-internal.** A veto on `tool_call` happens inside an agent step. If the agent recovers (uses a different tool), the step succeeds and the final result is recorded. If the veto causes the step to fail, the step is marked failed and re-executed on replay — hooks fire again during that re-execution since it is live.
+
+```
+ctx.step("research", () => researchTask({...}))
+  │
+  ├─ REPLAY: return cached result from durable log
+  │          (no agent runs, no events, no hooks)
+  │
+  └─ LIVE:   agentTask() → runner.run() → hooks intercept events
+             → post-hook result recorded to durable log
+```
+
+This means hooks attach at the `agentTask()` layer (inside a step), not the workflow layer. The workflow handles replay; the agent handles live execution + hooks.
