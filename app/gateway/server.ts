@@ -1,6 +1,7 @@
 /** Gateway — Hono server for webhooks, threads, and health. */
 import { Hono } from "hono";
 import { appendMessage, getOrCreateThread } from "#factory-sdk";
+import { dispatchWorkflowTask } from "./dispatch.js";
 import { slackHandler } from "./slack.js";
 import { githubHandler } from "./github.js";
 
@@ -17,20 +18,15 @@ export function createApp(): Hono {
     await getOrCreateThread(threadId, { userId: body.userId ?? "anonymous" });
     await appendMessage(threadId, "user", body.content);
 
-    const slug = process.env.RENDER_WORKFLOW_SLUG;
-    if (slug) {
-      try {
-        const { Render } = await import("@renderinc/sdk");
-        const client = new Render();
-        await client.workflows.startTask(`${slug}/assistant`, [
-          { message: body.content, threadId },
-        ]);
-      } catch (err) {
-        console.error("Failed to dispatch assistant task:", err);
-        return c.json({ error: "dispatch failed" }, 502);
-      }
-    } else {
-      console.warn("RENDER_WORKFLOW_SLUG not set — cannot dispatch agent task");
+    const result = await dispatchWorkflowTask("assistant", {
+      message: body.content,
+      threadId,
+    });
+
+    // A missing slug is a config gap, not a client error — the message is
+    // still persisted, so the request is accepted either way.
+    if (!result.ok && result.reason === "error") {
+      return c.json({ error: "dispatch failed" }, 502);
     }
 
     return c.json({ threadId, status: "accepted" }, 202);
