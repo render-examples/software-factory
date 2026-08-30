@@ -4,8 +4,8 @@ import {
   createRegistry,
   createSandboxToolSource,
   RenderSandboxProvider,
-} from "../../sdk/index.js";
-import { ClaudeBuiltInToolSource } from "../../sdk/runners/index.js";
+  ClaudeBuiltInToolSource,
+} from "#factory-sdk";
 import { TriggerWorkflowToolSource } from "../tools/trigger-workflow.js";
 import { GitHubToolSource } from "../tools/github.js";
 

@@ -1,6 +1,6 @@
 /** TriggerWorkflow — lets agents dispatch workflow tasks via Render SDK. */
 import { z } from "zod";
-import type { Tool, ToolSource, ToolResult, ToolContext } from "../../sdk/tools.js";
+import type { Tool, ToolSource, ToolResult, ToolContext } from "#factory-sdk";
 
 const inputSchema = {
   task: z

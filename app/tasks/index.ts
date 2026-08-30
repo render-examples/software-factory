@@ -1,4 +1,4 @@
-import { agentTask } from "../../sdk/index.js";
+import { agentTask } from "#factory-sdk";
 import {
   assistant,
   triage,
