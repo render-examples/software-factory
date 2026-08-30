@@ -29,6 +29,8 @@ export interface RunContext {
   readonly tools: readonly ResolvedTool[];
   readonly maxTurns?: number;
   readonly signal?: AbortSignal;
+  /** Model size tier ("small"/"medium"/"large") or a literal model string. */
+  readonly model?: string;
 }
 
 export interface AgentRunner {

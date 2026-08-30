@@ -18,6 +18,8 @@ export interface AgentSpec {
   readonly budget?: { maxIterations?: number };
   readonly plan?: string;
   readonly interactive?: boolean;
+  /** Model size tier ("small", "medium", "large") or a literal model string. */
+  readonly model?: string;
 }
 
 export interface AgentDef {
@@ -110,6 +112,7 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
         systemPrompt: agent.spec.prompt,
         tools,
         maxTurns: agent.spec.budget?.maxIterations,
+        model: agent.spec.model,
       })) {
         if (event.type === "result") {
           result = event.result;
