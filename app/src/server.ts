@@ -1,17 +1,11 @@
-import { bootFactory } from "@render-factory/sdk";
-import { startGateway } from "@render-factory/gateway";
-import { ensureWorkflowSlug } from "../lib/render.js";
+/**
+ * Gateway entrypoint — Hono web service.
+ */
+import { serve } from "@hono/node-server";
+import { createApp } from "../gateway/server.js";
 
-ensureWorkflowSlug();
+const app = createApp();
+const port = Number(process.env.PORT ?? 3000);
 
-const root = new URL("../..", import.meta.url).pathname;
-const { runtime, workflows, channels } = await bootFactory(root);
-
-const { port } = await startGateway({
-  runtime,
-  workflows,
-  channels,
-  defaultWorkflow: "spec-to-pr",
-  defaultAgent: "assistant",
-});
+serve({ fetch: app.fetch, port });
 console.log(`gateway listening on :${port}`);
