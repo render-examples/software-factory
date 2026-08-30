@@ -6,7 +6,7 @@ services:
     envVars:
       - key: REDIS_URL
         fromKeyValue:
-          name: factory-kv
+          name: render-factory-kv
           property: connectionString
       - key: RENDER_WORKFLOW_SLUG
         sync: false
@@ -17,9 +17,6 @@ services:
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
 
-  # factory-workflows is a Render Workflow service (managed in the Dashboard,
-  # not via Blueprint). Start command: npx tsx app/src/workflows.ts
-
 keyValues:
-  - name: factory-kv
+  - name: render-factory-kv
     plan: starter
