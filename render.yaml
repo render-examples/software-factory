@@ -5,7 +5,8 @@ services:
     plan: starter
     envVars:
       - key: REDIS_URL
-        fromKeyValue:
+        fromService:
+          type: keyvalue
           name: render-factory-kv
           property: connectionString
       - key: RENDER_WORKFLOW_SLUG
@@ -17,6 +18,6 @@ services:
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
 
-keyValues:
-  - name: render-factory-kv
+  - type: keyvalue
+    name: render-factory-kv
     plan: starter
