@@ -1,6 +1,6 @@
-- [x] Pluggable agent harness
-- Sandboxes for remote execution
-- Inter-step blob storage / ref injection for large artifacts
+- [x] Pluggable agent harness (Claude Agent SDK first)
+- [x] Sandboxes for remote execution
+- [ ] Inter-step blob storage / ref injection for large artifacts, store in Redis
 - Hooks
 - Policies
     - Tool Permissions
