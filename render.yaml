@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: factory-gateway
+    name: render-factory-gateway
     runtime: docker
     plan: starter
     envVars:
