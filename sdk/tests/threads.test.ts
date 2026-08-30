@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const store = new Map<string, { value: string; ex?: number }>();
 
-vi.mock("./redis.js", () => ({
+vi.mock("../redis.js", () => ({
   kv: async () => ({
     get: async (key: string) => store.get(key)?.value ?? null,
     set: async (key: string, value: string, opts?: { EX?: number }) => {
@@ -14,8 +14,8 @@ vi.mock("./redis.js", () => ({
   }),
 }));
 
-import { appendMessage, getOrCreateThread, getThread } from "./threads.js";
-import { getBlob, resolveRefs, BLOB_THRESHOLD } from "./blobs.js";
+import { appendMessage, getOrCreateThread, getThread } from "../threads.js";
+import { getBlob, resolveRefs, BLOB_THRESHOLD } from "../blobs.js";
 
 beforeEach(() => {
   store.clear();
@@ -28,7 +28,6 @@ describe("appendMessage", () => {
     const thread = await getThread("t1");
     expect(thread?.messages).toHaveLength(1);
     expect(thread?.messages[0]).toMatchObject({ role: "user", content: "hello" });
-    // Only the thread record, no blob.
     expect(store.size).toBe(1);
   });
 
@@ -74,7 +73,6 @@ describe("appendMessage", () => {
     const thread = await getThread("t1");
     expect(thread!.messages).toHaveLength(2);
     const [first, second] = thread!.messages.map((m) => m.content);
-    // Distinct keys (message index differs), both resolving to the original.
     expect(first).not.toBe(second);
     expect(await getBlob(first)).toBe(same);
     expect(await getBlob(second)).toBe(same);
@@ -91,7 +89,6 @@ describe("appendMessage", () => {
 
   it("produces refs containing no whitespace", async () => {
     const large = "x".repeat(BLOB_THRESHOLD + 1);
-    // Slack-style composite thread ids, plus a defensive whitespace case.
     await appendMessage("C123:1699999999.000100", "user", large);
     await appendMessage("has spaces", "user", large);
 

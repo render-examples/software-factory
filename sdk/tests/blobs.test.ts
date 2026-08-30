@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const store = new Map<string, { value: string; ex?: number }>();
 
-vi.mock("./redis.js", () => ({
+vi.mock("../redis.js", () => ({
   kv: async () => ({
     get: async (key: string) => store.get(key)?.value ?? null,
     set: async (key: string, value: string, opts?: { EX?: number }) => {
@@ -21,7 +21,7 @@ import {
   resolveRefs,
   maybePutBlob,
   BLOB_THRESHOLD,
-} from "./blobs.js";
+} from "../blobs.js";
 
 beforeEach(() => {
   store.clear();

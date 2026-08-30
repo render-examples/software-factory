@@ -25,12 +25,11 @@ vi.mock("@renderinc/sdk", () => ({
   },
 }));
 
-import { dispatchWorkflowTask, DISPATCH_BLOB_TTL_SECONDS } from "./dispatch.js";
+import { dispatchWorkflowTask, DISPATCH_BLOB_TTL_SECONDS } from "../gateway/dispatch.js";
 import { getBlob, BLOB_THRESHOLD } from "#factory-sdk/blobs";
 
 const LARGE = "x".repeat(BLOB_THRESHOLD + 1);
 
-/** First payload argument handed to startTask. */
 function dispatchedPayload(): any {
   return startTask.mock.calls[0][1][0];
 }
@@ -110,7 +109,6 @@ describe("dispatchWorkflowTask blob-capping", () => {
     expect(payload.comment.body).toMatch(/^\$blob:/);
     expect(await getBlob(payload.issue.body)).toBe(LARGE);
     expect(await getBlob(payload.comment.body)).toBe(LARGE);
-    // Sibling fields survive untouched.
     expect(payload.issue.title).toBe("keep me");
     expect(payload.comment.user).toBe("u");
   });

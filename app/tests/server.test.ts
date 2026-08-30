@@ -21,7 +21,7 @@ vi.mock("@renderinc/sdk", () => ({
   },
 }));
 
-import { createApp } from "./server.js";
+import { createApp } from "../gateway/server.js";
 import { getThread } from "#factory-sdk/threads";
 import { getBlob, BLOB_THRESHOLD } from "#factory-sdk/blobs";
 
@@ -103,7 +103,6 @@ describe("POST /threads/:id/messages", () => {
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ threadId: "t1", status: "accepted" });
     expect(startTask).not.toHaveBeenCalled();
-    // The message is still persisted even though nothing was dispatched.
     expect((await getThread("t1"))?.messages).toHaveLength(1);
   });
 
