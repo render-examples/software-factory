@@ -1,12 +1,20 @@
-// Agent config and task bridge
 export { Agent, agentTask, md, configure } from "./agent.js";
 export type { AgentDef, AgentSpec, AgentTaskInput, AgentTaskOptions } from "./agent.js";
 
-// Thread store
 export { getThread, getOrCreateThread, appendMessage } from "./threads.js";
 export type { Thread, ThreadMessage } from "./threads.js";
 
-// Tool system (SDK-agnostic)
+export { kv } from "./redis.js";
+
+export {
+  putBlob,
+  getBlob,
+  delBlob,
+  resolveRefs,
+  maybePutBlob,
+  BLOB_THRESHOLD,
+} from "./blobs.js";
+
 export {
   ToolRegistry,
   createRegistry,
@@ -24,13 +32,10 @@ export type {
   InferShape,
 } from "./tools.js";
 
-// Runner interface (SDK-agnostic)
 export type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
 
-// Runner implementations
 export { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
 
-// Sandbox system (SDK-agnostic interfaces)
 export {
   BaseSandbox,
   collectExecOutput,
@@ -51,6 +56,5 @@ export type {
 export { createSandboxToolSource } from "./sandbox-tool-source.js";
 export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";
 
-// Sandbox provider implementations
 export { RenderSandboxProvider } from "./sandbox/index.js";
 export type { RenderSandboxProviderOptions } from "./sandbox/index.js";

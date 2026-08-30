@@ -1,9 +1,6 @@
 /**
  * ClaudeRunner — AgentRunner backed by the Claude Agent SDK.
- *
- * All @anthropic-ai/claude-agent-sdk imports are isolated here.
- * Built-in tools (Read, Edit, Bash, …) pass through to the SDK.
- * Custom tools are bridged via an in-process MCP server.
+ * Built-in tools pass through to the SDK; custom tools are bridged via MCP.
  */
 import {
   query,
@@ -21,10 +18,6 @@ import {
   type ToolSource,
 } from "../tools.js";
 
-// ---------------------------------------------------------------------------
-// Claude built-in tool names
-// ---------------------------------------------------------------------------
-
 const CLAUDE_BUILTIN_NAMES = new Set([
   "Read",
   "Edit",
@@ -34,10 +27,6 @@ const CLAUDE_BUILTIN_NAMES = new Set([
   "Glob",
   "NotebookEdit",
 ]);
-
-// ---------------------------------------------------------------------------
-// ClaudeBuiltInToolSource — registers Claude's native tools in the registry
-// ---------------------------------------------------------------------------
 
 export class ClaudeBuiltInToolSource implements ToolSource {
   readonly id = "claude-built-in";
@@ -49,10 +38,6 @@ export class ClaudeBuiltInToolSource implements ToolSource {
     }));
   }
 }
-
-// ---------------------------------------------------------------------------
-// ClaudeRunner
-// ---------------------------------------------------------------------------
 
 const MCP_SERVER_NAME = "factory-tools";
 
@@ -73,8 +58,7 @@ export class ClaudeRunner implements AgentRunner {
       ? abortControllerFromSignal(ctx.signal)
       : undefined;
 
-    // Auto-allow both built-in tools and MCP-bridged custom tools.
-    // MCP tools are namespaced as mcp__<server>__<tool> by the SDK.
+    // MCP tools are namespaced as mcp__<server>__<tool> by the SDK
     const mcpToolNames = customTools.map(
       (t) => `mcp__${MCP_SERVER_NAME}__${t.name}`,
     );
@@ -117,10 +101,6 @@ export class ClaudeRunner implements AgentRunner {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Bridge a Tool to the Claude SDK's tool() helper
-// ---------------------------------------------------------------------------
-
 function bridgeToolToSdk(tool: Tool, agentId: string, signal?: AbortSignal) {
   const toolCtx: ToolContext = { agentId, signal };
 
@@ -137,10 +117,6 @@ function bridgeToolToSdk(tool: Tool, agentId: string, signal?: AbortSignal) {
     },
   );
 }
-
-// ---------------------------------------------------------------------------
-// Map Claude SDK messages to AgentEvents
-// ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapSdkMessage(msg: any): AgentEvent | null {
@@ -169,10 +145,6 @@ function mapSdkMessage(msg: any): AgentEvent | null {
       return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function abortControllerFromSignal(signal: AbortSignal): AbortController {
   const controller = new AbortController();

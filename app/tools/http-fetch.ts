@@ -1,10 +1,4 @@
-/**
- * HttpFetch — a custom tool that lets agents make HTTP requests.
- *
- * Proof-of-life for the pluggable tool system. The Claude Agent SDK has no
- * built-in HTTP tool, so this demonstrates custom tool registration,
- * resolution, and dispatch through the runner.
- */
+/** HttpFetch — custom tool that lets agents make HTTP requests. */
 import { z } from "zod";
 import type { Tool, ToolSource, ToolResult, ToolContext, InferShape } from "../../sdk/tools.js";
 

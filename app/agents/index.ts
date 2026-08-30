@@ -1,9 +1,5 @@
 import { Agent, md } from "../../sdk/index.js";
 
-// ---------------------------------------------------------------------------
-// Pure agent config — just prompts, tools, and constraints
-// ---------------------------------------------------------------------------
-
 export const assistant = Agent({
   id: "assistant",
   description: "Conversational assistant for interactive threads",
