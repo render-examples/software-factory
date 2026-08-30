@@ -106,7 +106,7 @@ export { RunPaused, RunCancelled, MODEL_PRICING, estimateCost } from "@render-fa
 export { resolveModelSpec } from "@render-factory/engine";
 export { defineToolSource } from "@render-factory/engine";
 
-// --- SDK composition / orchestration ---
+// --- SDK runtime (internal, used by gateway and dispatch) ---
 export type {
   RunnerRegistry,
   DispatchOptions,
@@ -114,19 +114,17 @@ export type {
   RootDispatchJob,
   AgentRuntime,
   CreateRuntimeOptions,
-  ExecutionMode,
 } from "./runtime.js";
 export { createRuntime } from "./runtime.js";
 
-export type { AgentSet, Agent } from "./agents.js";
 export { resumeRun, driveAgentTurn } from "./agents.js";
 
-// Internal workflow runtime (used by boot, dispatch, and gateway tests)
 export type { WorkflowDefinition, WorkflowContext, WorkflowOptions, WorkflowDispatchOptions } from "./workflow.js";
 export { workflow, bindWorkflow } from "./workflow.js";
 
 // --- Channels & webhook verification ---
-export type { Channel, ChannelInboundEvent, ChannelDeliverContext, ChannelTarget, ChannelMatch } from "./channel.js";
+export type { Channel, ChannelDeliverContext, ChannelTarget, ChannelMatch } from "./channel.js";
+export type { ChannelInboundEvent as LegacyChannelInboundEvent } from "./channel.js";
 
 export type {
   WebhookVerify,
@@ -160,42 +158,31 @@ export {
 } from "./dispatch.js";
 export type { AgentTaskInput, InProcessDispatcherOptions } from "./dispatch.js";
 
-// --- Typed authoring API ---
+// --- Agent authoring API (Render-native) ---
 export {
   md,
-  defineAgent,
+  Agent,
   defineTool,
-  defineWorkflow,
-  defineChannel,
-  defineFactory,
   defineMcpSource,
+  defineChannel,
   matchesRepoAllowlist,
-  isAgentDef,
-  isWorkflowDef,
-  isChannelDef,
-  isFactoryDef,
-} from "./define.js";
+  isSetupTool,
+  getSetupSpec,
+} from "./agent.js";
 export type {
   AgentDef,
-  AgentDefinitionSpec,
+  AgentSpec,
   ToolSetupContext,
   TypedToolSpec,
   TypedToolWithSetup,
-  ToolDef,
-  WorkflowDef,
-  WorkflowDefinitionSpec,
-  WorkflowTaskContext,
-  TaskResult,
   ChannelDef,
   ChannelDefSpec,
   ChannelTargetDef,
-  FactoryDef,
-  FactorySpec,
-} from "./define.js";
+  ChannelInboundEvent,
+} from "./agent.js";
 
-// --- Factory boot ---
-export { bootFactory } from "./boot.js";
-export type { BootedFactory, BootFactoryOverrides } from "./boot.js";
+// --- Agent task bridge ---
+export { agentTask, _setSharedRuntime, _resetSharedRuntime } from "./agent-task.js";
 
 // --- Thread surface notifications ---
 export { notifyThreadSurfaces } from "./notify-surfaces.js";

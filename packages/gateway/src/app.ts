@@ -40,7 +40,6 @@ export interface GatewayOptions {
   defaultAgent?: string;
   baseUrl?: string;
   oauthProviders?: Map<string, OAuthProviderConfig>;
-  /** Inbound/outbound message surfaces (Slack/GitHub/…), mounted at `POST /channels/:id`. */
   channels?: Map<string, Channel>;
   /**
    * Resume driver for paused runs. Defaults to the in-process `resumeRun` over
@@ -74,7 +73,17 @@ export interface GatewayOptions {
  */
 export function createGatewayApp(opts: GatewayOptions) {
   const app = new Hono();
-  const { runtime, workflows, cancelStore } = opts;
+
+  // Derive runtime/workflows/channels from opts.
+  const runtime: AgentRuntime = opts.runtime;
+  const workflows: ReadonlyMap<string, WorkflowDefinition> =
+    opts.workflows ?? new Map();
+  const channels: ReadonlyMap<string, Channel> =
+    opts.channels ?? new Map();
+  const defaultWorkflow = opts.defaultWorkflow;
+  const defaultAgent = opts.defaultAgent;
+
+  const { cancelStore } = opts;
   const operatorUserId =
     opts.operatorUserId ?? process.env.RENDER_FACTORY_OPERATOR_ID ?? DEFAULT_OPERATOR_ID;
 
@@ -169,7 +178,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   // The loop polls runtime.cancelStore, so cancel routes must write to the same
   // store (BUG-01); an explicit override still wins (tests).
   const cancel = cancelStore ?? runtime.cancelStore;
-  const wf = workflows ?? new Map();
+  const wf = workflows;
   // HITL resume: a paused workflow root re-drives via dispatch/replay; a paused
   // agent/chat turn re-drives via the same chat-turn task dispatch. Both are
   // replay-safe (memoized ctx.step + deterministic child ids), so re-driving
@@ -258,7 +267,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   // Powers the operator UI's dispatch/schedule pickers; dispatch POST lives in runRoutes.
   app.get("/workflows", (c) => {
     const list = [...wf.keys()].map((name) => ({ name }));
-    return c.json({ workflows: list, defaultWorkflow: opts.defaultWorkflow });
+    return c.json({ workflows: list, defaultWorkflow });
   });
 
   app.route("/", runRoutes({ store, cancelStore: cancel, workflows: wf }));
@@ -381,7 +390,7 @@ export function createGatewayApp(opts: GatewayOptions) {
     return { runId, threadId, status: 202, body: { runId, channel: binding.channel, agent: agentName, threadId } };
   };
 
-  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow: opts.defaultWorkflow, defaultAgent: opts.defaultAgent, startAgentRun, resume, awaitResume }));
+  app.route("/", threadRoutes({ store, threadStore: runtime.threadStore, workflows: wf, defaultWorkflow, defaultAgent, startAgentRun, resume, awaitResume }));
 
   app.route("/", hitlRoutes({ store, resume, awaitResume }));
 
@@ -413,7 +422,7 @@ export function createGatewayApp(opts: GatewayOptions) {
   // opts.channels is seeded onto runtime.channels so inbound routes and outbound
   // delivery resolve the same set. Public routes: auth is the channel's
   // declarative signature policy (fail-closed via checkWebhookAuth).
-  if (opts.channels) for (const [id, ch] of opts.channels) runtime.channels.set(id, ch);
+  for (const [id, ch] of channels) runtime.channels.set(id, ch);
   if (runtime.channels.size > 0) {
     app.route("/", channelRoutes({ channels: runtime.channels, workflows: wf, handleChannelMessage }));
   }

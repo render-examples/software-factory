@@ -103,8 +103,8 @@ async function readRawBodyLimited(
  * Verification runs over the exact raw body bytes.
  */
 export function channelRoutes(deps: {
-  channels: Map<string, Channel>;
-  workflows: Map<string, WorkflowDefinition>;
+  channels: ReadonlyMap<string, Channel>;
+  workflows: ReadonlyMap<string, WorkflowDefinition>;
   /**
    * Handle an inbound message on a channel conversation (agent-target channels):
    * resolve/create the conversation's thread, satisfy a pending HITL input or

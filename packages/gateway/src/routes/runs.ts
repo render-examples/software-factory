@@ -19,7 +19,7 @@ const EVENT_CATEGORIES = new Set(["lifecycle", "message", "tool", "step", "model
 export function runRoutes(deps: {
   store: RunStore;
   cancelStore: CancelStore;
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: ReadonlyMap<string, WorkflowDefinition>;
 }) {
   const app = new Hono();
   const { store, cancelStore, workflows } = deps;

@@ -10,15 +10,14 @@ when asked to add, modify, or extend anything in the render-factory.
 ```
 render-factory/
 ├── app/                    ← YOU CUSTOMIZE THIS
-│   ├── agents/             TypeScript agent definitions (index.ts barrel)
-│   ├── workflows/          Durable workflow orchestration
-│   ├── tools/              Tool sources (local, MCP)
+│   ├── agents/             Agent definitions (leaf + composition) in index.ts
+│   ├── tools/              Tool sources (local, MCP, setup-injected)
 │   ├── channels/           Inbound webhook adapters
-│   ├── factory.ts          Explicit factory root (workflows, channels, interactive agents)
+│   ├── factory.ts          Flat factory root (agents, channels, config)
 │   └── src/                Entrypoints (server.ts, workflows.ts)
 ├── packages/               ← INFRASTRUCTURE, DON'T TOUCH
 │   ├── engine/             Agent loop, model clients, tools runtime
-│   ├── sdk/                Public API, define*, bootFactory, dispatch
+│   ├── sdk/                Public API: Agent(), Factory(), boot(), dispatch
 │   ├── store/              Event log, projections, Postgres
 │   ├── gateway/            HTTP service, auth, operator UI
 │   └── sandbox/render/     Render Sandbox provider
@@ -26,29 +25,33 @@ render-factory/
 ```
 
 **Import from `@render-factory/sdk` for all authoring.** Never import from
-`engine`, `store`, or `gateway` when writing agents, workflows, or tools.
+`engine`, `store`, or `gateway` when writing agents or tools.
 
 ## How it boots
 
 Both entrypoints (`server.ts`, `workflows.ts`) import the factory definition
-from `app/factory.ts` and call `bootFactory(factoryDef)`, which traverses the
-typed dependency graph, validates all references, and materializes the runtime.
-No filesystem discovery or compilation is involved.
+from `app/factory.ts` and call `boot(factoryDef)`, which registers agents,
+materializes tools, binds channels, and returns a running factory. No graph
+traversal, no filesystem discovery.
 
 ---
 
 ## Authoring Agents
 
-Agents are TypeScript definitions in `app/agents/index.ts`. Each is created
-with `defineAgent()` and exported as a named constant.
+Agents are the **only authored primitive**. There are two kinds:
 
-### Example
+- **Prompt agents** use an LLM executor (model loop, tools, budget).
+- **Composition agents** use a `run(ctx)` function for deterministic orchestration.
+
+Both are created with `Agent()` and exported from `app/agents/index.ts`.
+
+### Prompt agent (LLM)
 
 ```ts
-import { defineAgent, md } from "@render-factory/sdk";
+import { Agent, md } from "@render-factory/sdk";
 import sandboxTool from "../tools/sandbox/index.js";
 
-export const researcher = defineAgent({
+export const researcher = Agent({
   id: "researcher",
   description: "Explores the repository to understand how to implement an issue",
   tools: [sandboxTool],
@@ -60,88 +63,70 @@ export const researcher = defineAgent({
 });
 ```
 
+### Composition agent (deterministic)
+
+```ts
+export const specToPr = Agent({
+  id: "spec-to-pr",
+  description: "Triage, research, plan, implement, open PR",
+  plan: "standard",
+  agents: [triage, researcher, planner, implementer],
+  async run(ctx) {
+    const research = await ctx.run(researcher, ctx.input.description);
+    const plan = await ctx.run(planner, research);
+    return ctx.run(implementer, plan);
+  },
+});
+```
+
 ### Agent Definition Fields
 
-**Common (use these):**
+**Common:**
 
 | Field | Type | Purpose |
 |-------|------|---------|
 | `id` | string | Unique agent identifier (required) |
 | `description` | string | What the agent does |
-| `model` | string | Model tier: `small`, `medium`, `large` (or a specific model ID) |
-| `tools` | ToolSource[] | Tool sources this agent can access (imported objects) |
-| `subagents` | AgentDef[] | Subagent definitions this agent can delegate to |
-| `budget` | object | Execution limits (see below) |
-| `prompt` | string | System prompt, typically using the `md` tagged template |
+| `input` | z.ZodType | Zod schema for validating/typing agent input |
+| `output` | z.ZodType | Zod schema for structured output |
 
-**Budget fields:**
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `budget.maxIterations` | number | 25 | Max model call + tool call loops |
-| `budget.maxCostUsd` | number | null | Max estimated cost in USD |
-| `budget.maxWallSeconds` | number | none | Max wall-clock time |
-| `budget.maxTokens` | number | none | Max total tokens (input + output) |
-
-**Advanced (most agents don't need these):**
+**Prompt agents (LLM):**
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `provider` | `"anthropic"` \| `"openai"` | Override the default provider |
-| `output` | z.ZodType | Structured output schema (Zod, converted to JSON Schema) |
+| `prompt` | string | System prompt (use `md` tagged template) |
+| `model` | string | Model tier: `small`, `medium`, `large` (or model ID) |
+| `tools` | ToolSource[] | Tool sources this agent can access |
+| `subagents` | AgentDef[] | Subagent definitions for delegation |
+| `budget` | object | Execution limits |
+| `sampling` | object | Temperature, topP, maxOutputTokens |
 | `requireApproval` | ToolSource[] | Tools that pause for human approval |
-| `plan` | string | Render Workflows compute plan (`starter`, `standard`, `pro`) |
-| `interactive` | boolean | Marks this as a conversational agent |
-| `sampling.temperature` | number | Model temperature |
-| `sampling.topP` | number | Top-p sampling |
-| `sampling.maxOutputTokens` | number | Max output tokens per model call |
-| `input` | z.ZodType | Zod schema for validating/typing agent input |
+| `interactive` | boolean | Marks as a conversational chat surface |
+| `plan` | string | Render Workflows compute plan |
 
-### Adding an agent
+**Composition agents (deterministic):**
 
-1. Define the agent in `app/agents/index.ts` using `defineAgent()`.
-2. Import it in the workflow that uses it and add it to the workflow's `agents` array.
-3. The factory graph is traversed automatically — no separate registration needed.
+| Field | Type | Purpose |
+|-------|------|---------|
+| `agents` | AgentDef[] | Child agents available via `ctx.run()` |
+| `run` | function | `(ctx: AgentContext) => Promise<T>` |
+| `plan` | string | Render Workflows compute plan |
 
----
+### `ctx.run()` — the only composition API
 
-## Composing Workflows
-
-Workflows live in `app/workflows/<name>/index.ts`. They default-export a
-`defineWorkflow()` definition that declares its agent dependencies.
-
-### Minimal workflow
-
-```ts
-import { defineWorkflow } from "@render-factory/sdk";
-import { researcher } from "../../agents/index.js";
-
-export default defineWorkflow({
-  id: "my-workflow",
-  agents: [researcher] as const,
-  run: async (ctx) => {
-    const result = await ctx.task(researcher, ctx.input);
-    return { summary: result.text };
-  },
-});
-```
-
-### `ctx.task()` — the only execution API
-
-Every agent invocation is a durable isolated task. Use `await` for sequential
-steps and `Promise.all()` for parallel fan-out:
+Every agent invocation inside a composition agent is a durable isolated task:
 
 ```ts
 // Sequential — each step feeds the next
-const research = await ctx.task(researcher, input);
-const plan = await ctx.task(planner, research.text);
-const impl = await ctx.task(implementer, plan.text);
+const research = await ctx.run(researcher, input);
+const plan = await ctx.run(planner, research);
+const impl = await ctx.run(implementer, plan);
 
 // Parallel — independent work fans out
-const [security, perf, tests] = await Promise.all([
-  ctx.task(securityAgent, diff),
-  ctx.task(perfAgent, diff),
-  ctx.task(testsAgent, diff),
+const [sec, perf, tests] = await Promise.all([
+  ctx.run(securityAgent, diff),
+  ctx.run(perfAgent, diff),
+  ctx.run(testsAgent, diff),
 ]);
 ```
 
@@ -155,20 +140,22 @@ const pr = await ctx.step("open-pr", async () => {
 });
 ```
 
-### Registration
+---
 
-Workflows must be added to the factory root in `app/factory.ts`:
+## The Factory Root
+
+`app/factory.ts` is a **flat registry** of all agents and channels:
 
 ```ts
-export default defineFactory({
-  workflows: [specToPr, prReview, prFix],
+export default Factory({
+  agents: [assistant, researcher, planner, implementer, specToPr, prReview],
   channels: [github, slack],
-  interactive: [assistant],
+  config: { repos: ["owner/repo"] },
 });
 ```
 
-Only workflows listed here (or reachable through channels) are dispatchable.
-Agent dependencies are declared per-workflow and collected transitively at boot.
+All agents are listed here. Composition agents and leaf agents are peers.
+No dependency graph — agents resolve each other at runtime via `ctx.run()`.
 
 ---
 
@@ -177,7 +164,7 @@ Agent dependencies are declared per-workflow and collected transitively at boot.
 Tools live in `app/tools/<source-id>/index.ts`. Each default-exports a
 `ToolSource` created by `defineTool()` or `defineMcpSource()`.
 
-### Single local tool
+### Simple tool
 
 ```ts
 import { defineTool } from "@render-factory/sdk";
@@ -185,22 +172,37 @@ import { defineTool } from "@render-factory/sdk";
 export default defineTool({
   id: "get_issue",
   description: "Read one GitHub issue.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      repo: { type: "string" },
-      number: { type: "number" },
-    },
-    required: ["repo", "number"],
-  },
+  inputSchema: { type: "object", properties: { repo: { type: "string" } } },
   async invoke(input, ctx) {
-    const { repo, number } = input as { repo: string; number: number };
     return JSON.stringify(result);
   },
 });
 ```
 
-### MCP server (HTTP)
+### Setup-injected tool
+
+Tools that need runtime dependencies use `setup()`:
+
+```ts
+export default defineTool({
+  id: "start_workflow",
+  description: "Start a background agent...",
+  inputSchema: { ... },
+  setup(ctx) {
+    return {
+      id: "start_workflow",
+      description: "...",
+      inputSchema: { ... },
+      async invoke(input, toolCtx) {
+        const wf = ctx.workflows.get(input.name);
+        return wf.dispatch(input.spec);
+      },
+    };
+  },
+});
+```
+
+### MCP server
 
 ```ts
 import { defineMcpSource } from "@render-factory/sdk";
@@ -212,52 +214,24 @@ export default defineMcpSource({
 });
 ```
 
-### Using tools in agents
-
-Import the tool source and reference it in the agent's `tools` array:
-
-```ts
-import sandboxTool from "../tools/sandbox/index.js";
-
-export const implementer = defineAgent({
-  tools: [sandboxTool],
-  // ...
-});
-```
-
 ---
 
 ## Adding Channels
 
-Channels live in `app/channels/<name>.ts`. They default-export a `defineChannel()`
-definition that references workflow or agent targets as imported objects.
+Channels live in `app/channels/<name>.ts`. They target agents directly:
 
 ```ts
 import { defineChannel, githubVerify } from "@render-factory/sdk";
-import specToPr from "../workflows/spec-to-pr/index.js";
+import { specToPr } from "../agents/index.js";
 
 export default defineChannel({
   id: "github",
-  target: { workflow: specToPr },
+  target: { agent: specToPr },
   verify: githubVerify(),
   match(req) { /* return { event } or null */ },
   async parse(req) { /* return { conversationId, input, target? } */ },
 });
 ```
-
-Channels must be added to the factory root in `app/factory.ts`.
-
----
-
-## The Factory Root
-
-`app/factory.ts` is the single composition boundary. It lists:
-- **workflows** — publicly dispatchable via the HTTP API
-- **channels** — inbound/outbound message surfaces
-- **interactive** — conversational agents exposed as chat entrypoints
-
-All agent, tool, and subagent dependencies are collected transitively from
-workflows and interactive agents. You never list pipeline agents in the factory.
 
 ---
 

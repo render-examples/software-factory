@@ -65,64 +65,76 @@ const ACTIVITY_EVENT_TYPES: RunEvent["type"][] = [
   "context.compacted",
 ];
 
-let runtime: ActivityRuntime | undefined;
+const description =
+  "Read recent activity for a Render Factory run or thread. Use this when the " +
+  "user provides a run ID or thread ID, asks for status, or wants the latest " +
+  "workflow/conversation content. Returns the newest 20 entries by default, " +
+  "with bounded pagination. This tool is read-only.";
 
-/** @internal Test helper to inject runtime stores. */
-export function setRuntime(value: ActivityRuntime): void {
-  runtime = value;
-}
+const activityInputSchema = {
+  type: "object",
+  properties: {
+    scope: {
+      type: "string",
+      enum: ["run", "thread"],
+      description: "Whether `id` identifies a run or a thread.",
+    },
+    id: {
+      type: "string",
+      minLength: 1,
+      description: "The run ID or thread ID to inspect.",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_LIMIT,
+      description: `Maximum entries to return. Default ${DEFAULT_LIMIT}; max ${MAX_LIMIT}.`,
+    },
+    since: {
+      type: "string",
+      description: "Optional ISO-8601 timestamp; only return activity at or after it.",
+    },
+    before_seq: {
+      type: "integer",
+      minimum: 0,
+      description: "Return the latest entries strictly before this sequence (older-page cursor).",
+    },
+    after_seq: {
+      type: "integer",
+      minimum: 0,
+      description: "Return entries strictly after this sequence (incremental-update cursor).",
+    },
+  },
+  required: ["scope", "id"],
+  additionalProperties: false,
+} as const;
 
 export default defineTool({
   id: "get_activity",
-  description:
-    "Read recent activity for a Render Factory run or thread. Use this when the " +
-    "user provides a run ID or thread ID, asks for status, or wants the latest " +
-    "workflow/conversation content. Returns the newest 20 entries by default, " +
-    "with bounded pagination. This tool is read-only.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      scope: {
-        type: "string",
-        enum: ["run", "thread"],
-        description: "Whether `id` identifies a run or a thread.",
+  description,
+  inputSchema: activityInputSchema,
+  setup(ctx) {
+    const rt: ActivityRuntime = {
+      store: ctx.runtime.store,
+      threadStore: ctx.runtime.threadStore,
+      itemStore: ctx.runtime.itemStore,
+    };
+    return {
+      id: "get_activity",
+      description,
+      inputSchema: activityInputSchema,
+      async invoke(rawInput, toolCtx) {
+        return invokeActivity(rt, rawInput, toolCtx);
       },
-      id: {
-        type: "string",
-        minLength: 1,
-        description: "The run ID or thread ID to inspect.",
-      },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: MAX_LIMIT,
-        description: `Maximum entries to return. Default ${DEFAULT_LIMIT}; max ${MAX_LIMIT}.`,
-      },
-      since: {
-        type: "string",
-        description: "Optional ISO-8601 timestamp; only return activity at or after it.",
-      },
-      before_seq: {
-        type: "integer",
-        minimum: 0,
-        description: "Return the latest entries strictly before this sequence (older-page cursor).",
-      },
-      after_seq: {
-        type: "integer",
-        minimum: 0,
-        description: "Return entries strictly after this sequence (incremental-update cursor).",
-      },
-    },
-    required: ["scope", "id"],
-    additionalProperties: false,
+    };
   },
-  async invoke(rawInput, ctx) {
-    if (!runtime) {
-      return {
-        content: "get_activity: runtime stores are not bound (server misconfiguration)",
-        isError: true,
-      };
-    }
+});
+
+async function invokeActivity(
+  runtime: ActivityRuntime,
+  rawInput: unknown,
+  ctx: { runId?: string },
+) {
     if (!ctx.runId) {
       return { content: "get_activity: calling run context is unavailable", isError: true };
     }
@@ -177,8 +189,7 @@ export default defineTool({
         afterSeq: input.after_seq,
       }),
     };
-  },
-});
+}
 
 function inaccessible(): { content: string; isError: true } {
   // Missing and unauthorized targets intentionally share one response so IDs

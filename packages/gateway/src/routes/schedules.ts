@@ -9,7 +9,7 @@ const PATCHABLE_SCHEDULE_FIELDS = new Set(["workflow", "cronExpression", "input"
 
 export interface ScheduleRoutesDeps {
   scheduleStore: ScheduleStore;
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: ReadonlyMap<string, WorkflowDefinition>;
   /** Clock injection for tests. Defaults to `new Date()`. */
   now?: () => Date;
 }

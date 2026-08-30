@@ -8,7 +8,7 @@ import { getPrincipal, canAccess } from "../auth.js";
 export interface ThreadRouteDeps {
   store: RunStore;
   threadStore: ThreadStore;
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: ReadonlyMap<string, WorkflowDefinition>;
   defaultWorkflow?: string;
   /** Conversational agent for threads; takes precedence over defaultWorkflow when set. */
   defaultAgent?: string;

@@ -1,86 +1,27 @@
-import { task } from "@renderinc/sdk/workflows";
-import {
-  bootFactory,
-  workflowTaskHandler,
-  agentTaskHandler,
-  computeRequiredPlans,
-  RenderWorkflowsDispatcher,
-} from "@render-factory/sdk";
-import type { AgentInput, AgentOutput, AgentTaskInput, DispatchOptions } from "@render-factory/sdk";
-import factoryDef from "../factory.js";
-import { WORKFLOW_SLUG, ensureWorkflowSlug } from "../lib/render.js";
+/**
+ * Render Workflows host entrypoint.
+ * Imports agent tasks and composition workflows — they self-register via task().
+ */
 
-ensureWorkflowSlug();
+// Agent tasks (each registers a Render task via agentTask())
+import "../tasks/index.js";
 
-// --- Dispatcher ---
+// Composition workflows (each registers a Render task via task())
+import { specToPr } from "../workflows/spec-to-pr.js";
+import { prReview } from "../workflows/pr-review.js";
+import { prFix } from "../workflows/pr-fix.js";
 
-const nativeAgentTasks = new Map<string, (input: AgentTaskInput) => Promise<AgentOutput>>();
+const taskCount = 12 + 3; // 12 agent tasks + 3 composition tasks
+console.log(
+  `workflows host ready. ${taskCount} tasks registered: ` +
+  `agents (assistant, triage, researcher, planner, implementer, security, performance, correctness, tests, lint, judge, deployer) + ` +
+  `workflows (spec-to-pr, pr-review, pr-fix)`,
+);
 
-class NativeChainingDispatcher extends RenderWorkflowsDispatcher {
-  override async dispatch(
-    agentName: string,
-    input: AgentInput,
-    opts: DispatchOptions,
-  ): Promise<AgentOutput> {
-    const plan = opts.plan ?? "standard";
-    const native = nativeAgentTasks.get(plan);
-    if (process.env.RENDER_SDK_SOCKET_PATH && native) {
-      return native({
-        agentName,
-        input,
-        runId: opts.runId,
-        parentSpanId: opts.parentSpanId,
-        userId: opts.userId,
-        threadId: opts.threadId,
-        depth: opts.depth ?? 0,
-        idempotencyKey: opts.idempotencyKey,
-        cancelScopeId: opts.cancelScopeId,
-      });
-    }
-    return super.dispatch(agentName, input, opts);
-  }
-}
-
-const dispatcher = new NativeChainingDispatcher({ workflowSlug: WORKFLOW_SLUG });
-
-const { runtime, workflows } = await bootFactory(factoryDef, {
-  runtime: { dispatcher },
-});
-
-const getDefinition = (name: string) => runtime.agentDefinitions.get(name);
-
-// --- Task Registration ---
-
-const plans = computeRequiredPlans([...runtime.agentDefinitions.values()]);
-for (const plan of plans) {
-  const agentTask = task(
-    { name: `agent@${plan}`, plan },
-    (input: Parameters<typeof agentTaskHandler>[0]) => agentTaskHandler(input, runtime, getDefinition),
-  );
-  nativeAgentTasks.set(plan, agentTask as (input: AgentTaskInput) => Promise<AgentOutput>);
-  task(
-    { name: `workflow@${plan}`, plan },
-    (args: Parameters<typeof workflowTaskHandler>[0]) => workflowTaskHandler(args, workflows),
-  );
-}
-
-const taskNames = plans.flatMap((p) => [`agent@${p}`, `workflow@${p}`]).join(", ");
-
-// --- Startup ---
-
-const underRenderRuntime = !!(process.env.RENDER_SDK_SOCKET_PATH || process.env.RENDER_USE_LOCAL_DEV);
-if (underRenderRuntime) {
-  console.log(`workflows host serving Render Workflows tasks: ${taskNames}`);
-} else {
-  console.log(
-    `workflows host ready (idle; no Render Workflows runtime). ` +
-      `${runtime.agentDefinitions.size} agents, ${workflows.size} workflows, tasks: ${taskNames}`,
-  );
-  const keepAlive = setInterval(() => {}, 1 << 30);
-  const shutdown = (): void => {
-    clearInterval(keepAlive);
-    process.exit(0);
-  };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
-}
+const keepAlive = setInterval(() => {}, 1 << 30);
+const shutdown = (): void => {
+  clearInterval(keepAlive);
+  process.exit(0);
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

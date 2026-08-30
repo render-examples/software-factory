@@ -178,7 +178,7 @@ async function collectWorkflowsSlug(env: CollectedEnv, existing?: render.RenderS
   console.log("  Create one manually in the Render Dashboard:");
   console.log("    1. Go to https://dashboard.render.com/create?type=workflows");
   console.log("    2. Connect this repository");
-  console.log("    3. Set the start command to: node app/dist/src/workflows.js");
+  console.log("    3. Set the start command to: pnpm --filter @render-factory/app workflows");
   console.log("    4. Choose the \"standard\" plan");
   console.log();
 

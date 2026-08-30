@@ -1,9 +1,10 @@
-import { defineChannel, md } from "@render-factory/sdk";
-import { githubVerify, matchesRepoAllowlist } from "@render-factory/sdk";
+import { defineChannel } from "@render-factory/sdk";
+import { githubVerify, matchesRepoAllowlist, Agent, md } from "@render-factory/sdk";
 import { normalizeGitHubEvent, type NormalizedGitHubEvent } from "../lib/github-events.js";
-import specToPr from "../workflows/spec-to-pr/index.js";
-import prReview from "../workflows/pr-review/index.js";
-import prFix from "../workflows/pr-fix/index.js";
+
+const specToPrTarget = Agent({ id: "spec-to-pr", prompt: md`Triage, research, plan, implement, open PR` });
+const prReviewTarget = Agent({ id: "pr-review", prompt: md`Fan-out specialist reviews, then judge` });
+const prFixTarget = Agent({ id: "pr-fix", prompt: md`Fix review feedback on agent PRs` });
 
 const SEEN_DELIVERY_TTL_MS = 10 * 60 * 1000;
 const seenDeliveries = new Map<string, number>();
@@ -30,9 +31,9 @@ function ackDuplicate() {
   };
 }
 
-const github = defineChannel({
+export default defineChannel({
   id: "github",
-  target: { workflow: specToPr, trigger: "github.issues" },
+  target: { agent: specToPrTarget, trigger: "github.issues" },
   verify: githubVerify(),
 
   match(req: Request) {
@@ -62,13 +63,13 @@ const github = defineChannel({
       }
     }
 
-    let target: { workflow: typeof specToPr | typeof prReview | typeof prFix; trigger: string };
+    let target: { agent: typeof specToPrTarget; trigger: string };
     if (event === "pull_request") {
-      target = { workflow: prReview, trigger: "github.pull_request" };
+      target = { agent: prReviewTarget, trigger: "github.pull_request" };
     } else if (event === "pull_request_review") {
-      target = { workflow: prFix, trigger: "github.pull_request_review" };
+      target = { agent: prFixTarget, trigger: "github.pull_request_review" };
     } else {
-      target = { workflow: specToPr, trigger: `github.${event}` };
+      target = { agent: specToPrTarget, trigger: `github.${event}` };
     }
     const conversationId =
       normalized.kind === "issue" ? `issue-${normalized.issue.number}`
@@ -77,5 +78,3 @@ const github = defineChannel({
     return { conversationId, input: normalized, target };
   },
 });
-
-export default github;

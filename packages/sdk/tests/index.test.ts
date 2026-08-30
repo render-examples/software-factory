@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createRuntime, defineTool, defineMcpSource, defineAgent, defineWorkflow, defineFactory, md, idempotencyKey, InProcessDispatcher } from "../src/index.js";
+import { createRuntime, defineTool, defineMcpSource, Agent, md, idempotencyKey, InProcessDispatcher, matchesRepoAllowlist } from "../src/index.js";
 import { mockModel, createTestRuntime } from "../src/testing.js";
 
 describe("@render-factory/sdk", () => {
@@ -15,26 +15,18 @@ describe("@render-factory/sdk", () => {
     expect(runtime.dispatcher).toBeInstanceOf(InProcessDispatcher);
   });
 
-  it("defineAgent returns a frozen AgentDef", () => {
-    const agent = defineAgent({
+  it("Agent() returns a frozen AgentDef with pure config", () => {
+    const agent = Agent({
       id: "test-agent",
       prompt: md`You are a test agent.`,
     });
-    expect(agent.__brand).toBe("AgentDef");
+    expect(agent.__kind).toBe("AgentDef");
     expect(agent.id).toBe("test-agent");
     expect(Object.isFrozen(agent)).toBe(true);
   });
 
-  it("defineWorkflow returns a frozen WorkflowDef", () => {
-    const agent = defineAgent({ id: "a", prompt: "test" });
-    const wf = defineWorkflow({
-      id: "test-wf",
-      agents: [agent] as const,
-      run: async () => {},
-    });
-    expect(wf.__brand).toBe("WorkflowDef");
-    expect(wf.id).toBe("test-wf");
-    expect(Object.isFrozen(wf)).toBe(true);
+  it("Agent() requires prompt", () => {
+    expect(() => Agent({ id: "bad" } as never)).toThrow(/prompt is required/);
   });
 
   it("defineTool returns a ToolSource", () => {
@@ -45,14 +37,6 @@ describe("@render-factory/sdk", () => {
   it("defineMcpSource returns a ToolSource (connects on mount)", () => {
     const source = defineMcpSource({ transport: "stdio" });
     expect(source.id).toBe("mcp");
-  });
-
-  it("defineFactory returns a frozen FactoryDef", () => {
-    const agent = defineAgent({ id: "a", prompt: "test" });
-    const wf = defineWorkflow({ id: "wf", agents: [agent] as const, run: async () => {} });
-    const factory = defineFactory({ workflows: [wf] });
-    expect(factory.__brand).toBe("FactoryDef");
-    expect(Object.isFrozen(factory)).toBe(true);
   });
 
   it("md strips common indentation", () => {
@@ -66,5 +50,12 @@ describe("@render-factory/sdk", () => {
   it("idempotencyKey is deterministic", () => {
     expect(idempotencyKey("a", "b")).toBe(idempotencyKey("a", "b"));
     expect(idempotencyKey("a", "b")).not.toBe(idempotencyKey("a", "c"));
+  });
+
+  it("matchesRepoAllowlist treats punctuation literally with segment wildcards", () => {
+    expect(matchesRepoAllowlist("render/foo.bar", ["render/foo.bar"])).toBe(true);
+    expect(matchesRepoAllowlist("render/fooXbar", ["render/foo.bar"])).toBe(false);
+    expect(matchesRepoAllowlist("render/anything", ["render/*"])).toBe(true);
+    expect(matchesRepoAllowlist("render/nested/repo", ["render/*"])).toBe(false);
   });
 });
