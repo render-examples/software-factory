@@ -10,8 +10,11 @@ import {
   RenderSandboxProvider,
 } from "../../sdk/index.js";
 import { ClaudeBuiltInToolSource } from "../../sdk/runners/index.js";
+import { TriggerWorkflowToolSource } from "../tools/trigger-workflow.js";
 
-const registry = createRegistry().register(new ClaudeBuiltInToolSource());
+const registry = createRegistry()
+  .register(new ClaudeBuiltInToolSource())
+  .register(new TriggerWorkflowToolSource());
 
 if (process.env.RENDER_API_KEY) {
   registry.register(
