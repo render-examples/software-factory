@@ -22,7 +22,7 @@ vi.mock("@renderinc/sdk", () => ({
   },
 }));
 
-import { githubHandler } from "./github.js";
+import { githubHandler } from "../gateway/github.js";
 import { getBlob, BLOB_THRESHOLD } from "#factory-sdk/blobs";
 
 const SECRET = "github-test-secret";
@@ -35,7 +35,6 @@ const REPO = {
   default_branch: "main",
 };
 
-/** POST /github with a valid sha256 HMAC over the raw body. */
 function post(event: string, payload: unknown) {
   const body = JSON.stringify(payload);
   const sig = "sha256=" + createHmac("sha256", SECRET).update(body).digest("hex");
@@ -194,7 +193,6 @@ describe("POST /github blob-capping", () => {
     const payload = dispatchedPayload();
     expect(payload.issue.body).toMatch(/^\$blob:/);
     expect(await getBlob(payload.issue.body)).toBe(LARGE);
-    // Other fields are untouched.
     expect(payload.issue.title).toBe("Add a feature");
     expect(payload.repo.fullName).toBe("acme/factory");
   });

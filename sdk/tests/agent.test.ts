@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const store = new Map<string, { value: string; ex?: number }>();
 
-vi.mock("./redis.js", () => ({
+vi.mock("../redis.js", () => ({
   kv: async () => ({
     get: async (key: string) => store.get(key)?.value ?? null,
     set: async (key: string, value: string, opts?: { EX?: number }) => {
@@ -14,11 +14,11 @@ vi.mock("./redis.js", () => ({
   }),
 }));
 
-import { Agent, agentTask } from "./agent.js";
-import { appendMessage, getThread } from "./threads.js";
-import { BLOB_THRESHOLD } from "./blobs.js";
-import type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
-import type { ToolRegistry } from "./tools.js";
+import { Agent, agentTask } from "../agent.js";
+import { appendMessage, getThread } from "../threads.js";
+import { BLOB_THRESHOLD } from "../blobs.js";
+import type { AgentRunner, AgentEvent, RunContext } from "../runner.js";
+import type { ToolRegistry } from "../tools.js";
 
 /** Runner that records the prompt it receives and yields a canned result. */
 class RecordingRunner implements AgentRunner {
@@ -34,7 +34,6 @@ const emptyRegistry = { resolve: async () => [] } as unknown as ToolRegistry;
 
 let seq = 0;
 function interactiveTask(runner: AgentRunner) {
-  // Unique id per task: agentTask registers into a process-wide registry.
   const agent = Agent({
     id: `test-agent-${seq++}`,
     prompt: "You are a test agent.",
@@ -52,7 +51,6 @@ describe("agentTask history replay", () => {
     const large = "x".repeat(BLOB_THRESHOLD + 1);
     await appendMessage("t1", "user", large);
 
-    // Precondition: the message really was offloaded to a blob.
     const stored = (await getThread("t1"))!.messages[0].content;
     expect(stored).toMatch(/^\$blob:/);
 
@@ -91,7 +89,6 @@ describe("agentTask history replay", () => {
 
   it("resolves refs in the incoming message too", async () => {
     const large = "z".repeat(BLOB_THRESHOLD + 1);
-    // appendMessage caps it, giving us a real ref to pass as input.
     await appendMessage("other", "user", large);
     const ref = (await getThread("other"))!.messages[0].content;
 

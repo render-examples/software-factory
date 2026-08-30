@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { HookInterceptor, type Hook, type HookContext } from "./hooks.js";
-import type { AgentEvent } from "./runner.js";
+import { HookInterceptor, type Hook, type HookContext } from "../hooks.js";
+import type { AgentEvent } from "../runner.js";
 
 const ctx: HookContext = { runId: "test-run", agentId: "test-agent" };
 

@@ -22,14 +22,13 @@ vi.mock("@renderinc/sdk", () => ({
   },
 }));
 
-import { slackHandler } from "./slack.js";
+import { slackHandler } from "../gateway/slack.js";
 import { getThread } from "#factory-sdk/threads";
 import { getBlob, BLOB_THRESHOLD } from "#factory-sdk/blobs";
 
 const SECRET = "slack-test-secret";
 const LARGE = "x".repeat(BLOB_THRESHOLD + 1);
 
-/** POST /slack with a valid Slack v0 signature over the raw body. */
 function post(payload: unknown, extraHeaders: Record<string, string> = {}) {
   const body = JSON.stringify(payload);
   const ts = Math.floor(Date.now() / 1000).toString();
