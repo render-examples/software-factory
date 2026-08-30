@@ -1,8 +1,10 @@
-- Custom Tools
-- Hooks
+- [x] Pluggable agent harness
 - Sandboxes for remote execution
-- Pluggable agent harness
-- Permissions and policies
+- Inter-step blob storage / ref injection for large artifacts
+- Hooks
+- Policies
+    - Tool Permissions
+    - Cost control
 - Object storage
 - LLM Gateway
 - Eval suite

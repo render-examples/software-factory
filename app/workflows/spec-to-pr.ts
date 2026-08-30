@@ -1,11 +1,15 @@
 /**
  * spec-to-pr — Triage → research → plan → implement → PR.
- * Bare Render task composing agent tasks via direct calls.
+ *
+ * Creates a Render Sandbox for the research and implementation phases.
+ * The sandbox gets the repo cloned into it; agents operate via sandbox__* tools.
  */
 import { task } from "@renderinc/sdk/workflows";
 import { triageTask, researchTask, planTask, implementTask } from "../tasks/index.js";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../lib/github.js";
 import type { NormalizedGitHubEvent } from "../lib/github-events.js";
+import { RenderSandboxProvider } from "../../sdk/sandbox/index.js";
+import { collectExecOutput } from "../../sdk/sandbox.js";
 
 interface SpecInput {
   title: string;
@@ -15,6 +19,7 @@ interface SpecInput {
 }
 
 const MAX_TEXT = 12_000;
+const REPO_DIR = "/home/user/repo";
 
 function isBot(sender: { login: string; type: string }): boolean {
   return sender.type === "Bot" || sender.login.endsWith("[bot]") || sender.login === process.env.GITHUB_BOT_LOGIN;
@@ -27,6 +32,10 @@ function renderIssue(issue: Issue, comments: IssueComment[]): string {
     for (const c of comments) parts.push(`### @${c.user}`, c.body);
   }
   return parts.join("\n").slice(0, MAX_TEXT);
+}
+
+function sandboxContext(sandboxId: string): string {
+  return `sandbox_id: ${sandboxId}\nrepoDir: ${REPO_DIR}`;
 }
 
 function normalizeInput(raw: unknown): { spec: SpecInput; isGitHubIssue: boolean } | { skipped: string } {
@@ -65,6 +74,7 @@ export const specToPr = task(
     const gh = githubFromEnv();
     const repo: RepoRef = spec.repo;
 
+    // --- Triage (no sandbox needed) ---
     if (isGitHubIssue && spec.issueNumber) {
       const issue = await gh.getIssue(repo, spec.issueNumber);
       const comments = await gh.listIssueComments(repo, spec.issueNumber);
@@ -90,26 +100,77 @@ export const specToPr = task(
       await gh.addLabels(repo, spec.issueNumber, ["factory:working"]);
     }
 
-    const researchBrief = await researchTask({ message: `${spec.title}\n\n${spec.description}` });
-    const planRaw = await planTask({ message: `${spec.title}\n\n${spec.description}\n\nResearch brief:\n${researchBrief}` });
-    const implResult = await implementTask({ message: `${spec.title}\n\nApproved plan:\n${planRaw}` });
-
-    const branch = spec.issueNumber ? `agent/issue-${spec.issueNumber}` : `agent/spec-${Date.now()}`;
-    const pr = await gh.ensurePull(repo, {
-      title: spec.issueNumber ? `Fix #${spec.issueNumber}: ${spec.title}` : spec.title,
-      head: branch,
-      base: "main",
-      body: spec.issueNumber
-        ? `Automated implementation for #${spec.issueNumber}.\n\n${implResult}\n\nCloses #${spec.issueNumber}.`
-        : implResult,
+    // --- Sandbox lifecycle: research → plan → implement ---
+    const provider = new RenderSandboxProvider();
+    const sandbox = await provider.create({
+      metadata: {
+        workflow: "spec-to-pr",
+        repo: `${repo.owner}/${repo.repo}`,
+        ...(spec.issueNumber ? { issue: String(spec.issueNumber) } : {}),
+      },
     });
 
-    if (isGitHubIssue && spec.issueNumber) {
-      await gh.createIssueComment(repo, spec.issueNumber, `Opened a pull request: ${pr.htmlUrl}`);
-      await gh.removeLabel(repo, spec.issueNumber, "factory:working");
-      await gh.addLabels(repo, spec.issueNumber, ["factory:done"]);
-    }
+    const branch = spec.issueNumber
+      ? `agent/issue-${spec.issueNumber}`
+      : `agent/spec-${Date.now()}`;
 
-    return { status: "pr_opened", pr: pr.htmlUrl, branch };
+    try {
+      // Clone repo into sandbox
+      const cloneUrl = `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
+      const cloneEvents = await sandbox.exec(
+        `git clone --depth=50 ${cloneUrl} ${REPO_DIR} && cd ${REPO_DIR} && git checkout -b ${branch}`,
+      );
+      const { exitCode: cloneExit, output: cloneOut } = await collectExecOutput(cloneEvents);
+      if (cloneExit !== 0) throw new Error(`Clone failed: ${cloneOut.slice(0, 500)}`);
+
+      // Configure git identity
+      const gitConfigEvents = await sandbox.exec(
+        `cd ${REPO_DIR} && git config user.name "render-factory[bot]" && git config user.email "bot@render-factory.dev"`,
+      );
+      await collectExecOutput(gitConfigEvents);
+
+      // Research
+      const ctx = sandboxContext(sandbox.id);
+      const researchBrief = await researchTask({
+        message: `${ctx}\n\n${spec.title}\n\n${spec.description}`,
+      });
+
+      // Plan (no sandbox tools needed — just reasoning)
+      const planRaw = await planTask({
+        message: `${spec.title}\n\n${spec.description}\n\nResearch brief:\n${researchBrief}`,
+      });
+
+      // Implement
+      const implResult = await implementTask({
+        message: `${ctx}\n\n${spec.title}\n\nApproved plan:\n${planRaw}`,
+      });
+
+      // Commit and push from sandbox
+      const pushEvents = await sandbox.exec(
+        `cd ${REPO_DIR} && git add -A && git diff --cached --quiet || git commit -m "Implement: ${spec.title}" && git push origin ${branch}`,
+      );
+      const { exitCode: pushExit, output: pushOut } = await collectExecOutput(pushEvents);
+      if (pushExit !== 0) throw new Error(`Push failed: ${pushOut.slice(0, 500)}`);
+
+      // Open PR
+      const pr = await gh.ensurePull(repo, {
+        title: spec.issueNumber ? `Fix #${spec.issueNumber}: ${spec.title}` : spec.title,
+        head: branch,
+        base: "main",
+        body: spec.issueNumber
+          ? `Automated implementation for #${spec.issueNumber}.\n\n${implResult}\n\nCloses #${spec.issueNumber}.`
+          : implResult,
+      });
+
+      if (isGitHubIssue && spec.issueNumber) {
+        await gh.createIssueComment(repo, spec.issueNumber, `Opened a pull request: ${pr.htmlUrl}`);
+        await gh.removeLabel(repo, spec.issueNumber, "factory:working");
+        await gh.addLabels(repo, spec.issueNumber, ["factory:done"]);
+      }
+
+      return { status: "pr_opened", pr: pr.htmlUrl, branch };
+    } finally {
+      await sandbox.terminate().catch(() => {});
+    }
   },
 );
