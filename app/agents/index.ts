@@ -7,7 +7,7 @@ import { Agent, md } from "../../sdk/index.js";
 export const assistant = Agent({
   id: "assistant",
   description: "Conversational assistant for interactive threads",
-  model: "small",
+  model: "medium",
   interactive: true,
   tools: ["Read", "Grep", "Glob", "TriggerWorkflow"],
   prompt: md`
