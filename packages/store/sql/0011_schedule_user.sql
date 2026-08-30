@@ -1,2 +1,0 @@
--- Schedule user_id already included in 0004 (consolidated).
--- This migration is now a no-op.

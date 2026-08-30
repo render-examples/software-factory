@@ -1,2 +1,0 @@
--- Deliver job exemption already handled in 0007 (consolidated).
--- This migration is now a no-op.

@@ -1,83 +1,40 @@
-# Render Blueprint for render-factory.
-#
-# Two pipelines, triggered by webhooks at POST /channels/github:
-#   spec-to-pr   (issues, issue_comment): triage -> Research/Plan/Implement -> PR
-#   pr-review    (pull_request): fan out 4 reviewers -> judge -> approve/request-changes
-#
-# The Workflow service must be created MANUALLY in the Dashboard
-# (Blueprints can't manage Workflows yet). See README.md.
-
-databases:
-  - name: render-factory-db
-    plan: basic-256mb
-
 services:
   - type: web
-    name: render-factory-gateway
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: pnpm --filter @render-factory/app start
-    plan: standard
-    healthCheckPath: /health
+    name: factory-gateway
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npx tsx app/src/server.ts
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: render-factory-db
+      - key: REDIS_URL
+        fromKeyValue:
+          name: factory-kv
           property: connectionString
-      - key: RENDER_FACTORY_API_KEY
-        generateValue: true
-      - key: RENDER_FACTORY_ENCRYPTION_KEY
-        generateValue: true
-      - key: RENDER_API_KEY
+      - key: RENDER_WORKFLOW_SLUG
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      - key: SLACK_BOT_TOKEN
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-      - key: GITHUB_TOKEN
-        sync: false
-      - key: GITHUB_BOT_LOGIN
-        sync: false
+
+  - type: worker
+    name: factory-workflows
+    runtime: node
+    plan: standard
+    buildCommand: npm install
+    startCommand: npx tsx app/src/workflows.ts
+    envVars:
+      - key: REDIS_URL
+        fromKeyValue:
+          name: factory-kv
+          property: connectionString
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: GIT_AUTHOR_NAME
-        value: render-agent
-      - key: GIT_AUTHOR_EMAIL
-        value: render-agent@users.noreply.github.com
+      - key: GITHUB_TOKEN
+        sync: false
 
-  - type: cron
-    name: render-factory-retention
-    runtime: node
+keyValues:
+  - name: factory-kv
     plan: starter
-    schedule: "0 4 * * *"
-    buildCommand: "true"
-    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/retention" -H "Authorization: Bearer $RENDER_FACTORY_API_KEY"'
-    envVars:
-      - key: GATEWAY_URL
-        fromService:
-          type: web
-          name: render-factory-gateway
-          property: hostport
-      - key: RENDER_FACTORY_API_KEY
-        fromService:
-          type: web
-          name: render-factory-gateway
-          envVarKey: RENDER_FACTORY_API_KEY
-
-  - type: cron
-    name: render-factory-reaper
-    runtime: node
-    plan: starter
-    schedule: "*/5 * * * *"
-    buildCommand: "true"
-    startCommand: 'curl -fsS -X POST "$GATEWAY_URL/admin/runs/reap" -H "Authorization: Bearer $RENDER_FACTORY_API_KEY"'
-    envVars:
-      - key: GATEWAY_URL
-        fromService:
-          type: web
-          name: render-factory-gateway
-          property: hostport
-      - key: RENDER_FACTORY_API_KEY
-        fromService:
-          type: web
-          name: render-factory-gateway
-          envVarKey: RENDER_FACTORY_API_KEY
