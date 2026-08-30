@@ -49,9 +49,9 @@ export class StaticModelResolver implements ModelResolver {
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_TIERS: TierMap = {
-  small: "claude-sonnet-4",
-  medium: "claude-sonnet-4-5",
-  large: "claude-opus-4",
+  small: "claude-haiku-4-5",
+  medium: "claude-sonnet-5",
+  large: "claude-opus-5",
 };
 
 export function createClaudeModelResolver(
