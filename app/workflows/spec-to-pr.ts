@@ -3,7 +3,7 @@ import { task } from "@renderinc/sdk/workflows";
 import { triageTask, researchTask, planTask, implementTask } from "../tasks/index.js";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../lib/github.js";
 import type { NormalizedGitHubEvent } from "../lib/github-events.js";
-import { RenderSandboxProvider, collectExecOutput } from "#factory-sdk";
+import { RenderSandboxProvider, collectExecOutput, resolveRefs } from "#factory-sdk";
 
 interface SpecInput {
   title: string;
@@ -62,7 +62,13 @@ export const specToPr = task(
     const normalized = normalizeInput(input);
     if ("skipped" in normalized) return { skipped: normalized.skipped };
 
-    const { spec, isGitHubIssue } = normalized;
+    const { isGitHubIssue } = normalized;
+    // The gateway blob-caps oversized issue bodies, so the description may be
+    // a `$blob:` ref. Resolve it before it reaches any agent prompt.
+    const spec: SpecInput = {
+      ...normalized.spec,
+      description: await resolveRefs(normalized.spec.description),
+    };
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("GITHUB_TOKEN is not set");
     const gh = githubFromEnv();

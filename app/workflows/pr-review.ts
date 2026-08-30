@@ -5,6 +5,7 @@ import { task } from "@renderinc/sdk/workflows";
 import { securityTask, performanceTask, correctnessTask, testsTask, lintTask, judgeTask } from "../tasks/index.js";
 import { githubFromEnv, type PullFile, type ReviewComment } from "../lib/github.js";
 import type { NormalizedGitHubEvent } from "../lib/github-events.js";
+import { resolveRefs } from "#factory-sdk";
 
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review"]);
 const MAX_DIFF_CHARS = 60_000;
@@ -34,6 +35,8 @@ export const prReview = task(
     const files = await gh.listPullFiles(repo, pull.number);
     if (files.length === 0) return { skipped: "no files changed" };
     const diff = renderDiff(files);
+    // The gateway blob-caps oversized PR bodies; resolve before prompting.
+    const pullBody = await resolveRefs(pull.body);
 
     const [secRaw, perfRaw, corrRaw, testsRaw, lintRaw] = await Promise.all([
       securityTask({ message: diff }),
@@ -52,7 +55,7 @@ export const prReview = task(
     ].join("\n\n");
 
     const judgeRaw = await judgeTask({
-      message: `Pull request #${pull.number}: ${pull.title}\n\n${pull.body}\n\nSpecialist reviews:\n\n${combined}\n\nDiff:\n\n${diff}`,
+      message: `Pull request #${pull.number}: ${pull.title}\n\n${pullBody}\n\nSpecialist reviews:\n\n${combined}\n\nDiff:\n\n${diff}`,
     });
 
     let decision: "approve" | "request_changes" = "request_changes";

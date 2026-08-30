@@ -4,6 +4,7 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appendMessage, getOrCreateThread } from "#factory-sdk";
+import { dispatchWorkflowTask } from "./dispatch.js";
 
 interface SlackEnvelope {
   type?: string;
@@ -75,18 +76,14 @@ export function slackHandler(): Hono {
     await getOrCreateThread(threadId, { channel, slackUser: ev.user ?? "" });
     await appendMessage(threadId, "user", text);
 
-    const slug = process.env.RENDER_WORKFLOW_SLUG;
-    if (slug) {
-      try {
-        const { Render } = await import("@renderinc/sdk");
-        const client = new Render();
-        await client.workflows.startTask(`${slug}/slack-assistant`, [
-          { message: text, threadId, slackChannel: channel, slackThreadTs: threadTs },
-        ]);
-      } catch (err) {
-        console.error("Failed to dispatch slack-assistant task:", err);
-      }
-    }
+    // Slack always gets a 200 — dispatch failures are logged by the
+    // dispatcher, never surfaced back to Slack (which would retry).
+    await dispatchWorkflowTask("slack-assistant", {
+      message: text,
+      threadId,
+      slackChannel: channel,
+      slackThreadTs: threadTs,
+    });
 
     return c.json({ ok: true });
   });
