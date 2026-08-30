@@ -2,11 +2,11 @@
 - [x] Sandboxes for remote execution
 - [x] Inter-step blob storage / ref injection for large artifacts, store in Redis
 - [x] Render API tools -> assistant (services, deploys, logs, metrics)
-- Hooks
-- Policies
-    - Tool Permissions
-    - Cost control
-- Object storage
-- LLM Gateway
-- Eval suite
-- Memories
+- [x] Hooks
+    - [x] Policies
+        - Tool Permissions
+        - Cost control
+- [ ] Object storage 
+- [ ] LLM Gateway
+- [ ] Eval suite
+- [ ] Memories

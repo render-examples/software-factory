@@ -34,6 +34,10 @@ export type {
 
 export type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
 
+// Hooks
+export { HookInterceptor } from "./hooks.js";
+export type { Hook, HookResult, HookContext } from "./hooks.js";
+
 // Model resolution
 export {
   StaticModelResolver,
