@@ -1,6 +1,6 @@
 /** Gateway — Hono server for webhooks, threads, and health. */
 import { Hono } from "hono";
-import { appendMessage, getOrCreateThread } from "../../sdk/threads.js";
+import { appendMessage, getOrCreateThread } from "#factory-sdk";
 import { slackHandler } from "./slack.js";
 import { githubHandler } from "./github.js";
 

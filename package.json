@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "imports": {
+    "#factory-sdk": "./sdk/index.ts",
+    "#factory-sdk/*": "./sdk/*.ts"
+  },
   "engines": { "node": ">=22" },
   "scripts": {
     "start:gateway": "tsx app/src/server.ts",

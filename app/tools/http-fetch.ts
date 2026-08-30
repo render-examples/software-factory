@@ -1,6 +1,6 @@
 /** HttpFetch — custom tool that lets agents make HTTP requests. */
 import { z } from "zod";
-import type { Tool, ToolSource, ToolResult, ToolContext, InferShape } from "../../sdk/tools.js";
+import type { Tool, ToolSource, ToolResult, ToolContext, InferShape } from "#factory-sdk";
 
 const MAX_BODY = 50_000;
 

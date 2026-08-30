@@ -1,4 +1,4 @@
-import { Agent, md } from "../../sdk/index.js";
+import { Agent, md } from "#factory-sdk";
 
 // ---------------------------------------------------------------------------
 // Conversational

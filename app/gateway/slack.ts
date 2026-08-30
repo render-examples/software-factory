@@ -3,7 +3,7 @@
  */
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { appendMessage, getOrCreateThread } from "../../sdk/threads.js";
+import { appendMessage, getOrCreateThread } from "#factory-sdk";
 
 interface SlackEnvelope {
   type?: string;
