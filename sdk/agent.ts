@@ -97,9 +97,13 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       if (agent.spec.interactive && input.threadId) {
         const thread = await getThread(input.threadId);
         if (thread) {
-          for (const msg of thread.messages.slice(-20)) {
-            history.push(`${msg.role}: ${msg.content}`);
-          }
+          // Stored messages may be `$blob:` refs (see appendMessage), so
+          // resolve each one before replaying it as conversation history.
+          const recent = thread.messages.slice(-20);
+          const contents = await Promise.all(
+            recent.map((msg) => resolveRefs(msg.content)),
+          );
+          recent.forEach((msg, i) => history.push(`${msg.role}: ${contents[i]}`));
         }
       }
 

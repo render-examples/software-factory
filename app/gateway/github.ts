@@ -4,6 +4,7 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { normalizeGitHubEvent } from "../lib/github-events.js";
+import { dispatchWorkflowTask } from "./dispatch.js";
 
 function verifyGitHubSignature(rawBody: string, headers: Headers): boolean {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
@@ -47,20 +48,12 @@ export function githubHandler(): Hono {
       taskName = "spec-to-pr";
     }
 
-    const slug = process.env.RENDER_WORKFLOW_SLUG;
-    if (slug) {
-      try {
-        const { Render } = await import("@renderinc/sdk");
-        const client = new Render();
-        await client.workflows.startTask(`${slug}/${taskName}`, [normalized]);
-        return c.json({ dispatched: taskName }, 202);
-      } catch (err) {
-        console.error(`Failed to dispatch ${taskName}:`, err);
-        return c.json({ error: "dispatch failed" }, 502);
-      }
+    const result = await dispatchWorkflowTask(taskName, normalized);
+    if (result.ok) return c.json({ dispatched: taskName }, 202);
+    if (result.reason === "no-slug") {
+      return c.json({ error: "RENDER_WORKFLOW_SLUG not set" }, 503);
     }
-
-    return c.json({ error: "RENDER_WORKFLOW_SLUG not set" }, 503);
+    return c.json({ error: "dispatch failed" }, 502);
   });
 
   return app;
