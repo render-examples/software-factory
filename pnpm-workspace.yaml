@@ -1,6 +1,0 @@
-packages:
-  - "packages/*"
-  - "packages/sandbox/*"
-  - "app"
-allowBuilds:
-  esbuild: true

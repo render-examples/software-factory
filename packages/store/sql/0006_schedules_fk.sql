@@ -1,2 +1,0 @@
--- Schedules: last_run_id FK already has ON DELETE SET NULL in 0004.
--- This migration is now a no-op (the FK was consolidated into 0004).
