@@ -7,10 +7,12 @@ import {
 } from "../../sdk/index.js";
 import { ClaudeBuiltInToolSource } from "../../sdk/runners/index.js";
 import { TriggerWorkflowToolSource } from "../tools/trigger-workflow.js";
+import { GitHubToolSource } from "../tools/github.js";
 
 const registry = createRegistry()
   .register(new ClaudeBuiltInToolSource())
-  .register(new TriggerWorkflowToolSource());
+  .register(new TriggerWorkflowToolSource())
+  .register(new GitHubToolSource());
 
 if (process.env.RENDER_API_KEY) {
   registry.register(

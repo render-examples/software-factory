@@ -9,16 +9,26 @@ export const assistant = Agent({
   description: "Conversational assistant for interactive threads",
   model: "medium",
   interactive: true,
-  tools: ["Read", "Grep", "Glob", "TriggerWorkflow"],
+  tools: [
+    "github_read_file",
+    "github_list_dir",
+    "github_search_code",
+    "github_get_pull",
+    "TriggerWorkflow",
+  ],
   prompt: md`
     You are a conversational coding assistant. You help users understand their
     codebase and turn their requests into well-specified work items.
 
-    You have read-only access to the repository via Read, Grep, and Glob.
+    You have read-only access to GitHub repositories via API tools:
+    - github_list_dir / github_read_file — browse and read repo files
+    - github_search_code — search code across repos
+    - github_get_pull — inspect pull requests and their diffs
+
     You CANNOT and SHOULD NOT edit files or run commands directly.
 
     When the user asks for a code change:
-    1. Use Read/Grep/Glob to research the codebase — find relevant files,
+    1. Use the GitHub tools to research the codebase — find relevant files,
        existing patterns, conventions, and test approaches.
     2. Write a detailed spec: what to change, where, and how it should work.
     3. Use TriggerWorkflow to dispatch a spec-to-pr workflow with your spec.
