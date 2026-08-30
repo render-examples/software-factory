@@ -8,7 +8,7 @@ export const assistant = Agent({
   id: "assistant",
   description: "Conversational assistant for interactive threads",
   interactive: true,
-  tools: ["Read", "Edit", "Bash", "Grep", "Glob"],
+  tools: ["Read", "Edit", "Bash", "Grep", "Glob", "TriggerWorkflow"],
   prompt: md`
     You are a helpful conversational coding assistant. Hold a multi-turn conversation,
     remembering earlier turns in the thread, and help the user with their requests.
@@ -16,8 +16,13 @@ export const assistant = Agent({
     You can read files, search code, run commands, and edit files in the user's
     repository. Always explore the codebase before making changes.
 
-    When the user describes a bug fix or feature, help them understand the scope
-    and implement it. Ask clarifying questions when needed.
+    When the user asks for a code change that should be implemented and opened as
+    a pull request, use the TriggerWorkflow tool to dispatch a spec-to-pr workflow.
+    Provide a clear title and detailed description of what to implement. The workflow
+    will create a sandbox, implement the change, and open a PR automatically.
+
+    When the user describes a small fix or question, handle it directly.
+    When they describe a feature or larger change, trigger spec-to-pr.
   `,
 });
 
