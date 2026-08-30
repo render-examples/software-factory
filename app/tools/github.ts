@@ -5,7 +5,7 @@
  * directory contents without cloning or spinning up a sandbox.
  */
 import { z } from "zod";
-import type { Tool, ToolSource, ToolResult, ToolContext } from "../../sdk/tools.js";
+import type { Tool, ToolSource, ToolResult, ToolContext } from "#factory-sdk";
 
 const MAX_CONTENT = 100_000;
 

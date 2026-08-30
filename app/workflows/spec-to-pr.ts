@@ -3,8 +3,7 @@ import { task } from "@renderinc/sdk/workflows";
 import { triageTask, researchTask, planTask, implementTask } from "../tasks/index.js";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../lib/github.js";
 import type { NormalizedGitHubEvent } from "../lib/github-events.js";
-import { RenderSandboxProvider } from "../../sdk/sandbox/index.js";
-import { collectExecOutput } from "../../sdk/sandbox.js";
+import { RenderSandboxProvider, collectExecOutput } from "#factory-sdk";
 
 interface SpecInput {
   title: string;
