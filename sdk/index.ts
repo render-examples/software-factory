@@ -29,3 +29,28 @@ export type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
 
 // Runner implementations
 export { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
+
+// Sandbox system (SDK-agnostic interfaces)
+export {
+  BaseSandbox,
+  collectExecOutput,
+  shellEscape,
+} from "./sandbox.js";
+export type {
+  Sandbox,
+  SandboxProvider,
+  SandboxExecEvent,
+  SandboxExecOptions,
+  SandboxStatus,
+  SandboxDownload,
+  SandboxUploadData,
+  SandboxUploadOptions,
+  CreateSandboxOptions,
+} from "./sandbox.js";
+
+export { createSandboxToolSource } from "./sandbox-tool-source.js";
+export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";
+
+// Sandbox provider implementations
+export { RenderSandboxProvider } from "./sandbox/index.js";
+export type { RenderSandboxProviderOptions } from "./sandbox/index.js";

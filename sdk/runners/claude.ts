@@ -73,9 +73,16 @@ export class ClaudeRunner implements AgentRunner {
       ? abortControllerFromSignal(ctx.signal)
       : undefined;
 
+    // Auto-allow both built-in tools and MCP-bridged custom tools.
+    // MCP tools are namespaced as mcp__<server>__<tool> by the SDK.
+    const mcpToolNames = customTools.map(
+      (t) => `mcp__${MCP_SERVER_NAME}__${t.name}`,
+    );
+    const allAllowed = [...builtInNames, ...mcpToolNames];
+
     const options: Options = {
       systemPrompt: ctx.systemPrompt,
-      allowedTools: builtInNames.length > 0 ? builtInNames : undefined,
+      allowedTools: allAllowed.length > 0 ? allAllowed : undefined,
       maxTurns: ctx.maxTurns,
     };
 
