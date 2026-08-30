@@ -1,6 +1,7 @@
 - [x] Pluggable agent harness (Claude Agent SDK first)
 - [x] Sandboxes for remote execution
 - [x] Inter-step blob storage / ref injection for large artifacts, store in Redis
+- [x] Render API tools -> assistant (services, deploys, logs, metrics)
 - Hooks
 - Policies
     - Tool Permissions

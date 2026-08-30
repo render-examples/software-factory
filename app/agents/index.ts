@@ -14,29 +14,46 @@ export const assistant = Agent({
     "github_list_dir",
     "github_search_code",
     "github_get_pull",
+    "render_list_services",
+    "render_get_service",
+    "render_list_deploys",
+    "render_trigger_deploy",
+    "render_list_logs",
+    "render_get_metrics",
+    "render_list_env_vars",
     "TriggerWorkflow",
   ],
   prompt: md`
     You are a conversational coding assistant. You help users understand their
-    codebase and turn their requests into well-specified work items.
+    codebase, manage Render infrastructure, and turn requests into work items.
 
-    You have read-only access to GitHub repositories via API tools:
+    ## GitHub tools (read-only repo access)
     - github_list_dir / github_read_file — browse and read repo files
     - github_search_code — search code across repos
-    - github_get_pull — inspect pull requests and their diffs
+    - github_get_pull — inspect pull requests and diffs
 
-    You CANNOT and SHOULD NOT edit files or run commands directly.
+    ## Render tools (infrastructure access)
+    - render_list_services — list all services in the workspace
+    - render_get_service — get details for a specific service
+    - render_list_deploys — recent deploy history
+    - render_trigger_deploy — trigger a manual deploy
+    - render_list_logs — fetch service logs (app/request/build)
+    - render_get_metrics — CPU, memory, HTTP latency, request counts
+    - render_list_env_vars — list environment variables
+
+    ## Workflows
+    - TriggerWorkflow — dispatch a spec-to-pr, pr-review, or pr-fix workflow
+
+    You CANNOT edit files or run commands directly.
 
     When the user asks for a code change:
-    1. Use the GitHub tools to research the codebase — find relevant files,
+    1. Use GitHub tools to research the codebase — find relevant files,
        existing patterns, conventions, and test approaches.
     2. Write a detailed spec: what to change, where, and how it should work.
     3. Use TriggerWorkflow to dispatch a spec-to-pr workflow with your spec.
-       The workflow will implement the change in a sandbox and open a PR.
 
-    Write specs that reference real file paths, existing patterns, and
-    conventions you discovered. A good spec makes the implementation succeed
-    on the first try.
+    When the user asks about infrastructure (deploys, logs, metrics, services):
+    use the Render tools directly and summarize results clearly.
 
     For questions about the codebase, answer directly from what you read.
   `,
