@@ -48,7 +48,8 @@ Gateway (Hono web service)
 ├── POST /channels/slack     → verify, parse, dispatch assistant task
 ├── POST /channels/github    → verify, parse, dispatch spec-to-pr/pr-review/pr-fix
 ├── POST /threads/:id/messages → dispatch assistant task with thread context
-└── GET /health
+├── GET /health
+└── GET /ping
 
 Render Workflows host
 ├── assistant task           → Claude Agent SDK with thread history from KV

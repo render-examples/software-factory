@@ -12,6 +12,10 @@ export function createApp(): Hono {
 
   app.get("/health", (c) => c.json({ status: "ok" }));
 
+  app.get("/ping", (c) =>
+    c.json({ pong: true, timestamp: new Date().toISOString() }),
+  );
+
   app.post("/threads/:id/messages", async (c) => {
     const threadId = c.req.param("id");
     const body = await c.req.json<{ content: string; userId?: string }>();
