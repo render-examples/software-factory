@@ -21,3 +21,6 @@ services:
   - type: keyvalue
     name: render-factory-kv
     plan: starter
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
