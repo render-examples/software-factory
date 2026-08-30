@@ -9,6 +9,7 @@ import { resolveRefs, maybePutBlob } from "./blobs.js";
 import { createRegistry, type ToolRegistry } from "./tools.js";
 import { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
+import { HookInterceptor, type Hook } from "./hooks.js";
 
 export interface AgentSpec {
   readonly id: string;
@@ -56,10 +57,12 @@ export interface AgentTaskInput {
 export interface AgentTaskOptions {
   runner?: AgentRunner;
   registry?: ToolRegistry;
+  hooks?: Hook[];
 }
 
 let _defaultRunner: AgentRunner | undefined;
 let _defaultRegistry: ToolRegistry | undefined;
+let _defaultHooks: Hook[] = [];
 
 function defaultRunner(): AgentRunner {
   _defaultRunner ??= new ClaudeRunner();
@@ -71,10 +74,11 @@ function defaultRegistry(): ToolRegistry {
   return _defaultRegistry;
 }
 
-/** Override the default runner and/or registry. Call once at startup. */
+/** Override the default runner, registry, and/or hooks. Call once at startup. */
 export function configure(opts: AgentTaskOptions): void {
   if (opts.runner) _defaultRunner = opts.runner;
   if (opts.registry) _defaultRegistry = opts.registry;
+  if (opts.hooks) _defaultHooks = opts.hooks;
 }
 
 export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
@@ -83,6 +87,8 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
     async function run(input: AgentTaskInput): Promise<string> {
       const runner = opts?.runner ?? defaultRunner();
       const registry = opts?.registry ?? defaultRegistry();
+      const hooks = opts?.hooks ?? _defaultHooks;
+      const interceptor = new HookInterceptor(hooks);
       const runId = randomUUID().slice(0, 8);
 
       const message = await resolveRefs(input.message);
@@ -105,6 +111,7 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       const toolNames = agent.spec.tools ?? [];
       const tools = await registry.resolve(toolNames);
 
+      const hookCtx = { runId, agentId: agent.id };
       let result = "";
       for await (const event of runner.run({
         agentId: agent.id,
@@ -114,8 +121,11 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
         maxTurns: agent.spec.budget?.maxIterations,
         model: agent.spec.model,
       })) {
-        if (event.type === "result") {
-          result = event.result;
+        const hookResult = await interceptor.intercept(event, hookCtx);
+        if (hookResult.action === "reject") continue;
+        const finalEvent = hookResult.event ?? event;
+        if (finalEvent.type === "result") {
+          result = finalEvent.result;
         }
       }
 

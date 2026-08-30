@@ -9,6 +9,9 @@ import {
 import { TriggerWorkflowToolSource } from "../tools/trigger-workflow.js";
 import { GitHubToolSource } from "../tools/github.js";
 import { RenderToolSource } from "../tools/render.js";
+import { auditHook } from "../hooks/audit.js";
+import { blockDestructiveHook } from "../hooks/block-destructive.js";
+import { redactSecretsHook } from "../hooks/redact-secrets.js";
 
 const registry = createRegistry()
   .register(new ClaudeBuiltInToolSource())
@@ -24,7 +27,10 @@ if (process.env.RENDER_API_KEY) {
   console.log("sandbox + render tools skipped (no RENDER_API_KEY)");
 }
 
-configure({ registry });
+configure({
+  registry,
+  hooks: [auditHook, blockDestructiveHook, redactSecretsHook],
+});
 
 import "../tasks/index.js";
 import "../workflows/spec-to-pr.js";
