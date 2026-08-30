@@ -109,7 +109,7 @@ export const specToPr = task(
       : `agent/spec-${Date.now()}`;
 
     try {
-      const cloneUrl = `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
+      const cloneUrl = `https://oauth2:${token}@github.com/${repo.owner}/${repo.repo}.git`;
       const cloneEvents = await sandbox.exec(
         `git clone --depth=50 ${cloneUrl} ${REPO_DIR} && cd ${REPO_DIR} && git checkout -b ${branch}`,
       );

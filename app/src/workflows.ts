@@ -8,6 +8,7 @@ import {
 } from "#factory-sdk";
 import { TriggerWorkflowToolSource } from "../tools/trigger-workflow.js";
 import { GitHubToolSource } from "../tools/github.js";
+import { RenderToolSource } from "../tools/render.js";
 
 const registry = createRegistry()
   .register(new ClaudeBuiltInToolSource())
@@ -15,14 +16,12 @@ const registry = createRegistry()
   .register(new GitHubToolSource());
 
 if (process.env.RENDER_API_KEY) {
-  registry.register(
-    createSandboxToolSource({
-      provider: new RenderSandboxProvider(),
-    }),
-  );
-  console.log("sandbox tools registered (RENDER_API_KEY present)");
+  registry
+    .register(createSandboxToolSource({ provider: new RenderSandboxProvider() }))
+    .register(new RenderToolSource());
+  console.log("sandbox + render tools registered (RENDER_API_KEY present)");
 } else {
-  console.log("sandbox tools skipped (no RENDER_API_KEY)");
+  console.log("sandbox + render tools skipped (no RENDER_API_KEY)");
 }
 
 configure({ registry });
