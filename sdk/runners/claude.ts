@@ -17,6 +17,10 @@ import {
   type BuiltInTool,
   type ToolSource,
 } from "../tools.js";
+import {
+  createClaudeModelResolver,
+  type ModelResolver,
+} from "../models.js";
 
 const CLAUDE_BUILTIN_NAMES = new Set([
   "Read",
@@ -42,6 +46,12 @@ export class ClaudeBuiltInToolSource implements ToolSource {
 const MCP_SERVER_NAME = "factory-tools";
 
 export class ClaudeRunner implements AgentRunner {
+  private readonly modelResolver: ModelResolver;
+
+  constructor(opts?: { modelResolver?: ModelResolver }) {
+    this.modelResolver = opts?.modelResolver ?? createClaudeModelResolver();
+  }
+
   async *run(ctx: RunContext): AsyncIterable<AgentEvent> {
     const builtInNames: string[] = [];
     const customTools: Tool[] = [];
@@ -69,6 +79,11 @@ export class ClaudeRunner implements AgentRunner {
       allowedTools: allAllowed.length > 0 ? allAllowed : undefined,
       maxTurns: ctx.maxTurns,
     };
+
+    if (ctx.model) {
+      const resolved = this.modelResolver.resolve(ctx.model);
+      options.model = resolved.model;
+    }
 
     if (abortController) {
       options.abortController = abortController;

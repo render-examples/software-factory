@@ -1,8 +1,13 @@
 import { Agent, md } from "../../sdk/index.js";
 
+// ---------------------------------------------------------------------------
+// Conversational
+// ---------------------------------------------------------------------------
+
 export const assistant = Agent({
   id: "assistant",
   description: "Conversational assistant for interactive threads",
+  model: "small",
   interactive: true,
   tools: ["Read", "Grep", "Glob", "TriggerWorkflow"],
   prompt: md`
@@ -27,9 +32,14 @@ export const assistant = Agent({
   `,
 });
 
+// ---------------------------------------------------------------------------
+// Triage
+// ---------------------------------------------------------------------------
+
 export const triage = Agent({
   id: "triage",
   description: "Decides whether a new issue has enough detail to implement",
+  model: "small",
   tools: ["Read"],
   prompt: md`
     You triage incoming GitHub issues. Decide whether there is enough concrete
@@ -39,9 +49,14 @@ export const triage = Agent({
   `,
 });
 
+// ---------------------------------------------------------------------------
+// Spec-to-PR pipeline
+// ---------------------------------------------------------------------------
+
 export const researcher = Agent({
   id: "researcher",
   description: "Explores the repository to understand how to implement an issue",
+  model: "medium",
   tools: [
     "sandbox__exec",
     "sandbox__read_file",
@@ -63,6 +78,7 @@ export const researcher = Agent({
 export const planner = Agent({
   id: "planner",
   description: "Turns research into a concrete implementation plan",
+  model: "medium",
   tools: ["Read", "Grep"],
   plan: "standard",
   prompt: md`
@@ -75,6 +91,7 @@ export const planner = Agent({
 export const implementer = Agent({
   id: "implementer",
   description: "Implements the plan, edits files, and runs tests",
+  model: "large",
   tools: [
     "sandbox__exec",
     "sandbox__read_file",
@@ -95,9 +112,14 @@ export const implementer = Agent({
   `,
 });
 
+// ---------------------------------------------------------------------------
+// PR review pipeline
+// ---------------------------------------------------------------------------
+
 export const security = Agent({
   id: "security",
   description: "Reviews a diff for security vulnerabilities",
+  model: "small",
   tools: ["Read"],
   plan: "standard",
   prompt: md`
@@ -109,6 +131,7 @@ export const security = Agent({
 export const performance = Agent({
   id: "performance",
   description: "Reviews a diff for performance issues",
+  model: "small",
   tools: ["Read"],
   prompt: md`
     You are a performance reviewer. Flag N+1 queries, unbounded loops,
@@ -119,6 +142,7 @@ export const performance = Agent({
 export const correctness = Agent({
   id: "correctness",
   description: "Reviews a diff for correctness and logic bugs",
+  model: "medium",
   tools: ["Read"],
   plan: "standard",
   prompt: md`
@@ -130,6 +154,7 @@ export const correctness = Agent({
 export const tests = Agent({
   id: "tests",
   description: "Reviews a diff for test coverage and quality",
+  model: "small",
   tools: ["Read"],
   plan: "standard",
   prompt: md`
@@ -141,6 +166,7 @@ export const tests = Agent({
 export const lint = Agent({
   id: "lint",
   description: "Runs the project linter and reports findings",
+  model: "small",
   tools: ["Read", "Bash"],
   plan: "standard",
   budget: { maxIterations: 15 },
@@ -152,6 +178,7 @@ export const lint = Agent({
 export const judge = Agent({
   id: "judge",
   description: "Makes the final approve/reject decision on a PR",
+  model: "medium",
   tools: ["Read"],
   prompt: md`
     You are the lead reviewer. Given specialist reviews of a PR diff, make the

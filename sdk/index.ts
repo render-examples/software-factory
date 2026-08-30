@@ -34,6 +34,14 @@ export type {
 
 export type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
 
+// Model resolution
+export {
+  StaticModelResolver,
+  createClaudeModelResolver,
+  CLAUDE_TIERS,
+} from "./models.js";
+export type { ModelTier, ModelResolver, ResolvedModel, TierMap } from "./models.js";
+
 export { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
 
 export {
