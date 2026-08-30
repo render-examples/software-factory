@@ -1,30 +1,17 @@
 /**
- * SandboxToolSource — exposes sandbox operations as agent tools.
- *
- * 6 tools prefixed with "sandbox__": exec, read_file, write_file, list_dir,
- * apply_patch, search. Each takes a sandbox_id parameter so agents can target
- * specific sandboxes.
- *
- * The tool source caches connections by sandbox_id. It does NOT own lifecycle
- * — workflows create and terminate sandboxes.
+ * SandboxToolSource — exposes sandbox operations as agent tools (sandbox__*).
+ * Each tool takes a sandbox_id so agents can target specific sandboxes.
+ * Caches connections by sandbox_id. Workflows own sandbox lifecycle.
  */
 import { z } from "zod";
 import type { Tool, ToolSource, ToolResult, ToolContext } from "./tools.js";
 import type { Sandbox, SandboxProvider } from "./sandbox.js";
 import { collectExecOutput, shellEscape } from "./sandbox.js";
 
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
-
 export interface SandboxToolSourceOptions {
   provider: SandboxProvider;
   id?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_CHARS = 50_000;
 
@@ -66,20 +53,12 @@ export function createSandboxToolSource(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Shared
-// ---------------------------------------------------------------------------
-
 type Resolver = (sandboxId: string) => Promise<Sandbox>;
 
 let patchCounter = 0;
 function uniquePatchPath(): string {
   return `/tmp/.render-agent-${Date.now()}-${++patchCounter}.patch`;
 }
-
-// ---------------------------------------------------------------------------
-// Tool: exec
-// ---------------------------------------------------------------------------
 
 const execSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),
@@ -111,10 +90,6 @@ function buildExecTool(resolve: Resolver): Tool<typeof execSchema> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tool: read_file
-// ---------------------------------------------------------------------------
-
 const readFileSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),
   path: z.string().describe("File path within the sandbox."),
@@ -132,10 +107,6 @@ function buildReadFileTool(resolve: Resolver): Tool<typeof readFileSchema> {
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tool: write_file
-// ---------------------------------------------------------------------------
 
 const writeFileSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),
@@ -159,10 +130,6 @@ function buildWriteFileTool(resolve: Resolver): Tool<typeof writeFileSchema> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tool: list_dir
-// ---------------------------------------------------------------------------
-
 const listDirSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),
   path: z
@@ -184,10 +151,6 @@ function buildListDirTool(resolve: Resolver): Tool<typeof listDirSchema> {
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tool: apply_patch
-// ---------------------------------------------------------------------------
 
 const applyPatchSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),
@@ -228,10 +191,6 @@ function buildApplyPatchTool(
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tool: search
-// ---------------------------------------------------------------------------
 
 const searchSchema = {
   sandbox_id: z.string().describe("Target sandbox ID."),

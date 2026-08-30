@@ -1,7 +1,4 @@
-/**
- * Shared Redis client — single connection reused by threads, blobs, and
- * any future KV-backed module.
- */
+/** Shared Redis client reused by threads and blobs. */
 import { createClient, type RedisClientType } from "redis";
 
 let _client: RedisClientType | undefined;

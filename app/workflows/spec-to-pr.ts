@@ -1,9 +1,4 @@
-/**
- * spec-to-pr — Triage → research → plan → implement → PR.
- *
- * Creates a Render Sandbox for the research and implementation phases.
- * The sandbox gets the repo cloned into it; agents operate via sandbox__* tools.
- */
+/** spec-to-pr — Triage → research → plan → implement → PR via Render Sandbox. */
 import { task } from "@renderinc/sdk/workflows";
 import { triageTask, researchTask, planTask, implementTask } from "../tasks/index.js";
 import { githubFromEnv, type Issue, type IssueComment, type RepoRef } from "../lib/github.js";
@@ -74,7 +69,7 @@ export const specToPr = task(
     const gh = githubFromEnv();
     const repo: RepoRef = spec.repo;
 
-    // --- Triage (no sandbox needed) ---
+    // --- Triage ---
     if (isGitHubIssue && spec.issueNumber) {
       const issue = await gh.getIssue(repo, spec.issueNumber);
       const comments = await gh.listIssueComments(repo, spec.issueNumber);
@@ -100,7 +95,7 @@ export const specToPr = task(
       await gh.addLabels(repo, spec.issueNumber, ["factory:working"]);
     }
 
-    // --- Sandbox lifecycle: research → plan → implement ---
+    // --- Sandbox: research → plan → implement ---
     const provider = new RenderSandboxProvider();
     const sandbox = await provider.create({
       metadata: {
@@ -115,7 +110,6 @@ export const specToPr = task(
       : `agent/spec-${Date.now()}`;
 
     try {
-      // Clone repo into sandbox
       const cloneUrl = `https://x-access-token:${token}@github.com/${repo.owner}/${repo.repo}.git`;
       const cloneEvents = await sandbox.exec(
         `git clone --depth=50 ${cloneUrl} ${REPO_DIR} && cd ${REPO_DIR} && git checkout -b ${branch}`,
@@ -123,36 +117,30 @@ export const specToPr = task(
       const { exitCode: cloneExit, output: cloneOut } = await collectExecOutput(cloneEvents);
       if (cloneExit !== 0) throw new Error(`Clone failed: ${cloneOut.slice(0, 500)}`);
 
-      // Configure git identity
       const gitConfigEvents = await sandbox.exec(
         `cd ${REPO_DIR} && git config user.name "render-factory[bot]" && git config user.email "bot@render-factory.dev"`,
       );
       await collectExecOutput(gitConfigEvents);
 
-      // Research
       const ctx = sandboxContext(sandbox.id);
       const researchBrief = await researchTask({
         message: `${ctx}\n\n${spec.title}\n\n${spec.description}`,
       });
 
-      // Plan (no sandbox tools needed — just reasoning)
       const planRaw = await planTask({
         message: `${spec.title}\n\n${spec.description}\n\nResearch brief:\n${researchBrief}`,
       });
 
-      // Implement
       const implResult = await implementTask({
         message: `${ctx}\n\n${spec.title}\n\nApproved plan:\n${planRaw}`,
       });
 
-      // Commit and push from sandbox
       const pushEvents = await sandbox.exec(
         `cd ${REPO_DIR} && git add -A && git diff --cached --quiet || git commit -m "Implement: ${spec.title}" && git push origin ${branch}`,
       );
       const { exitCode: pushExit, output: pushOut } = await collectExecOutput(pushEvents);
       if (pushExit !== 0) throw new Error(`Push failed: ${pushOut.slice(0, 500)}`);
 
-      // Open PR
       const pr = await gh.ensurePull(repo, {
         title: spec.issueNumber ? `Fix #${spec.issueNumber}: ${spec.title}` : spec.title,
         head: branch,

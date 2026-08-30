@@ -1,10 +1,4 @@
-/**
- * TriggerWorkflow — lets agents dispatch workflow tasks (spec-to-pr, pr-review, etc.).
- *
- * Uses the Render SDK client to start a task on the local dev server or
- * production Render Workflows. The assistant can use this to escalate
- * conversational requests into code change workflows.
- */
+/** TriggerWorkflow — lets agents dispatch workflow tasks via Render SDK. */
 import { z } from "zod";
 import type { Tool, ToolSource, ToolResult, ToolContext } from "../../sdk/tools.js";
 

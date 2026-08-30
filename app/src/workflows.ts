@@ -1,8 +1,4 @@
-/**
- * Render Workflows entrypoint — configures the tool registry with sandbox
- * support (when credentials are available), then imports all tasks and
- * workflows to register them.
- */
+/** Render Workflows entrypoint — tool registry setup + task/workflow imports. */
 import {
   configure,
   createRegistry,
@@ -29,10 +25,7 @@ if (process.env.RENDER_API_KEY) {
 
 configure({ registry });
 
-// Agent tasks
 import "../tasks/index.js";
-
-// Composition workflows
 import "../workflows/spec-to-pr.js";
 import "../workflows/pr-review.js";
 import "../workflows/pr-fix.js";

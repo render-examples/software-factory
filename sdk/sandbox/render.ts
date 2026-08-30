@@ -1,8 +1,6 @@
 /**
- * RenderSandboxProvider — Render Sandboxes (alpha) as a SandboxProvider.
- *
- * All @renderinc/sdk imports are isolated here. Uses the experimental
- * sandboxes API to create, exec, upload, download, and terminate sandboxes.
+ * RenderSandboxProvider — Render Sandboxes as a SandboxProvider.
+ * All @renderinc/sdk imports are isolated here.
  */
 import { Render } from "@renderinc/sdk";
 import {
@@ -19,24 +17,14 @@ import {
   type CreateSandboxOptions,
 } from "../sandbox.js";
 
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
-
 export interface RenderSandboxProviderOptions {
-  /** Render API token. Defaults to RENDER_API_KEY env var. */
   token?: string;
-  /** Workspace/owner ID (tea-…). Defaults to RENDER_WORKSPACE_ID env var. */
   ownerId?: `tea-${string}`;
-  /** Max time to wait for sandbox readiness, in ms. Default 120_000. */
+  /** Max wait for sandbox readiness (ms). Default 120_000. */
   readyTimeoutMs?: number;
-  /** Polling interval while waiting, in ms. Default 1500. */
+  /** Polling interval (ms). Default 1_500. */
   pollIntervalMs?: number;
 }
-
-// ---------------------------------------------------------------------------
-// Status mapping
-// ---------------------------------------------------------------------------
 
 const STATUS_MAP: Record<string, SandboxStatus> = {
   pending: "pending",
@@ -44,10 +32,6 @@ const STATUS_MAP: Record<string, SandboxStatus> = {
   errored: "errored",
   terminated: "terminated",
 };
-
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
 
 type SandboxesClient = InstanceType<typeof Render>["experimental"]["sandboxes"];
 
@@ -112,10 +96,6 @@ export class RenderSandboxProvider implements SandboxProvider {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// Sandbox instance
-// ---------------------------------------------------------------------------
 
 class RenderSandbox extends BaseSandbox {
   constructor(
@@ -198,10 +178,6 @@ class RenderSandbox extends BaseSandbox {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));

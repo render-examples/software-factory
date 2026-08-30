@@ -1,26 +1,15 @@
 /**
  * Sandbox — provider-agnostic interfaces for isolated execution environments.
- *
- * Sandboxes give agents a remote filesystem and shell. Workflows own the
- * lifecycle (create/terminate); agents consume via sandbox__* tools.
- *
- * No SDK imports — provider implementations live in sdk/sandbox/.
+ * Workflows own lifecycle (create/terminate); agents use sandbox__* tools.
+ * Provider implementations live in sdk/sandbox/.
  */
 import type { Readable } from "node:stream";
-
-// ---------------------------------------------------------------------------
-// Event / status types
-// ---------------------------------------------------------------------------
 
 export type SandboxExecEvent =
   | { type: "output"; stream: "stdout" | "stderr"; data: string }
   | { type: "exit"; exitCode: number };
 
 export type SandboxStatus = "pending" | "running" | "errored" | "terminated";
-
-// ---------------------------------------------------------------------------
-// Options
-// ---------------------------------------------------------------------------
 
 export interface CreateSandboxOptions {
   timeoutSeconds?: number;
@@ -42,10 +31,6 @@ export interface SandboxDownload {
   size: number;
   contentType: string;
 }
-
-// ---------------------------------------------------------------------------
-// Sandbox — a live session with filesystem and shell access
-// ---------------------------------------------------------------------------
 
 export interface Sandbox {
   readonly id: string;
@@ -70,20 +55,13 @@ export interface Sandbox {
   listDir(path: string): Promise<string[]>;
 }
 
-// ---------------------------------------------------------------------------
-// SandboxProvider — factory for sandbox instances
-// ---------------------------------------------------------------------------
-
 export interface SandboxProvider {
   readonly name: string;
   create(opts?: CreateSandboxOptions): Promise<Sandbox>;
   connect(sandboxId: string): Promise<Sandbox>;
 }
 
-// ---------------------------------------------------------------------------
-// BaseSandbox — abstract base with file ops built on exec/upload/download
-// ---------------------------------------------------------------------------
-
+/** Abstract base with file ops built on exec/upload/download. */
 export abstract class BaseSandbox implements Sandbox {
   abstract readonly id: string;
 
@@ -137,16 +115,9 @@ export abstract class BaseSandbox implements Sandbox {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const MAX_COLLECT_CHARS = 1_000_000;
 
-/**
- * Collect exec output into a single string. Caps buffered output at 1MB
- * to prevent unbounded memory growth from long-running commands.
- */
+/** Collect exec output into a single string. Caps at 1 MB. */
 export async function collectExecOutput(
   events: AsyncGenerator<SandboxExecEvent>,
 ): Promise<{ output: string; exitCode: number }> {
