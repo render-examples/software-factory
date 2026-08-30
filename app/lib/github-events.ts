@@ -1,6 +1,4 @@
-// Normalized shapes for the GitHub webhook payloads the demo cares about. The
-// webhook adapter verifies + parses raw deliveries into these; both workflows
-// consume them as `ctx.input`.
+// Normalized GitHub webhook payloads consumed by workflow tasks.
 
 export interface RepoInfo {
   owner: string;
@@ -21,7 +19,7 @@ export interface NormalizedIssueEvent {
     labels: string[];
     user: string;
     htmlUrl: string;
-    /** GitHub models PR conversations as issues too; skip those here. */
+    /** True when the "issue" is actually a PR conversation. */
     isPullRequest: boolean;
   };
   comment?: { body: string; user: string };
@@ -51,7 +49,7 @@ export type NormalizedGitHubEvent =
   | NormalizedPullEvent
   | { kind: "skip"; event: string };
 
-// Loose views of the raw GitHub payload (only the fields we read).
+// Partial types for raw GitHub webhook payloads.
 interface RawRepo {
   name: string;
   owner: { login: string };

@@ -1,19 +1,14 @@
 /**
- * Render-native agent framework.
- *
- * Agent() — pure config describing an agent (prompt, tools, budget).
- * agentTask() — turns an Agent into a Render Workflows task using a pluggable
- *               runner and tool registry.
+ * Agent() — config describing an agent (prompt, tools, budget).
+ * agentTask() — turns an Agent into a Render Workflows task.
  */
+import { randomUUID } from "node:crypto";
 import { task } from "@renderinc/sdk/workflows";
 import { getThread, appendMessage } from "./threads.js";
+import { resolveRefs, maybePutBlob } from "./blobs.js";
 import { createRegistry, type ToolRegistry } from "./tools.js";
 import { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
-
-// ---------------------------------------------------------------------------
-// Agent — pure config, no behavior
-// ---------------------------------------------------------------------------
 
 export interface AgentSpec {
   readonly id: string;
@@ -37,10 +32,7 @@ export function Agent(spec: AgentSpec): AgentDef {
   return Object.freeze({ __kind: "AgentDef" as const, id: spec.id, spec });
 }
 
-// ---------------------------------------------------------------------------
-// md — inline Markdown prompt helper
-// ---------------------------------------------------------------------------
-
+/** Tagged template that strips leading indentation from inline prompts. */
 export function md(strings: TemplateStringsArray, ...values: unknown[]): string {
   let raw = String.raw(strings, ...values);
   const lines = raw.split("\n");
@@ -53,10 +45,6 @@ export function md(strings: TemplateStringsArray, ...values: unknown[]): string 
   if (minIndent > 0) return lines.map((l) => l.slice(minIndent)).join("\n");
   return lines.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// agentTask — bridge Agent config to a Render task via pluggable runner
-// ---------------------------------------------------------------------------
 
 export interface AgentTaskInput {
   message: string;
@@ -81,10 +69,7 @@ function defaultRegistry(): ToolRegistry {
   return _defaultRegistry;
 }
 
-/**
- * Override the shared default runner and/or registry for all agent tasks.
- * Call once at startup (e.g. in workflows.ts) before tasks execute.
- */
+/** Override the default runner and/or registry. Call once at startup. */
 export function configure(opts: AgentTaskOptions): void {
   if (opts.runner) _defaultRunner = opts.runner;
   if (opts.registry) _defaultRegistry = opts.registry;
@@ -96,8 +81,10 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
     async function run(input: AgentTaskInput): Promise<string> {
       const runner = opts?.runner ?? defaultRunner();
       const registry = opts?.registry ?? defaultRegistry();
+      const runId = randomUUID().slice(0, 8);
 
-      // --- Thread history (interactive agents) ---
+      const message = await resolveRefs(input.message);
+
       const history: string[] = [];
       if (agent.spec.interactive && input.threadId) {
         const thread = await getThread(input.threadId);
@@ -113,15 +100,13 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
           ? `Previous conversation:\n${history.join("\n")}\n\nNew message: `
           : "";
 
-      // --- Resolve tools ---
       const toolNames = agent.spec.tools ?? [];
       const tools = await registry.resolve(toolNames);
 
-      // --- Run ---
       let result = "";
       for await (const event of runner.run({
         agentId: agent.id,
-        prompt: `${contextPrefix}${input.message}`,
+        prompt: `${contextPrefix}${message}`,
         systemPrompt: agent.spec.prompt,
         tools,
         maxTurns: agent.spec.budget?.maxIterations,
@@ -131,12 +116,11 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
         }
       }
 
-      // --- Persist assistant reply (interactive agents) ---
       if (agent.spec.interactive && input.threadId) {
         await appendMessage(input.threadId, "assistant", result);
       }
 
-      return result;
+      return maybePutBlob(runId, agent.id, result);
     },
   );
 }

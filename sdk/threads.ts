@@ -1,8 +1,7 @@
 /**
  * Thread store backed by Render Key Value (Redis-compatible).
- * ~40 lines. The entire persistence layer for the MVP.
  */
-import { createClient, type RedisClientType } from "redis";
+import { kv } from "./redis.js";
 
 export interface ThreadMessage {
   role: "user" | "assistant";
@@ -14,17 +13,6 @@ export interface Thread {
   id: string;
   messages: ThreadMessage[];
   metadata: Record<string, string>;
-}
-
-let _client: RedisClientType | undefined;
-
-async function kv(): Promise<RedisClientType> {
-  if (_client?.isOpen) return _client;
-  const url = process.env.REDIS_URL;
-  if (!url) throw new Error("REDIS_URL is not set");
-  _client = createClient({ url }) as RedisClientType;
-  await _client.connect();
-  return _client;
 }
 
 export async function getThread(id: string): Promise<Thread | null> {

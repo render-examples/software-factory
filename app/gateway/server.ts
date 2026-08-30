@@ -1,7 +1,4 @@
-/**
- * Gateway — thin Hono server for webhooks, threads, and health.
- * ~150 lines total. No framework abstraction.
- */
+/** Gateway — Hono server for webhooks, threads, and health. */
 import { Hono } from "hono";
 import { appendMessage, getOrCreateThread } from "../../sdk/threads.js";
 import { slackHandler } from "./slack.js";

@@ -1,8 +1,6 @@
-// A tiny GitHub REST client used by the workflows for *deterministic* side
-// effects (read an issue, post a comment, set labels, open a PR, submit a
-// review). It deliberately lives in `src/lib` — not `tools/` — so GitHub writes
-// happen in `ctx.step()` under the workflow's control, not as model-callable
-// tools. Auth is a single fine-grained PAT in `GITHUB_TOKEN` (see .env.example).
+// GitHub REST client for workflow side-effects (issues, PRs, reviews).
+// Lives in lib/ (not tools/) so writes happen under workflow control,
+// not as model-callable tools. Auth: fine-grained PAT via GITHUB_TOKEN.
 
 const DEFAULT_API = "https://api.github.com";
 
@@ -151,7 +149,7 @@ export class GitHub {
     await this.request("POST", `/repos/${ref.owner}/${ref.repo}/issues/${number}/labels`, { body: { labels } });
   }
 
-  /** Remove a single label; a 404 (not present) is treated as success. */
+  /** Remove a label. A 404 (already absent) is treated as success. */
   async removeLabel(ref: RepoRef, number: number, label: string): Promise<void> {
     try {
       await this.request(
@@ -201,7 +199,7 @@ export class GitHub {
     return toPull(raw);
   }
 
-  /** Idempotent create: reuse an open PR for the same head branch if present. */
+  /** Reuse an existing open PR for the same head branch, or create one. */
   async ensurePull(
     ref: RepoRef,
     args: { title: string; head: string; base: string; body: string },
@@ -212,9 +210,8 @@ export class GitHub {
   }
 
   /**
-   * Submit a review. Tries with inline comments first; if GitHub rejects them
-   * (422 — a common outcome when a line isn't in the diff hunk), it retries with
-   * a body-only review so the verdict still lands.
+   * Submit a review. Falls back to body-only if GitHub returns 422
+   * (inline comments targeting lines outside the diff hunk).
    */
   async createReview(
     ref: RepoRef,
@@ -241,16 +238,16 @@ export class GitHub {
   }
 }
 
-/** Construct a client from the environment; throws if the token is missing. */
+/** Build a client from GITHUB_TOKEN. Throws if unset. */
 export function githubFromEnv(fetchImpl: typeof fetch = fetch): GitHub {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
-    throw new Error("GITHUB_TOKEN is not set; the demo needs a fine-grained PAT to act on GitHub.");
+    throw new Error("GITHUB_TOKEN is not set — a fine-grained PAT is required.");
   }
   return new GitHub(token, fetchImpl);
 }
 
-// --- raw payload shapes + mappers (kept internal) ---
+// --- raw payload shapes + mappers ---
 
 interface RawUser {
   login: string;

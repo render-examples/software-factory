@@ -1,38 +1,14 @@
 /**
- * Tool system — interfaces for custom tools, sources, and a registry.
- *
- * Agents declare tools by string name. The registry resolves those names into
- * either built-in tools (handled natively by the runner's SDK) or custom tools
- * (bridged by the runner).
- *
- * Custom tools define their input schema with Zod. No dependency on any
- * specific agent SDK — the runner bridges tools to its own SDK.
+ * Tool system — custom tools, sources, and a registry.
+ * Agents declare tools by name; the registry resolves them to built-in
+ * (runner-native) or custom (Zod-schema) tools.
  */
 import { z } from "zod";
 
-// ---------------------------------------------------------------------------
-// Zod type utilities — defined locally so tools.ts has no SDK dependency
-// ---------------------------------------------------------------------------
-
-/**
- * A raw Zod object shape: `{ url: z.ZodString, count: z.ZodNumber }`.
- * Equivalent to the Claude Agent SDK's `AnyZodRawShape`.
- */
 export type ZodShape = Record<string, z.ZodType>;
 
-/**
- * Infer the output type from a raw Zod shape.
- *
- * ```ts
- * const schema = { url: z.string(), count: z.number().optional() };
- * type T = InferShape<typeof schema>; // { url: string; count?: number }
- * ```
- */
+/** Infer the TS type from a raw Zod shape (e.g. `{ url: z.string() }`). */
 export type InferShape<T extends ZodShape> = z.output<z.ZodObject<T>>;
-
-// ---------------------------------------------------------------------------
-// Tool — the fundamental unit
-// ---------------------------------------------------------------------------
 
 export interface ToolContext {
   readonly agentId: string;
@@ -44,20 +20,12 @@ export interface ToolResult {
   readonly isError?: boolean;
 }
 
-/**
- * A custom tool backed by a Zod schema. The `Schema` type parameter is the
- * raw Zod shape — the same shape most agent SDK tool helpers expect.
- */
 export interface Tool<Schema extends ZodShape = ZodShape> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Schema;
   invoke(input: InferShape<Schema>, ctx: ToolContext): Promise<ToolResult>;
 }
-
-// ---------------------------------------------------------------------------
-// Built-in marker — SDK-managed tools that pass through to the runner's SDK
-// ---------------------------------------------------------------------------
 
 export interface BuiltInTool {
   readonly name: string;
@@ -74,18 +42,10 @@ export function isCustomTool(tool: ResolvedTool): tool is Tool {
   return !isBuiltIn(tool);
 }
 
-// ---------------------------------------------------------------------------
-// ToolSource — a provider that resolves to one or more tools
-// ---------------------------------------------------------------------------
-
 export interface ToolSource {
   readonly id: string;
   resolve(): ResolvedTool[] | Promise<ResolvedTool[]>;
 }
-
-// ---------------------------------------------------------------------------
-// ToolRegistry — maps string names to resolved tools
-// ---------------------------------------------------------------------------
 
 export class ToolRegistry {
   private readonly sources = new Map<string, ToolSource>();
@@ -110,10 +70,7 @@ export class ToolRegistry {
     return [...this.sources.keys()];
   }
 
-  /**
-   * Resolve an agent's tool name list to ResolvedTool[].
-   * Throws if any name is unknown.
-   */
+  /** Resolve tool names to ResolvedTool[]. Throws on unknown names. */
   async resolve(names: readonly string[]): Promise<ResolvedTool[]> {
     const allTools = new Map<string, ResolvedTool>();
 
@@ -140,10 +97,6 @@ export class ToolRegistry {
     return resolved;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createRegistry(): ToolRegistry {
   return new ToolRegistry();
