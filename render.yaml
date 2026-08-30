@@ -1,10 +1,8 @@
 services:
   - type: web
     name: factory-gateway
-    runtime: node
+    runtime: docker
     plan: starter
-    buildCommand: npm install
-    startCommand: npx tsx app/src/server.ts
     envVars:
       - key: REDIS_URL
         fromKeyValue:
