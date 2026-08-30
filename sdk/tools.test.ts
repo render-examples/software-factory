@@ -8,6 +8,8 @@ import {
 } from "./tools.js";
 import type { Tool, ToolSource, ToolResult, ToolContext, ResolvedTool } from "./tools.js";
 import { ClaudeBuiltInToolSource } from "./runners/claude.js";
+import { createSandboxToolSource } from "./sandbox-tool-source.js";
+import type { SandboxProvider, Sandbox } from "./sandbox.js";
 
 const echoSchema = { text: z.string() };
 
@@ -136,5 +138,63 @@ describe("Custom tool invocation", () => {
       { agentId: "test" },
     );
     expect(result.content).toBe("12");
+  });
+});
+
+describe("SandboxToolSource", () => {
+  const stubProvider: SandboxProvider = {
+    name: "stub",
+    async create() {
+      return {} as Sandbox;
+    },
+    async connect() {
+      return {} as Sandbox;
+    },
+  };
+
+  it("registers 6 sandbox tools in the registry", async () => {
+    const source = createSandboxToolSource({ provider: stubProvider });
+    const registry = createRegistry()
+      .register(new ClaudeBuiltInToolSource())
+      .register(source);
+
+    const tools = await registry.resolve([
+      "sandbox__exec",
+      "sandbox__read_file",
+      "sandbox__write_file",
+      "sandbox__list_dir",
+      "sandbox__apply_patch",
+      "sandbox__search",
+    ]);
+
+    expect(tools).toHaveLength(6);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("sandbox__exec");
+    expect(names).toContain("sandbox__read_file");
+    expect(names).toContain("sandbox__write_file");
+    expect(names).toContain("sandbox__list_dir");
+    expect(names).toContain("sandbox__apply_patch");
+    expect(names).toContain("sandbox__search");
+
+    for (const tool of tools) {
+      expect(isCustomTool(tool)).toBe(true);
+      expect(isBuiltIn(tool)).toBe(false);
+    }
+  });
+
+  it("resolves sandbox tools alongside built-in tools", async () => {
+    const source = createSandboxToolSource({ provider: stubProvider });
+    const registry = createRegistry()
+      .register(new ClaudeBuiltInToolSource())
+      .register(source);
+
+    const tools = await registry.resolve(["Read", "sandbox__exec", "Bash"]);
+    expect(tools).toHaveLength(3);
+
+    const builtIn = tools.filter(isBuiltIn);
+    const custom = tools.filter(isCustomTool);
+    expect(builtIn).toHaveLength(2);
+    expect(custom).toHaveLength(1);
+    expect(custom[0].name).toBe("sandbox__exec");
   });
 });

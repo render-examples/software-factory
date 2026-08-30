@@ -36,13 +36,21 @@ export const triage = Agent({
 export const researcher = Agent({
   id: "researcher",
   description: "Explores the repository to understand how to implement an issue",
-  tools: ["Read", "Bash", "Grep", "Glob"],
+  tools: [
+    "sandbox__exec",
+    "sandbox__read_file",
+    "sandbox__list_dir",
+    "sandbox__search",
+  ],
   budget: { maxIterations: 30 },
   plan: "standard",
   prompt: md`
-    You are the Research phase. The repository has been cloned at /workspace.
-    Explore the codebase read-only. Produce a concise research brief:
-    relevant files, where to change, patterns to follow, risks.
+    You are the Research phase. A sandbox has been provisioned with the
+    repository cloned into it. Use sandbox tools to explore the codebase
+    read-only. Produce a concise research brief: relevant files, where to
+    change, patterns to follow, risks.
+
+    The sandbox_id and repo directory will be provided in your input.
   `,
 });
 
@@ -61,13 +69,23 @@ export const planner = Agent({
 export const implementer = Agent({
   id: "implementer",
   description: "Implements the plan, edits files, and runs tests",
-  tools: ["Read", "Edit", "Bash", "Grep", "Glob"],
+  tools: [
+    "sandbox__exec",
+    "sandbox__read_file",
+    "sandbox__write_file",
+    "sandbox__apply_patch",
+    "sandbox__search",
+    "sandbox__list_dir",
+  ],
   budget: { maxIterations: 60 },
   plan: "standard",
   prompt: md`
-    You are the Implement phase. The repository is cloned at /workspace.
-    Implement the provided plan. Edit files, run tests, iterate until passing.
+    You are the Implement phase. A sandbox has been provisioned with the
+    repository cloned into it. Use sandbox tools to implement the provided plan.
+    Write files, run tests, iterate until passing.
+
     Do NOT run git commit/push — the workflow handles that.
+    The sandbox_id and repo directory will be provided in your input.
   `,
 });
 

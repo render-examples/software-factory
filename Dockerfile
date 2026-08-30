@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:22
 
 WORKDIR /app
 
@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["npx", "tsx", "app/src/server.ts"]
+CMD ["node", "--import", "tsx", "app/src/server.ts"]
