@@ -1,5 +1,5 @@
 /**
- * Slack webhook handler. Verifies signatures, parses events, dispatches assistant task.
+ * Slack webhook handler. Verifies signatures, parses events, dispatches slack-assistant workflow.
  */
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -35,18 +35,6 @@ function verifySlackSignature(rawBody: string, headers: Headers): boolean {
   } catch {
     return false;
   }
-}
-
-async function postSlackMessage(channel: string, text: string, threadTs?: string): Promise<void> {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("SLACK_BOT_TOKEN is not set");
-  const payload: Record<string, string> = { channel, text };
-  if (threadTs) payload.thread_ts = threadTs;
-  await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
 }
 
 export function slackHandler(): Hono {
@@ -92,11 +80,11 @@ export function slackHandler(): Hono {
       try {
         const { Render } = await import("@renderinc/sdk");
         const client = new Render();
-        await client.workflows.startTask(`${slug}/assistant`, [
-          { message: text, threadId },
+        await client.workflows.startTask(`${slug}/slack-assistant`, [
+          { message: text, threadId, slackChannel: channel, slackThreadTs: threadTs },
         ]);
       } catch (err) {
-        console.error("Failed to dispatch assistant task:", err);
+        console.error("Failed to dispatch slack-assistant task:", err);
       }
     }
 

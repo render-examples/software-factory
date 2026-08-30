@@ -33,5 +33,6 @@ import "../tasks/index.js";
 import "../workflows/spec-to-pr.js";
 import "../workflows/pr-review.js";
 import "../workflows/pr-fix.js";
+import "../workflows/slack-assistant.js";
 
 console.log("workflows host ready — tasks registered");
