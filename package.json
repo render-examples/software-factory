@@ -5,6 +5,7 @@
   "type": "module",
   "imports": {
     "#factory-agents": "./app/agents/index.ts",
+    "#factory-run-store": "./app/lib/run-store.ts",
     "#factory-sdk": "./sdk/index.ts",
     "#factory-sdk/*": "./sdk/*.ts"
   },
