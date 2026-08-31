@@ -1,20 +1,27 @@
 /**
- * Blob storage (Redis-backed) for large agent outputs.
- * Outputs exceeding BLOB_THRESHOLD are replaced with `$blob:<key>` refs
- * so workflow subtask payloads stay small. Resolved transparently by agentTask().
+ * Redis-backed handoff artifacts for large station outputs.
+ * Oversized results become opaque `$blob:blob:<key>` refs that workflow code
+ * resolves explicitly; user-authored text is never scanned for references.
  */
-import { createHash } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { kv } from "./redis.js";
 
 const REF_PREFIX = "$blob:";
-const DEFAULT_TTL_SECONDS = 3600; // 1 hour
+const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60; // Match run checkpoints.
 export const BLOB_THRESHOLD = 50_000; // characters
 
-const REF_PATTERN = /\$blob:[^\s]+/g;
+function blobKey(runId: string, step: string): string {
+  const capability = randomBytes(16).toString("hex");
+  return `blob:${encodeURIComponent(runId)}:${encodeURIComponent(step)}:${capability}`;
+}
 
-function blobKey(runId: string, step: string, content: string): string {
-  const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
-  return `blob:${runId}:${step}:${hash}`;
+export function isBlobRef(value: string): boolean {
+  return /^\$blob:blob:[^\s]+$/.test(value);
+}
+
+function keyFromRef(ref: string): string | null {
+  if (!isBlobRef(ref)) return null;
+  return ref.slice(REF_PREFIX.length);
 }
 
 export async function putBlob(
@@ -23,39 +30,37 @@ export async function putBlob(
   content: string,
   ttlSeconds = DEFAULT_TTL_SECONDS,
 ): Promise<string> {
-  const key = blobKey(runId, step, content);
+  const key = blobKey(runId, step);
   const client = await kv();
   await client.set(key, content, { EX: ttlSeconds });
   return `${REF_PREFIX}${key}`;
 }
 
 export async function getBlob(ref: string): Promise<string | null> {
-  const key = ref.startsWith(REF_PREFIX) ? ref.slice(REF_PREFIX.length) : ref;
+  const key = keyFromRef(ref);
+  if (!key) return null;
   const client = await kv();
-  return client.get(key);
+  const content = await client.get(key);
+  if (content !== null) {
+    await client.expire(key, DEFAULT_TTL_SECONDS);
+  }
+  return content;
 }
 
 export async function delBlob(ref: string): Promise<void> {
-  const key = ref.startsWith(REF_PREFIX) ? ref.slice(REF_PREFIX.length) : ref;
+  const key = keyFromRef(ref);
+  if (!key) return;
   const client = await kv();
   await client.del(key);
 }
 
-/** Replace all `$blob:` refs with their content. Expired refs are left as-is. */
-export async function resolveRefs(text: string): Promise<string> {
-  const refs = text.match(REF_PATTERN);
-  if (!refs) return text;
-
-  const unique = [...new Set(refs)];
-  const resolved = await Promise.all(unique.map((r) => getBlob(r)));
-
-  let out = text;
-  for (let i = 0; i < unique.length; i++) {
-    if (resolved[i] !== null) {
-      out = out.replaceAll(unique[i], resolved[i]!);
-    }
+/** Resolve one trusted, typed blob reference and fail if it has expired. */
+export async function requireBlob(ref: string): Promise<string> {
+  const content = await getBlob(ref);
+  if (content === null) {
+    throw new Error("Blob reference is invalid or expired");
   }
-  return out;
+  return content;
 }
 
 /** Store as blob if content exceeds BLOB_THRESHOLD; otherwise return as-is. */

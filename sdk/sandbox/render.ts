@@ -5,7 +5,6 @@
 import { Render } from "@renderinc/sdk";
 import {
   BaseSandbox,
-  collectExecOutput,
   type Sandbox,
   type SandboxProvider,
   type SandboxExecEvent,

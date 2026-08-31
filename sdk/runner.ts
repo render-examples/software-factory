@@ -22,6 +22,11 @@ export type AgentEvent =
   | { readonly type: "result"; readonly result: string }
   | { readonly type: "error"; readonly error: Error };
 
+export type ToolCallEvent = Extract<AgentEvent, { type: "tool_call" }>;
+export type ToolCallInterception =
+  | { action: "continue"; event?: AgentEvent }
+  | { action: "reject"; reason: string };
+
 export interface RunContext {
   readonly agentId: string;
   readonly prompt: string;
@@ -29,8 +34,13 @@ export interface RunContext {
   readonly tools: readonly ResolvedTool[];
   readonly maxTurns?: number;
   readonly signal?: AbortSignal;
+  readonly sandboxId?: string;
   /** Model size tier ("small"/"medium"/"large") or a literal model string. */
   readonly model?: string;
+  /** Pre-execution policy bridge used by runners that support tool hooks. */
+  readonly interceptToolCall?: (
+    event: ToolCallEvent,
+  ) => Promise<ToolCallInterception>;
 }
 
 export interface AgentRunner {

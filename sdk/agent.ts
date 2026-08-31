@@ -4,10 +4,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { task } from "@renderinc/sdk/workflows";
-import { getThread, appendMessage } from "./threads.js";
-import { resolveRefs, maybePutBlob } from "./blobs.js";
+import { maybePutBlob } from "./blobs.js";
 import { createRegistry, type ToolRegistry } from "./tools.js";
-import { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
+import { ClaudeRunner } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
 import { HookInterceptor, type Hook } from "./hooks.js";
 
@@ -18,7 +17,6 @@ export interface AgentSpec {
   readonly tools?: readonly string[];
   readonly budget?: { maxIterations?: number };
   readonly plan?: string;
-  readonly interactive?: boolean;
   /** Model size tier ("small", "medium", "large") or a literal model string. */
   readonly model?: string;
 }
@@ -37,7 +35,7 @@ export function Agent(spec: AgentSpec): AgentDef {
 
 /** Tagged template that strips leading indentation from inline prompts. */
 export function md(strings: TemplateStringsArray, ...values: unknown[]): string {
-  let raw = String.raw(strings, ...values);
+  const raw = String.raw(strings, ...values);
   const lines = raw.split("\n");
   while (lines.length > 0 && lines[0].trim() === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
@@ -51,7 +49,8 @@ export function md(strings: TemplateStringsArray, ...values: unknown[]): string 
 
 export interface AgentTaskInput {
   message: string;
-  threadId?: string;
+  /** Workflow-owned sandbox binding; never supplied by the model. */
+  sandboxId?: string;
 }
 
 export interface AgentTaskOptions {
@@ -70,7 +69,7 @@ function defaultRunner(): AgentRunner {
 }
 
 function defaultRegistry(): ToolRegistry {
-  _defaultRegistry ??= createRegistry().register(new ClaudeBuiltInToolSource());
+  _defaultRegistry ??= createRegistry();
   return _defaultRegistry;
 }
 
@@ -91,52 +90,41 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       const interceptor = new HookInterceptor(hooks);
       const runId = randomUUID().slice(0, 8);
 
-      const message = await resolveRefs(input.message);
-
-      const history: string[] = [];
-      if (agent.spec.interactive && input.threadId) {
-        const thread = await getThread(input.threadId);
-        if (thread) {
-          // Stored messages may be `$blob:` refs (see appendMessage), so
-          // resolve each one before replaying it as conversation history.
-          const recent = thread.messages.slice(-20);
-          const contents = await Promise.all(
-            recent.map((msg) => resolveRefs(msg.content)),
-          );
-          recent.forEach((msg, i) => history.push(`${msg.role}: ${contents[i]}`));
-        }
-      }
-
-      const contextPrefix =
-        history.length > 0
-          ? `Previous conversation:\n${history.join("\n")}\n\nNew message: `
-          : "";
-
       const toolNames = agent.spec.tools ?? [];
       const tools = await registry.resolve(toolNames);
 
       const hookCtx = { runId, agentId: agent.id };
-      let result = "";
+      let result: string | undefined;
       for await (const event of runner.run({
         agentId: agent.id,
-        prompt: `${contextPrefix}${message}`,
+        prompt: input.message,
         systemPrompt: agent.spec.prompt,
         tools,
         maxTurns: agent.spec.budget?.maxIterations,
         model: agent.spec.model,
+        sandboxId: input.sandboxId,
+        interceptToolCall: (event) => interceptor.intercept(event, hookCtx),
       })) {
+        if (event.type === "error") throw event.error;
+        // Claude's PreToolUse bridge already ran tool-call hooks before
+        // execution. The streamed copy is for runner consumers, not a second
+        // policy/audit pass.
+        if (event.type === "tool_call") continue;
+
         const hookResult = await interceptor.intercept(event, hookCtx);
         if (hookResult.action === "reject") continue;
         const finalEvent = hookResult.event ?? event;
         if (finalEvent.type === "result") {
+          if (result !== undefined) {
+            throw new Error(`Agent "${agent.id}" produced multiple results`);
+          }
           result = finalEvent.result;
         }
       }
 
-      if (agent.spec.interactive && input.threadId) {
-        await appendMessage(input.threadId, "assistant", result);
+      if (result === undefined) {
+        throw new Error(`Agent "${agent.id}" produced no result`);
       }
-
       return maybePutBlob(runId, agent.id, result);
     },
   );

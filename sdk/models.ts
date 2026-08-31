@@ -36,10 +36,13 @@ export class StaticModelResolver implements ModelResolver {
 
   resolve(tierOrModel: ModelTier | string): ResolvedModel {
     const model =
-      tierOrModel in this.tiers
+      Object.hasOwn(this.tiers, tierOrModel)
         ? this.tiers[tierOrModel as ModelTier]
         : tierOrModel;
 
+    if (typeof model !== "string" || model.length === 0) {
+      throw new Error(`Invalid model resolution for "${tierOrModel}"`);
+    }
     return { model, ...(this.baseUrl && { baseUrl: this.baseUrl }) };
   }
 }

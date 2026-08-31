@@ -7,9 +7,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["sdk", "app"],
+  "include": ["sdk", "app", "scripts", "integration"],
   "exclude": ["node_modules"]
 }

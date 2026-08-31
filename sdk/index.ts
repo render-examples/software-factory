@@ -1,16 +1,14 @@
 export { Agent, agentTask, md, configure } from "./agent.js";
 export type { AgentDef, AgentSpec, AgentTaskInput, AgentTaskOptions } from "./agent.js";
 
-export { getThread, getOrCreateThread, appendMessage } from "./threads.js";
-export type { Thread, ThreadMessage } from "./threads.js";
-
-export { kv } from "./redis.js";
+export { closeKv, kv } from "./redis.js";
 
 export {
   putBlob,
   getBlob,
   delBlob,
-  resolveRefs,
+  isBlobRef,
+  requireBlob,
   maybePutBlob,
   BLOB_THRESHOLD,
 } from "./blobs.js";
@@ -32,7 +30,13 @@ export type {
   InferShape,
 } from "./tools.js";
 
-export type { AgentRunner, AgentEvent, RunContext } from "./runner.js";
+export type {
+  AgentRunner,
+  AgentEvent,
+  RunContext,
+  ToolCallEvent,
+  ToolCallInterception,
+} from "./runner.js";
 
 // Hooks
 export { HookInterceptor } from "./hooks.js";

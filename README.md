@@ -1,10 +1,70 @@
 # render-factory
 
-An open-source, self-hosted template for building autonomous coding agent workflows on [Render](https://render.com). Define agents as pure config, compose them as durable Render Workflows, and connect them to Slack and GitHub.
+A small, self-hosted software factory built from Render Web Services,
+Workflows, Sandboxes, and Key Value.
 
-[Quick start](#quick-start) · [What it does](#what-it-does) · [Who is this for](#who-is-this-for) · [Architecture](#architecture) · [Customize](#customize) · [Deploy](#deploy-to-render)
+It intentionally operates on one repository. A maintainer applies one label,
+the factory implements the issue in an isolated sandbox, three reviewers
+inspect the staged diff in parallel, and the workflow opens a reviewed draft
+pull request. A person decides when it is ready and merges it.
 
----
+## How it works
+
+1. Configure `FACTORY_REPO=owner/repo`.
+2. A maintainer listed in `FACTORY_GITHUB_ACTORS` applies the `factory` label.
+3. The gateway verifies the GitHub signature, repository, actor, action, and
+   label, atomically claims the delivery and issue, then dispatches the issue
+   number with GitHub's delivery ID.
+4. The workflow fetches the issue and comments directly from GitHub.
+5. Triage either asks for clarification or starts an isolated sandbox.
+6. The analyst researches the checkout and prepares a plan.
+7. The implementer edits the checkout and runs the repository's checks.
+8. Security, correctness, and test reviewers inspect the staged diff in
+   parallel; a judge synthesizes their result. One requested revision runs
+   through implementation and review again.
+9. Only an approved revision is pushed, its remote SHA is verified, and the
+   workflow opens a draft pull request.
+
+Every stage is checkpointed in Key Value. Automatic task retries reconnect to
+the same sandbox and deterministic branch instead of starting duplicate work.
+
+If clarification or a retry is needed, a maintainer reapplies the label.
+Issue comments never trigger the factory.
+
+## Architecture
+
+```text
+GitHub issues.labeled
+  │
+  ▼
+Gateway web service
+  ├─ verifies HMAC
+  ├─ matches FACTORY_REPO + FACTORY_LABEL
+  ├─ checks FACTORY_GITHUB_ACTORS
+  ├─ deduplicates delivery + leases issue
+  └─ dispatches { issueNumber, attemptId }
+  │
+  ▼
+Render Workflows
+  ├─ triage
+  ├─ analyst ───────────────┐
+  ├─ implementer            │ one Render Sandbox
+  ├─ security ┐             │
+  ├─ correctness ├ parallel │
+  ├─ tests ────┘            │
+  ├─ judge                  │
+  └─ draft pull request ◀───┘
+
+Render Key Value
+  ├─ delivery deduplication and issue leases
+  ├─ replay checkpoints for every pipeline stage
+  └─ oversized workflow handoff artifacts
+```
+
+The gateway runs no models and holds no repository credential. GitHub writes
+are owned by workflow code, not model-callable tools. Agents receive only the
+sandbox operations needed by their station. `GET /health` reports process
+liveness; `GET /ready` checks Key Value and is the deployed health check.
 
 ## Quick start
 
@@ -12,172 +72,117 @@ An open-source, self-hosted template for building autonomous coding agent workfl
 git clone https://github.com/<you>/render-factory.git
 cd render-factory
 npm install
-npm run start:gateway      # Hono server on :3000
-npm run start:workflows    # Render Workflows task host
+cp .env.example .env
+
+npm run dev:redis
+npm run dev:gateway
+npm run dev:workflows
 ```
 
-Set your environment variables (see [below](#environment-variables)), point a GitHub webhook at `/channels/github`, and label an issue — the factory takes it from there.
+Configure a GitHub webhook for `issues` events at:
 
----
-
-## What it does
-
-You define agents as pure config, bridge them to Render tasks, and compose them in workflows. The agents receive work from Slack and GitHub, execute code via the Claude Agent SDK, and deliver results back automatically.
-
-The template ships with three connected workflows:
-
-- **Spec to PR (`spec-to-pr`)** — GitHub issue or assistant-dispatched spec → triage → research → plan → implementation → tests → pull request.
-- **PR Review (`pr-review`)** — Opened/updated PR → security, performance, correctness, tests, and lint reviewers fan out in parallel → judge synthesizes a GitHub review.
-- **PR Fix (`pr-fix`)** — Review feedback on an agent branch → implementer fixes the issues → pushes.
-
-Plus an **interactive assistant** — Slack message or API thread → Claude agent turn with multi-turn memory → reply. The assistant can explore repos, answer questions, and dispatch `spec-to-pr`.
-
-## Who is this for
-
-- **Lean engineering teams** that want fully customizable background coding workflows without purchasing a closed agent control plane.
-- **Teams that want self-hosted cloud coding agents embedded in their existing workflow.** The agent meets you where you already are.
-- **Platform-minded engineers** who want to customize agents, workflow stages, models, tools, and approval boundaries.
-- **Anyone outgrowing one-shot CLI agents.** If you've been using Claude Code, Codex, or similar tools and want an agent that persists across sessions, handles multi-step work durably, and integrates with your team's channels — this is the next step.
-
----
-
-## Architecture
-
-```
-Gateway (Hono web service)
-├── POST /channels/slack     → verify, parse, dispatch assistant task
-├── POST /channels/github    → verify, parse, dispatch spec-to-pr/pr-review/pr-fix
-├── POST /threads/:id/messages → dispatch assistant task with thread context
-└── GET /health
-
-Render Workflows host
-├── assistant task           → Claude Agent SDK with thread history from KV
-├── researcher task          → Claude Agent SDK (read-only exploration)
-├── planner task             → Claude Agent SDK (structured plan)
-├── implementer task         → Claude Agent SDK (code changes + tests)
-├── spec-to-pr workflow      → triage → research → plan → implement → PR
-├── pr-review workflow       → fan-out reviewers → judge → GitHub review
-└── pr-fix workflow          → implementer → push fixes
-
-Render Key Value (Redis)
-└── thread:{id} → conversation history (multi-turn memory)
+```text
+https://<gateway>/channels/github
 ```
 
-- **Gateway** — thin Hono HTTP server (~220 lines). Verifies webhooks, manages threads, dispatches Render tasks. No agent execution.
-- **Workflows host** — runs all agent compute on Render Workflows. Each agent is a Render task powered by the Claude Agent SDK. Composition workflows chain tasks together.
-- **Key Value** — thread memory for interactive conversations. No Postgres.
-- **SDK** — 165 lines. `Agent()` for config, `agentTask()` to bridge to Render tasks, `md` for prompts, and a KV-backed thread store.
+Use a fine-grained GitHub token scoped only to `FACTORY_REPO`, with the
+minimum Contents, Issues, and Pull Requests permissions needed to create a
+feature branch, comment, and open a draft PR. Protect the default branch.
 
----
+## Configuration
 
-## Customize
+| Variable | Service | Purpose |
+|---|---|---|
+| `FACTORY_REPO` | Both | The only repository the factory can operate on |
+| `FACTORY_LABEL` | Both | Intake label; defaults to `factory` |
+| `FACTORY_GITHUB_ACTORS` | Gateway | Comma-separated maintainer logins allowed to apply the label |
+| `GITHUB_WEBHOOK_SECRET` | Gateway | GitHub webhook HMAC secret |
+| `RENDER_WORKFLOW_SLUG` | Gateway | Deployed Workflows service slug |
+| `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
+| `GITHUB_TOKEN` | Workflows | Fine-grained token scoped to `FACTORY_REPO` |
+| `RENDER_API_KEY` | Workflows | Render Sandbox API credential |
+| `RENDER_WORKSPACE_ID` | Workflows | Workspace containing the sandboxes |
+| `REDIS_URL` | Both | Internal Key Value connection string for intake leases and workflow checkpoints |
 
-### Define an agent
+`FACTORY_LABEL` has a safe default. `REDIS_URL` is wired automatically for
+the gateway Blueprint and points to local Docker in `.env.example`.
 
-Agents are pure config — a prompt, tools, and constraints:
+After filling `.env` and starting local Key Value, validate configuration and
+external access before creating a service:
 
-```ts
-import { Agent, md } from "../sdk/index.js";
-
-export const researcher = Agent({
-  id: "researcher",
-  prompt: md`
-    You are the Research phase. Explore the codebase read-only.
-    Produce a concise research brief.
-  `,
-  tools: ["Read", "Bash", "Grep", "Glob"],
-  budget: { maxIterations: 30 },
-  plan: "standard",
-});
+```bash
+npm run doctor
 ```
-
-### Bridge to a Render task
-
-```ts
-import { agentTask } from "../sdk/index.js";
-import { researcher } from "../agents/index.js";
-
-export const researchTask = agentTask(researcher);
-```
-
-### Compose in a workflow
-
-Workflows are bare Render tasks that chain agent tasks:
-
-```ts
-import { task } from "@renderinc/sdk/workflows";
-import { researchTask, planTask, implementTask } from "../tasks/index.js";
-
-export const specToPr = task(
-  { name: "spec-to-pr", plan: "standard" },
-  async function specToPr(input) {
-    const research = await researchTask({ message: input.description });
-    const plan = await planTask({ message: research });
-    return implementTask({ message: plan });
-  },
-);
-```
-
-### Add a channel
-
-Channels are Hono route handlers that verify webhooks and dispatch tasks:
-
-```ts
-app.post("/channels/github", async (c) => {
-  // verify signature, normalize event, startTask("spec-to-pr", [event])
-});
-```
-
----
-
-## File structure
-
-```
-render-factory/
-├── sdk/                    Framework (165 lines)
-│   ├── agent.ts            Agent() + agentTask() + md
-│   ├── threads.ts          KV-backed thread store
-│   └── index.ts            Barrel
-├── app/
-│   ├── agents/index.ts     Pure agent configs (prompts, tools)
-│   ├── tasks/index.ts      agentTask() bridge (one per agent)
-│   ├── workflows/          Bare Render task() composition
-│   ├── gateway/            Hono server + channel handlers
-│   ├── lib/                Domain helpers (GitHub REST client)
-│   └── src/                Entrypoints (server.ts, workflows.ts)
-├── package.json
-├── tsconfig.json
-├── render.yaml             Blueprint (web + workflows + KV)
-└── README.md
-```
-
----
 
 ## Deploy to Render
 
 1. Fork this repository.
-2. Create a [Blueprint](https://dashboard.render.com/select-repo?type=blueprint) from `render.yaml`. It provisions:
-   - `factory-gateway` — web service
-   - `factory-workflows` — Render Workflows host
-   - `factory-kv` — Key Value store
-3. Set the environment variables below on each service.
-4. Create a Render Workflows service manually (until Blueprints support it), connect this repo, and set the start command to `npx tsx app/src/workflows.ts`.
-5. Point your GitHub webhook at `https://<gateway>/channels/github`.
-6. Point your Slack Events API at `https://<gateway>/channels/slack`.
+2. Create a Blueprint from `render.yaml`. It provisions:
+   - `render-factory-gateway`
+   - `render-factory-kv`, with external access disabled
+3. Set the gateway variables shown above.
+4. Create a Render Workflows service, connect this repository, and use:
 
-## Environment variables
+   ```bash
+   npx tsx app/src/workflows.ts
+   ```
 
-| Variable | Where | Purpose |
-|----------|-------|---------|
-| `ANTHROPIC_API_KEY` | Workflows | Claude API key |
-| `REDIS_URL` | Both | Render Key Value connection string |
-| `RENDER_WORKFLOW_SLUG` | Gateway | Workflows service slug for task dispatch |
-| `GITHUB_TOKEN` | Workflows | Fine-grained PAT for repo operations |
-| `GITHUB_WEBHOOK_SECRET` | Gateway | GitHub webhook signature verification |
-| `SLACK_SIGNING_SECRET` | Gateway | Slack request signing verification |
-| `SLACK_BOT_TOKEN` | Gateway | Slack bot OAuth token for replies |
+5. Set the Workflows variables, using the Key Value internal URL.
+6. Point the GitHub `issues` webhook at `/channels/github`.
 
----
+Render Workflows cannot currently be provisioned by Blueprints. The doctor
+command validates everything it can locally; the remaining manual check is
+that the Dashboard Workflow slug matches `RENDER_WORKFLOW_SLUG`.
+
+## Safety boundaries
+
+- One validated repository, fixed at deployment time.
+- One maintainer-applied intake label.
+- Only `issues.labeled` starts work.
+- GitHub delivery deduplication, one active lease per issue, and replay-safe
+  stage checkpoints.
+- No public chat API or Slack control plane.
+- No model-callable GitHub, Render, deploy, environment, or merge tools.
+- Built-in Claude tools are explicitly restricted and unattended permissions
+  fail closed.
+- Repository execution stays in a Render Sandbox.
+- Git credentials are supplied only around clone and push and are not stored
+  in the Git remote.
+- Generated branches use the `factory/` prefix.
+- One internal revision is allowed; unresolved findings stop without a PR.
+- Automation ends at an approved draft PR; readiness and merge remain human
+  decisions.
+
+## Customize
+
+Agents are plain configuration:
+
+```ts
+export const analyst = Agent({
+  id: "analyst",
+  model: "medium",
+  tools: [
+    "sandbox__read_file",
+    "sandbox__list_dir",
+    "sandbox__search",
+  ],
+  prompt: md`
+    Explore the configured repository read-only and produce a grounded plan.
+  `,
+});
+```
+
+The pipeline is in `app/workflows/spec-to-pr.ts`; agent definitions are in
+`app/agents/index.ts`.
+
+## Verification
+
+```bash
+npm run typecheck
+npm test
+npm run lint
+render blueprints validate
+```
 
 ## License
 

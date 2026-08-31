@@ -1,26 +1,18 @@
 import { agentTask } from "#factory-sdk";
 import {
-  assistant,
   triage,
-  researcher,
-  planner,
+  analyst,
   implementer,
   security,
-  performance,
   correctness,
   tests,
-  lint,
   judge,
-} from "../agents/index.js";
+} from "#factory-agents";
 
-export const assistantTask = agentTask(assistant);
 export const triageTask = agentTask(triage);
-export const researchTask = agentTask(researcher);
-export const planTask = agentTask(planner);
+export const analysisTask = agentTask(analyst);
 export const implementTask = agentTask(implementer);
 export const securityTask = agentTask(security);
-export const performanceTask = agentTask(performance);
 export const correctnessTask = agentTask(correctness);
 export const testsTask = agentTask(tests);
-export const lintTask = agentTask(lint);
 export const judgeTask = agentTask(judge);

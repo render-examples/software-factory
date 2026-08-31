@@ -138,7 +138,7 @@ describe("HookInterceptor", () => {
       on: ["result"],
       async handle(event) {
         if (event.type === "result") {
-          return { action: "continue", event: { ...event, result: event.result + "!" } };
+          return { action: "continue", event: { ...event, result: `${event.result}!` } };
         }
         return { action: "continue" };
       },
