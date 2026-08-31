@@ -26,7 +26,7 @@ export const analyst = Agent({
   budget: { maxIterations: 30 },
   plan: "standard",
   prompt: md`
-    You are the analysis station. A sandbox contains the factory's one
+    You are the analysis agent. A sandbox contains the factory's one
     configured repository. Explore it read-only and produce a concrete,
     minimal implementation plan grounded in existing patterns.
 
@@ -51,7 +51,7 @@ export const implementer = Agent({
   budget: { maxIterations: 60 },
   plan: "standard",
   prompt: md`
-    You are the implementation station. Implement the supplied plan in the
+    You are the implementation agent. Implement the supplied plan in the
     sandbox checkout, run the repository's own checks, and iterate until they
     pass. Do not commit or push; the workflow owns Git and GitHub side effects.
 

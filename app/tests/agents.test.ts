@@ -9,7 +9,7 @@ import {
   triage,
 } from "../agents/index.js";
 
-describe("factory station tool boundaries", () => {
+describe("factory agent tool boundaries", () => {
   it("gives host-side decision agents no tools", () => {
     for (const agent of [triage, security, correctness, tests, judge]) {
       expect(agent.spec.tools).toEqual([]);
