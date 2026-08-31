@@ -1,7 +1,7 @@
 /**
  * Block-destructive hook — vetoes tool calls containing dangerous commands.
  */
-import type { Hook } from "../../sdk/hooks.js";
+import type { Hook } from "#factory/sdk";
 
 const BLOCKED_PATTERNS = [
   "rm -rf /",

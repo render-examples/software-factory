@@ -3,7 +3,7 @@ import {
   collectExecOutput,
   shellEscape,
   type Sandbox,
-} from "#factory-sdk";
+} from "#factory/sdk";
 
 const GITHUB_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 

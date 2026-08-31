@@ -2,6 +2,10 @@
 
 A self-hosted fork-and-deploy software factory built on Render. Turn a labeled GitHub issue into a reviewed draft pull request using durable workflows and isolated coding agents.
 
+An optional Slack assistant provides signed, multi-turn access to
+fixed-repository Q&A, read-only Render observability, and unlabeled issue
+drafting. It cannot bypass the GitHub label gate.
+
 [Get started](#get-started) · [How it works](#how-it-works) ·
 [Architecture](#architecture) · [Deploy](#deploy-to-render) ·
 [Customize](#customize) · [Safety](#safety-boundaries)
@@ -59,6 +63,20 @@ is terminated only after the workflow reaches a terminal result.
 
 If clarification or a retry is needed, a maintainer reapplies the label.
 
+### Optional Slack assistant
+
+When Slack credentials are configured, workspace users can mention the app,
+message it directly, or reply in an existing thread. Key Value stores the last
+20 messages atomically for 30 days. The assistant can:
+
+- read and search only `FACTORY_REPO`
+- list Render services and inspect deploys, logs, and metrics
+- create an unlabeled issue in `FACTORY_REPO`
+
+It cannot deploy, read environment-variable values, modify code, apply the
+factory label, or start a factory run. A maintainer reviews a drafted issue
+and applies `FACTORY_LABEL` in GitHub.
+
 ## Architecture
 
 ```text
@@ -83,9 +101,17 @@ Render Workflows
   ├─ judge                  │
   └─ draft pull request ◀───┘
 
+Signed Slack event
+  └─ Gateway → slack-assistant task
+       ├─ capped Key Value thread history
+       ├─ fixed-repository read tools
+       ├─ read-only Render tools
+       └─ optional unlabeled GitHub issue
+
 Render Key Value
   ├─ delivery deduplication and issue leases
   ├─ replay checkpoints for every pipeline stage
+  ├─ Slack delivery state and capped thread memory
   └─ oversized workflow handoff artifacts
 ```
 
@@ -99,8 +125,9 @@ app/
   gateway/         HTTP intake, validation, and dispatch
   hooks/           Audit and policy hooks
   lib/             GitHub, configuration, and Git helpers
+  tools/           Bounded Slack-assistant integrations
   src/             Gateway and Workflows entrypoints
-  tests/           Application tests
+  tests/           Application and integration tests
 sdk/
   runners/         Model runner implementations
   sandbox/         Sandbox provider implementations
@@ -193,6 +220,8 @@ comment, and open a draft PR, and protect the default branch.
 | `GITHUB_TOKEN` | Workflows | Fine-grained token scoped to `FACTORY_REPO` |
 | `RENDER_API_KEY` | Workflows | Render SDK and Sandbox credential |
 | `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
+| `SLACK_SIGNING_SECRET` | Gateway | Optional Slack request-signing secret |
+| `SLACK_BOT_TOKEN` | Workflows | Required with Slack to post thread replies |
 | `PORT` | Gateway | Optional HTTP port; defaults to `3000` |
 
 Both processes must use the same `FACTORY_REPO` and `FACTORY_LABEL`.
@@ -202,6 +231,11 @@ wires its production value automatically.
 Development scripts load `.env`. The production commands
 `npm run start:gateway` and `npm run start:workflows` do not; supply their
 environment through Render or the process environment.
+
+Slack remains disabled unless `SLACK_SIGNING_SECRET` is present. When enabling
+it, also set `SLACK_BOT_TOKEN` on the Workflows service. The signing secret
+authenticates Slack, not an individual user; any workspace member who can
+reach the installed app can use its bounded capabilities.
 
 ## Deploy to Render
 
@@ -222,7 +256,9 @@ environment through Render or the process environment.
    `REDIS_URL`.
 6. Set the gateway's `RENDER_WORKFLOW_SLUG` to the Workflows service slug.
 7. Point the GitHub `issues` webhook at `/channels/github`.
-8. Run `npm run doctor` from a configured local checkout.
+8. Optional: configure Slack Events at `/channels/slack`, subscribe to
+   `app_mention` and direct-message events, and set the Slack variables.
+9. Run `npm run doctor` from a configured local checkout.
 
 Render Workflows cannot currently be provisioned by Blueprints. The
 repository's `Dockerfile` starts only the gateway; keep the Workflows host as
@@ -240,7 +276,7 @@ Agents are TypeScript configuration with an explicit model tier, tool
 allowlist, budget, and prompt:
 
 ```ts
-import { Agent, md } from "#factory-sdk";
+import { Agent, md } from "#factory/sdk";
 
 export const dependencyAnalyst = Agent({
   id: "dependency-analyst",
@@ -275,7 +311,7 @@ Git pushes, checkpoints, and retries. Agents do not receive those capabilities.
 
 New workflows should validate `unknown` input immediately, keep dispatch
 payloads small, and be imported by `app/src/workflows.ts` so their tasks
-register. Application code imports public APIs through `#factory-sdk`;
+register. Application code imports public APIs through `#factory/sdk`;
 provider integrations stay behind SDK interfaces.
 
 See [AGENTS.md](AGENTS.md) for detailed extension conventions, registration
@@ -287,7 +323,11 @@ steps, security invariants, and test ownership.
 - GitHub delivery deduplication, one active lease per issue, and replay-safe
   stage checkpoints prevent overlapping work.
 - The gateway never receives the repository token.
-- No model-callable GitHub, Render, deploy, environment, or merge tools.
+- Slack is disabled by default and accepts only correctly signed Slack events
+  when enabled.
+- Slack tools are fixed to `FACTORY_REPO`, Render reads, and unlabeled issue
+  creation; deploys, environment values, labels, merges, and direct workflow
+  dispatch are absent.
 - Built-in Claude filesystem and shell tools are not exposed to app agents.
 - Unattended permissions and malformed model output fail closed.
 - Repository execution stays in a Render Sandbox.
@@ -301,8 +341,8 @@ steps, security invariants, and test ownership.
 
 - One deployment is bound to one GitHub repository.
 - Intake is limited to a maintainer applying one issue label.
-- There is no public chat API, Slack control plane, PR review trigger, or
-  automatic PR follow-up.
+- There is no public chat API, PR review trigger, or automatic PR follow-up.
+- Slack is an optional bounded assistant, not a factory control plane.
 - Only one internal implementation/review revision is attempted; unresolved
   findings stop without a PR.
 - Render Workflows must be created separately from the Blueprint.

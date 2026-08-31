@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execGitWithToken, githubRemoteUrl } from "../lib/sandbox-git.js";
-import { shellEscape, type Sandbox, type SandboxExecEvent } from "#factory-sdk";
+import { shellEscape, type Sandbox, type SandboxExecEvent } from "#factory/sdk";
 
 async function* successfulExec(): AsyncGenerator<SandboxExecEvent> {
   yield { type: "exit", exitCode: 0 };

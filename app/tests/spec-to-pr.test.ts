@@ -57,8 +57,8 @@ const sandbox = {
 };
 state.sandbox = sandbox;
 
-vi.mock("#factory-sdk", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("#factory-sdk")>();
+vi.mock("#factory/sdk", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("#factory/sdk")>();
 	return {
 		...actual,
 		RenderSandboxProvider: class {

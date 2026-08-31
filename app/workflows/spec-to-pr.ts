@@ -10,7 +10,7 @@ import {
 	shellEscape,
 	type Sandbox,
 	type SandboxProvider,
-} from "#factory-sdk";
+} from "#factory/sdk";
 import {
 	analysisTask,
 	correctnessTask,

@@ -1,5 +1,5 @@
 /** Render Workflows entrypoint — tool registry setup + task/workflow imports. */
-import { closeKv, configure } from "#factory-sdk";
+import { closeKv, configure } from "#factory/sdk";
 import { auditHook } from "../hooks/audit.js";
 import { blockDestructiveHook } from "../hooks/block-destructive.js";
 import { redactSecretsHook } from "../hooks/redact-secrets.js";
@@ -20,6 +20,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 import "../tasks/index.js";
+import "../workflows/slack-assistant.js";
 import "../workflows/spec-to-pr.js";
 
 console.log("single-repository factory workflows ready");

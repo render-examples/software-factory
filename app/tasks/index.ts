@@ -1,5 +1,6 @@
-import { agentTask } from "#factory-sdk";
+import { agentTask } from "#factory/sdk";
 import {
+  assistant,
   triage,
   analyst,
   implementer,
@@ -7,8 +8,9 @@ import {
   correctness,
   tests,
   judge,
-} from "#factory-agents";
+} from "../agents/index.js";
 
+export const assistantTask = agentTask(assistant);
 export const triageTask = agentTask(triage);
 export const analysisTask = agentTask(analyst);
 export const implementTask = agentTask(implementer);

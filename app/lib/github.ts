@@ -1,6 +1,6 @@
-// GitHub REST client for workflow side-effects (issues, PRs, reviews).
-// Lives in lib/ (not tools/) so writes happen under workflow control,
-// not as model-callable tools. Auth: fine-grained PAT via GITHUB_TOKEN.
+// GitHub REST client for workflow side effects and fixed-repository Slack
+// tools. The assistant can only reach the explicitly wrapped read methods and
+// unlabeled issue creation. Auth: fine-grained PAT via GITHUB_TOKEN.
 
 const DEFAULT_API = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -28,6 +28,18 @@ export interface IssueComment {
 	body: string;
 	user: string;
 	createdAt: string;
+}
+
+export interface RepositoryEntry {
+	name: string;
+	path: string;
+	type: "file" | "dir" | "symlink" | "submodule";
+	size: number;
+}
+
+export interface CodeSearchResult {
+	path: string;
+	htmlUrl: string;
 }
 
 export interface PullRequest {
@@ -137,6 +149,15 @@ export class GitHub {
 
 	// --- Issues ---
 
+	async createIssue(ref: RepoRef, title: string, body: string): Promise<Issue> {
+		const raw = await this.request<RawIssue>(
+			"POST",
+			`/repos/${ref.owner}/${ref.repo}/issues`,
+			{ body: { title, body } },
+		);
+		return toIssue(raw);
+	}
+
 	async getIssue(ref: RepoRef, number: number): Promise<Issue> {
 		const raw = await this.request<RawIssue>(
 			"GET",
@@ -224,6 +245,54 @@ export class GitHub {
 			if (err instanceof GitHubError && err.status === 404) return;
 			throw err;
 		}
+	}
+
+	// --- Read-only repository access ---
+
+	async readFile(ref: RepoRef, path: string, gitRef?: string): Promise<string> {
+		const encodedPath = repositoryPath(path);
+		const query = gitRef ? `?ref=${encodeURIComponent(gitRef)}` : "";
+		return this.request<string>(
+			"GET",
+			`/repos/${ref.owner}/${ref.repo}/contents/${encodedPath}${query}`,
+			{ accept: "application/vnd.github.raw+json" },
+		);
+	}
+
+	async listDirectory(
+		ref: RepoRef,
+		path = "",
+		gitRef?: string,
+	): Promise<RepositoryEntry[]> {
+		const encodedPath = path ? `/${repositoryPath(path)}` : "";
+		const query = gitRef ? `?ref=${encodeURIComponent(gitRef)}` : "";
+		const raw = await this.request<RawRepositoryEntry[]>(
+			"GET",
+			`/repos/${ref.owner}/${ref.repo}/contents${encodedPath}${query}`,
+		);
+		return raw.map((entry) => ({
+			name: entry.name,
+			path: entry.path,
+			type: entry.type,
+			size: entry.size,
+		}));
+	}
+
+	async searchCode(
+		ref: RepoRef,
+		query: string,
+		limit = 10,
+	): Promise<CodeSearchResult[]> {
+		const perPage = Math.max(1, Math.min(limit, 30));
+		const qualified = `${query} repo:${ref.owner}/${ref.repo}`;
+		const raw = await this.request<RawCodeSearch>(
+			"GET",
+			`/search/code?q=${encodeURIComponent(qualified)}&per_page=${perPage}`,
+		);
+		return raw.items.map((item) => ({
+			path: item.path,
+			htmlUrl: item.html_url,
+		}));
 	}
 
 	// --- Pull requests ---
@@ -317,6 +386,15 @@ interface RawComment {
 	user: RawUser | null;
 	created_at: string;
 }
+interface RawRepositoryEntry {
+	name: string;
+	path: string;
+	type: "file" | "dir" | "symlink" | "submodule";
+	size: number;
+}
+interface RawCodeSearch {
+	items: Array<{ path: string; html_url: string }>;
+}
 interface RawPull {
 	number: number;
 	title: string;
@@ -356,6 +434,18 @@ function toPull(raw: RawPull): PullRequest {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function repositoryPath(path: string): string {
+	const parts = path.split("/");
+	if (
+		path.startsWith("/") ||
+		parts.length === 0 ||
+		parts.some((part) => !part || part === "." || part === "..")
+	) {
+		throw new Error("Repository path must be a relative file path");
+	}
+	return parts.map(encodeURIComponent).join("/");
 }
 
 async function readResponseText(

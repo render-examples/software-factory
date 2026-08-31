@@ -1,4 +1,4 @@
-import { closeKv, kv } from "#factory-sdk";
+import { closeKv, kv } from "#factory/sdk";
 import { TaskRegistry } from "@renderinc/sdk/workflows";
 import {
 	assertGatewayConfig,
@@ -12,6 +12,12 @@ function requireConfiguration(): void {
 	assertWorkflowConfig();
 	if ((process.env.GITHUB_WEBHOOK_SECRET ?? "").length < 32) {
 		throw new Error("GITHUB_WEBHOOK_SECRET must be at least 32 characters");
+	}
+	const slack = [process.env.SLACK_SIGNING_SECRET, process.env.SLACK_BOT_TOKEN];
+	if (slack.some(Boolean) && slack.some((value) => !value?.trim())) {
+		throw new Error(
+			"Slack requires SLACK_SIGNING_SECRET and SLACK_BOT_TOKEN together",
+		);
 	}
 }
 
@@ -52,6 +58,8 @@ async function checkWorkflowRegistration(): Promise<void> {
 		"implementer",
 		"judge",
 		"security",
+		"slack-assistant",
+		"slack-assistant-agent",
 		"spec-to-pr",
 		"tests",
 		"triage",
@@ -60,8 +68,14 @@ async function checkWorkflowRegistration(): Promise<void> {
 	if (missing.length > 0) {
 		throw new Error(`Workflow tasks did not register: ${missing.join(", ")}`);
 	}
-	if (createWorkflowRegistry().sourceIds().join(",") !== "sandbox") {
-		throw new Error("Production tool registry is not sandbox-only");
+	const sources = createWorkflowRegistry().sourceIds();
+	if (
+		sources.join(",") !==
+		"sandbox,slack-assistant-github,slack-assistant-render"
+	) {
+		throw new Error(
+			"Production tool registry does not match the bounded surface",
+		);
 	}
 }
 

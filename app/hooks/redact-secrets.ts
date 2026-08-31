@@ -1,7 +1,7 @@
 /**
  * Redact-secrets hook — strips secret-like patterns from agent output.
  */
-import type { Hook } from "../../sdk/hooks.js";
+import type { Hook } from "#factory/sdk";
 
 const SECRET_PATTERNS = [
   /\b(sk-ant-api\S{10,})\b/g,
