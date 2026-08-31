@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe("workflow registration", () => {
-  it("registers exactly the factory pipeline and its stations", async () => {
+  it("registers exactly the factory pipeline and its agents", async () => {
     await import("../tasks/index.js");
     await import("../workflows/spec-to-pr.js");
 

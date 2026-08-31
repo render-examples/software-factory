@@ -110,7 +110,7 @@ Workflows host:
 - `GITHUB_TOKEN` (required): fine-grained token scoped to `FACTORY_REPO`.
 - `RENDER_API_KEY` (required by the Render SDK).
 - `RENDER_WORKSPACE_ID` (required for Sandboxes).
-- `REDIS_URL` (required): replay checkpoints and oversized station artifacts.
+- `REDIS_URL` (required): replay checkpoints and oversized agent artifacts.
 - `GITHUB_API_URL` (optional): GitHub API base URL override.
 
 Keep the GitHub token to the minimum Contents, Issues, and Pull Requests
@@ -121,7 +121,7 @@ token in a Git remote URL or agent prompt.
 
 ```text
 app/
-  agents/index.ts          Agent station definitions and prompts
+  agents/index.ts          Agent definitions and prompts
   tasks/index.ts           Agent definitions wrapped with agentTask()
   workflows/               Multi-step orchestration workflows
   gateway/                 HTTP intake, validation, and workflow dispatch
@@ -201,18 +201,18 @@ the security model:
 
 There are two kinds of Render Workflows tasks in this codebase:
 
-1. **Agent station tasks** are created by `agentTask(Agent(...))`. They accept
+1. **Agent tasks** are created by `agentTask(Agent(...))`. They accept
    `{ message: string, sandboxId?: string }` and return a string or blob ref.
 2. **Orchestration workflows** are created directly with `task(...)`. They
-   compose stations and own external side effects.
+   compose agents and own external side effects.
 
 Task registration is module side-effect based. `app/src/workflows.ts` imports
 `app/tasks/index.ts` and every orchestration workflow module. There is no
 separate registry manifest.
 
-## Add an agent station task
+## Add an agent task
 
-Use this path when adding another model-backed station to a pipeline.
+Use this path when adding another model-backed agent to a pipeline.
 
 ### 1. Define the agent
 
@@ -252,11 +252,11 @@ export const docsReviewTask = agentTask(docsReviewer);
 ```
 
 Because `app/tasks/index.ts` is already imported by the workflow entrypoint,
-no additional registration import is needed for a station added there.
+no additional registration import is needed for an agent added there.
 
 ### 3. Call it from orchestration
 
-Import the task into the relevant workflow and pass only the station's input:
+Import the task into the relevant workflow and pass only the agent's input:
 
 ```ts
 const rawReview = await docsReviewTask({ message: stagedDiff });
@@ -265,28 +265,28 @@ const review = isBlobRef(rawReview)
   : rawReview;
 ```
 
-Pass `sandboxId: sandbox.id` only when the station declares `sandbox__*` tools
+Pass `sandboxId: sandbox.id` only when the agent declares `sandbox__*` tools
 and a workflow-owned sandbox already exists.
 
 `agentTask()` requires exactly one terminal runner result. It propagates runner
 errors, rejects missing or multiple results, and stores results larger than
 50,000 characters in Key Value.
 
-### 4. Test the station
+### 4. Test the agent
 
 - Update `app/tests/agents.test.ts` for tool-access boundaries.
 - Update `sdk/tests/agent.test.ts` if task/runner wiring changed.
 - Add structured-output cases to `app/tests/model-json.test.ts` when relevant.
 - Run typecheck and tests.
 
-For a station that must emit JSON, define a Zod schema in workflow code and use
+For an agent that must emit JSON, define a Zod schema in workflow code and use
 `parseModelJson`. Treat `null` as a failure and choose a fail-closed fallback;
 do not trust model JSON without validation.
 
 ## Add an orchestration workflow
 
 Use this path for a new externally dispatchable pipeline or a new composition
-of existing station tasks.
+of existing agent tasks.
 
 ### 1. Create the workflow module
 
@@ -305,7 +305,7 @@ export const issueSummary = task(
   { name: "issue-summary", plan: "standard" },
   async function issueSummary(rawInput: unknown) {
     const input = inputSchema.parse(rawInput);
-    // Fetch authoritative state and orchestrate station tasks here.
+    // Fetch authoritative state and orchestrate agent tasks here.
     return { status: "done", issueNumber: input.issueNumber };
   },
 );
@@ -317,7 +317,7 @@ Workflow handlers should:
 - Return JSON-serializable values.
 - Fetch issue bodies, comments, repository state, and other large data inside
   the workflow rather than carrying it through gateway dispatch.
-- Resolve possible agent blob refs before using station output.
+- Resolve possible agent blob refs before using agent output.
 - Keep GitHub and Git side effects in workflow-owned code.
 - Use `try/finally` around sandbox lifecycle.
 - Truncate unbounded model context explicitly.
@@ -366,7 +366,7 @@ If a workflow is internal-only, register it but do not add a gateway route.
 - `app/tests/dispatch.test.ts`: task path and argument shape.
 - `app/tests/github.test.ts`: signature, event filters, payload, and statuses.
 - `app/tests/server.test.ts`: route mounting and health behavior.
-- Add isolated workflow tests by mocking GitHub, sandbox, and station
+- Add isolated workflow tests by mocking GitHub, sandbox, and agent
   boundaries. `app/tests/spec-to-pr.test.ts` is the reference.
 
 ## Existing `spec-to-pr` workflow behavior
@@ -479,7 +479,7 @@ hook enforcement.
 
 ## Test ownership
 
-Use the closest suite: `app/tests/agents.test.ts` for station permissions;
+Use the closest suite: `app/tests/agents.test.ts` for agent permissions;
 `dispatch.test.ts`, `github.test.ts`, and `server.test.ts` for gateway behavior;
 the other `app/tests/` files for config, GitHub, model JSON, and Git
 credentials. In `sdk/tests/`, use `agent` and `claude-runner` for execution,
@@ -504,7 +504,7 @@ service.
 Before finishing:
 
 1. Confirm the change preserves the gateway/workflow/agent trust boundaries.
-2. Register every new station or workflow through the existing imports.
+2. Register every new agent or workflow through the existing imports.
 3. Keep task names consistent between definitions, dispatch, and tests.
 4. Validate all new external input and keep task values JSON-serializable.
 5. Resolve oversized agent outputs and bound model context.

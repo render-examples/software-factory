@@ -1,5 +1,5 @@
 /**
- * Redis-backed handoff artifacts for large station outputs.
+ * Redis-backed handoff artifacts for large agent outputs.
  * Oversized results become opaque `$blob:blob:<key>` refs that workflow code
  * resolves explicitly; user-authored text is never scanned for references.
  */
