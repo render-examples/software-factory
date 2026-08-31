@@ -11,7 +11,7 @@ import {
 	abandonIntake,
 	claimIntake,
 	markIntakeDispatched,
-} from "../lib/run-store.js";
+} from "#factory-run-store";
 import { dispatchWorkflowTask } from "./dispatch.js";
 import { readRequestBody } from "./body.js";
 
