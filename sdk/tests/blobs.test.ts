@@ -11,6 +11,12 @@ vi.mock("../redis.js", () => ({
     del: async (key: string) => {
       store.delete(key);
     },
+    expire: async (key: string, seconds: number) => {
+      const entry = store.get(key);
+      if (!entry) return 0;
+      entry.ex = seconds;
+      return 1;
+    },
   }),
 }));
 
@@ -18,7 +24,8 @@ import {
   putBlob,
   getBlob,
   delBlob,
-  resolveRefs,
+  isBlobRef,
+  requireBlob,
   maybePutBlob,
   BLOB_THRESHOLD,
 } from "../blobs.js";
@@ -42,9 +49,36 @@ describe("putBlob / getBlob", () => {
     expect(store.get(key)?.ex).toBe(300);
   });
 
+  it("refreshes artifact lifetime when it is read", async () => {
+    const ref = await putBlob("run1", "step", "data", 1);
+    const key = ref.replace("$blob:", "");
+    await getBlob(ref);
+    expect(store.get(key)?.ex).toBe(7 * 24 * 60 * 60);
+  });
+
   it("returns null for unknown ref", async () => {
     const content = await getBlob("$blob:blob:unknown:step:abc");
     expect(content).toBeNull();
+  });
+
+  it("rejects references outside the blob namespace", async () => {
+    store.set("thread:private", {
+      value: JSON.stringify({ messages: ["secret"] }),
+    });
+    expect(await getBlob("$blob:thread:private")).toBeNull();
+  });
+
+  it("uses opaque capabilities instead of content-derived keys", async () => {
+    const first = await putBlob("run1", "step", "same");
+    const second = await putBlob("run1", "step", "same");
+    expect(first).not.toBe(second);
+    expect(isBlobRef(first)).toBe(true);
+  });
+
+  it("fails closed for an invalid or expired required reference", async () => {
+    await expect(
+      requireBlob("$blob:blob:unknown:step:abc"),
+    ).rejects.toThrow(/invalid or expired/);
   });
 });
 
@@ -55,37 +89,6 @@ describe("delBlob", () => {
 
     await delBlob(ref);
     expect(await getBlob(ref)).toBeNull();
-  });
-});
-
-describe("resolveRefs", () => {
-  it("replaces refs with stored content", async () => {
-    const ref1 = await putBlob("r1", "research", "Research findings here");
-    const ref2 = await putBlob("r1", "plan", "Implementation plan");
-
-    const input = `Title\n\n${ref1}\n\nPlan:\n${ref2}`;
-    const resolved = await resolveRefs(input);
-
-    expect(resolved).toBe(
-      "Title\n\nResearch findings here\n\nPlan:\nImplementation plan",
-    );
-  });
-
-  it("leaves text without refs unchanged", async () => {
-    const text = "Just a regular message with no refs";
-    expect(await resolveRefs(text)).toBe(text);
-  });
-
-  it("leaves unresolvable refs in place", async () => {
-    const text = "Prefix $blob:blob:gone:step:abc suffix";
-    expect(await resolveRefs(text)).toBe(text);
-  });
-
-  it("handles duplicate refs", async () => {
-    const ref = await putBlob("r1", "step", "content");
-    const input = `${ref} and ${ref}`;
-    const resolved = await resolveRefs(input);
-    expect(resolved).toBe("content and content");
   });
 });
 

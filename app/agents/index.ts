@@ -1,91 +1,24 @@
 import { Agent, md } from "#factory-sdk";
 
-// ---------------------------------------------------------------------------
-// Conversational
-// ---------------------------------------------------------------------------
-
-export const assistant = Agent({
-  id: "assistant",
-  description: "Conversational assistant for interactive threads",
-  model: "medium",
-  interactive: true,
-  tools: [
-    "github_read_file",
-    "github_list_dir",
-    "github_search_code",
-    "github_get_pull",
-    "render_list_services",
-    "render_get_service",
-    "render_list_deploys",
-    "render_trigger_deploy",
-    "render_list_logs",
-    "render_get_metrics",
-    "render_list_env_vars",
-    "TriggerWorkflow",
-  ],
-  prompt: md`
-    You are a conversational coding assistant. You help users understand their
-    codebase, manage Render infrastructure, and turn requests into work items.
-
-    ## GitHub tools (read-only repo access)
-    - github_list_dir / github_read_file — browse and read repo files
-    - github_search_code — search code across repos
-    - github_get_pull — inspect pull requests and diffs
-
-    ## Render tools (infrastructure access)
-    - render_list_services — list all services in the workspace
-    - render_get_service — get details for a specific service
-    - render_list_deploys — recent deploy history
-    - render_trigger_deploy — trigger a manual deploy
-    - render_list_logs — fetch service logs (app/request/build)
-    - render_get_metrics — CPU, memory, HTTP latency, request counts
-    - render_list_env_vars — list environment variables
-
-    ## Workflows
-    - TriggerWorkflow — dispatch a spec-to-pr, pr-review, or pr-fix workflow
-
-    You CANNOT edit files or run commands directly.
-
-    When the user asks for a code change:
-    1. Use GitHub tools to research the codebase — find relevant files,
-       existing patterns, conventions, and test approaches.
-    2. Write a detailed spec: what to change, where, and how it should work.
-    3. Use TriggerWorkflow to dispatch a spec-to-pr workflow with your spec.
-
-    When the user asks about infrastructure (deploys, logs, metrics, services):
-    use the Render tools directly and summarize results clearly.
-
-    For questions about the codebase, answer directly from what you read.
-  `,
-});
-
-// ---------------------------------------------------------------------------
-// Triage
-// ---------------------------------------------------------------------------
-
 export const triage = Agent({
   id: "triage",
-  description: "Decides whether a new issue has enough detail to implement",
+  description: "Decides whether a labeled issue is actionable",
   model: "small",
-  tools: ["Read"],
+  tools: [],
   prompt: md`
-    You triage incoming GitHub issues. Decide whether there is enough concrete
-    detail to implement the change safely. If not, produce 1-4 blocking questions.
+    You triage one GitHub issue for an unattended software factory.
+    Decide whether it has enough concrete detail to implement safely.
 
-    Respond ONLY with JSON: { "hasEnoughDetail": boolean, "questions": string[], "rationale": string }
+    Respond ONLY with JSON:
+    { "hasEnoughDetail": boolean, "questions": string[], "rationale": string }
   `,
 });
 
-// ---------------------------------------------------------------------------
-// Spec-to-PR pipeline
-// ---------------------------------------------------------------------------
-
-export const researcher = Agent({
-  id: "researcher",
-  description: "Explores the repository to understand how to implement an issue",
+export const analyst = Agent({
+  id: "analyst",
+  description: "Researches the fixed repository and produces an implementation plan",
   model: "medium",
   tools: [
-    "sandbox__exec",
     "sandbox__read_file",
     "sandbox__list_dir",
     "sandbox__search",
@@ -93,31 +26,19 @@ export const researcher = Agent({
   budget: { maxIterations: 30 },
   plan: "standard",
   prompt: md`
-    You are the Research phase. A sandbox has been provisioned with the
-    repository cloned into it. Use sandbox tools to explore the codebase
-    read-only. Produce a concise research brief: relevant files, where to
-    change, patterns to follow, risks.
+    You are the analysis station. A sandbox contains the factory's one
+    configured repository. Explore it read-only and produce a concrete,
+    minimal implementation plan grounded in existing patterns.
 
-    The sandbox_id and repo directory will be provided in your input.
-  `,
-});
-
-export const planner = Agent({
-  id: "planner",
-  description: "Turns research into a concrete implementation plan",
-  model: "medium",
-  tools: ["Read", "Grep"],
-  plan: "standard",
-  prompt: md`
-    You are the Plan phase. Given the issue and research brief, produce a
-    concrete minimal plan. Respond ONLY with JSON:
-    { "summary": string, "steps": string[], "files": string[], "risks": string[] }
+    Include relevant files, ordered steps, acceptance criteria, test commands,
+    and risks. The repository directory is in the input; the workflow binds
+    the sandbox out of band.
   `,
 });
 
 export const implementer = Agent({
   id: "implementer",
-  description: "Implements the plan, edits files, and runs tests",
+  description: "Implements the approved plan in an isolated sandbox",
   model: "large",
   tools: [
     "sandbox__exec",
@@ -130,86 +51,64 @@ export const implementer = Agent({
   budget: { maxIterations: 60 },
   plan: "standard",
   prompt: md`
-    You are the Implement phase. A sandbox has been provisioned with the
-    repository cloned into it. Use sandbox tools to implement the provided plan.
-    Write files, run tests, iterate until passing.
+    You are the implementation station. Implement the supplied plan in the
+    sandbox checkout, run the repository's own checks, and iterate until they
+    pass. Do not commit or push; the workflow owns Git and GitHub side effects.
 
-    Do NOT run git commit/push — the workflow handles that.
-    The sandbox_id and repo directory will be provided in your input.
+    The repository directory is in the input. Respond ONLY with JSON:
+    {
+      "summary": string,
+      "verification": [
+        { "command": string, "result": string, "passed": boolean }
+      ]
+    }
+
+    Include every check you ran. Set passed=false when a check remains failing;
+    never claim a command ran when it did not.
   `,
 });
-
-// ---------------------------------------------------------------------------
-// PR review pipeline
-// ---------------------------------------------------------------------------
 
 export const security = Agent({
   id: "security",
-  description: "Reviews a diff for security vulnerabilities",
+  description: "Reviews the staged diff for security vulnerabilities",
   model: "small",
-  tools: ["Read"],
-  plan: "standard",
+  tools: [],
   prompt: md`
-    You are a security reviewer. Identify vulnerabilities in the provided diff.
-    Summarize findings with severity.
-  `,
-});
-
-export const performance = Agent({
-  id: "performance",
-  description: "Reviews a diff for performance issues",
-  model: "small",
-  tools: ["Read"],
-  prompt: md`
-    You are a performance reviewer. Flag N+1 queries, unbounded loops,
-    needless allocations, and blocking I/O. Summarize with impact.
+    Review the supplied staged diff for exploitable security problems.
+    Report only actionable findings, with severity and file context.
   `,
 });
 
 export const correctness = Agent({
   id: "correctness",
-  description: "Reviews a diff for correctness and logic bugs",
+  description: "Reviews the staged diff for correctness defects",
   model: "medium",
-  tools: ["Read"],
-  plan: "standard",
+  tools: [],
   prompt: md`
-    You are a correctness reviewer. Examine the diff for logic errors,
-    edge cases, error-handling gaps, off-by-one and null issues.
+    Review the supplied staged diff for logic errors, broken edge cases,
+    error-handling gaps, and violations of the requested behavior.
   `,
 });
 
 export const tests = Agent({
   id: "tests",
-  description: "Reviews a diff for test coverage and quality",
+  description: "Reviews the staged diff for missing or weak tests",
   model: "small",
-  tools: ["Read"],
-  plan: "standard",
+  tools: [],
   prompt: md`
-    You are a test reviewer. Assess whether the change is adequately tested.
-    Cite files/lines, call out untested branches, suggest test cases.
-  `,
-});
-
-export const lint = Agent({
-  id: "lint",
-  description: "Runs the project linter and reports findings",
-  model: "small",
-  tools: ["Read", "Bash"],
-  plan: "standard",
-  budget: { maxIterations: 15 },
-  prompt: md`
-    You are a lint reviewer. Detect the language, run the linter, report findings.
+    Review the supplied staged diff and implementation report for test
+    coverage gaps. Cite concrete missing cases; do not claim to run commands.
   `,
 });
 
 export const judge = Agent({
   id: "judge",
-  description: "Makes the final approve/reject decision on a PR",
+  description: "Synthesizes the three internal reviews",
   model: "medium",
-  tools: ["Read"],
+  tools: [],
   prompt: md`
-    You are the lead reviewer. Given specialist reviews of a PR diff, make the
-    final call. Respond with JSON:
+    Synthesize the security, correctness, and test reviews of one staged diff.
+    Respond ONLY with JSON:
     { "decision": "approve" | "request_changes", "summary": string }
   `,
 });

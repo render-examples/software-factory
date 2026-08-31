@@ -3,7 +3,7 @@
  * Agents declare tools by name; the registry resolves them to built-in
  * (runner-native) or custom (Zod-schema) tools.
  */
-import { z } from "zod";
+import type { z } from "zod";
 
 export type ZodShape = Record<string, z.ZodType>;
 
@@ -12,6 +12,7 @@ export type InferShape<T extends ZodShape> = z.output<z.ZodObject<T>>;
 
 export interface ToolContext {
   readonly agentId: string;
+  readonly sandboxId?: string;
   readonly signal?: AbortSignal;
 }
 

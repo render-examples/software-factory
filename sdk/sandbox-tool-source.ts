@@ -1,7 +1,7 @@
 /**
  * SandboxToolSource — exposes sandbox operations as agent tools (sandbox__*).
- * Each tool takes a sandbox_id so agents can target specific sandboxes.
- * Caches connections by sandbox_id. Workflows own sandbox lifecycle.
+ * The workflow binds one sandbox ID through ToolContext. The model cannot
+ * select or address another run's sandbox.
  */
 import { z } from "zod";
 import type { Tool, ToolSource, ToolResult, ToolContext } from "./tools.js";
@@ -28,14 +28,12 @@ export function createSandboxToolSource(
 ): ToolSource {
   const sourceId = opts.id ?? "sandbox";
   const { provider } = opts;
-  const cache = new Map<string, Sandbox>();
 
-  async function resolve(sandboxId: string): Promise<Sandbox> {
-    let sandbox = cache.get(sandboxId);
-    if (sandbox) return sandbox;
-    sandbox = await provider.connect(sandboxId);
-    cache.set(sandboxId, sandbox);
-    return sandbox;
+  async function resolve(ctx: ToolContext): Promise<Sandbox> {
+    if (!ctx.sandboxId) {
+      throw new Error(`Agent "${ctx.agentId}" has no sandbox binding`);
+    }
+    return provider.connect(ctx.sandboxId);
   }
 
   return {
@@ -53,7 +51,7 @@ export function createSandboxToolSource(
   };
 }
 
-type Resolver = (sandboxId: string) => Promise<Sandbox>;
+type Resolver = (ctx: ToolContext) => Promise<Sandbox>;
 
 let patchCounter = 0;
 function uniquePatchPath(): string {
@@ -61,7 +59,6 @@ function uniquePatchPath(): string {
 }
 
 const execSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   command: z.string().describe("The shell command to execute."),
   cwd: z.string().optional().describe("Working directory. Optional."),
 };
@@ -74,7 +71,7 @@ function buildExecTool(resolve: Resolver): Tool<typeof execSchema> {
       "A non-zero exit code is normal output (e.g. failing tests), not a tool error.",
     inputSchema: execSchema,
     async invoke(input, ctx: ToolContext): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+      const sandbox = await resolve(ctx);
       const cmd = input.cwd
         ? `cd ${shellEscape(input.cwd)} && ${input.command}`
         : input.command;
@@ -91,7 +88,6 @@ function buildExecTool(resolve: Resolver): Tool<typeof execSchema> {
 }
 
 const readFileSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   path: z.string().describe("File path within the sandbox."),
 };
 
@@ -100,8 +96,8 @@ function buildReadFileTool(resolve: Resolver): Tool<typeof readFileSchema> {
     name: "sandbox__read_file",
     description: "Read a UTF-8 file from a sandbox. Returns its contents.",
     inputSchema: readFileSchema,
-    async invoke(input): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+    async invoke(input, ctx): Promise<ToolResult> {
+      const sandbox = await resolve(ctx);
       const content = await sandbox.readFile(input.path);
       return { content: truncate(content, 100_000) };
     },
@@ -109,7 +105,6 @@ function buildReadFileTool(resolve: Resolver): Tool<typeof readFileSchema> {
 }
 
 const writeFileSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   path: z.string().describe("File path within the sandbox."),
   content: z.string().describe("Full file contents to write."),
 };
@@ -120,8 +115,8 @@ function buildWriteFileTool(resolve: Resolver): Tool<typeof writeFileSchema> {
     description:
       "Create or overwrite a UTF-8 file in a sandbox. Parent directories are created automatically.",
     inputSchema: writeFileSchema,
-    async invoke(input): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+    async invoke(input, ctx): Promise<ToolResult> {
+      const sandbox = await resolve(ctx);
       await sandbox.writeFile(input.path, input.content);
       return {
         content: `Wrote ${Buffer.byteLength(input.content, "utf-8")} bytes to ${input.path}`,
@@ -131,7 +126,6 @@ function buildWriteFileTool(resolve: Resolver): Tool<typeof writeFileSchema> {
 }
 
 const listDirSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   path: z
     .string()
     .optional()
@@ -144,8 +138,8 @@ function buildListDirTool(resolve: Resolver): Tool<typeof listDirSchema> {
     description:
       "List entries in a directory. Directories are suffixed with '/'. Defaults to the sandbox root.",
     inputSchema: listDirSchema,
-    async invoke(input): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+    async invoke(input, ctx): Promise<ToolResult> {
+      const sandbox = await resolve(ctx);
       const entries = await sandbox.listDir(input.path || ".");
       return { content: entries.join("\n") || "(empty directory)" };
     },
@@ -153,7 +147,6 @@ function buildListDirTool(resolve: Resolver): Tool<typeof listDirSchema> {
 }
 
 const applyPatchSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   diff: z.string().describe("A unified diff in `git apply` format."),
   cwd: z
     .string()
@@ -170,7 +163,7 @@ function buildApplyPatchTool(
       "Apply a unified diff (git apply format) to files in a sandbox. Prefer this for multi-file edits.",
     inputSchema: applyPatchSchema,
     async invoke(input, ctx: ToolContext): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+      const sandbox = await resolve(ctx);
       const patchPath = uniquePatchPath();
       await sandbox.upload(patchPath, input.diff);
       const cdPrefix = input.cwd
@@ -193,7 +186,6 @@ function buildApplyPatchTool(
 }
 
 const searchSchema = {
-  sandbox_id: z.string().describe("Target sandbox ID."),
   pattern: z.string().describe("Regex pattern to search for."),
   path: z
     .string()
@@ -212,7 +204,7 @@ function buildSearchTool(resolve: Resolver): Tool<typeof searchSchema> {
       "Search file contents using ripgrep (rg). Returns matching lines with file paths and line numbers.",
     inputSchema: searchSchema,
     async invoke(input, ctx: ToolContext): Promise<ToolResult> {
-      const sandbox = await resolve(input.sandbox_id);
+      const sandbox = await resolve(ctx);
       const args = ["rg", "--line-number", "--no-heading"];
       if (input.include) args.push("--glob", input.include);
       args.push("--", input.pattern, input.path || ".");

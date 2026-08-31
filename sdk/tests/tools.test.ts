@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import {
-  ToolRegistry,
   createRegistry,
   isBuiltIn,
   isCustomTool,
@@ -196,5 +195,34 @@ describe("SandboxToolSource", () => {
     expect(builtIn).toHaveLength(2);
     expect(custom).toHaveLength(1);
     expect(custom[0].name).toBe("sandbox__exec");
+  });
+
+  it("binds sandbox access through trusted tool context", async () => {
+    const readFile = async () => "contents";
+    const connect = async (sandboxId: string) => {
+      expect(sandboxId).toBe("sandbox-owned-by-workflow");
+      return { readFile } as unknown as Sandbox;
+    };
+    const source = createSandboxToolSource({
+      provider: { name: "bound", create: stubProvider.create, connect },
+    });
+    const [tool] = await createRegistry()
+      .register(source)
+      .resolve(["sandbox__read_file"]);
+
+    expect(tool).toSatisfy(isCustomTool);
+    if (!isCustomTool(tool)) return;
+    expect(tool.inputSchema).not.toHaveProperty("sandbox_id");
+    const result = await tool.invoke(
+      { path: "/workspace/file.txt" },
+      { agentId: "analyst", sandboxId: "sandbox-owned-by-workflow" },
+    );
+    expect(result.content).toBe("contents");
+    await expect(
+      tool.invoke(
+        { path: "/workspace/file.txt" },
+        { agentId: "analyst" },
+      ),
+    ).rejects.toThrow(/no sandbox binding/);
   });
 });

@@ -1,129 +1,143 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-const store = new Map<string, { value: string; ex?: number }>();
-
-vi.mock("../redis.js", () => ({
-  kv: async () => ({
-    get: async (key: string) => store.get(key)?.value ?? null,
-    set: async (key: string, value: string, opts?: { EX?: number }) => {
-      store.set(key, { value, ex: opts?.EX });
-    },
-    del: async (key: string) => {
-      store.delete(key);
-    },
-  }),
-}));
-
-import { Agent, agentTask } from "../agent.js";
-import { appendMessage, getThread } from "../threads.js";
-import { BLOB_THRESHOLD } from "../blobs.js";
-import type { AgentRunner, AgentEvent, RunContext } from "../runner.js";
+import { describe, expect, it } from "vitest";
+import { Agent, agentTask, md } from "../agent.js";
+import type { Hook } from "../hooks.js";
+import type { AgentEvent, AgentRunner, RunContext } from "../runner.js";
 import type { ToolRegistry } from "../tools.js";
 
-/** Runner that records the prompt it receives and yields a canned result. */
 class RecordingRunner implements AgentRunner {
-  readonly prompts: string[] = [];
-  constructor(private readonly result: string = "done") {}
-  async *run(ctx: RunContext): AsyncIterable<AgentEvent> {
-    this.prompts.push(ctx.prompt);
-    yield { type: "result", result: this.result };
+  context?: RunContext;
+
+  async *run(context: RunContext): AsyncIterable<AgentEvent> {
+    this.context = context;
+    yield { type: "result", result: "done" };
   }
 }
 
-const emptyRegistry = { resolve: async () => [] } as unknown as ToolRegistry;
+const emptyRegistry = {
+  resolve: async () => [],
+} as unknown as ToolRegistry;
 
-let seq = 0;
-function interactiveTask(runner: AgentRunner) {
-  const agent = Agent({
-    id: `test-agent-${seq++}`,
-    prompt: "You are a test agent.",
-    interactive: true,
+describe("Agent", () => {
+  it("validates required configuration", () => {
+    expect(() => Agent({ id: "", prompt: "prompt" })).toThrow(/id/);
+    expect(() => Agent({ id: "agent", prompt: "" })).toThrow(/prompt/);
   });
-  return agentTask(agent, { runner, registry: emptyRegistry });
-}
 
-beforeEach(() => {
-  store.clear();
+  it("dedents markdown prompts", () => {
+    expect(md`
+      first
+        second
+    `).toBe("first\n  second");
+  });
 });
 
-describe("agentTask history replay", () => {
-  it("resolves blob refs stored in thread history", async () => {
-    const large = "x".repeat(BLOB_THRESHOLD + 1);
-    await appendMessage("t1", "user", large);
-
-    const stored = (await getThread("t1"))!.messages[0].content;
-    expect(stored).toMatch(/^\$blob:/);
-
-    const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: "follow up", threadId: "t1" });
-
-    const prompt = runner.prompts[0];
-    expect(prompt).not.toContain("$blob:");
-    expect(prompt).toContain(large);
-    expect(prompt).toContain("New message: follow up");
+describe("agentTask", () => {
+  it("defaults to an empty registry rather than host built-ins", async () => {
+    const run = agentTask(
+      Agent({ id: "default-registry-test", prompt: "system", tools: ["Bash"] }),
+      { runner: new RecordingRunner() },
+    );
+    await expect(run({ message: "work" })).rejects.toThrow(/Bash.*not found/);
   });
 
-  it("replays inline messages verbatim", async () => {
-    await appendMessage("t1", "user", "first question");
-    await appendMessage("t1", "assistant", "first answer");
-
+  it("forwards the configured prompt, model, budget, and tools", async () => {
     const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: "second question", threadId: "t1" });
-
-    expect(runner.prompts[0]).toContain("user: first question");
-    expect(runner.prompts[0]).toContain("assistant: first answer");
-  });
-
-  it("keeps ordering when mixing capped and inline messages", async () => {
-    const large = "y".repeat(BLOB_THRESHOLD + 1);
-    await appendMessage("t1", "user", large);
-    await appendMessage("t1", "assistant", "short reply");
-
-    const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: "next", threadId: "t1" });
-
-    const prompt = runner.prompts[0];
-    expect(prompt).not.toContain("$blob:");
-    expect(prompt.indexOf(large)).toBeLessThan(prompt.indexOf("assistant: short reply"));
-  });
-
-  it("resolves refs in the incoming message too", async () => {
-    const large = "z".repeat(BLOB_THRESHOLD + 1);
-    await appendMessage("other", "user", large);
-    const ref = (await getThread("other"))!.messages[0].content;
-
-    const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: ref, threadId: "t1" });
-
-    expect(runner.prompts[0]).toContain(large);
-    expect(runner.prompts[0]).not.toContain("$blob:");
-  });
-
-  it("appends the assistant reply back to the thread", async () => {
-    await appendMessage("t1", "user", "hi");
-    await interactiveTask(new RecordingRunner("the answer"))({
-      message: "hi",
-      threadId: "t1",
+    const agent = Agent({
+      id: "analyst-test",
+      prompt: "system",
+      model: "medium",
+      budget: { maxIterations: 12 },
+      tools: [],
     });
 
-    const thread = await getThread("t1");
-    expect(thread!.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: "the answer",
+    const result = await agentTask(agent, {
+      runner,
+      registry: emptyRegistry,
+    })({ message: "work item" });
+
+    expect(result).toBe("done");
+    expect(runner.context).toMatchObject({
+      agentId: "analyst-test",
+      prompt: "work item",
+      systemPrompt: "system",
+      maxTurns: 12,
+      model: "medium",
+      tools: [],
     });
   });
 
-  it("runs without history when the thread does not exist", async () => {
-    const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: "hello", threadId: "missing" });
-    expect(runner.prompts[0]).toBe("hello");
+  it("bridges hook rejection to the runner's pre-tool policy", async () => {
+    let intercepted: unknown;
+    const runner: AgentRunner = {
+      async *run(context) {
+        if (!context.interceptToolCall) {
+          throw new Error("missing tool interceptor");
+        }
+        intercepted = await context.interceptToolCall({
+          type: "tool_call",
+          id: "tool-1",
+          name: "Bash",
+          input: { command: "rm -rf /" },
+        });
+        yield { type: "result", result: "done" };
+      },
+    };
+    const blocker: Hook = {
+      name: "blocker",
+      on: ["tool_call"],
+      async handle() {
+        return { action: "reject", reason: "blocked" };
+      },
+    };
+
+    await agentTask(
+      Agent({ id: "policy-test", prompt: "system", tools: [] }),
+      { runner, registry: emptyRegistry, hooks: [blocker] },
+    )({ message: "work" });
+
+    expect(intercepted).toEqual({ action: "reject", reason: "blocked" });
   });
 
-  it("leaves an expired ref in place rather than failing", async () => {
-    await appendMessage("t1", "user", "see $blob:blob:gone:step:abc here");
+  it("throws runner failures instead of returning an empty success", async () => {
+    const runner: AgentRunner = {
+      async *run() {
+        yield { type: "error", error: new Error("model unavailable") };
+      },
+    };
+    const run = agentTask(
+      Agent({ id: "failure-test", prompt: "system", tools: [] }),
+      { runner, registry: emptyRegistry },
+    );
 
-    const runner = new RecordingRunner();
-    await interactiveTask(runner)({ message: "next", threadId: "t1" });
-    expect(runner.prompts[0]).toContain("$blob:blob:gone:step:abc");
+    await expect(run({ message: "work" })).rejects.toThrow(
+      "model unavailable",
+    );
+  });
+
+  it("requires exactly one terminal result", async () => {
+    const noResult: AgentRunner = {
+      async *run() {
+        yield { type: "text", text: "unfinished" };
+      },
+    };
+    const multipleResults: AgentRunner = {
+      async *run() {
+        yield { type: "result", result: "first" };
+        yield { type: "result", result: "second" };
+      },
+    };
+    const agent = Agent({ id: "terminal-test", prompt: "system", tools: [] });
+
+    await expect(
+      agentTask(agent, { runner: noResult, registry: emptyRegistry })({
+        message: "work",
+      }),
+    ).rejects.toThrow(/no result/);
+    await expect(
+      agentTask(agent, {
+        runner: multipleResults,
+        registry: emptyRegistry,
+      })({ message: "work" }),
+    ).rejects.toThrow(/multiple results/);
   });
 });
