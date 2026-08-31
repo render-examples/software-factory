@@ -1,4 +1,4 @@
-import { kv } from "#factory-sdk";
+import { kv } from "#factory/sdk";
 
 const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const LEASE_TTL_SECONDS = 26 * 60 * 60;

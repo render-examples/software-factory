@@ -1,7 +1,7 @@
 /**
  * Audit hook — logs every tool call, tool result, and final result.
  */
-import type { Hook } from "../../sdk/hooks.js";
+import type { Hook } from "#factory/sdk";
 
 export const auditHook: Hook = {
   name: "audit",

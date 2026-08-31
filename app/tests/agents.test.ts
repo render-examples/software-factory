@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyst,
+  assistant,
   correctness,
   implementer,
   judge,
@@ -10,6 +11,13 @@ import {
 } from "../agents/index.js";
 
 describe("factory agent tool boundaries", () => {
+  it("keeps the Slack assistant bounded to read and issue drafting", () => {
+    expect(assistant.spec.tools).toContain("draft_factory_issue");
+    expect(assistant.spec.tools).not.toContain("render_trigger_deploy");
+    expect(assistant.spec.tools).not.toContain("render_list_env_vars");
+    expect(assistant.spec.tools).not.toContain("Bash");
+  });
+
   it("gives host-side decision agents no tools", () => {
     for (const agent of [triage, security, correctness, tests, judge]) {
       expect(agent.spec.tools).toEqual([]);

@@ -2,7 +2,7 @@
  * Gateway entrypoint — Hono web service.
  */
 import { serve } from "@hono/node-server";
-import { closeKv } from "#factory-sdk";
+import { closeKv } from "#factory/sdk";
 import { createApp } from "../gateway/server.js";
 import { assertGatewayConfig } from "../lib/factory-config.js";
 

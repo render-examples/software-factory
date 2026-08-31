@@ -4,10 +4,8 @@
   "private": true,
   "type": "module",
   "imports": {
-    "#factory-agents": "./app/agents/index.ts",
-    "#factory-run-store": "./app/lib/run-store.ts",
-    "#factory-sdk": "./sdk/index.ts",
-    "#factory-sdk/*": "./sdk/*.ts"
+    "#factory/sdk": "./sdk/index.ts",
+    "#factory/sdk/*": "./sdk/*.ts"
   },
   "engines": {
     "node": ">=22"
@@ -19,10 +17,10 @@
     "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/src/workflows.ts",
     "dev:redis": "docker compose up redis",
     "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts",
-    "lint": "biome lint --error-on-warnings app sdk scripts integration",
+    "lint": "biome lint --error-on-warnings app sdk scripts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "RUN_LIVE_INTEGRATION=1 vitest run integration",
+    "test:integration": "RUN_LIVE_INTEGRATION=1 vitest run app/tests/integration",
     "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {

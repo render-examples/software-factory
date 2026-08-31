@@ -100,6 +100,8 @@ Gateway:
 - `RENDER_WORKFLOW_SLUG` (required to dispatch): deployed Workflows service
   slug, without the task name.
 - `REDIS_URL` (required): delivery deduplication and per-issue leases.
+- `SLACK_SIGNING_SECRET` (optional): enables signed Slack intake. Any member
+  who can reach the installed app may use the bounded assistant.
 - `PORT` (optional): gateway port; defaults to `3000`.
 
 Workflows host:
@@ -111,6 +113,7 @@ Workflows host:
 - `RENDER_API_KEY` (required by the Render SDK).
 - `RENDER_WORKSPACE_ID` (required for Sandboxes).
 - `REDIS_URL` (required): replay checkpoints and oversized agent artifacts.
+- `SLACK_BOT_TOKEN` (required only when Slack intake is enabled): posts replies.
 - `GITHUB_API_URL` (optional): GitHub API base URL override.
 
 Keep the GitHub token to the minimum Contents, Issues, and Pull Requests
@@ -127,9 +130,10 @@ app/
   gateway/                 HTTP intake, validation, and workflow dispatch
   hooks/                   Audit, destructive-action block, secret redaction
   lib/                     GitHub, config, model JSON, and sandbox Git helpers
+  tools/                   Bounded Slack-assistant GitHub/Render integrations
   src/server.ts            Gateway process entrypoint
   src/workflows.ts         Workflow process entrypoint and registrations
-  tests/                   App and gateway tests
+  tests/                   App, gateway, and integration tests
 sdk/
   agent.ts                 Agent(), configure(), and agentTask()
   runner.ts                Provider-neutral AgentRunner interface
@@ -147,7 +151,7 @@ Dockerfile                 Gateway image only
 docker-compose.yml         Local Redis
 ```
 
-`#factory-sdk` maps to `sdk/index.ts`. Use this alias from app code for public
+`#factory/sdk` maps to `sdk/index.ts`. Use this alias from app code for public
 SDK APIs. Add a barrel export when a new SDK capability is meant to be public.
 
 `tmp/` is ignored scratch space and may contain stale design notes. Runtime
@@ -157,7 +161,7 @@ source, tests, this file, and `README.md` are authoritative.
 
 - This is strict TypeScript using ESM and NodeNext resolution.
 - Include `.js` in relative TypeScript import specifiers.
-- Use `#factory-sdk` rather than reaching into SDK internals from app code.
+- Use `#factory/sdk` rather than reaching into SDK internals from app code.
 - Use kebab-case workflow filenames and task names; use camelCase exports.
 - Validate external and workflow input with Zod before using it.
 - Use `md` for dedented multi-line agent prompts.
@@ -176,7 +180,8 @@ Preserve these boundaries unless the requested change explicitly redesigns
 the security model:
 
 - One deployment is bound to one validated `FACTORY_REPO`.
-- Only an `issues.labeled` event from an allowed human actor starts work.
+- Only an `issues.labeled` event from an allowed human actor starts factory
+  implementation; Slack can draft an unlabeled issue but cannot start work.
 - The webhook signature is checked before JSON parsing or dispatch.
 - Pull request conversations, bots, wrong repositories, wrong labels, and
   unsupported events are skipped.
@@ -189,8 +194,12 @@ the security model:
   those bypass the workflow-owned sandbox binding.
 - `sandboxId` is supplied by workflow code through `AgentTaskInput`; it is not
   model-selected or accepted from public input.
-- GitHub writes, Git pushes, sandbox lifecycle, and pull request creation stay
-  in orchestration code, not model-callable tools.
+- Git pushes, labels, sandbox lifecycle, and pull request creation stay in
+  orchestration code. The sole model-callable GitHub write creates an
+  unlabeled issue in `FACTORY_REPO`.
+- Slack is disabled unless its signing secret is present. The signing secret
+  authenticates Slack rather than an individual user; the assistant therefore
+  has no deploy, environment-value, label, merge, or workflow-dispatch tool.
 - Preserve a sandbox across automatic task retries; terminate it in `finally`
   only after a terminal workflow result or final failed attempt.
 - Automation stops at a draft PR. It does not mark ready or merge.
@@ -432,9 +441,10 @@ Custom tools implement `ToolSource` from `sdk/tools.ts`.
 4. Add the exact tool names to only the agents that need them.
 5. Add registry, validation, permission, and failure tests.
 
-Use the `source__tool` naming convention. The production registry currently
-contains only the sandbox source. Unknown tool names fail during task
-execution.
+Use the `source__tool` naming convention. The production registry contains the
+sandbox source plus bounded Slack-assistant GitHub and read-only Render
+sources. Agent declarations still determine the exact per-agent surface;
+unknown tool names fail during task execution.
 
 Do not register Claude built-in filesystem or shell tools for app agents
 without an explicit security-model change. Custom sandbox tools are bridged

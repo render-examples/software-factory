@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
-import { closeKv, kv } from "../sdk/redis.js";
+import { closeKv, kv } from "#factory/sdk";
 import {
 	abandonIntake,
 	claimExecution,
@@ -13,7 +13,15 @@ import {
 	putCheckpoint,
 	refreshExecution,
 	releaseExecution,
-} from "../app/lib/run-store.js";
+} from "../../lib/run-store.js";
+import {
+	appendSlackMessage,
+	claimSlackDelivery,
+	claimSlackThread,
+	getSlackThread,
+	markSlackDispatched,
+	releaseSlackThread,
+} from "../../lib/slack-state.js";
 
 afterAll(async () => {
 	await closeKv();
@@ -67,6 +75,37 @@ describe.skipIf(process.env.RUN_LIVE_INTEGRATION !== "1")(
 			await abandonIntake(repository, issueNumber, secondAttempt);
 			await abandonIntake(repository, issueNumber, firstAttempt);
 			await clearCheckpoints(firstAttempt, ["probe", "failure-count"]);
+		});
+
+		it("executes atomic Slack delivery, memory, and lock scripts", async () => {
+			const client = await kv();
+			const eventId = `Ev-${randomUUID()}`;
+			const threadId = `C-${randomUUID()}`;
+			const hash = (value: string) =>
+				createHash("sha256").update(value).digest("hex");
+
+			expect(await claimSlackDelivery(eventId)).toBe("claimed");
+			await markSlackDispatched(eventId);
+			expect(await claimSlackDelivery(eventId)).toBe("dispatched");
+			const message = {
+				eventId,
+				role: "user" as const,
+				content: "hello",
+				ts: new Date().toISOString(),
+			};
+			expect(await appendSlackMessage(threadId, message)).toBe(true);
+			expect(await appendSlackMessage(threadId, message)).toBe(false);
+			expect(await getSlackThread(threadId)).toEqual([message]);
+			expect(await claimSlackThread(threadId, eventId)).toBe(true);
+			expect(await claimSlackThread(threadId, "other")).toBe(false);
+			await releaseSlackThread(threadId, eventId);
+
+			await client.del([
+				`slack:delivery:${hash(eventId)}`,
+				`slack:message:${hash(eventId)}`,
+				`slack:thread:${hash(threadId)}`,
+				`slack:lock:${hash(threadId)}`,
+			]);
 		});
 	},
 );

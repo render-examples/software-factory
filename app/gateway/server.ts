@@ -1,7 +1,8 @@
 /** Gateway — Hono server for GitHub intake and health. */
 import { Hono } from "hono";
-import { kv } from "#factory-sdk";
+import { kv } from "#factory/sdk";
 import { githubHandler } from "./github.js";
+import { slackConfigured, slackHandler } from "./slack.js";
 
 export function createApp(): Hono {
   const app = new Hono();
@@ -16,6 +17,7 @@ export function createApp(): Hono {
     }
   });
   app.route("/channels", githubHandler());
+  if (slackConfigured()) app.route("/channels", slackHandler());
 
   return app;
 }
