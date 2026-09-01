@@ -1,9 +1,12 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	createMemoryFactoryStore,
+	type FactoryStore,
+} from "#factory/store";
 
-const { startTask, redisStore } = vi.hoisted(() => ({
+const { startTask } = vi.hoisted(() => ({
 	startTask: vi.fn(),
-	redisStore: new Map<string, string>(),
 }));
 
 vi.mock("@renderinc/sdk", () => ({
@@ -12,46 +15,10 @@ vi.mock("@renderinc/sdk", () => ({
 	},
 }));
 
-vi.mock("../../sdk/redis.js", () => ({
-	kv: async () => ({
-		eval: async (
-			script: string,
-			options: { keys: string[]; arguments: string[] },
-		) => {
-			const [deliveryKey, leaseKey] = options.keys;
-			const [attemptId, mode] = options.arguments;
-			if (script.includes('return "claimed"')) {
-				const delivery = redisStore.get(deliveryKey);
-				if (delivery?.startsWith("completed:")) return "completed";
-				if (delivery?.startsWith("dispatched:")) return "dispatched";
-				if (delivery) return "pending";
-				if (redisStore.has(leaseKey)) return "busy";
-				redisStore.set(deliveryKey, `pending:${attemptId}`);
-				redisStore.set(leaseKey, attemptId);
-				return "claimed";
-			}
-			if (script.includes("local expected")) {
-				if (redisStore.get(deliveryKey) !== `pending:${attemptId}`) return 0;
-				redisStore.set(deliveryKey, `dispatched:${attemptId}`);
-				return 1;
-			}
-			if (redisStore.get(leaseKey) === attemptId) {
-				redisStore.delete(leaseKey);
-			}
-			if (
-				mode === "delete" &&
-				redisStore.get(deliveryKey)?.endsWith(attemptId)
-			) {
-				redisStore.delete(deliveryKey);
-			}
-			return 1;
-		},
-	}),
-}));
-
 import { githubHandler } from "../gateway/github.js";
 
 const SECRET = "github-test-secret";
+let store: FactoryStore;
 
 function issuePayload(overrides: Record<string, unknown> = {}) {
 	return {
@@ -64,10 +31,20 @@ function issuePayload(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function post(event: string, payload: unknown, deliveryId = "delivery-123456") {
+function signedBody(payload: unknown): {
+	body: string;
+	signature: string;
+} {
 	const body = JSON.stringify(payload);
-	const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-	return githubHandler().request("/github", {
+	return {
+		body,
+		signature: `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+	};
+}
+
+function post(event: string, payload: unknown, deliveryId = "delivery-123456") {
+	const { body, signature } = signedBody(payload);
+	return githubHandler({ store }).request("/github", {
 		method: "POST",
 		headers: {
 			"x-github-event": event,
@@ -79,9 +56,9 @@ function post(event: string, payload: unknown, deliveryId = "delivery-123456") {
 }
 
 beforeEach(() => {
-	redisStore.clear();
+	store = createMemoryFactoryStore();
 	startTask.mockReset();
-	startTask.mockResolvedValue({ id: "run-1" });
+	startTask.mockResolvedValue({ taskRunId: "run-1" });
 	process.env.FACTORY_REPO = "acme/factory";
 	process.env.FACTORY_LABEL = "factory";
 	process.env.FACTORY_GITHUB_ACTORS = "maintainer,second-maintainer";
@@ -91,8 +68,9 @@ beforeEach(() => {
 	vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
 	vi.restoreAllMocks();
+	await store.close();
 	delete process.env.FACTORY_REPO;
 	delete process.env.FACTORY_LABEL;
 	delete process.env.FACTORY_GITHUB_ACTORS;
@@ -101,14 +79,26 @@ afterEach(() => {
 });
 
 describe("GitHub factory intake", () => {
-	it("dispatches only the issue number for an authorized label event", async () => {
+	it("dispatches a generated run ID for an authorized label event", async () => {
 		const response = await post("issues", issuePayload());
 
 		expect(response.status).toBe(202);
 		expect(await response.json()).toEqual({ dispatched: "spec-to-pr" });
 		expect(startTask).toHaveBeenCalledWith(
 			"acme/factory-workflows/spec-to-pr",
-			[{ issueNumber: 42, attemptId: "delivery-123456" }],
+			[
+				expect.objectContaining({
+					issueNumber: 42,
+					runId: expect.any(String),
+				}),
+			],
+		);
+		const payload = startTask.mock.calls[0][1][0] as {
+			runId: string;
+		};
+		expect(payload.runId).not.toBe("delivery-123456");
+		expect(await store.inbox.getRunId("github", "delivery-123456")).toBe(
+			payload.runId,
 		);
 	});
 
@@ -119,22 +109,37 @@ describe("GitHub factory intake", () => {
 		expect(await duplicate.json()).toMatchObject({ reason: "dispatched" });
 
 		const busy = await post("issues", issuePayload(), "delivery-654321");
-		expect(await busy.json()).toMatchObject({ reason: "busy" });
+		expect(await busy.json()).toMatchObject({ reason: "subject_busy" });
 		expect(startTask).toHaveBeenCalledTimes(1);
 	});
 
-	it("redispatches a claimed delivery when the gateway died before dispatch", async () => {
-		const attemptId = "delivery-pending";
-		redisStore.set(
-			`factory:delivery:acme%2Ffactory:${attemptId}`,
-			`pending:${attemptId}`,
-		);
-		redisStore.set("factory:lease:acme%2Ffactory:42", attemptId);
+	it("redispatches a pending delivery after a gateway interruption", async () => {
+		const deliveryId = "delivery-pending";
+		const payload = issuePayload();
+		const { body } = signedBody(payload);
+		const runId = randomUUID();
+		await store.inbox.accept({
+			provider: "github",
+			deliveryId,
+			payloadDigest: createHash("sha256").update(body).digest("hex"),
+			subjectKey: "github:acme/factory:issue:42",
+			run: {
+				id: runId,
+				rootRunId: runId,
+				kind: "workflow",
+				name: "spec-to-pr",
+			},
+			deliveryTtlSeconds: 600,
+			subjectLeaseTtlSeconds: 600,
+		});
 
-		const response = await post("issues", issuePayload(), attemptId);
+		const response = await post("issues", payload, deliveryId);
 
 		expect(response.status).toBe(202);
-		expect(startTask).toHaveBeenCalledOnce();
+		expect(startTask).toHaveBeenCalledWith(
+			"acme/factory-workflows/spec-to-pr",
+			[{ issueNumber: 42, runId }],
+		);
 	});
 
 	it.each([
@@ -168,7 +173,7 @@ describe("GitHub factory intake", () => {
 	});
 
 	it("rejects an invalid signature", async () => {
-		const response = await githubHandler().request("/github", {
+		const response = await githubHandler({ store }).request("/github", {
 			method: "POST",
 			headers: {
 				"x-github-event": "issues",
@@ -182,9 +187,8 @@ describe("GitHub factory intake", () => {
 	});
 
 	it("requires a valid GitHub delivery ID", async () => {
-		const body = JSON.stringify(issuePayload());
-		const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-		const response = await githubHandler().request("/github", {
+		const { body, signature } = signedBody(issuePayload());
+		const response = await githubHandler({ store }).request("/github", {
 			method: "POST",
 			headers: {
 				"x-github-event": "issues",
@@ -199,7 +203,7 @@ describe("GitHub factory intake", () => {
 	it("rejects malformed signed JSON", async () => {
 		const body = "{";
 		const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-		const response = await githubHandler().request("/github", {
+		const response = await githubHandler({ store }).request("/github", {
 			method: "POST",
 			headers: {
 				"x-github-event": "issues",
@@ -226,10 +230,10 @@ describe("GitHub factory intake", () => {
 		expect(response.status).toBe(503);
 	});
 
-	it("returns 502 when workflow dispatch fails", async () => {
+	it("returns 502 when workflow dispatch fails and permits redelivery", async () => {
 		startTask
 			.mockRejectedValueOnce(new Error("boom"))
-			.mockResolvedValueOnce({ id: "run-2" });
+			.mockResolvedValueOnce({ taskRunId: "run-2" });
 		const response = await post("issues", issuePayload());
 		expect(response.status).toBe(502);
 		const retry = await post("issues", issuePayload());

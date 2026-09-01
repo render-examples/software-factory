@@ -5,7 +5,7 @@
  * payloads stay small without a second storage protocol.
  */
 export type DispatchResult =
-  | { ok: true; taskName: string }
+  | { ok: true; taskName: string; taskRunId?: string }
   | { ok: false; reason: "no-slug"; taskName: string }
   | { ok: false; reason: "error"; taskName: string; error: unknown };
 
@@ -28,8 +28,17 @@ export async function dispatchWorkflowTask<T>(
   try {
     const { Render } = await import("@renderinc/sdk");
     const client = new Render();
-    await client.workflows.startTask(`${slug}/${taskName}`, [payload]);
-    return { ok: true, taskName };
+    const started = await client.workflows.startTask(`${slug}/${taskName}`, [
+      payload,
+    ]);
+    const taskRunId =
+      started &&
+      typeof started === "object" &&
+      "taskRunId" in started &&
+      typeof started.taskRunId === "string"
+        ? started.taskRunId
+        : undefined;
+    return { ok: true, taskName, taskRunId };
   } catch (error) {
     console.error(`Failed to dispatch ${taskName}:`, error);
     return { ok: false, reason: "error", taskName, error };

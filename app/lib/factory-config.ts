@@ -50,7 +50,7 @@ export function assertGatewayConfig(): void {
   factoryRepository();
   factoryActors();
   requireEnv("GITHUB_WEBHOOK_SECRET");
-  requireEnv("REDIS_URL");
+  requireEnv("DATABASE_URL");
   requireEnv("RENDER_WORKFLOW_SLUG");
 }
 
@@ -58,7 +58,7 @@ export function assertWorkflowConfig(): void {
   factoryRepository();
   requireEnv("ANTHROPIC_API_KEY");
   requireEnv("GITHUB_TOKEN");
-  requireEnv("REDIS_URL");
+  requireEnv("DATABASE_URL");
   requireEnv("RENDER_API_KEY");
   requireEnv("RENDER_WORKSPACE_ID");
 }

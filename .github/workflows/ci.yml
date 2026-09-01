@@ -13,12 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
-      redis:
-        image: redis:7-alpine
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: render_factory
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
         ports:
-          - 6379:6379
+          - 5432:5432
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "pg_isready -U postgres -d render_factory"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -32,5 +36,5 @@ jobs:
       - run: npm run check
       - run: npm run test:integration
         env:
-          REDIS_URL: redis://localhost:6379
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/render_factory
       - run: npm audit --omit=dev --audit-level=moderate

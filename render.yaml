@@ -1,14 +1,18 @@
+databases:
+  - name: render-factory-db
+    plan: basic-256mb
+
 services:
   - type: web
     name: render-factory-gateway
     runtime: docker
     plan: starter
+    preDeployCommand: npm run db:migrate
     healthCheckPath: /ready
     envVars:
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: render-factory-kv
+      - key: DATABASE_URL
+        fromDatabase:
+          name: render-factory-db
           property: connectionString
       - key: FACTORY_REPO
         sync: false
@@ -20,11 +24,15 @@ services:
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-      - key: SLACK_SIGNING_SECRET
-        sync: false
 
-  - type: keyvalue
-    name: render-factory-kv
+  - type: cron
+    name: render-factory-retention
+    runtime: docker
     plan: starter
-    maxmemoryPolicy: noeviction
-    ipAllowList: []
+    schedule: "0 4 * * *"
+    dockerCommand: npm run db:cleanup
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: render-factory-db
+          property: connectionString

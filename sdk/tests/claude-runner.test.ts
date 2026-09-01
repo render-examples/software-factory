@@ -257,10 +257,24 @@ describe("ClaudeRunner event mapping", () => {
 				is_error: true,
 				stop_reason: "max turns",
 				errors: ["turn budget exhausted"],
+				modelUsage: {
+					"claude-test": {
+						inputTokens: 12,
+						outputTokens: 3,
+					},
+				},
 			};
 		});
 
-		const [event] = await collectEvents();
+		const [usage, event] = await collectEvents();
+		expect(usage).toEqual({
+			type: "usage",
+			usage: {
+				inputTokens: 12,
+				outputTokens: 3,
+				model: "claude-test",
+			},
+		});
 		expect(event.type).toBe("error");
 		if (event.type === "error") {
 			expect(event.error.message).toContain("turn budget exhausted");

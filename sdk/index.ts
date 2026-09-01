@@ -1,7 +1,11 @@
 export { Agent, agentTask, md, configure } from "./agent.js";
-export type { AgentDef, AgentSpec, AgentTaskInput, AgentTaskOptions } from "./agent.js";
-
-export { closeKv, kv } from "./redis.js";
+export type {
+  AgentDef,
+  AgentRunContext,
+  AgentSpec,
+  AgentTaskInput,
+  AgentTaskOptions,
+} from "./agent.js";
 
 export {
   putBlob,
@@ -36,6 +40,7 @@ export type {
   RunContext,
   ToolCallEvent,
   ToolCallInterception,
+  TokenUsage,
 } from "./runner.js";
 
 // Hooks
@@ -56,7 +61,7 @@ export {
   BaseSandbox,
   collectExecOutput,
   shellEscape,
-} from "./sandbox.js";
+} from "./sandbox/index.js";
 export type {
   Sandbox,
   SandboxProvider,
@@ -67,7 +72,7 @@ export type {
   SandboxUploadData,
   SandboxUploadOptions,
   CreateSandboxOptions,
-} from "./sandbox.js";
+} from "./sandbox/index.js";
 
 export { createSandboxToolSource } from "./sandbox-tool-source.js";
 export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";

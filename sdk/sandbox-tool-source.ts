@@ -5,8 +5,8 @@
  */
 import { z } from "zod";
 import type { Tool, ToolSource, ToolResult, ToolContext } from "./tools.js";
-import type { Sandbox, SandboxProvider } from "./sandbox.js";
-import { collectExecOutput, shellEscape } from "./sandbox.js";
+import type { Sandbox, SandboxProvider } from "./sandbox/index.js";
+import { collectExecOutput, shellEscape } from "./sandbox/index.js";
 
 export interface SandboxToolSourceOptions {
   provider: SandboxProvider;

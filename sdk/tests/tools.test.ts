@@ -8,7 +8,7 @@ import {
 import type { Tool, ToolSource, ToolResult, ToolContext, ResolvedTool } from "../tools.js";
 import { ClaudeBuiltInToolSource } from "../runners/claude.js";
 import { createSandboxToolSource } from "../sandbox-tool-source.js";
-import type { SandboxProvider, Sandbox } from "../sandbox.js";
+import type { SandboxProvider, Sandbox } from "../sandbox/index.js";
 
 const echoSchema = { text: z.string() };
 

@@ -8,7 +8,7 @@ import {
 	tool as sdkTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRunner, AgentEvent, RunContext } from "../runner.js";
+import type { AgentRunner, AgentEvent, RunContext, TokenUsage } from "../runner.js";
 import {
 	isBuiltIn,
 	isCustomTool,
@@ -180,10 +180,13 @@ export class ClaudeRunner implements AgentRunner {
 			};
 		}
 
+		const resolvedModel = ctx.model
+			? this.modelResolver.resolve(ctx.model).model
+			: "unknown";
 		try {
 			const toolNames = new Map<string, string>();
 			for await (const msg of query({ prompt: ctx.prompt, options })) {
-				for (const event of mapSdkMessage(msg, toolNames)) {
+				for (const event of mapSdkMessage(msg, toolNames, resolvedModel)) {
 					yield event;
 				}
 			}
@@ -236,13 +239,69 @@ function toolResultContent(content: unknown): string {
 		.join("\n");
 }
 
+function extractTerminalUsage(
+	msg: Record<string, unknown>,
+	resolvedModel: string,
+): TokenUsage[] {
+	const modelUsage = msg.modelUsage;
+	if (
+		modelUsage !== null &&
+		typeof modelUsage === "object" &&
+		!Array.isArray(modelUsage)
+	) {
+		const totals = Object.entries(modelUsage as Record<string, unknown>)
+			.flatMap(([model, raw]) => {
+				if (raw === null || typeof raw !== "object") return [];
+				const usage = raw as Record<string, unknown>;
+				const inputTokens =
+					typeof usage.inputTokens === "number"
+						? usage.inputTokens
+						: 0;
+				const outputTokens =
+					typeof usage.outputTokens === "number"
+						? usage.outputTokens
+						: 0;
+				if (inputTokens === 0 && outputTokens === 0) return [];
+				return [{ inputTokens, outputTokens, model }];
+			});
+		if (totals.length > 0) return totals;
+	}
+	const usage =
+		(msg.message as Record<string, unknown> | undefined)?.usage ??
+		msg.usage;
+	if (usage === null || typeof usage !== "object") return [];
+	const u = usage as Record<string, unknown>;
+	const inputTokens =
+		typeof u.input_tokens === "number"
+			? u.input_tokens
+			: typeof u.inputTokens === "number"
+				? u.inputTokens
+				: 0;
+	const outputTokens =
+		typeof u.output_tokens === "number"
+			? u.output_tokens
+			: typeof u.outputTokens === "number"
+				? u.outputTokens
+				: 0;
+	if (inputTokens === 0 && outputTokens === 0) return [];
+	return [{ inputTokens, outputTokens, model: resolvedModel }];
+}
+
 function mapSdkMessage(
 	msg: SDKMessage,
 	toolNames: Map<string, string>,
+	resolvedModel: string,
 ): AgentEvent[] {
 	const events: AgentEvent[] = [];
 	switch (msg.type) {
 		case "result": {
+			const resultEvents: AgentEvent[] = [];
+			for (const usage of extractTerminalUsage(
+				msg as unknown as Record<string, unknown>,
+				resolvedModel,
+			)) {
+				resultEvents.push({ type: "usage", usage });
+			}
 			if (msg.subtype !== "success" || msg.is_error) {
 				const details =
 					"errors" in msg && msg.errors.length > 0
@@ -250,14 +309,14 @@ function mapSdkMessage(
 						: "result" in msg && typeof msg.result === "string"
 							? msg.result
 							: (msg.stop_reason ?? msg.subtype);
-				return [{ type: "error", error: new Error(details) }];
+				resultEvents.push({
+					type: "error",
+					error: new Error(details),
+				});
+				return resultEvents;
 			}
-			return [
-				{
-					type: "result",
-					result: msg.result,
-				},
-			];
+			resultEvents.push({ type: "result", result: msg.result });
+			return resultEvents;
 		}
 		case "assistant": {
 			if (msg.error) {
