@@ -2,7 +2,7 @@ import type {
 	ExecutionHandle,
 	FactoryStore,
 } from "#factory/store";
-import type { CheckpointStage } from "./constants.js";
+import { DOWNSTREAM_STAGES, type CheckpointStage } from "./constants.js";
 
 export interface CheckpointAttempt {
 	runId: string;
@@ -16,12 +16,26 @@ export interface CheckpointRunner {
 		stage: CheckpointStage,
 		execute: (context: { generation: number }) => Promise<T>,
 	): Promise<T>;
+	invalidateDownstream(fromStage: CheckpointStage): Promise<void>;
 }
 
 export function createCheckpointRunner(
 	attempt: CheckpointAttempt,
 ): CheckpointRunner {
 	return {
+		async invalidateDownstream(fromStage: CheckpointStage): Promise<void> {
+			const startIndex = DOWNSTREAM_STAGES.indexOf(fromStage.key);
+			if (startIndex < 0) return;
+			const keys = DOWNSTREAM_STAGES.slice(startIndex);
+			if (keys.length === 0) return;
+			await attempt.store.runs.invalidateSteps(
+				attempt.runId,
+				keys,
+				"retry_after_fix",
+				attempt.execution,
+			);
+		},
+
 		async run<T>(
 			stage: CheckpointStage,
 			execute: (context: { generation: number }) => Promise<T>,

@@ -99,6 +99,53 @@ export async function completeDiff({
 	return diff;
 }
 
+export interface VerificationResult {
+	passed: boolean;
+	results: Array<{
+		command: string;
+		exitCode: number;
+		output: string;
+		passed: boolean;
+	}>;
+}
+
+const MAX_VERIFY_OUTPUT = 10_000;
+
+export async function runVerification(
+	sandbox: Sandbox,
+	commands: readonly string[],
+): Promise<VerificationResult> {
+	const results: VerificationResult["results"] = [];
+	let allPassed = true;
+	for (const command of commands) {
+		const events = await sandbox.exec(
+			`cd ${shellEscape(REPO_DIR)} && ${command}`,
+		);
+		const { output, exitCode } = await collectExecOutput(events);
+		const passed = exitCode === 0;
+		if (!passed) allPassed = false;
+		results.push({
+			command,
+			exitCode,
+			output: output.slice(0, MAX_VERIFY_OUTPUT),
+			passed,
+		});
+	}
+	return { passed: allPassed, results };
+}
+
+export function formatVerificationFailures(
+	result: VerificationResult,
+): string {
+	return result.results
+		.filter((r) => !r.passed)
+		.map(
+			(r) =>
+				`Command: ${r.command}\nExit code: ${r.exitCode}\nOutput:\n${r.output}`,
+		)
+		.join("\n\n---\n\n");
+}
+
 interface VerifyPushOptions {
 	sandbox: Sandbox;
 	token: string;

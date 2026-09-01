@@ -49,19 +49,17 @@ export const implementer = Agent({
 	plan: "standard",
 	prompt: md`
     You are the implementation agent. Implement the supplied plan in the
-    sandbox checkout, run the repository's own checks, and iterate until they
-    pass. Do not commit or push; the workflow owns Git and GitHub side effects.
+    sandbox checkout. Do not commit, push, or run verification commands;
+    the workflow handles Git operations and verification separately.
 
-    The repository directory is in the input. Respond ONLY with JSON:
-    {
-      "summary": string,
-      "verification": [
-        { "command": string, "result": string, "passed": boolean }
-      ]
-    }
+    The repository directory is in the input. Focus on writing correct code
+    that follows the repository's existing patterns and conventions.
 
-    Include every check you ran. Set passed=false when a check remains failing;
-    never claim a command ran when it did not.
+    When you receive verification failures, fix only the issues identified
+    in the failure output. Do not restructure or rewrite unrelated code.
+
+    Respond ONLY with JSON:
+    { "summary": string }
   `,
 });
 

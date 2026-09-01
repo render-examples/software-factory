@@ -150,9 +150,6 @@ export function requireImplementationReport(raw: string): ImplementationReport {
 	if (!report) {
 		throw new Error("Implementer returned invalid structured output");
 	}
-	if (report.verification.some((check) => !check.passed)) {
-		throw new Error("Implementer reported a failing verification command");
-	}
 	return report;
 }
 

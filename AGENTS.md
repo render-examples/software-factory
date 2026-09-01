@@ -125,10 +125,10 @@ app/
   agents/index.ts          Agent definitions and prompts
   tasks/index.ts           Agent definitions wrapped with agentTask()
   workflows/index.ts       Orchestration workflow registration manifest
-  workflows/*/index.ts     Individual workflow entrypoints and helpers
+  workflows/spec-to-pr/    Issue-to-PR pipeline and helpers
   gateway/                 HTTP intake, validation, and workflow dispatch
-  hooks/                   Audit, destructive-action block, secret redaction
-  lib/                     GitHub, config, model JSON, and sandbox Git helpers
+  hooks/                   Audit, cost tracking, destructive-action block, secret redaction
+  lib/                     GitHub, config, model JSON, convention memory, sandbox Git
   src/server.ts            Gateway process entrypoint
   src/workflows.ts         Workflow process entrypoint and registrations
   tests/                   App, gateway, and integration tests
@@ -137,8 +137,7 @@ sdk/
   runner.ts                Provider-neutral AgentRunner interface
   runners/                 Runner implementations
   tools.ts                 Tool, ToolSource, and ToolRegistry
-  sandbox.ts               Provider-neutral sandbox interfaces
-  sandbox/                 Sandbox provider implementations
+  sandbox/                 Provider-neutral interfaces and implementations
   sandbox-tool-source.ts   sandbox__* tools exposed to agents
   hooks.ts                 Agent event interception
   models.ts                Model tier resolution
@@ -146,10 +145,18 @@ sdk/
   tests/                   SDK unit tests
 store/
   contracts.ts             Backend-neutral store interfaces
+  values.ts                Key validation, JSON normalization, artifact refs
   memory.ts                Executable test reference
-  postgres/                Production Postgres adapter and migrations
+  runtime.ts               Global FactoryStore singleton
+  postgres/                Production Postgres adapter, pool, and migrations
   sql/                     Immutable schema migrations
   tests/                   Backend conformance suites
+scripts/
+  doctor.ts                Pre-deploy configuration validator
+  migrate.ts               Schema migration runner
+  cleanup-store.ts         Retention cron entry point
+  run-status.ts            CLI run introspection
+factory.config.ts          Verification commands for the target repository
 render.yaml                Gateway + Postgres + retention cron Blueprint
 Dockerfile                 Gateway image only
 docker-compose.yml         Local Postgres
@@ -206,8 +213,7 @@ the security model:
 - `sandboxId` is supplied by workflow code through `AgentTaskInput`; it is not
   model-selected or accepted from public input.
 - Git pushes, labels, sandbox lifecycle, and pull request creation stay in
-  orchestration code. The sole model-callable GitHub write creates an
-  unlabeled issue in `FACTORY_REPO`.
+  orchestration code. Agents have no direct GitHub write capability.
 - Preserve a sandbox across automatic task retries; terminate it in `finally`
   only after a terminal workflow result or final failed attempt.
 - Automation stops at a draft PR. It does not mark ready or merge.
@@ -394,8 +400,17 @@ lifecycle, Git operations, and terminal handling. It parses and re-fetches the
 issue, checks the label, runs triage, and then removes the label as
 acknowledgment. The RunStore records each stage and event under a logical run
 ID, and the issue lease prevents overlapping runs. It reconnects to the same
-sandbox and deterministic `factory/` branch on retry, runs analysis and
-implementation, commits, fans out three complete-diff reviews, and permits one
+sandbox and deterministic `factory/` branch on retry.
+
+When `factory.config.ts` defines `verify` commands, the workflow runs them
+deterministically in the sandbox after each implementation round. If any
+command fails, the output is fed back to the implementer for up to three fix
+rounds. The implementer itself does not run verification commands.
+
+The workflow runs analysis, implementation, verification, then performs a lightweight
+self-review for obvious issues (debug artifacts, broken imports, missing
+exports), applies self-review fixes if needed, fans out three complete-diff
+reviews (security, correctness, tests) in parallel, and permits one
 implementation/review revision. Workflow-owned code verifies the pushed SHA,
 opens a draft PR only after approval, and uses marker-backed idempotent issue
 comments. The sandbox terminates after a terminal result.
@@ -479,9 +494,9 @@ verify that every field on `ResolvedModel` is consumed by the runner;
 
 ## Extend sandbox providers
 
-Implement `SandboxProvider` and `Sandbox` from `sdk/sandbox.ts`, normally using
-`BaseSandbox`; the Render implementation is the reference. Keep provider API
-code under `sdk/sandbox/`, preserve streaming exec and cancellation, and bind
+Implement `SandboxProvider` and `Sandbox` from `sdk/sandbox/types.ts`, normally
+using `BaseSandbox`; the Render implementation is the reference. Keep provider
+API code under `sdk/sandbox/`, preserve streaming exec and cancellation, and bind
 `connect(id)` only to the requested workflow-owned sandbox. Register it through
 `createSandboxToolSource({ provider })`; orchestration must still own creation
 and termination.
@@ -489,8 +504,10 @@ and termination.
 ## Extend hooks
 
 Hooks implement `Hook` from `sdk/hooks.ts` and are registered with
-`configure({ hooks })`. Current hooks audit events, block destructive tool
-calls, and redact likely secrets.
+`configure({ hooks })`. Current hooks: audit logging, cost tracking
+(per-agent usage summaries), destructive-action blocking (force push,
+recursive delete, secret exfiltration, evasion patterns), and secret
+redaction in agent output.
 
 Only `tool_call` is a gating event. Rejecting text, result, or tool-result
 events does not veto execution. A runner must call `interceptToolCall` before
