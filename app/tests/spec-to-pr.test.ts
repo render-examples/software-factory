@@ -119,7 +119,6 @@ import { STAGES } from "../workflows/spec-to-pr/constants.js";
 
 const implementation = JSON.stringify({
 	summary: "Implemented the fix",
-	verification: [{ command: "npm test", result: "passed", passed: true }],
 });
 
 beforeEach(() => {

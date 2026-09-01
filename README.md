@@ -46,11 +46,16 @@ The factory supplies the operational foundation around those agents:
    comments and stops.
 6. Accepted work gets an isolated sandbox and deterministic `factory/` branch.
 7. The analyst researches the checkout and prepares a grounded plan.
-8. The implementer edits the checkout and runs the repository's own checks.
-9. Security, correctness, and test reviewers inspect the complete staged diff
-   in parallel; a judge synthesizes their findings.
-10. One requested revision may run through implementation and review again.
-11. Only an approved revision is pushed. Workflow code verifies the remote
+8. The implementer edits the checkout. It does not run verification itself.
+9. When `factory.config.ts` defines `verify` commands, the workflow runs them
+   deterministically in the sandbox. On failure, the output is fed back to the
+   implementer for up to three fix rounds.
+10. A lightweight self-review catches debug artifacts, broken imports, and
+    obvious mistakes; fixes are applied automatically if found.
+11. Security, correctness, and test reviewers inspect the complete staged diff
+    in parallel; a judge synthesizes their findings.
+12. One requested revision may run through implementation and review again.
+13. Only an approved revision is pushed. Workflow code verifies the remote
     SHA and opens a draft pull request.
 
 Every run and stage transition is recorded through a backend-neutral RunStore.
@@ -79,6 +84,8 @@ Render Workflows
   ├─ triage
   ├─ analyst ───────────────┐
   ├─ implementer            │ one Render Sandbox
+  ├─ verify (deterministic) │
+  ├─ self-review + fix      │
   ├─ security ┐             │
   ├─ correctness ├ parallel │
   ├─ tests ────┘            │
@@ -98,17 +105,24 @@ Render Postgres
 app/
   agents/          Agent definitions and prompts
   tasks/           Agent definitions wrapped as workflow tasks
-  workflows/       Durable orchestration
+  workflows/       Durable orchestration (spec-to-pr pipeline)
   gateway/         HTTP intake, validation, and dispatch
-  hooks/           Audit and policy hooks
-  lib/             GitHub, configuration, and Git helpers
+  hooks/           Audit, cost tracking, destructive-action block, secret redaction
+  lib/             GitHub, config, convention memory, sandbox Git helpers
   src/             Gateway and Workflows entrypoints
   tests/           Application and integration tests
 sdk/
   runners/         Model runner implementations
-  sandbox/         Sandbox provider implementations
+  sandbox/         Sandbox provider interfaces and implementations
   tests/           SDK tests
-store/             Backend-neutral contracts plus memory/Postgres adapters
+store/
+  contracts.ts     Backend-neutral store interfaces
+  memory.ts        In-memory adapter (test reference)
+  postgres/        Production Postgres adapter, pool, and migrations
+  sql/             Immutable schema migrations
+  tests/           Backend conformance suites
+scripts/           Doctor, migration, retention, and run-status CLI tools
+factory.config.ts  Verification commands for the target repository
 render.yaml        Gateway, Postgres, and retention-cron Blueprint
 Dockerfile         Gateway image
 docker-compose.yml Local Postgres
@@ -152,9 +166,6 @@ migrate Postgres first:
 npm run dev:postgres
 npm run db:migrate
 ```
-
-Existing checkouts should remove `REDIS_URL`, copy the `DATABASE_URL` settings
-from `.env.example`, and run the migration before starting either process.
 
 Then run each process in a separate terminal:
 
@@ -253,6 +264,25 @@ registration. The remaining manual check is that the Dashboard Workflow slug
 matches `RENDER_WORKFLOW_SLUG`.
 
 ## Customize
+
+### Verification commands
+
+`factory.config.ts` at the factory repo root defines the commands the workflow
+runs deterministically after each implementation round:
+
+```ts
+export const factoryConfig = {
+  verify: ["npm run build", "npx vitest run"],
+};
+```
+
+When `verify` is non-empty, the workflow runs each command in the sandbox after
+the implementer finishes. If any command fails, the output is fed back to the
+implementer and it gets up to three fix rounds. When `verify` is empty, the
+workflow skips verification and proceeds directly to review.
+
+This keeps verification deterministic and workflow-controlled rather than
+relying on the model to discover and run the right commands.
 
 ### Agents
 

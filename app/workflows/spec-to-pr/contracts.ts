@@ -14,15 +14,6 @@ export const triageSchema = z.object({
 
 export const implementationSchema = z.object({
 	summary: z.string().min(1),
-	verification: z
-		.array(
-			z.object({
-				command: z.string().min(1),
-				result: z.string(),
-				passed: z.boolean(),
-			}),
-		)
-		.min(1),
 });
 
 export const selfReviewSchema = z.object({
