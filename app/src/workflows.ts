@@ -1,25 +1,30 @@
-/** Render Workflows entrypoint — tool registry setup + task/workflow imports. */
+/** Render Workflows entrypoint — sandbox provider + hook setup, then task/workflow imports. */
 import {
 	configureFactoryStore,
 	createPostgresFactoryStore,
 } from "#factory/store";
-import { configure } from "#factory/sdk";
+import {
+	configure,
+	configureSandboxProvider,
+	RenderSandboxProvider,
+} from "#factory/sdk";
 import { auditHook } from "../hooks/audit.js";
 import { blockDestructiveHook } from "../hooks/block-destructive.js";
 import { costTrackingHook } from "../hooks/cost-tracking.js";
 import { redactSecretsHook } from "../hooks/redact-secrets.js";
 import { assertWorkflowConfig } from "../lib/factory-config.js";
-import { createWorkflowRegistry } from "../lib/workflow-registry.js";
 
 assertWorkflowConfig();
+
 const store = createPostgresFactoryStore({
 	applicationName: "render-factory-workflows",
 });
 await store.verifySchema();
 configureFactoryStore(store);
 
+configureSandboxProvider(new RenderSandboxProvider());
+
 configure({
-	registry: createWorkflowRegistry(),
 	hooks: [auditHook, blockDestructiveHook, costTrackingHook, redactSecretsHook],
 	store,
 });

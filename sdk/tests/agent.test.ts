@@ -3,7 +3,6 @@ import { createMemoryFactoryStore } from "#factory/store";
 import { Agent, agentTask, md } from "../agent.js";
 import type { Hook } from "../hooks.js";
 import type { AgentEvent, AgentRunner, RunContext } from "../runner.js";
-import type { ToolRegistry } from "../tools.js";
 
 class RecordingRunner implements AgentRunner {
   context?: RunContext;
@@ -14,9 +13,6 @@ class RecordingRunner implements AgentRunner {
   }
 }
 
-const emptyRegistry = {
-  resolve: async () => [],
-} as unknown as ToolRegistry;
 const store = createMemoryFactoryStore();
 
 describe("Agent", () => {
@@ -34,14 +30,6 @@ describe("Agent", () => {
 });
 
 describe("agentTask", () => {
-  it("defaults to an empty registry rather than host built-ins", async () => {
-    const run = agentTask(
-      Agent({ id: "default-registry-test", prompt: "system", tools: ["Bash"] }),
-      { runner: new RecordingRunner(), store },
-    );
-    await expect(run({ message: "work" })).rejects.toThrow(/Bash.*not found/);
-  });
-
   it("forwards the configured prompt, model, budget, and tools", async () => {
     const runner = new RecordingRunner();
     const agent = Agent({
@@ -54,7 +42,6 @@ describe("agentTask", () => {
 
     const result = await agentTask(agent, {
       runner,
-      registry: emptyRegistry,
       store,
     })({ message: "work item" });
 
@@ -92,7 +79,7 @@ describe("agentTask", () => {
     };
     const run = agentTask(
       Agent({ id: "child-agent", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry, store: hierarchyStore },
+      { runner, store: hierarchyStore },
     );
 
     await run({
@@ -149,7 +136,7 @@ describe("agentTask", () => {
 
     await agentTask(
       Agent({ id: "policy-test", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry, hooks: [blocker], store },
+      { runner, hooks: [blocker], store },
     )({ message: "work" });
 
     expect(intercepted).toEqual({ action: "reject", reason: "blocked" });
@@ -163,7 +150,7 @@ describe("agentTask", () => {
     };
     const run = agentTask(
       Agent({ id: "failure-test", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry, store },
+      { runner, store },
     );
 
     await expect(run({ message: "work" })).rejects.toThrow(
@@ -180,7 +167,7 @@ describe("agentTask", () => {
     };
     const run = agentTask(
       Agent({ id: "terminal-failure-test", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry, store: failureStore },
+      { runner, store: failureStore },
     );
     const input = {
       message: "work",
@@ -215,14 +202,13 @@ describe("agentTask", () => {
     const agent = Agent({ id: "terminal-test", prompt: "system", tools: [] });
 
     await expect(
-      agentTask(agent, { runner: noResult, registry: emptyRegistry, store })({
+      agentTask(agent, { runner: noResult, store })({
         message: "work",
       }),
     ).rejects.toThrow(/no result/);
     await expect(
       agentTask(agent, {
         runner: multipleResults,
-        registry: emptyRegistry,
         store,
       })({ message: "work" }),
     ).rejects.toThrow(/multiple results/);
