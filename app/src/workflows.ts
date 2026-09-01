@@ -4,10 +4,13 @@ import {
 	createPostgresFactoryStore,
 } from "#factory/store";
 import {
+	ClaudeRunner,
 	configure,
 	configureSandboxProvider,
+	createClaudeModelResolver,
 	RenderSandboxProvider,
 } from "#factory/sdk";
+import { factoryConfig } from "../../factory.config.js";
 import { auditHook } from "../hooks/audit.js";
 import { blockDestructiveHook } from "../hooks/block-destructive.js";
 import { costTrackingHook } from "../hooks/cost-tracking.js";
@@ -24,7 +27,10 @@ configureFactoryStore(store);
 
 configureSandboxProvider(new RenderSandboxProvider());
 
+const modelResolver = createClaudeModelResolver(factoryConfig.models);
+
 configure({
+	runner: new ClaudeRunner({ modelResolver }),
 	hooks: [auditHook, blockDestructiveHook, costTrackingHook, redactSecretsHook],
 	store,
 });
