@@ -8,9 +8,16 @@ import {
 import { RenderSandboxProvider, type Sandbox } from "#factory/sdk";
 import { factoryLabel, factoryRepository } from "../../lib/factory-config.js";
 import { githubFromEnv, type RepoRef } from "../../lib/github.js";
-import { createCheckpointRunner } from "./checkpoints.js";
 import {
+	createCheckpointRunner,
+	type CheckpointRunner,
+} from "./checkpoints.js";
+import { factoryConfig } from "../../../factory.config.js";
+import {
+	EXECUTION_CLAIM_TTL_SECONDS,
 	EXECUTION_HEARTBEAT_INTERVAL_MS,
+	MAX_VERIFY_ITERATIONS,
+	OPERATIONS,
 	SPEC_TO_PR_MAX_RETRIES,
 	SPEC_TO_PR_RETRY_BACKOFF,
 	SPEC_TO_PR_RETRY_WAIT_MS,
@@ -18,16 +25,26 @@ import {
 	SPEC_TO_PR_TASK_PLAN,
 	SPEC_TO_PR_TIMEOUT_SECONDS,
 	STAGES,
+	SUBJECT_LEASE_TTL_SECONDS,
 } from "./constants.js";
 import {
 	inputSchema,
+	type CommitCheckpoint,
+	type ImplementationCheckpoint,
 	type IntakeCheckpoint,
 	type PullCheckpoint,
+	type ReadySandboxCheckpoint,
 	type ReviewDecision,
 	type WorkflowResult,
 } from "./contracts.js";
 import { operationId, sandboxContext } from "./context.js";
-import { completeDiff, ensureCommit, verifyPush } from "./git.js";
+import {
+	completeDiff,
+	ensureCommit,
+	formatVerificationFailures,
+	runVerification,
+	verifyPush,
+} from "./git.js";
 import {
 	loadIntake,
 	runAnalysis,
@@ -40,6 +57,175 @@ import { finish, recordFailure } from "./terminal.js";
 
 export { branchName } from "./context.js";
 
+// ---------------------------------------------------------------------------
+// Shared phase context passed to extracted helpers
+// ---------------------------------------------------------------------------
+
+interface PhaseContext {
+	sandbox: Sandbox;
+	sandboxState: ReadySandboxCheckpoint;
+	checkpoints: CheckpointRunner;
+	parentRun: (
+		stepKey: string,
+		generation: number,
+	) => {
+		rootRunId: string;
+		runId: string;
+		stepKey: string;
+		generation: number;
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Phase: verify implementation against configured commands
+// ---------------------------------------------------------------------------
+
+type VerifyOutcome =
+	| {
+			passed: true;
+			implementation: ImplementationCheckpoint;
+			commit: CommitCheckpoint;
+	  }
+	| { passed: false; failures: string };
+
+async function verifyImplementation(
+	ctx: PhaseContext,
+	implementation: ImplementationCheckpoint,
+	commit: CommitCheckpoint,
+	workItem: string,
+	issueNumber: number,
+): Promise<VerifyOutcome> {
+	const commands = factoryConfig.verify;
+	if (commands.length === 0) {
+		return { passed: true, implementation, commit };
+	}
+
+	const context = sandboxContext();
+	let currentImpl = implementation;
+	let currentCommit = commit;
+
+	let result = await ctx.checkpoints.run(STAGES.verify1, () =>
+		runVerification(ctx.sandbox, commands),
+	);
+
+	for (
+		let round = 0;
+		!result.passed && round < MAX_VERIFY_ITERATIONS;
+		round++
+	) {
+		const failures = formatVerificationFailures(result);
+		const previousSha = currentCommit.sha;
+
+		currentImpl = await ctx.checkpoints.run(
+			STAGES.verifyFix,
+			({ generation }) =>
+				runImplementation({
+					message:
+						`${context}\n\nThe following verification commands failed after your implementation.\n` +
+						`Fix the issues so all commands pass.\n\nWork item:\n${workItem}\n\n` +
+						`Failures:\n${failures}`,
+					sandboxId: ctx.sandbox.id,
+					run: ctx.parentRun(STAGES.verifyFix.key, generation),
+				}),
+		);
+
+		const fixCommit = await ctx.checkpoints.run(
+			STAGES.verifyFixCommit,
+			() =>
+				ensureCommit({
+					sandbox: ctx.sandbox,
+					state: ctx.sandboxState,
+					previousSha,
+					message: `Fix verification failures for issue #${issueNumber}`,
+				}),
+		);
+		if (fixCommit) currentCommit = fixCommit;
+
+		await ctx.checkpoints.invalidateDownstream(STAGES.verify1);
+		result = await ctx.checkpoints.run(STAGES.verify1, () =>
+			runVerification(ctx.sandbox, commands),
+		);
+		if (!result.passed) {
+			await ctx.checkpoints.invalidateDownstream(STAGES.verifyFix);
+		}
+	}
+
+	if (!result.passed) {
+		return { passed: false, failures: formatVerificationFailures(result) };
+	}
+	return { passed: true, implementation: currentImpl, commit: currentCommit };
+}
+
+// ---------------------------------------------------------------------------
+// Phase: lightweight self-review for obvious issues
+// ---------------------------------------------------------------------------
+
+async function applySelfReview(
+	ctx: PhaseContext,
+	implementation: ImplementationCheckpoint,
+	commit: CommitCheckpoint,
+	intake: IntakeCheckpoint,
+	analysis: string,
+	issueNumber: number,
+): Promise<{
+	implementation: ImplementationCheckpoint;
+	commit: CommitCheckpoint;
+}> {
+	const diff = await completeDiff({
+		sandbox: ctx.sandbox,
+		state: ctx.sandboxState,
+		headSha: commit.sha,
+	});
+
+	const result = await ctx.checkpoints.run(
+		STAGES.selfReview1,
+		({ generation }) =>
+			runSelfReview({
+				diff,
+				workItem: intake.workItem,
+				run: ctx.parentRun(STAGES.selfReview1.key, generation),
+			}),
+	);
+
+	if (!result.needsRevision || result.issues.length === 0) {
+		return { implementation, commit };
+	}
+
+	const context = sandboxContext();
+	const previousSha = commit.sha;
+	const fixedImpl = await ctx.checkpoints.run(
+		STAGES.selfReviewFix,
+		({ generation }) =>
+			runImplementation({
+				message:
+					`${context}\n\nFix the following self-review issues in the current implementation:\n${intake.workItem}\n\n` +
+					`Original analysis:\n${analysis}\n\nSelf-review issues:\n${result.issues.map((i, idx) => `${idx + 1}. ${i}`).join("\n")}\n\n` +
+					`Do not restructure the implementation. Only fix the specific issues listed above.`,
+				sandboxId: ctx.sandbox.id,
+				run: ctx.parentRun(STAGES.selfReviewFix.key, generation),
+			}),
+	);
+
+	const fixedCommit = await ctx.checkpoints.run(
+		STAGES.selfReviewCommit,
+		() =>
+			ensureCommit({
+				sandbox: ctx.sandbox,
+				state: ctx.sandboxState,
+				previousSha,
+				message: `Self-review fixes for issue #${issueNumber}`,
+			}),
+	);
+
+	return fixedCommit
+		? { implementation: fixedImpl, commit: fixedCommit }
+		: { implementation, commit };
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
 function formatReviewBody(review: ReviewDecision): string {
 	const tier = review.riskTier ?? "unknown";
 	const header = `## Internal review: ${review.decision === "approve" ? "approved" : "changes requested"}\n\n**Risk tier:** ${tier}\n\n${review.summary}`;
@@ -51,6 +237,10 @@ function formatReviewBody(review: ReviewDecision): string {
 	);
 	return `${header}\n\n### Top findings\n\n| Severity | Confidence | Source | File | Description |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}`;
 }
+
+// ---------------------------------------------------------------------------
+// Main orchestration task
+// ---------------------------------------------------------------------------
 
 export const specToPr = task(
 	{
@@ -97,7 +287,7 @@ export const specToPr = task(
 		const executionClaim = await store.runs.beginExecution(
 			runId,
 			executionId,
-			30,
+			EXECUTION_CLAIM_TTL_SECONDS,
 		);
 		if (executionClaim.kind === "busy") {
 			return { skipped: "attempt is already running" };
@@ -106,7 +296,7 @@ export const specToPr = task(
 		const acquiredSubjectLease = await store.leases.tryAcquire(
 			subjectKey,
 			runId,
-			26 * 60 * 60,
+			SUBJECT_LEASE_TTL_SECONDS,
 		);
 		if (!acquiredSubjectLease) {
 			const result = { skipped: "issue is already running" } as const;
@@ -125,12 +315,12 @@ export const specToPr = task(
 		const heartbeat = setInterval(() => {
 			void Promise.all([
 				store.runs
-					.refreshExecution(execution, 30)
+					.refreshExecution(execution, EXECUTION_CLAIM_TTL_SECONDS)
 					.then((refreshed) => {
 						execution = refreshed;
 					}),
 				store.leases
-					.refresh(subjectLease, 26 * 60 * 60)
+					.refresh(subjectLease, SUBJECT_LEASE_TTL_SECONDS)
 					.then((refreshed) => {
 						subjectLease = refreshed;
 					}),
@@ -154,7 +344,7 @@ export const specToPr = task(
 			store,
 			refreshSubjectLease: () =>
 				store.leases
-					.refresh(subjectLease, 26 * 60 * 60)
+					.refresh(subjectLease, SUBJECT_LEASE_TTL_SECONDS)
 					.then((refreshed) => {
 						subjectLease = refreshed;
 					}),
@@ -181,6 +371,7 @@ export const specToPr = task(
 		};
 
 		try {
+			// ── Intake ──────────────────────────────────────────────────
 			const intake = await checkpoints.run<IntakeCheckpoint>(
 				STAGES.intake,
 				({ generation }) =>
@@ -203,7 +394,7 @@ export const specToPr = task(
 				await gh.ensureIssueComment(
 					repo,
 					issueNumber,
-					operationId(runId, "clarification"),
+					operationId(runId, OPERATIONS.clarification),
 					`The factory needs more detail before it can proceed:\n\n${questions
 						.map((question, index) => `${index + 1}. ${question}`)
 						.join(
@@ -216,6 +407,7 @@ export const specToPr = task(
 				});
 			}
 
+			// ── Sandbox ─────────────────────────────────────────────────
 			const provider = new RenderSandboxProvider();
 			const sandboxResult = await getOrCreateSandbox({
 				provider,
@@ -229,17 +421,29 @@ export const specToPr = task(
 			const activeSandbox = sandboxResult.sandbox;
 			sandbox = activeSandbox;
 			const sandboxState = sandboxResult.state;
-			const context = sandboxContext();
 			assertHeartbeat();
 
-			const analysis = await checkpoints.run(STAGES.analysis, ({ generation }) =>
-				runAnalysis({
-					workItem: intake.workItem,
-					sandboxId: activeSandbox.id,
-					run: parentRun(STAGES.analysis.key, generation),
-				}),
+			const ctx: PhaseContext = {
+				sandbox: activeSandbox,
+				sandboxState,
+				checkpoints,
+				parentRun,
+			};
+			const context = sandboxContext();
+
+			// ── Analysis ────────────────────────────────────────────────
+			const analysis = await checkpoints.run(
+				STAGES.analysis,
+				({ generation }) =>
+					runAnalysis({
+						workItem: intake.workItem,
+						sandboxId: activeSandbox.id,
+						run: parentRun(STAGES.analysis.key, generation),
+					}),
 			);
-			let implementation1 = await checkpoints.run(
+
+			// ── Initial implementation ──────────────────────────────────
+			let implementation = await checkpoints.run(
 				STAGES.implementation1,
 				({ generation }) =>
 					runImplementation({
@@ -248,7 +452,7 @@ export const specToPr = task(
 						run: parentRun(STAGES.implementation1.key, generation),
 					}),
 			);
-			let commit1 = await checkpoints.run(STAGES.commit1, () =>
+			let commit = await checkpoints.run(STAGES.commit1, () =>
 				ensureCommit({
 					sandbox: activeSandbox,
 					state: sandboxState,
@@ -256,143 +460,133 @@ export const specToPr = task(
 					message: `Implement issue #${issueNumber}: ${intake.issue.title}`,
 				}),
 			);
-			if (!commit1) {
+			if (!commit) {
 				await gh.ensureIssueComment(
 					repo,
 					issueNumber,
-					operationId(runId, "no-changes"),
+					operationId(runId, OPERATIONS.noChanges),
 					`The factory produced no repository changes. Reapply the \`${triggerLabel}\` label to retry.`,
 				);
 				return finishTerminal({ status: "no_changes" });
 			}
 
-			const diff1 = await completeDiff({
+			// ── Verification ────────────────────────────────────────────
+			const verified = await verifyImplementation(
+				ctx,
+				implementation,
+				commit,
+				intake.workItem,
+				issueNumber,
+			);
+			if (!verified.passed) {
+				await gh.ensureIssueComment(
+					repo,
+					issueNumber,
+					operationId(runId, OPERATIONS.verifyFailed),
+					`The factory could not pass verification after ${MAX_VERIFY_ITERATIONS} fix rounds:\n\n\`\`\`\n${verified.failures.slice(0, 3000)}\n\`\`\`\n\nReapply the \`${triggerLabel}\` label to retry.`,
+				);
+				return finishTerminal({
+					status: "changes_requested",
+					summary: `Verification failed: ${verified.failures.slice(0, 500)}`,
+				});
+			}
+			implementation = verified.implementation;
+			commit = verified.commit;
+
+			// ── Self-review ─────────────────────────────────────────────
+			({ implementation, commit } = await applySelfReview(
+				ctx,
+				implementation,
+				commit,
+				intake,
+				analysis,
+				issueNumber,
+			));
+
+			// ── Review ──────────────────────────────────────────────────
+			let reviewDiff = await completeDiff({
 				sandbox: activeSandbox,
 				state: sandboxState,
-				headSha: commit1.sha,
+				headSha: commit.sha,
 			});
-
-			const selfReviewResult = await checkpoints.run(
-				STAGES.selfReview1,
+			let review = await checkpoints.run(
+				STAGES.review1,
 				({ generation }) =>
-					runSelfReview({
-						diff: diff1,
-						workItem: intake.workItem,
-						run: parentRun(STAGES.selfReview1.key, generation),
+					runReview({
+						diff: reviewDiff,
+						implementation,
+						run: parentRun(STAGES.review1.key, generation),
 					}),
 			);
-			if (selfReviewResult.needsRevision && selfReviewResult.issues.length > 0) {
-				const previousSha = commit1.sha;
-				const selfReviewFixes = await checkpoints.run(
-					STAGES.selfReviewFix,
-					({ generation }) =>
-						runImplementation({
-							message:
-								`${context}\n\nFix the following self-review issues in the current implementation:\n${intake.workItem}\n\n` +
-								`Original analysis:\n${analysis}\n\nSelf-review issues:\n${selfReviewResult.issues.map((i, idx) => `${idx + 1}. ${i}`).join("\n")}\n\n` +
-								`Do not restructure the implementation. Only fix the specific issues listed above.`,
-							sandboxId: activeSandbox.id,
-							run: parentRun(STAGES.selfReviewFix.key, generation),
-						}),
-				);
-				const selfReviewCommit = await checkpoints.run(
-					STAGES.selfReviewCommit,
-					() =>
-						ensureCommit({
-							sandbox: activeSandbox,
-							state: sandboxState,
-							previousSha,
-							message: `Self-review fixes for issue #${issueNumber}`,
-						}),
-				);
-				if (selfReviewCommit) {
-					implementation1 = selfReviewFixes;
-					commit1 = selfReviewCommit;
-				}
-			}
 
-			const reviewDiff = selfReviewResult.needsRevision
-				? await completeDiff({
-						sandbox: activeSandbox,
-						state: sandboxState,
-						headSha: commit1.sha,
-					})
-				: diff1;
-			const review1 = await checkpoints.run(STAGES.review1, ({ generation }) =>
-				runReview({
-					diff: reviewDiff,
-					implementation: implementation1,
-					run: parentRun(STAGES.review1.key, generation),
-				}),
-			);
-
-			let finalCommit = commit1;
-			let finalImplementation = implementation1;
-			let finalReview = review1;
-			if (review1.decision === "request_changes") {
-				finalImplementation = await checkpoints.run(
+			// ── Revision (if review requests changes) ───────────────────
+			if (review.decision === "request_changes") {
+				const priorSha = commit.sha;
+				implementation = await checkpoints.run(
 					STAGES.implementation2,
 					({ generation }) =>
 						runImplementation({
 							message:
 								`${context}\n\nRevise the existing implementation for this work item:\n${intake.workItem}\n\n` +
-								`Original analysis:\n${analysis}\n\nBlocking internal review:\n${review1.summary}\n\n${review1.details}`,
+								`Original analysis:\n${analysis}\n\nBlocking internal review:\n${review.summary}\n\n${review.details}`,
 							sandboxId: activeSandbox.id,
-						run: parentRun(STAGES.implementation2.key, generation),
+							run: parentRun(STAGES.implementation2.key, generation),
 						}),
 				);
-				const commit2 = await checkpoints.run(STAGES.commit2, () =>
+				const revisionCommit = await checkpoints.run(STAGES.commit2, () =>
 					ensureCommit({
 						sandbox: activeSandbox,
 						state: sandboxState,
-						previousSha: commit1.sha,
+						previousSha: priorSha,
 						message: `Address internal review for issue #${issueNumber}`,
 					}),
 				);
-				if (!commit2) {
-					finalReview = {
-						decision: "request_changes",
-						summary: "The revision produced no changes.",
-						details: review1.details,
-					};
-				} else {
-					finalCommit = commit2;
-					const diff2 = await completeDiff({
+				if (revisionCommit) {
+					commit = revisionCommit;
+					reviewDiff = await completeDiff({
 						sandbox: activeSandbox,
 						state: sandboxState,
-						headSha: commit2.sha,
+						headSha: commit.sha,
 					});
-					finalReview = await checkpoints.run(STAGES.review2, ({ generation }) =>
-						runReview({
-							diff: diff2,
-							implementation: finalImplementation,
-							run: parentRun(STAGES.review2.key, generation),
-						}),
+					review = await checkpoints.run(
+						STAGES.review2,
+						({ generation }) =>
+							runReview({
+								diff: reviewDiff,
+								implementation,
+								run: parentRun(STAGES.review2.key, generation),
+							}),
 					);
+				} else {
+					review = {
+						...review,
+						summary: "The revision produced no changes.",
+					};
 				}
 			}
 
-			if (finalReview.decision !== "approve") {
+			if (review.decision !== "approve") {
 				await gh.ensureIssueComment(
 					repo,
 					issueNumber,
-					operationId(runId, "changes-requested"),
-					`The factory stopped after its revision still needed changes:\n\n${finalReview.summary}\n\n` +
+					operationId(runId, OPERATIONS.changesRequested),
+					`The factory stopped after its revision still needed changes:\n\n${review.summary}\n\n` +
 						`Reapply the \`${triggerLabel}\` label after updating the issue or repository.`,
 				);
 				return finishTerminal({
 					status: "changes_requested",
-					summary: finalReview.summary,
+					summary: review.summary,
 				});
 			}
 
+			// ── Push and open PR ────────────────────────────────────────
 			assertHeartbeat();
 			await checkpoints.run(STAGES.push, () =>
 				verifyPush({
 					sandbox: activeSandbox,
 					token,
 					state: sandboxState,
-					expectedSha: finalCommit.sha,
+					expectedSha: commit.sha,
 				}),
 			);
 			const pull = await checkpoints.run<PullCheckpoint>(
@@ -403,11 +597,11 @@ export const specToPr = task(
 						head: sandboxState.branch,
 						base: sandboxState.base,
 						draft: true,
-						expectedHeadSha: finalCommit.sha,
+						expectedHeadSha: commit.sha,
 						body:
 							`Automated implementation for #${issueNumber}.\n\n` +
-							`${formatReviewBody(finalReview)}\n\n` +
-							`## Implementation report\n\n${finalImplementation.raw}\n\nCloses #${issueNumber}.`,
+							`${formatReviewBody(review)}\n\n` +
+							`## Implementation report\n\n${implementation.raw}\n\nCloses #${issueNumber}.`,
 					});
 					return {
 						number: result.number,
@@ -421,7 +615,7 @@ export const specToPr = task(
 					runId,
 					kind: "git.branch",
 					externalId: sandboxState.branch,
-					metadata: { headSha: finalCommit.sha },
+					metadata: { headSha: commit.sha },
 				}),
 				store.runs.addLink({
 					runId,
@@ -434,7 +628,7 @@ export const specToPr = task(
 			await gh.ensureIssueComment(
 				repo,
 				issueNumber,
-				operationId(runId, "draft-pr"),
+				operationId(runId, OPERATIONS.draftPr),
 				`The factory opened a reviewed draft pull request: ${pull.htmlUrl}`,
 			);
 

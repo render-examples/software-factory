@@ -7,10 +7,20 @@ export const SPEC_TO_PR_RETRY_BACKOFF = 2;
 export const SPEC_TO_PR_TIMEOUT_SECONDS = 24 * 60 * 60;
 export const SPEC_TO_PR_SANDBOX_TIMEOUT_SECONDS = SPEC_TO_PR_TIMEOUT_SECONDS;
 export const EXECUTION_HEARTBEAT_INTERVAL_MS = 10_000;
+export const EXECUTION_CLAIM_TTL_SECONDS = 30;
+export const SUBJECT_LEASE_TTL_SECONDS = 26 * 60 * 60;
 
 export const MAX_ISSUE_CHARS = 12_000;
 export const MAX_REVIEW_DIFF_CHARS = 200_000;
 export const REPO_DIR = "/home/user/repo";
+
+export const OPERATIONS = {
+	clarification: "clarification",
+	noChanges: "no-changes",
+	verifyFailed: "verify-failed",
+	changesRequested: "changes-requested",
+	draftPr: "draft-pr",
+} as const;
 
 export interface CheckpointStage<Key extends string = string> {
 	readonly key: Key;
@@ -24,12 +34,17 @@ function defineStage<const Key extends string>(
 	return { key, replaySafe };
 }
 
+export const MAX_VERIFY_ITERATIONS = 3;
+
 export const STAGES = {
 	intake: defineStage("intake", false),
 	sandbox: defineStage("sandbox", true),
 	analysis: defineStage("analysis", false),
 	implementation1: defineStage("implementation-1", false),
 	commit1: defineStage("commit-1", true),
+	verify1: defineStage("verify-1", false),
+	verifyFix: defineStage("verify-fix", false),
+	verifyFixCommit: defineStage("verify-fix-commit", true),
 	selfReview1: defineStage("self-review-1", false),
 	selfReviewFix: defineStage("self-review-fix", false),
 	selfReviewCommit: defineStage("self-review-commit", true),
@@ -47,6 +62,9 @@ const DOWNSTREAM_STAGE_DEFINITIONS = [
 	STAGES.analysis,
 	STAGES.implementation1,
 	STAGES.commit1,
+	STAGES.verify1,
+	STAGES.verifyFix,
+	STAGES.verifyFixCommit,
 	STAGES.selfReview1,
 	STAGES.selfReviewFix,
 	STAGES.selfReviewCommit,
