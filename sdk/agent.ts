@@ -4,11 +4,18 @@
  */
 import { randomUUID } from "node:crypto";
 import { task } from "@renderinc/sdk/workflows";
-import { maybePutBlob } from "./blobs.js";
+import {
+  factoryStore,
+  type ExecutionHandle,
+  type FactoryStore,
+} from "#factory/store";
+import { BLOB_THRESHOLD } from "./blobs.js";
 import { createRegistry, type ToolRegistry } from "./tools.js";
 import { ClaudeRunner } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
 import { HookInterceptor, type Hook } from "./hooks.js";
+
+const AGENT_TASK_MAX_ATTEMPTS = 4;
 
 export interface AgentSpec {
   readonly id: string;
@@ -51,17 +58,28 @@ export interface AgentTaskInput {
   message: string;
   /** Workflow-owned sandbox binding; never supplied by the model. */
   sandboxId?: string;
+  /** Workflow-owned logical run binding; never supplied by the model. */
+  run?: AgentRunContext;
+}
+
+export interface AgentRunContext {
+  id: string;
+  rootRunId: string;
+  parentRunId?: string;
+  parentStepKey?: string;
 }
 
 export interface AgentTaskOptions {
   runner?: AgentRunner;
   registry?: ToolRegistry;
   hooks?: Hook[];
+  store?: FactoryStore;
 }
 
 let _defaultRunner: AgentRunner | undefined;
 let _defaultRegistry: ToolRegistry | undefined;
 let _defaultHooks: Hook[] = [];
+let _defaultStore: FactoryStore | undefined;
 
 function defaultRunner(): AgentRunner {
   _defaultRunner ??= new ClaudeRunner();
@@ -73,11 +91,17 @@ function defaultRegistry(): ToolRegistry {
   return _defaultRegistry;
 }
 
+function defaultStore(): FactoryStore {
+  _defaultStore ??= factoryStore();
+  return _defaultStore;
+}
+
 /** Override the default runner, registry, and/or hooks. Call once at startup. */
 export function configure(opts: AgentTaskOptions): void {
   if (opts.runner) _defaultRunner = opts.runner;
   if (opts.registry) _defaultRegistry = opts.registry;
   if (opts.hooks) _defaultHooks = opts.hooks;
+  if (opts.store) _defaultStore = opts.store;
 }
 
 export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
@@ -87,45 +111,128 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       const runner = opts?.runner ?? defaultRunner();
       const registry = opts?.registry ?? defaultRegistry();
       const hooks = opts?.hooks ?? _defaultHooks;
+      const store = opts?.store ?? defaultStore();
       const interceptor = new HookInterceptor(hooks);
-      const runId = randomUUID().slice(0, 8);
-
+      const runId = input.run?.id ?? randomUUID();
       const toolNames = agent.spec.tools ?? [];
       const tools = await registry.resolve(toolNames);
 
+      await store.runs.ensureRun({
+        id: runId,
+        rootRunId: input.run?.rootRunId ?? runId,
+        parentRunId: input.run?.parentRunId,
+        parentStepKey: input.run?.parentStepKey,
+        kind: "agent",
+        name: agent.id,
+        triggerType: input.run ? "workflow.task" : "direct",
+      });
+      const prior = await store.runs.getTerminal<unknown>(runId);
+      if (prior.found) {
+        if (typeof prior.value === "string") return prior.value;
+        throw new Error(`Agent run "${runId}" is already terminal`);
+      }
+
+      const executionId = randomUUID();
+      const claimed = await store.runs.beginExecution(runId, executionId, 30);
+      if (claimed.kind === "busy") {
+        throw new Error(`Agent run "${runId}" is already executing`);
+      }
+      let execution: ExecutionHandle = claimed.execution;
+      let heartbeatError: Error | undefined;
+      const heartbeat = setInterval(() => {
+        void store.runs
+          .refreshExecution(execution, 30)
+          .then((refreshed) => {
+            execution = refreshed;
+          })
+          .catch((error) => {
+            heartbeatError =
+              error instanceof Error ? error : new Error(String(error));
+          });
+      }, 10_000);
+      heartbeat.unref();
+
       const hookCtx = { runId, agentId: agent.id };
       let result: string | undefined;
-      for await (const event of runner.run({
-        agentId: agent.id,
-        prompt: input.message,
-        systemPrompt: agent.spec.prompt,
-        tools,
-        maxTurns: agent.spec.budget?.maxIterations,
-        model: agent.spec.model,
-        sandboxId: input.sandboxId,
-        interceptToolCall: (event) => interceptor.intercept(event, hookCtx),
-      })) {
-        if (event.type === "error") throw event.error;
-        // Claude's PreToolUse bridge already ran tool-call hooks before
-        // execution. The streamed copy is for runner consumers, not a second
-        // policy/audit pass.
-        if (event.type === "tool_call") continue;
-
-        const hookResult = await interceptor.intercept(event, hookCtx);
-        if (hookResult.action === "reject") continue;
-        const finalEvent = hookResult.event ?? event;
-        if (finalEvent.type === "result") {
-          if (result !== undefined) {
-            throw new Error(`Agent "${agent.id}" produced multiple results`);
+      try {
+        for await (const event of runner.run({
+          agentId: agent.id,
+          prompt: input.message,
+          systemPrompt: agent.spec.prompt,
+          tools,
+          maxTurns: agent.spec.budget?.maxIterations,
+          model: agent.spec.model,
+          sandboxId: input.sandboxId,
+          interceptToolCall: (event) => interceptor.intercept(event, hookCtx),
+        })) {
+          if (event.type === "error") {
+            await interceptor.intercept(event, hookCtx);
+            throw event.error;
           }
-          result = finalEvent.result;
-        }
-      }
+          // Claude's PreToolUse bridge already ran tool-call hooks before
+          // execution. The streamed copy is for runner consumers, not a second
+          // policy/audit pass.
+          if (event.type === "tool_call") continue;
 
-      if (result === undefined) {
-        throw new Error(`Agent "${agent.id}" produced no result`);
+          const hookResult = await interceptor.intercept(event, hookCtx);
+          if (hookResult.action === "reject") continue;
+          const finalEvent = hookResult.event ?? event;
+          if (finalEvent.type === "usage") {
+            await store.runs.recordUsage(
+              runId,
+              finalEvent.usage.inputTokens,
+              finalEvent.usage.outputTokens,
+              finalEvent.usage.model,
+              execution,
+            );
+          }
+          if (finalEvent.type === "result") {
+            if (result !== undefined) {
+              throw new Error(`Agent "${agent.id}" produced multiple results`);
+            }
+            result = finalEvent.result;
+          }
+        }
+
+        if (heartbeatError) throw heartbeatError;
+        if (result === undefined) {
+          throw new Error(`Agent "${agent.id}" produced no result`);
+        }
+        const storedResult =
+          result.length <= BLOB_THRESHOLD
+            ? result
+            : await store.artifacts.put({
+                runId,
+                namespace: agent.id,
+                content: result,
+                ttlSeconds: 7 * 24 * 60 * 60,
+              });
+        await store.completeRun({
+          runId,
+          execution,
+          status: "completed",
+          result: storedResult,
+        });
+        return storedResult;
+      } catch (error) {
+        const failureCount = await store.runs.incrementFailureCount(
+          runId,
+          execution,
+        );
+        if (failureCount >= AGENT_TASK_MAX_ATTEMPTS) {
+          await store.completeRun({
+            runId,
+            execution,
+            status: "failed",
+            errorCode: "attempts_exhausted",
+            result: { status: "failed" },
+          });
+        }
+        throw error;
+      } finally {
+        clearInterval(heartbeat);
+        await store.runs.releaseExecution(execution).catch(() => {});
       }
-      return maybePutBlob(runId, agent.id, result);
     },
   );
 }

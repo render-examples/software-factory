@@ -1,5 +1,14 @@
 services:
-  redis:
-    image: redis:7-alpine
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: render_factory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "6379:6379"
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d render_factory"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

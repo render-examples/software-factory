@@ -6,7 +6,7 @@ later, the more specific file takes precedence for that subtree.
 ## What this repository is
 
 `render-factory` is a self-hosted, single-repository software factory built on
-Render Web Services, Workflows, Sandboxes, and Key Value.
+Render Web Services, Workflows, Sandboxes, and Postgres.
 
 The normal path is:
 
@@ -32,7 +32,7 @@ write to GitHub directly. Repository execution happens in a Render Sandbox.
 
 - Node.js 22 or newer.
 - npm; `package-lock.json` is authoritative.
-- Docker for the local Redis-compatible Key Value service.
+- Docker for the local Postgres service.
 - Render CLI for `npm run dev:workflows`.
 - Render, GitHub, and Anthropic credentials for a full end-to-end run.
 
@@ -50,14 +50,15 @@ Fill in `.env`. The checked-in example intentionally contains no secrets.
 Run each command from the repository root in a separate terminal:
 
 ```bash
-npm run dev:redis
+npm run dev:postgres
+npm run db:migrate
 npm run dev:gateway
 npm run dev:workflows
 ```
 
-- Redis listens on `localhost:6379`; `.env.example` sets `REDIS_URL` to it.
+- Postgres listens on `localhost:55432`; `.env.example` sets `DATABASE_URL`.
 - The gateway listens on `0.0.0.0:${PORT:-3000}`.
-- `GET /health` is liveness; `GET /ready` checks Key Value readiness and is
+- `GET /health` is liveness; `GET /ready` checks Postgres readiness and is
   the Render health-check target.
 - GitHub issues webhooks are accepted at `POST /channels/github`.
 - `dev:workflows` requires an installed and authenticated Render CLI.
@@ -86,8 +87,8 @@ render blueprints validate
 ```
 
 `npm run check` runs Biome lint, TypeScript, and the unit suite. Use
-`npm run test:integration` with local Redis running for the opt-in live Key
-Value probe.
+`npm run test:integration` with local Postgres running for the live store
+conformance and cross-process probes.
 
 ## Environment contract
 
@@ -99,9 +100,7 @@ Gateway:
 - `GITHUB_WEBHOOK_SECRET` (required for requests): webhook HMAC secret.
 - `RENDER_WORKFLOW_SLUG` (required to dispatch): deployed Workflows service
   slug, without the task name.
-- `REDIS_URL` (required): delivery deduplication and per-issue leases.
-- `SLACK_SIGNING_SECRET` (optional): enables signed Slack intake. Any member
-  who can reach the installed app may use the bounded assistant.
+- `DATABASE_URL` (required): shared Postgres RunStore.
 - `PORT` (optional): gateway port; defaults to `3000`.
 
 Workflows host:
@@ -112,8 +111,7 @@ Workflows host:
 - `GITHUB_TOKEN` (required): fine-grained token scoped to `FACTORY_REPO`.
 - `RENDER_API_KEY` (required by the Render SDK).
 - `RENDER_WORKSPACE_ID` (required for Sandboxes).
-- `REDIS_URL` (required): replay checkpoints and oversized agent artifacts.
-- `SLACK_BOT_TOKEN` (required only when Slack intake is enabled): posts replies.
+- `DATABASE_URL` (required): same shared Postgres RunStore as the gateway.
 - `GITHUB_API_URL` (optional): GitHub API base URL override.
 
 Keep the GitHub token to the minimum Contents, Issues, and Pull Requests
@@ -126,11 +124,11 @@ token in a Git remote URL or agent prompt.
 app/
   agents/index.ts          Agent definitions and prompts
   tasks/index.ts           Agent definitions wrapped with agentTask()
-  workflows/               Multi-step orchestration workflows
+  workflows/index.ts       Orchestration workflow registration manifest
+  workflows/*/index.ts     Individual workflow entrypoints and helpers
   gateway/                 HTTP intake, validation, and workflow dispatch
   hooks/                   Audit, destructive-action block, secret redaction
   lib/                     GitHub, config, model JSON, and sandbox Git helpers
-  tools/                   Bounded Slack-assistant GitHub/Render integrations
   src/server.ts            Gateway process entrypoint
   src/workflows.ts         Workflow process entrypoint and registrations
   tests/                   App, gateway, and integration tests
@@ -144,11 +142,17 @@ sdk/
   sandbox-tool-source.ts   sandbox__* tools exposed to agents
   hooks.ts                 Agent event interception
   models.ts                Model tier resolution
-  blobs.ts, redis.ts       Oversized result handoff
+  blobs.ts                 Oversized result handoff through ArtifactStore
   tests/                   SDK unit tests
-render.yaml                Gateway + Key Value Blueprint
+store/
+  contracts.ts             Backend-neutral store interfaces
+  memory.ts                Executable test reference
+  postgres/                Production Postgres adapter and migrations
+  sql/                     Immutable schema migrations
+  tests/                   Backend conformance suites
+render.yaml                Gateway + Postgres + retention cron Blueprint
 Dockerfile                 Gateway image only
-docker-compose.yml         Local Redis
+docker-compose.yml         Local Postgres
 ```
 
 `#factory/sdk` maps to `sdk/index.ts`. Use this alias from app code for public
@@ -171,8 +175,13 @@ source, tests, this file, and `README.md` are authoritative.
   arrays with `execGitWithToken` for authenticated Git operations.
 - Keep provider-specific code behind `AgentRunner`, `ToolSource`, or
   `SandboxProvider` interfaces.
+- Keep persistence consumers behind `FactoryStore` capability interfaces.
+  Postgres is the production adapter; unit tests use `MemoryFactoryStore`.
+- Persist only bounded event metadata. Prompts, diffs, issue bodies, model
+  output, tool payloads, command output, API bodies, and credentials do not
+  belong in `run_events`.
 - Add or update tests with behavior changes. Do not call live Render, GitHub,
-  Redis, or model APIs from unit tests.
+  Postgres, or model APIs from unit tests.
 
 ## Core invariants
 
@@ -181,12 +190,14 @@ the security model:
 
 - One deployment is bound to one validated `FACTORY_REPO`.
 - Only an `issues.labeled` event from an allowed human actor starts factory
-  implementation; Slack can draft an unlabeled issue but cannot start work.
+  implementation.
 - The webhook signature is checked before JSON parsing or dispatch.
 - Pull request conversations, bots, wrong repositories, wrong labels, and
   unsupported events are skipped.
-- The gateway dispatches the minimum identifier:
-  `{ issueNumber, attemptId }`, where `attemptId` is GitHub's delivery ID.
+- The gateway maps each authenticated delivery to a logical run and dispatches
+  the minimum identifier: `{ issueNumber, runId }`.
+- Delivery IDs, logical run IDs, child agent/task run IDs, and execution retry
+  IDs are distinct.
 - Agents receive only explicitly registered tools.
 - Analysis uses read-only sandbox tools; only implementation receives sandbox
   write and exec tools.
@@ -197,14 +208,11 @@ the security model:
 - Git pushes, labels, sandbox lifecycle, and pull request creation stay in
   orchestration code. The sole model-callable GitHub write creates an
   unlabeled issue in `FACTORY_REPO`.
-- Slack is disabled unless its signing secret is present. The signing secret
-  authenticates Slack rather than an individual user; the assistant therefore
-  has no deploy, environment-value, label, merge, or workflow-dispatch tool.
 - Preserve a sandbox across automatic task retries; terminate it in `finally`
   only after a terminal workflow result or final failed attempt.
 - Automation stops at a draft PR. It does not mark ready or merge.
-- Render filesystems are ephemeral. Use Key Value or another durable service
-  for cross-step data, never local disk on a deployed service.
+- Render filesystems are ephemeral. Use the configured `FactoryStore` for
+  cross-step data, never local disk on a deployed service.
 
 ## Tasks: the two meanings
 
@@ -279,7 +287,8 @@ and a workflow-owned sandbox already exists.
 
 `agentTask()` requires exactly one terminal runner result. It propagates runner
 errors, rejects missing or multiple results, and stores results larger than
-50,000 characters in Key Value.
+50,000 characters through the configured `ArtifactStore`. Each invocation is
+recorded as a generic child agent run when workflow run context is supplied.
 
 ### 4. Test the agent
 
@@ -297,18 +306,15 @@ do not trust model JSON without validation.
 Use this path for a new externally dispatchable pipeline or a new composition
 of existing agent tasks.
 
-### 1. Create the workflow module
+### 1. Create the workflow directory
 
-Create `app/workflows/<workflow-name>.ts`:
+Create `app/workflows/<workflow-name>/`. Keep task registration and
+high-level control flow in `index.ts`; move schemas and domain operations into
+focused sibling modules that never import `index.ts`.
 
 ```ts
 import { task } from "@renderinc/sdk/workflows";
-import { z } from "zod";
-
-const inputSchema = z.object({
-  issueNumber: z.number().int().positive(),
-  attemptId: z.string(),
-});
+import { inputSchema } from "./contracts.js";
 
 export const issueSummary = task(
   { name: "issue-summary", plan: "standard" },
@@ -335,12 +341,14 @@ Workflow handlers should:
 
 ### 2. Register it
 
-Add a side-effect import to `app/src/workflows.ts`:
+Export the workflow from the central manifest in `app/workflows/index.ts`:
 
 ```ts
-import "../workflows/issue-summary.js";
+export { issueSummary } from "./issue-summary/index.js";
 ```
 
+`app/src/workflows.ts` imports this manifest after the agent task imports.
+Exporting a workflow evaluates its `task(...)` definition and registers it.
 Keep task names stable. Renaming a registered task also changes its dispatch
 address.
 
@@ -351,7 +359,7 @@ For GitHub intake, add or extend a handler under `app/gateway/` and dispatch:
 ```ts
 await dispatchWorkflowTask("issue-summary", {
   issueNumber: payload.issue.number,
-  attemptId: deliveryId,
+  runId,
 });
 ```
 
@@ -380,10 +388,12 @@ If a workflow is internal-only, register it but do not add a gateway route.
 
 ## Existing `spec-to-pr` workflow behavior
 
-`app/workflows/spec-to-pr.ts` is the reference implementation. It parses and
-re-fetches the issue, checks the label, runs triage, and then removes the label
-as acknowledgment. Redis checkpoints each stage under the GitHub delivery ID,
-and the issue lease prevents overlapping attempts. It reconnects to the same
+`app/workflows/spec-to-pr/index.ts` is the reference orchestration entrypoint;
+its sibling modules contain contracts, checkpointing, model stages, sandbox
+lifecycle, Git operations, and terminal handling. It parses and re-fetches the
+issue, checks the label, runs triage, and then removes the label as
+acknowledgment. The RunStore records each stage and event under a logical run
+ID, and the issue lease prevents overlapping runs. It reconnects to the same
 sandbox and deterministic `factory/` branch on retry, runs analysis and
 implementation, commits, fans out three complete-diff reviews, and permits one
 implementation/review revision. Workflow-owned code verifies the pushed SHA,
@@ -400,7 +410,8 @@ configured label.
 - Complete diff sent to reviewers: at most 200,000 characters; larger and
   binary diffs fail closed.
 - Agent task inline result: 50,000 characters; larger values become blob refs.
-- Blob and run-checkpoint TTL: 7 days, refreshed on read.
+- Artifact TTL: 7 days, refreshed on explicit read.
+- Run-event detail retention: 30 days by default; run summaries: 90 days.
 - Most sandbox tool output: 50,000 characters.
 - Sandbox file reads through the tool: 100,000 characters.
 - Collected sandbox exec output: 1,000,000 characters.
@@ -411,7 +422,8 @@ Do not scan arbitrary user text for embedded references.
 
 ## Retry and idempotency
 
-- A Lua claim atomically deduplicates `x-github-delivery` and leases the issue.
+- One Postgres transaction atomically deduplicates `x-github-delivery`, creates
+  the logical run, and leases the issue.
 - Delivery state moves from `pending` to `dispatched` only after Render accepts
   the task; a redelivery recovers a gateway crash from the pending state.
 - One execution lock with a 10-second heartbeat prevents duplicate Workflow
@@ -442,8 +454,8 @@ Custom tools implement `ToolSource` from `sdk/tools.ts`.
 5. Add registry, validation, permission, and failure tests.
 
 Use the `source__tool` naming convention. The production registry contains the
-sandbox source plus bounded Slack-assistant GitHub and read-only Render
-sources. Agent declarations still determine the exact per-agent surface;
+sandbox tool source. Agent declarations still determine the exact per-agent
+surface;
 unknown tool names fail during task execution.
 
 Do not register Claude built-in filesystem or shell tools for app agents
@@ -493,19 +505,20 @@ Use the closest suite: `app/tests/agents.test.ts` for agent permissions;
 `dispatch.test.ts`, `github.test.ts`, and `server.test.ts` for gateway behavior;
 the other `app/tests/` files for config, GitHub, model JSON, and Git
 credentials. In `sdk/tests/`, use `agent` and `claude-runner` for execution,
-`tools` and `hooks` for policy, and `blobs`, `redis`, and `models` for their
-named subsystems.
+`tools` and `hooks` for policy, and `blobs` and `models` for their named
+subsystems. Store adapter parity lives under `store/tests/`.
 
 Tests use Vitest. Preserve environment cleanup and mock external SDKs before
 importing modules that initialize clients or read configuration.
 
 ## Deployment notes
 
-`render.yaml` creates the Docker gateway and an internal-only, `noeviction` Key
-Value instance. It does not create the Workflows service; create that
-separately with `npm run start:workflows`, supply its environment, and use the
-Key Value internal URL for `REDIS_URL`. Run `npm run doctor` before deploying
-to validate configuration, GitHub access, and Key Value connectivity. The
+`render.yaml` creates the Docker gateway, Postgres, and a retention cron. It
+does not create the Workflows service; create that separately with
+`npm run start:workflows`, supply its environment, and use the same Postgres
+internal URL for `DATABASE_URL`. The gateway pre-deploy command applies schema
+migrations. Run `npm run doctor` before deploying to validate configuration,
+GitHub access, Postgres connectivity/schema, and task registration. The
 `Dockerfile` starts only the gateway; do not combine both processes into one
 service.
 
@@ -522,5 +535,5 @@ Before finishing:
 7. Update `.env.example`, `render.yaml`, and `README.md` when configuration or
    deployment behavior changes.
 8. Run `npm run check`.
-9. Run `npm run test:integration` when Redis behavior changed.
+9. Run `npm run test:integration` when store behavior changed.
 10. Validate the Blueprint when `render.yaml` changes.

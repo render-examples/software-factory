@@ -3,18 +3,18 @@
  * All @renderinc/sdk imports are isolated here.
  */
 import { Render } from "@renderinc/sdk";
-import {
-  BaseSandbox,
-  type Sandbox,
-  type SandboxProvider,
-  type SandboxExecEvent,
-  type SandboxExecOptions,
-  type SandboxDownload,
-  type SandboxUploadData,
-  type SandboxUploadOptions,
-  type SandboxStatus,
-  type CreateSandboxOptions,
-} from "../sandbox.js";
+import { BaseSandbox } from "./base.js";
+import type {
+  Sandbox,
+  SandboxProvider,
+  SandboxExecEvent,
+  SandboxExecOptions,
+  SandboxDownload,
+  SandboxUploadData,
+  SandboxUploadOptions,
+  SandboxStatus,
+  CreateSandboxOptions,
+} from "./types.js";
 
 export interface RenderSandboxProviderOptions {
   token?: string;

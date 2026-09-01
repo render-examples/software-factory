@@ -4,6 +4,12 @@
  */
 import type { ResolvedTool } from "./tools.js";
 
+export interface TokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly model: string;
+}
+
 export type AgentEvent =
   | { readonly type: "text"; readonly text: string }
   | {
@@ -20,7 +26,8 @@ export type AgentEvent =
       readonly isError: boolean;
     }
   | { readonly type: "result"; readonly result: string }
-  | { readonly type: "error"; readonly error: Error };
+  | { readonly type: "error"; readonly error: Error }
+  | { readonly type: "usage"; readonly usage: TokenUsage };
 
 export type ToolCallEvent = Extract<AgentEvent, { type: "tool_call" }>;
 export type ToolCallInterception =

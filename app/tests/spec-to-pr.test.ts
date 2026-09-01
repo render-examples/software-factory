@@ -1,24 +1,31 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	configureFactoryStore,
+	createMemoryFactoryStore,
+	type FactoryStore,
+} from "#factory/store";
 
 const state = vi.hoisted(() => ({
-	checkpoints: new Map<string, unknown>(),
 	sandboxStatus: "running" as "running" | "terminated",
 	currentSha: "base-sha",
 	commitCount: 0,
 	analysisTask: vi.fn(),
 	triageTask: vi.fn(),
 	implementTask: vi.fn(),
+	selfReviewTask: vi.fn(),
 	securityTask: vi.fn(),
 	correctnessTask: vi.fn(),
 	testsTask: vi.fn(),
 	judgeTask: vi.fn(),
-	completeIntake: vi.fn(),
 	ensureIssueComment: vi.fn(),
 	ensurePull: vi.fn(),
 	terminate: vi.fn(),
 	execGitWithToken: vi.fn(),
 	sandbox: undefined as unknown,
 }));
+
+let store: FactoryStore;
 
 async function* execResult(
 	output = "",
@@ -77,6 +84,7 @@ vi.mock("../tasks/index.js", () => ({
 	analysisTask: state.analysisTask,
 	triageTask: state.triageTask,
 	implementTask: state.implementTask,
+	selfReviewTask: state.selfReviewTask,
 	securityTask: state.securityTask,
 	correctnessTask: state.correctnessTask,
 	testsTask: state.testsTask,
@@ -101,32 +109,13 @@ vi.mock("../lib/github.js", () => ({
 	}),
 }));
 
-vi.mock("../lib/run-store.js", () => ({
-	getCheckpoint: async (_attemptId: string, stage: string) =>
-		state.checkpoints.has(stage)
-			? { found: true, value: state.checkpoints.get(stage) }
-			: { found: false },
-	putCheckpoint: async (_attemptId: string, stage: string, value: unknown) => {
-		state.checkpoints.set(stage, value);
-		return value;
-	},
-	clearCheckpoints: async (_attemptId: string, stages: readonly string[]) => {
-		for (const stage of stages) state.checkpoints.delete(stage);
-	},
-	refreshIntakeLease: async () => {},
-	claimExecution: async () => true,
-	refreshExecution: async () => {},
-	releaseExecution: async () => {},
-	incrementFailureCount: async () => 1,
-	completeIntake: state.completeIntake,
-}));
-
 vi.mock("../lib/sandbox-git.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/sandbox-git.js")>();
 	return { ...actual, execGitWithToken: state.execGitWithToken };
 });
 
-import { branchName, specToPr } from "../workflows/spec-to-pr.js";
+import { branchName, specToPr } from "../workflows/spec-to-pr/index.js";
+import { STAGES } from "../workflows/spec-to-pr/constants.js";
 
 const implementation = JSON.stringify({
 	summary: "Implemented the fix",
@@ -134,7 +123,8 @@ const implementation = JSON.stringify({
 });
 
 beforeEach(() => {
-	state.checkpoints.clear();
+	store = createMemoryFactoryStore();
+	configureFactoryStore(store);
 	state.currentSha = "base-sha";
 	state.commitCount = 0;
 	state.sandboxStatus = "running";
@@ -152,11 +142,25 @@ beforeEach(() => {
 	);
 	state.analysisTask.mockResolvedValue("analysis");
 	state.implementTask.mockResolvedValue(implementation);
-	state.securityTask.mockResolvedValue("no security findings");
-	state.correctnessTask.mockResolvedValue("correct");
-	state.testsTask.mockResolvedValue("covered");
+	state.selfReviewTask.mockResolvedValue(
+		JSON.stringify({ needsRevision: false, issues: [] }),
+	);
+	state.securityTask.mockResolvedValue(
+		JSON.stringify({ findings: [] }),
+	);
+	state.correctnessTask.mockResolvedValue(
+		JSON.stringify({ findings: [] }),
+	);
+	state.testsTask.mockResolvedValue(
+		JSON.stringify({ findings: [] }),
+	);
 	state.judgeTask.mockResolvedValue(
-		JSON.stringify({ decision: "approve", summary: "ready" }),
+		JSON.stringify({
+			decision: "approve",
+			riskTier: "trivial",
+			summary: "ready",
+			topFindings: [],
+		}),
 	);
 	state.ensurePull.mockResolvedValue({
 		htmlUrl: "https://github.test/pull/7",
@@ -174,7 +178,8 @@ beforeEach(() => {
 	);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await store.close();
 	delete process.env.FACTORY_REPO;
 	delete process.env.FACTORY_LABEL;
 	delete process.env.GITHUB_TOKEN;
@@ -187,25 +192,90 @@ describe("spec-to-pr workflow", () => {
 		);
 	});
 
+	it("terminalizes a run that cannot acquire its subject lease", async () => {
+		const lease = await store.leases.tryAcquire(
+			"github:acme/factory:issue:42",
+			"other-run",
+			600,
+		);
+		expect(lease).not.toBeNull();
+
+		const result = await specToPr({
+			issueNumber: 42,
+			runId: "subject-busy-run",
+		});
+
+		expect(result).toEqual({ skipped: "issue is already running" });
+		expect(await store.runs.getRun("subject-busy-run")).toMatchObject({
+			status: "cancelled",
+			errorCode: "subject_busy",
+		});
+		expect(state.triageTask).not.toHaveBeenCalled();
+	});
+
 	it("discards execution checkpoints when the saved sandbox is gone", async () => {
-		const attemptId = "delivery-stale1";
-		state.sandboxStatus = "terminated";
-		state.checkpoints.set("sandbox", {
+		const runId = randomUUID();
+		await store.runs.ensureRun({
+			id: runId,
+			rootRunId: runId,
+			kind: "workflow",
+			name: "spec-to-pr",
+		});
+		const claim = await store.runs.beginExecution(
+			runId,
+			randomUUID(),
+			30,
+		);
+		if (claim.kind !== "acquired") throw new Error("test run was busy");
+		const savedSandbox = {
 			id: "stale-sandbox",
-			ready: true,
+			ready: true as const,
 			remoteUrl: "https://github.com/acme/factory.git",
 			remoteHead: "origin/main",
 			base: "main",
 			baseSha: "base-sha",
-			branch: branchName(42, attemptId),
-		});
-		state.checkpoints.set("analysis", "stale analysis");
-		state.checkpoints.set("implementation-1", {
-			raw: implementation,
-			report: JSON.parse(implementation),
-		});
+			branch: branchName(42, runId),
+		};
+		await store.runs.beginStep(
+			runId,
+			STAGES.sandbox.key,
+			"safe",
+			claim.execution,
+		);
+		await store.runs.completeStep(
+			runId,
+			STAGES.sandbox.key,
+			savedSandbox,
+			claim.execution,
+		);
+		await store.runs.beginStep(
+			runId,
+			STAGES.analysis.key,
+			"guarded",
+			claim.execution,
+		);
+		await store.runs.completeStep(
+			runId,
+			STAGES.analysis.key,
+			"stale analysis",
+			claim.execution,
+		);
+		await store.runs.beginStep(
+			runId,
+			STAGES.implementation1.key,
+			"guarded",
+			claim.execution,
+		);
+		await store.runs.completeStep(
+			runId,
+			STAGES.implementation1.key,
+			{ raw: implementation, report: JSON.parse(implementation) },
+			claim.execution,
+		);
+		await store.runs.releaseExecution(claim.execution);
+		state.sandboxStatus = "terminated";
 
-		const result = await specToPr({ issueNumber: 42, attemptId });
+		const result = await specToPr({ issueNumber: 42, runId });
 
 		expect(result).toMatchObject({ status: "draft_pr_opened" });
 		expect(state.analysisTask).toHaveBeenCalledOnce();
@@ -213,12 +283,31 @@ describe("spec-to-pr workflow", () => {
 	});
 
 	it("does not replay an interrupted model stage", async () => {
-		state.checkpoints.set("analysis-started", true);
+		const runId = randomUUID();
+		await store.runs.ensureRun({
+			id: runId,
+			rootRunId: runId,
+			kind: "workflow",
+			name: "spec-to-pr",
+		});
+		const claim = await store.runs.beginExecution(
+			runId,
+			randomUUID(),
+			30,
+		);
+		if (claim.kind !== "acquired") throw new Error("test run was busy");
+		await store.runs.beginStep(
+			runId,
+			STAGES.analysis.key,
+			"guarded",
+			claim.execution,
+		);
+		await store.runs.releaseExecution(claim.execution);
 
 		await expect(
 			specToPr({
 				issueNumber: 42,
-				attemptId: "delivery-interrupted",
+				runId,
 			}),
 		).rejects.toThrow(/refusing non-deterministic replay/);
 		expect(state.analysisTask).not.toHaveBeenCalled();
@@ -227,7 +316,7 @@ describe("spec-to-pr workflow", () => {
 	it("opens an approved draft PR and verifies the pushed SHA", async () => {
 		const result = await specToPr({
 			issueNumber: 42,
-			attemptId: "delivery-123456",
+			runId: "delivery-123456",
 		});
 
 		expect(result).toEqual({
@@ -248,12 +337,11 @@ describe("spec-to-pr workflow", () => {
 			{ owner: "acme", repo: "factory", fullName: "acme/factory" },
 			expect.objectContaining({ draft: true, base: "main" }),
 		);
-		expect(state.completeIntake).toHaveBeenCalledOnce();
 		expect(state.terminate).toHaveBeenCalledOnce();
 
 		const replay = await specToPr({
 			issueNumber: 42,
-			attemptId: "delivery-123456",
+			runId: "delivery-123456",
 		});
 		expect(replay).toEqual(result);
 		expect(state.implementTask).toHaveBeenCalledOnce();
@@ -265,16 +353,31 @@ describe("spec-to-pr workflow", () => {
 			.mockResolvedValueOnce(
 				JSON.stringify({
 					decision: "request_changes",
+					riskTier: "medium",
 					summary: "fix the edge case",
+					topFindings: [
+						{
+							source: "correctness",
+							severity: "high",
+							confidence: 85,
+							file: "src/handler.ts",
+							description: "missing null check",
+						},
+					],
 				}),
 			)
 			.mockResolvedValueOnce(
-				JSON.stringify({ decision: "approve", summary: "fixed" }),
+				JSON.stringify({
+					decision: "approve",
+					riskTier: "low",
+					summary: "fixed",
+					topFindings: [],
+				}),
 			);
 
 		const result = await specToPr({
 			issueNumber: 42,
-			attemptId: "delivery-654321",
+			runId: "delivery-654321",
 		});
 
 		expect(result).toMatchObject({
@@ -286,17 +389,41 @@ describe("spec-to-pr workflow", () => {
 		expect(state.commitCount).toBe(2);
 	});
 
+	it("does not terminate the sandbox before terminal state is durable", async () => {
+		vi.spyOn(store, "completeRun").mockRejectedValueOnce(
+			new Error("database unavailable"),
+		);
+
+		await expect(
+			specToPr({
+				issueNumber: 42,
+				runId: "delivery-terminal-failure",
+			}),
+		).rejects.toThrow("database unavailable");
+		expect(state.terminate).not.toHaveBeenCalled();
+	});
+
 	it("stops without pushing when the revision still fails review", async () => {
 		state.judgeTask.mockResolvedValue(
 			JSON.stringify({
 				decision: "request_changes",
+				riskTier: "high",
 				summary: "still unsafe",
+				topFindings: [
+					{
+						source: "security",
+						severity: "critical",
+						confidence: 90,
+						file: "src/auth.ts",
+						description: "SQL injection in query builder",
+					},
+				],
 			}),
 		);
 
 		const result = await specToPr({
 			issueNumber: 42,
-			attemptId: "delivery-999999",
+			runId: "delivery-999999",
 		});
 
 		expect(result).toEqual({

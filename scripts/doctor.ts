@@ -1,5 +1,5 @@
-import { closeKv, kv } from "#factory/sdk";
 import { TaskRegistry } from "@renderinc/sdk/workflows";
+import { createPostgresFactoryStore } from "#factory/store";
 import {
 	assertGatewayConfig,
 	assertWorkflowConfig,
@@ -12,12 +12,6 @@ function requireConfiguration(): void {
 	assertWorkflowConfig();
 	if ((process.env.GITHUB_WEBHOOK_SECRET ?? "").length < 32) {
 		throw new Error("GITHUB_WEBHOOK_SECRET must be at least 32 characters");
-	}
-	const slack = [process.env.SLACK_SIGNING_SECRET, process.env.SLACK_BOT_TOKEN];
-	if (slack.some(Boolean) && slack.some((value) => !value?.trim())) {
-		throw new Error(
-			"Slack requires SLACK_SIGNING_SECRET and SLACK_BOT_TOKEN together",
-		);
 	}
 }
 
@@ -43,14 +37,9 @@ async function checkGitHub(): Promise<void> {
 	await response.body?.cancel();
 }
 
-async function checkKeyValue(): Promise<void> {
-	const client = await kv();
-	await client.ping();
-}
-
 async function checkWorkflowRegistration(): Promise<void> {
 	await import("../app/tasks/index.js");
-	await import("../app/workflows/spec-to-pr.js");
+	await import("../app/workflows/index.js");
 	const registered = new Set(TaskRegistry.getInstance().getAllTaskNames());
 	const expected = [
 		"analyst",
@@ -58,8 +47,7 @@ async function checkWorkflowRegistration(): Promise<void> {
 		"implementer",
 		"judge",
 		"security",
-		"slack-assistant",
-		"slack-assistant-agent",
+		"self-review",
 		"spec-to-pr",
 		"tests",
 		"triage",
@@ -69,10 +57,7 @@ async function checkWorkflowRegistration(): Promise<void> {
 		throw new Error(`Workflow tasks did not register: ${missing.join(", ")}`);
 	}
 	const sources = createWorkflowRegistry().sourceIds();
-	if (
-		sources.join(",") !==
-		"sandbox,slack-assistant-github,slack-assistant-render"
-	) {
+	if (sources.join(",") !== "sandbox") {
 		throw new Error(
 			"Production tool registry does not match the bounded surface",
 		);
@@ -82,24 +67,30 @@ async function checkWorkflowRegistration(): Promise<void> {
 async function main(): Promise<void> {
 	requireConfiguration();
 	console.log("✓ configuration is complete");
-	await Promise.all([
-		checkGitHub(),
-		checkKeyValue(),
-		checkWorkflowRegistration(),
-	]);
-	console.log("✓ GITHUB_TOKEN can access FACTORY_REPO");
-	console.log("✓ REDIS_URL accepts Key Value commands");
-	console.log("✓ workflow tasks and sandbox-only tools register locally");
-	console.log(
-		"✓ local checks passed; confirm the Dashboard Workflow slug matches RENDER_WORKFLOW_SLUG",
-	);
+	const store = createPostgresFactoryStore({
+		applicationName: "render-factory-doctor",
+	});
+	try {
+		await Promise.all([
+			checkGitHub(),
+			store.health(),
+			checkWorkflowRegistration(),
+		]);
+		await store.verifySchema();
+		console.log("✓ GITHUB_TOKEN can access FACTORY_REPO");
+		console.log("✓ DATABASE_URL accepts Postgres queries");
+		console.log("✓ factory store schema is current");
+		console.log("✓ workflow tasks and bounded tools register locally");
+		console.log(
+			"✓ local checks passed; confirm the Dashboard Workflow slug matches RENDER_WORKFLOW_SLUG",
+		);
+	} finally {
+		await store.close().catch(() => {});
+	}
 }
 
 main()
 	.catch((error) => {
 		console.error(`Factory doctor failed: ${String(error)}`);
 		process.exitCode = 1;
-	})
-	.finally(async () => {
-		await closeKv().catch(() => {});
 	});

@@ -13,22 +13,11 @@ const provider: SandboxProvider = {
 };
 
 describe("production workflow registry", () => {
-  it("contains sandbox and bounded Slack-assistant tools", async () => {
+  it("contains sandbox tools only", async () => {
     const registry = createWorkflowRegistry(provider);
 
-    expect(registry.sourceIds()).toEqual([
-      "sandbox",
-      "slack-assistant-github",
-      "slack-assistant-render",
-    ]);
+    expect(registry.sourceIds()).toEqual(["sandbox"]);
     await expect(registry.resolve(["Bash"])).rejects.toThrow(/not found/);
-    await expect(registry.resolve(["render_trigger_deploy"])).rejects.toThrow(
-      /not found/,
-    );
-    await expect(registry.resolve(["render_list_env_vars"])).rejects.toThrow(
-      /not found/,
-    );
     expect(await registry.resolve(["sandbox__read_file"])).toHaveLength(1);
-    expect(await registry.resolve(["draft_factory_issue"])).toHaveLength(1);
   });
 });

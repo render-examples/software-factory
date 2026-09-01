@@ -1,6 +1,5 @@
-// GitHub REST client for workflow side effects and fixed-repository Slack
-// tools. The assistant can only reach the explicitly wrapped read methods and
-// unlabeled issue creation. Auth: fine-grained PAT via GITHUB_TOKEN.
+// GitHub REST client for workflow side effects.
+// Auth: fine-grained PAT via GITHUB_TOKEN.
 
 const DEFAULT_API = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 15_000;

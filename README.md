@@ -2,10 +2,6 @@
 
 A self-hosted fork-and-deploy software factory built on Render. Turn a labeled GitHub issue into a reviewed draft pull request using durable workflows and isolated coding agents.
 
-An optional Slack assistant provides signed, multi-turn access to
-fixed-repository Q&A, read-only Render observability, and unlabeled issue
-drafting. It cannot bypass the GitHub label gate.
-
 [Get started](#get-started) · [How it works](#how-it-works) ·
 [Architecture](#architecture) · [Deploy](#deploy-to-render) ·
 [Customize](#customize) · [Safety](#safety-boundaries)
@@ -43,7 +39,7 @@ The factory supplies the operational foundation around those agents:
 2. A maintainer listed in `FACTORY_GITHUB_ACTORS` applies `FACTORY_LABEL`.
 3. The gateway verifies the GitHub signature, repository, actor, action, and
    label. It atomically claims the delivery and issue, then dispatches only
-   the issue number and GitHub delivery ID.
+   the issue number and a logical run ID.
 4. The workflow fetches authoritative issue and comment state from GitHub.
 5. Triage decides whether the issue has enough detail, and the workflow
    removes the intake label as acknowledgment. If clarification is needed, it
@@ -57,25 +53,13 @@ The factory supplies the operational foundation around those agents:
 11. Only an approved revision is pushed. Workflow code verifies the remote
     SHA and opens a draft pull request.
 
-Every stage is checkpointed in Key Value. Automatic task retries reconnect to
-the same sandbox and branch instead of starting duplicate work. The sandbox
-is terminated only after the workflow reaches a terminal result.
+Every run and stage transition is recorded through a backend-neutral RunStore.
+The production adapter uses Postgres for ordered events, replay checkpoints,
+leases, artifacts, and current-state projections. Automatic task retries
+reconnect to the same sandbox and branch instead of starting duplicate work.
+The sandbox is terminated only after the workflow reaches a terminal result.
 
 If clarification or a retry is needed, a maintainer reapplies the label.
-
-### Optional Slack assistant
-
-When Slack credentials are configured, workspace users can mention the app,
-message it directly, or reply in an existing thread. Key Value stores the last
-20 messages atomically for 30 days. The assistant can:
-
-- read and search only `FACTORY_REPO`
-- list Render services and inspect deploys, logs, and metrics
-- create an unlabeled issue in `FACTORY_REPO`
-
-It cannot deploy, read environment-variable values, modify code, apply the
-factory label, or start a factory run. A maintainer reviews a drafted issue
-and applies `FACTORY_LABEL` in GitHub.
 
 ## Architecture
 
@@ -88,7 +72,7 @@ Gateway web service
   ├─ matches FACTORY_REPO + FACTORY_LABEL
   ├─ checks FACTORY_GITHUB_ACTORS
   ├─ deduplicates delivery + leases issue
-  └─ dispatches { issueNumber, attemptId }
+  └─ creates a run + dispatches { issueNumber, runId }
   │
   ▼
 Render Workflows
@@ -101,17 +85,10 @@ Render Workflows
   ├─ judge                  │
   └─ draft pull request ◀───┘
 
-Signed Slack event
-  └─ Gateway → slack-assistant task
-       ├─ capped Key Value thread history
-       ├─ fixed-repository read tools
-       ├─ read-only Render tools
-       └─ optional unlabeled GitHub issue
-
-Render Key Value
-  ├─ delivery deduplication and issue leases
-  ├─ replay checkpoints for every pipeline stage
-  ├─ Slack delivery state and capped thread memory
+Render Postgres
+  ├─ generic workflow, task, and agent runs
+  ├─ ordered run events and replay checkpoints
+  ├─ delivery deduplication and fenced leases
   └─ oversized workflow handoff artifacts
 ```
 
@@ -125,16 +102,16 @@ app/
   gateway/         HTTP intake, validation, and dispatch
   hooks/           Audit and policy hooks
   lib/             GitHub, configuration, and Git helpers
-  tools/           Bounded Slack-assistant integrations
   src/             Gateway and Workflows entrypoints
   tests/           Application and integration tests
 sdk/
   runners/         Model runner implementations
   sandbox/         Sandbox provider implementations
   tests/           SDK tests
-render.yaml        Gateway and Key Value Blueprint
+store/             Backend-neutral contracts plus memory/Postgres adapters
+render.yaml        Gateway, Postgres, and retention-cron Blueprint
 Dockerfile         Gateway image
-docker-compose.yml Local Key Value
+docker-compose.yml Local Postgres
 ```
 
 The repository deploys as two independent processes: the public Hono gateway
@@ -143,7 +120,7 @@ at `app/src/server.ts` and the task-registration host at
 credential. Workflow code owns GitHub writes and sandbox lifecycle; agents
 receive only the sandbox operations required for their role.
 
-`GET /health` reports process liveness. `GET /ready` checks Key Value
+`GET /health` reports process liveness. `GET /ready` checks Postgres and schema
 readiness and is the deployed gateway health check.
 
 ## Get started
@@ -153,7 +130,7 @@ readiness and is the deployed gateway health check.
 For a full end-to-end run you need:
 
 - Node.js 22 or newer and npm
-- Docker for the local Redis-compatible Key Value service
+- Docker for the local Postgres service
 - The Render CLI, installed and authenticated
 - A Render workspace with access to Workflows and Sandboxes
 - An Anthropic API key
@@ -168,10 +145,19 @@ npm ci
 cp .env.example .env
 ```
 
-Fill in `.env` using the [configuration reference](#configuration), then run
-each service in a separate terminal:
+Fill in `.env` using the [configuration reference](#configuration). Start and
+migrate Postgres first:
 
-- Key Value: `npm run dev:redis`
+```bash
+npm run dev:postgres
+npm run db:migrate
+```
+
+Existing checkouts should remove `REDIS_URL`, copy the `DATABASE_URL` settings
+from `.env.example`, and run the migration before starting either process.
+
+Then run each process in a separate terminal:
+
 - Gateway on `http://localhost:3000`: `npm run dev:gateway`
 - Render Workflows host: `npm run dev:workflows`
 
@@ -179,7 +165,7 @@ each service in a separate terminal:
 still create real Render Sandboxes; they do not execute repository code on
 your development machine.
 
-With Key Value running and `.env` filled in, verify configuration, GitHub
+With Postgres running and `.env` filled in, verify configuration, GitHub
 access, and local task registration:
 
 ```bash
@@ -215,58 +201,56 @@ comment, and open a draft PR, and protect the default branch.
 | `FACTORY_GITHUB_ACTORS` | Gateway | Comma-separated GitHub logins allowed to apply the label |
 | `GITHUB_WEBHOOK_SECRET` | Gateway | HMAC secret; use at least 32 random characters |
 | `RENDER_WORKFLOW_SLUG` | Gateway | Deployed Workflows service slug, without a task name |
-| `REDIS_URL` | Both | Key Value connection string for intake leases and workflow checkpoints |
+| `DATABASE_URL` | Both | Postgres connection string for runs, events, checkpoints, leases, and artifacts |
+| `FACTORY_DB_POOL_MAX` | Both | Optional per-process Postgres pool maximum; defaults to `2` |
+| `FACTORY_EVENT_RETENTION_DAYS` | Retention cron | Optional event-detail retention; defaults to `30` |
+| `FACTORY_RUN_RETENTION_DAYS` | Retention cron | Optional run-summary retention; defaults to `90` |
 | `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
 | `GITHUB_TOKEN` | Workflows | Fine-grained token scoped to `FACTORY_REPO` |
 | `RENDER_API_KEY` | Workflows | Render SDK and Sandbox credential |
 | `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
-| `SLACK_SIGNING_SECRET` | Gateway | Optional Slack request-signing secret |
-| `SLACK_BOT_TOKEN` | Workflows | Required with Slack to post thread replies |
 | `PORT` | Gateway | Optional HTTP port; defaults to `3000` |
 
-Both processes must use the same `FACTORY_REPO` and `FACTORY_LABEL`.
-`REDIS_URL` points to local Docker in `.env.example`; the gateway Blueprint
-wires its production value automatically.
+Both processes must use the same `FACTORY_REPO`, `FACTORY_LABEL`, and Postgres
+database. `DATABASE_URL` points to local Docker in `.env.example`; the gateway
+Blueprint wires its production value automatically.
 
 Development scripts load `.env`. The production commands
 `npm run start:gateway` and `npm run start:workflows` do not; supply their
 environment through Render or the process environment.
 
-Slack remains disabled unless `SLACK_SIGNING_SECRET` is present. When enabling
-it, also set `SLACK_BOT_TOKEN` on the Workflows service. The signing secret
-authenticates Slack, not an individual user; any workspace member who can
-reach the installed app can use its bounded capabilities.
 
 ## Deploy to Render
 
 1. Fork this repository.
 2. Create a Blueprint from `render.yaml`. It provisions:
    - `render-factory-gateway`
-   - `render-factory-kv`, with external access disabled and a `noeviction`
-     policy
+   - `render-factory-db`
+   - `render-factory-retention`
 3. Set the unsynced gateway variables listed in
    [Configuration](#configuration).
-4. Create a Render Workflows service from the same repository. Use:
+4. Deploy the Blueprint gateway once so its pre-deploy command migrates the
+   shared database.
+5. Create a Render Workflows service from the same repository. Use:
 
    ```bash
    npm run start:workflows
    ```
 
-5. Set the Workflows variables, using the Key Value internal URL for
-   `REDIS_URL`.
-6. Set the gateway's `RENDER_WORKFLOW_SLUG` to the Workflows service slug.
-7. Point the GitHub `issues` webhook at `/channels/github`.
-8. Optional: configure Slack Events at `/channels/slack`, subscribe to
-   `app_mention` and direct-message events, and set the Slack variables.
+6. Set the Workflows variables before it starts, using the Postgres internal URL for
+   `DATABASE_URL`.
+7. Set the gateway's `RENDER_WORKFLOW_SLUG` to the Workflows service slug.
+8. Point the GitHub `issues` webhook at `/channels/github`.
 9. Run `npm run doctor` from a configured local checkout.
 
 Render Workflows cannot currently be provisioned by Blueprints. The
 repository's `Dockerfile` starts only the gateway; keep the Workflows host as
 a separate service.
 
-The doctor command validates configuration, repository access, Key Value, and
-task registration. The remaining manual check is that the Dashboard Workflow
-slug matches `RENDER_WORKFLOW_SLUG`.
+The gateway runs `npm run db:migrate` as its pre-deploy command. The doctor
+command validates configuration, repository access, Postgres schema, and task
+registration. The remaining manual check is that the Dashboard Workflow slug
+matches `RENDER_WORKFLOW_SLUG`.
 
 ## Customize
 
@@ -305,14 +289,24 @@ Tool lists are runtime allowlists. Read-only analysis agents receive
 read-only sandbox tools; only implementation receives write and execution
 tools.
 
-`app/workflows/spec-to-pr.ts` contains the issue-to-PR pipeline. Orchestration
-code owns trusted input fetching, sandbox creation and cleanup, GitHub writes,
-Git pushes, checkpoints, and retries. Agents do not receive those capabilities.
+`app/workflows/spec-to-pr/index.ts` contains the issue-to-PR orchestration;
+its sibling modules isolate checkpoint, model-stage, sandbox, Git, and
+terminal logic. Workflow code owns trusted input fetching, sandbox creation
+and cleanup, GitHub writes, Git pushes, checkpoints, and retries.
 
 New workflows should validate `unknown` input immediately, keep dispatch
-payloads small, and be imported by `app/src/workflows.ts` so their tasks
-register. Application code imports public APIs through `#factory/sdk`;
-provider integrations stay behind SDK interfaces.
+payloads small, live under `app/workflows/<workflow-name>/`, and be exported
+from `app/workflows/index.ts` so their tasks register.
+
+`store/` defines backend-neutral run, event, inbox, lease, artifact,
+conversation, and knowledge contracts. Postgres is the production adapter and
+the in-memory adapter is the executable test reference. Additional primary
+backends must pass the same conformance suite; read-only analytics or viewing
+systems should consume committed events by global position instead of becoming
+a second source of truth.
+
+Application code imports public APIs through `#factory/sdk`; provider
+integrations stay behind SDK interfaces.
 
 See [AGENTS.md](AGENTS.md) for detailed extension conventions, registration
 steps, security invariants, and test ownership.
@@ -323,11 +317,6 @@ steps, security invariants, and test ownership.
 - GitHub delivery deduplication, one active lease per issue, and replay-safe
   stage checkpoints prevent overlapping work.
 - The gateway never receives the repository token.
-- Slack is disabled by default and accepts only correctly signed Slack events
-  when enabled.
-- Slack tools are fixed to `FACTORY_REPO`, Render reads, and unlabeled issue
-  creation; deploys, environment values, labels, merges, and direct workflow
-  dispatch are absent.
 - Built-in Claude filesystem and shell tools are not exposed to app agents.
 - Unattended permissions and malformed model output fail closed.
 - Repository execution stays in a Render Sandbox.
@@ -342,13 +331,12 @@ steps, security invariants, and test ownership.
 - One deployment is bound to one GitHub repository.
 - Intake is limited to a maintainer applying one issue label.
 - There is no public chat API, PR review trigger, or automatic PR follow-up.
-- Slack is an optional bounded assistant, not a factory control plane.
 - Only one internal implementation/review revision is attempted; unresolved
   findings stop without a PR.
 - Render Workflows must be created separately from the Blueprint.
 - Render Workflows and Sandboxes product access is required.
 - Render service filesystems are ephemeral; durable workflow state belongs in
-  Key Value.
+  Postgres or another `FactoryStore` implementation.
 
 ## Development and verification
 
@@ -357,7 +345,8 @@ focused checks:
 
 ```bash
 npx vitest run app/tests/github.test.ts  # focused gateway test
-npm run test:integration                 # live Key Value probe; requires Redis
+npm run test:integration                 # live store suite; requires Postgres
+npm run run:status -- --issue 42         # inspect a persisted run safely
 render blueprints validate               # when render.yaml changes
 ```
 

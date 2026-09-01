@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createMemoryFactoryStore } from "#factory/store";
 import { Agent, agentTask, md } from "../agent.js";
 import type { Hook } from "../hooks.js";
 import type { AgentEvent, AgentRunner, RunContext } from "../runner.js";
@@ -16,6 +17,7 @@ class RecordingRunner implements AgentRunner {
 const emptyRegistry = {
   resolve: async () => [],
 } as unknown as ToolRegistry;
+const store = createMemoryFactoryStore();
 
 describe("Agent", () => {
   it("validates required configuration", () => {
@@ -35,7 +37,7 @@ describe("agentTask", () => {
   it("defaults to an empty registry rather than host built-ins", async () => {
     const run = agentTask(
       Agent({ id: "default-registry-test", prompt: "system", tools: ["Bash"] }),
-      { runner: new RecordingRunner() },
+      { runner: new RecordingRunner(), store },
     );
     await expect(run({ message: "work" })).rejects.toThrow(/Bash.*not found/);
   });
@@ -53,6 +55,7 @@ describe("agentTask", () => {
     const result = await agentTask(agent, {
       runner,
       registry: emptyRegistry,
+      store,
     })({ message: "work item" });
 
     expect(result).toBe("done");
@@ -64,6 +67,60 @@ describe("agentTask", () => {
       model: "medium",
       tools: [],
     });
+  });
+
+  it("records a generic child agent run and usage", async () => {
+    const hierarchyStore = createMemoryFactoryStore();
+    await hierarchyStore.runs.ensureRun({
+      id: "root-run",
+      rootRunId: "root-run",
+      kind: "workflow",
+      name: "pipeline",
+    });
+    const runner: AgentRunner = {
+      async *run() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 4,
+            model: "test-model",
+          },
+        };
+        yield { type: "result", result: "done" };
+      },
+    };
+    const run = agentTask(
+      Agent({ id: "child-agent", prompt: "system", tools: [] }),
+      { runner, registry: emptyRegistry, store: hierarchyStore },
+    );
+
+    await run({
+      message: "work",
+      run: {
+        id: "child-run",
+        rootRunId: "root-run",
+        parentRunId: "root-run",
+        parentStepKey: "analysis",
+      },
+    });
+
+    expect(await hierarchyStore.runs.getRun("child-run")).toMatchObject({
+      kind: "agent",
+      name: "child-agent",
+      status: "completed",
+      rootRunId: "root-run",
+      parentRunId: "root-run",
+      parentStepKey: "analysis",
+      totalInputTokens: 12,
+      totalOutputTokens: 4,
+      totalModelCalls: 1,
+    });
+    expect(
+      (await hierarchyStore.events.readRun("child-run")).map(
+        (event) => event.type,
+      ),
+    ).toContain("agent.usage");
   });
 
   it("bridges hook rejection to the runner's pre-tool policy", async () => {
@@ -92,7 +149,7 @@ describe("agentTask", () => {
 
     await agentTask(
       Agent({ id: "policy-test", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry, hooks: [blocker] },
+      { runner, registry: emptyRegistry, hooks: [blocker], store },
     )({ message: "work" });
 
     expect(intercepted).toEqual({ action: "reject", reason: "blocked" });
@@ -106,12 +163,41 @@ describe("agentTask", () => {
     };
     const run = agentTask(
       Agent({ id: "failure-test", prompt: "system", tools: [] }),
-      { runner, registry: emptyRegistry },
+      { runner, registry: emptyRegistry, store },
     );
 
     await expect(run({ message: "work" })).rejects.toThrow(
       "model unavailable",
     );
+  });
+
+  it("terminalizes an agent run after its retry budget is exhausted", async () => {
+    const failureStore = createMemoryFactoryStore();
+    const runner: AgentRunner = {
+      async *run() {
+        yield { type: "error", error: new Error("model unavailable") };
+      },
+    };
+    const run = agentTask(
+      Agent({ id: "terminal-failure-test", prompt: "system", tools: [] }),
+      { runner, registry: emptyRegistry, store: failureStore },
+    );
+    const input = {
+      message: "work",
+      run: {
+        id: "terminal-failure-run",
+        rootRunId: "terminal-failure-run",
+      },
+    };
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await expect(run(input)).rejects.toThrow("model unavailable");
+    }
+    expect(await failureStore.runs.getRun(input.run.id)).toMatchObject({
+      status: "failed",
+      failureCount: 4,
+      errorCode: "attempts_exhausted",
+    });
   });
 
   it("requires exactly one terminal result", async () => {
@@ -129,7 +215,7 @@ describe("agentTask", () => {
     const agent = Agent({ id: "terminal-test", prompt: "system", tools: [] });
 
     await expect(
-      agentTask(agent, { runner: noResult, registry: emptyRegistry })({
+      agentTask(agent, { runner: noResult, registry: emptyRegistry, store })({
         message: "work",
       }),
     ).rejects.toThrow(/no result/);
@@ -137,6 +223,7 @@ describe("agentTask", () => {
       agentTask(agent, {
         runner: multipleResults,
         registry: emptyRegistry,
+        store,
       })({ message: "work" }),
     ).rejects.toThrow(/multiple results/);
   });

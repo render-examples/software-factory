@@ -12,7 +12,7 @@ import { dispatchWorkflowTask } from "../gateway/dispatch.js";
 
 beforeEach(() => {
 	startTask.mockReset();
-	startTask.mockResolvedValue({ id: "run-1" });
+	startTask.mockResolvedValue({ taskRunId: "run-1" });
 	process.env.RENDER_WORKFLOW_SLUG = "acme/factory";
 	vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -25,10 +25,14 @@ afterEach(() => {
 
 describe("dispatchWorkflowTask", () => {
 	it("sends the small issue reference unchanged", async () => {
-		const payload = { issueNumber: 42, attemptId: "delivery-123456" };
+		const payload = { issueNumber: 42, runId: "run-123456" };
 		const result = await dispatchWorkflowTask("spec-to-pr", payload);
 
-		expect(result).toEqual({ ok: true, taskName: "spec-to-pr" });
+		expect(result).toEqual({
+			ok: true,
+			taskName: "spec-to-pr",
+			taskRunId: "run-1",
+		});
 		expect(startTask).toHaveBeenCalledWith("acme/factory/spec-to-pr", [
 			payload,
 		]);
@@ -38,7 +42,7 @@ describe("dispatchWorkflowTask", () => {
 		delete process.env.RENDER_WORKFLOW_SLUG;
 		const result = await dispatchWorkflowTask("spec-to-pr", {
 			issueNumber: 42,
-			attemptId: "delivery-123456",
+			runId: "run-123456",
 		});
 		expect(result).toEqual({
 			ok: false,
@@ -53,7 +57,7 @@ describe("dispatchWorkflowTask", () => {
 		startTask.mockRejectedValue(error);
 		const result = await dispatchWorkflowTask("spec-to-pr", {
 			issueNumber: 42,
-			attemptId: "delivery-123456",
+			runId: "run-123456",
 		});
 		expect(result).toEqual({
 			ok: false,

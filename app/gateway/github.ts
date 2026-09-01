@@ -1,19 +1,23 @@
 /** GitHub-only intake for one configured repository and one trigger label. */
 import { Hono } from "hono";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
 import { z } from "zod";
+import type { FactoryStore } from "#factory/store";
 import {
 	factoryActors,
 	factoryLabel,
 	factoryRepository,
 } from "../lib/factory-config.js";
-import {
-	abandonIntake,
-	claimIntake,
-	markIntakeDispatched,
-} from "../lib/run-store.js";
 import { dispatchWorkflowTask } from "./dispatch.js";
 import { readRequestBody } from "./body.js";
+
+const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
+const ISSUE_LEASE_TTL_SECONDS = 26 * 60 * 60;
 
 const issueEventSchema = z.object({
 	action: z.string(),
@@ -42,7 +46,7 @@ function verifyGitHubSignature(rawBody: string, headers: Headers): boolean {
 	}
 }
 
-export function githubHandler(): Hono {
+export function githubHandler(options: { store: FactoryStore }): Hono {
 	const repository = factoryRepository();
 	const triggerLabel = factoryLabel();
 	const allowedActors = factoryActors();
@@ -86,41 +90,71 @@ export function githubHandler(): Hono {
 			return c.json({ ok: true, skipped: true });
 		}
 
-		const attemptId = c.req.raw.headers.get("x-github-delivery");
-		if (!attemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(attemptId)) {
+		const deliveryId = c.req.raw.headers.get("x-github-delivery");
+		if (!deliveryId || !/^[A-Za-z0-9_-]{8,128}$/.test(deliveryId)) {
 			return c.json({ error: "missing GitHub delivery ID" }, 400);
 		}
-		let claim: Awaited<ReturnType<typeof claimIntake>>;
+		const proposedRunId = randomUUID();
+		const subjectKey = `github:${repository.fullName.toLowerCase()}:issue:${payload.issue.number}`;
+		let claim: Awaited<ReturnType<FactoryStore["inbox"]["accept"]>>;
 		try {
-			claim = await claimIntake(
-				repository.fullName,
-				payload.issue.number,
-				attemptId,
-			);
+			claim = await options.store.inbox.accept({
+				provider: "github",
+				deliveryId,
+				payloadDigest: createHash("sha256").update(rawBody).digest("hex"),
+				subjectKey,
+				run: {
+					id: proposedRunId,
+					rootRunId: proposedRunId,
+					kind: "workflow",
+					name: "spec-to-pr",
+					triggerType: "github.issues.labeled",
+					triggerRef: deliveryId,
+					input: { issueNumber: payload.issue.number },
+				},
+				deliveryTtlSeconds: DELIVERY_TTL_SECONDS,
+				subjectLeaseTtlSeconds: ISSUE_LEASE_TTL_SECONDS,
+			});
 		} catch (error) {
 			console.error("Failed to claim GitHub delivery:", error);
 			return c.json({ error: "intake store unavailable" }, 503);
 		}
-		if (claim === "busy" || claim === "dispatched" || claim === "completed") {
-			return c.json({ ok: true, skipped: true, reason: claim });
+		if (
+			claim.kind === "subject_busy" ||
+			claim.kind === "dispatched" ||
+			claim.kind === "completed"
+		) {
+			return c.json({ ok: true, skipped: true, reason: claim.kind });
 		}
 
+		const runId = claim.runId;
+		await options.store.runs.addLink({
+			runId,
+			kind: "github.issue",
+			externalId: `${repository.fullName}#${payload.issue.number}`,
+			metadata: { issueNumber: payload.issue.number },
+		});
 		const dispatch = await dispatchWorkflowTask("spec-to-pr", {
 			issueNumber: payload.issue.number,
-			attemptId,
+			runId,
 		});
 		if (dispatch.ok) {
-			await markIntakeDispatched(repository.fullName, attemptId).catch(
+			if (dispatch.taskRunId) {
+				await options.store.runs.addLink({
+					runId,
+					kind: "render.workflow-task",
+					externalId: dispatch.taskRunId,
+				});
+			}
+			await options.store.inbox.markDispatched("github", deliveryId).catch(
 				(error) => console.error("Failed to mark intake dispatched:", error),
 			);
 			return c.json({ dispatched: "spec-to-pr" }, 202);
 		}
-		if (claim === "claimed") {
-			await abandonIntake(
-				repository.fullName,
-				payload.issue.number,
-				attemptId,
-			).catch((error) =>
+		if (claim.kind === "accepted" || claim.kind === "pending") {
+			await options.store.inbox
+				.abandon("github", deliveryId)
+				.catch((error) =>
 				console.error("Failed to release intake claim:", error),
 			);
 		}
