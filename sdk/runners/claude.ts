@@ -14,8 +14,6 @@ import {
 	isCustomTool,
 	type Tool,
 	type ToolContext,
-	type BuiltInTool,
-	type ToolSource,
 } from "../tools.js";
 import { createClaudeModelResolver, type ModelResolver } from "../models.js";
 
@@ -28,17 +26,6 @@ const CLAUDE_BUILTIN_NAMES = new Set([
 	"Glob",
 	"NotebookEdit",
 ]);
-
-export class ClaudeBuiltInToolSource implements ToolSource {
-	readonly id = "claude-built-in";
-
-	resolve(): BuiltInTool[] {
-		return [...CLAUDE_BUILTIN_NAMES].map((name) => ({
-			name,
-			builtIn: true as const,
-		}));
-	}
-}
 
 const MCP_SERVER_NAME = "factory-tools";
 const CLAUDE_ENV_ALLOWLIST = [

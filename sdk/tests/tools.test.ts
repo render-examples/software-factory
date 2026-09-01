@@ -1,13 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import {
-  createRegistry,
   isBuiltIn,
   isCustomTool,
 } from "../tools.js";
-import type { Tool, ToolSource, ToolResult, ToolContext, ResolvedTool } from "../tools.js";
-import { ClaudeBuiltInToolSource } from "../runners/claude.js";
-import { createSandboxToolSource } from "../sandbox-tool-source.js";
+import type { Tool, ToolResult, ToolContext, ResolvedTool } from "../tools.js";
+import {
+  sandboxExec,
+  sandboxReadFile,
+  sandboxWriteFile,
+  sandboxListDir,
+  sandboxApplyPatch,
+  sandboxSearch,
+  allSandboxTools,
+  createSandboxToolsForProvider,
+} from "../sandbox-tool-source.js";
 import type { SandboxProvider, Sandbox } from "../sandbox/index.js";
 
 const echoSchema = { text: z.string() };
@@ -21,82 +28,34 @@ const echoTool: Tool<typeof echoSchema> = {
   },
 };
 
-class EchoToolSource implements ToolSource {
-  readonly id = "echo";
-  resolve() {
-    return [echoTool];
-  }
-}
-
 function partition(tools: ResolvedTool[]) {
   const builtIn = tools.filter(isBuiltIn).map((t) => t.name);
   const custom = tools.filter(isCustomTool);
   return { builtIn, custom };
 }
 
-describe("ClaudeBuiltInToolSource", () => {
-  it("resolves all Claude SDK built-in tools", () => {
-    const source = new ClaudeBuiltInToolSource();
-    const tools = source.resolve();
-    const names = tools.map((t) => t.name);
-    expect(names).toContain("Read");
-    expect(names).toContain("Edit");
-    expect(names).toContain("Bash");
-    expect(names).toContain("Grep");
-    expect(names).toContain("Glob");
-    for (const t of tools) {
-      expect(isBuiltIn(t)).toBe(true);
-      expect(isCustomTool(t)).toBe(false);
-    }
-  });
-});
-
-describe("ToolRegistry", () => {
-  it("resolves built-in tools from a registered source", async () => {
-    const registry = createRegistry().register(new ClaudeBuiltInToolSource());
-    const tools = await registry.resolve(["Read", "Bash"]);
-    const { builtIn, custom } = partition(tools);
-    expect(builtIn).toEqual(["Read", "Bash"]);
-    expect(custom).toEqual([]);
+describe("Tool type guards", () => {
+  it("identifies built-in tools", () => {
+    const builtIn = { name: "Read", builtIn: true as const };
+    expect(isBuiltIn(builtIn)).toBe(true);
+    expect(isCustomTool(builtIn)).toBe(false);
   });
 
-  it("resolves custom tools separately from built-in tools", async () => {
-    const registry = createRegistry()
-      .register(new ClaudeBuiltInToolSource())
-      .register(new EchoToolSource());
-    const tools = await registry.resolve(["Read", "Echo", "Bash"]);
-    const { builtIn, custom } = partition(tools);
+  it("identifies custom tools", () => {
+    expect(isCustomTool(echoTool)).toBe(true);
+    expect(isBuiltIn(echoTool)).toBe(false);
+  });
+
+  it("partitions mixed tool arrays", () => {
+    const mixed: ResolvedTool[] = [
+      { name: "Read", builtIn: true as const },
+      echoTool,
+      { name: "Bash", builtIn: true as const },
+    ];
+    const { builtIn, custom } = partition(mixed);
     expect(builtIn).toEqual(["Read", "Bash"]);
     expect(custom).toHaveLength(1);
     expect(custom[0].name).toBe("Echo");
-  });
-
-  it("throws for unknown tool names", async () => {
-    const registry = createRegistry().register(new ClaudeBuiltInToolSource());
-    await expect(registry.resolve(["Read", "NoSuchTool"])).rejects.toThrow(
-      /NoSuchTool.*not found/,
-    );
-  });
-
-  it("prevents duplicate source registration", () => {
-    const registry = createRegistry().register(new ClaudeBuiltInToolSource());
-    expect(() => registry.register(new ClaudeBuiltInToolSource())).toThrow(
-      /already registered/,
-    );
-  });
-
-  it("supports unregister", async () => {
-    const registry = createRegistry().register(new EchoToolSource());
-    expect(registry.has("echo")).toBe(true);
-    registry.unregister("echo");
-    expect(registry.has("echo")).toBe(false);
-    await expect(registry.resolve(["Echo"])).rejects.toThrow(/not found/);
-  });
-
-  it("resolves empty tool list", async () => {
-    const registry = createRegistry();
-    const tools = await registry.resolve([]);
-    expect(tools).toEqual([]);
   });
 });
 
@@ -140,32 +99,16 @@ describe("Custom tool invocation", () => {
   });
 });
 
-describe("SandboxToolSource", () => {
-  const stubProvider: SandboxProvider = {
-    name: "stub",
-    async create() {
-      return {} as Sandbox;
-    },
-    async connect() {
-      return {} as Sandbox;
-    },
-  };
-
-  it("registers 6 sandbox tools in the registry", async () => {
-    const source = createSandboxToolSource({ provider: stubProvider });
-    const registry = createRegistry()
-      .register(new ClaudeBuiltInToolSource())
-      .register(source);
-
-    const tools = await registry.resolve([
-      "sandbox__exec",
-      "sandbox__read_file",
-      "sandbox__write_file",
-      "sandbox__list_dir",
-      "sandbox__apply_patch",
-      "sandbox__search",
-    ]);
-
+describe("Module-level sandbox tools", () => {
+  it("exports 6 named sandbox tools", () => {
+    const tools = [
+      sandboxExec,
+      sandboxReadFile,
+      sandboxWriteFile,
+      sandboxListDir,
+      sandboxApplyPatch,
+      sandboxSearch,
+    ];
     expect(tools).toHaveLength(6);
     const names = tools.map((t) => t.name);
     expect(names).toContain("sandbox__exec");
@@ -181,20 +124,35 @@ describe("SandboxToolSource", () => {
     }
   });
 
-  it("resolves sandbox tools alongside built-in tools", async () => {
-    const source = createSandboxToolSource({ provider: stubProvider });
-    const registry = createRegistry()
-      .register(new ClaudeBuiltInToolSource())
-      .register(source);
+  it("provides allSandboxTools convenience array", () => {
+    expect(allSandboxTools).toHaveLength(6);
+    expect(allSandboxTools.map((t) => t.name)).toEqual([
+      "sandbox__exec",
+      "sandbox__read_file",
+      "sandbox__write_file",
+      "sandbox__list_dir",
+      "sandbox__apply_patch",
+      "sandbox__search",
+    ]);
+  });
+});
 
-    const tools = await registry.resolve(["Read", "sandbox__exec", "Bash"]);
-    expect(tools).toHaveLength(3);
+describe("createSandboxToolsForProvider", () => {
+  const stubProvider: SandboxProvider = {
+    name: "stub",
+    async create() {
+      return {} as Sandbox;
+    },
+    async connect() {
+      return {} as Sandbox;
+    },
+  };
 
-    const builtIn = tools.filter(isBuiltIn);
-    const custom = tools.filter(isCustomTool);
-    expect(builtIn).toHaveLength(2);
-    expect(custom).toHaveLength(1);
-    expect(custom[0].name).toBe("sandbox__exec");
+  it("creates an isolated set of 6 sandbox tools", () => {
+    const tools = createSandboxToolsForProvider(stubProvider);
+    expect(tools.all()).toHaveLength(6);
+    expect(tools.exec.name).toBe("sandbox__exec");
+    expect(tools.readFile.name).toBe("sandbox__read_file");
   });
 
   it("binds sandbox access through trusted tool context", async () => {
@@ -203,23 +161,20 @@ describe("SandboxToolSource", () => {
       expect(sandboxId).toBe("sandbox-owned-by-workflow");
       return { readFile } as unknown as Sandbox;
     };
-    const source = createSandboxToolSource({
-      provider: { name: "bound", create: stubProvider.create, connect },
+    const tools = createSandboxToolsForProvider({
+      name: "bound",
+      create: stubProvider.create,
+      connect,
     });
-    const [tool] = await createRegistry()
-      .register(source)
-      .resolve(["sandbox__read_file"]);
 
-    expect(tool).toSatisfy(isCustomTool);
-    if (!isCustomTool(tool)) return;
-    expect(tool.inputSchema).not.toHaveProperty("sandbox_id");
-    const result = await tool.invoke(
+    expect(tools.readFile.inputSchema).not.toHaveProperty("sandbox_id");
+    const result = await tools.readFile.invoke(
       { path: "/workspace/file.txt" },
       { agentId: "analyst", sandboxId: "sandbox-owned-by-workflow" },
     );
     expect(result.content).toBe("contents");
     await expect(
-      tool.invoke(
+      tools.readFile.invoke(
         { path: "/workspace/file.txt" },
         { agentId: "analyst" },
       ),

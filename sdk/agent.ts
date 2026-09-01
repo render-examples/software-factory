@@ -10,7 +10,7 @@ import {
   type FactoryStore,
 } from "#factory/store";
 import { BLOB_THRESHOLD } from "./blobs.js";
-import { createRegistry, type ToolRegistry } from "./tools.js";
+import type { ResolvedTool } from "./tools.js";
 import { ClaudeRunner } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
 import { HookInterceptor, type Hook } from "./hooks.js";
@@ -21,7 +21,7 @@ export interface AgentSpec {
   readonly id: string;
   readonly description?: string;
   readonly prompt: string;
-  readonly tools?: readonly string[];
+  readonly tools?: readonly ResolvedTool[];
   readonly budget?: { maxIterations?: number };
   readonly plan?: string;
   /** Model size tier ("small", "medium", "large") or a literal model string. */
@@ -71,13 +71,11 @@ export interface AgentRunContext {
 
 export interface AgentTaskOptions {
   runner?: AgentRunner;
-  registry?: ToolRegistry;
   hooks?: Hook[];
   store?: FactoryStore;
 }
 
 let _defaultRunner: AgentRunner | undefined;
-let _defaultRegistry: ToolRegistry | undefined;
 let _defaultHooks: Hook[] = [];
 let _defaultStore: FactoryStore | undefined;
 
@@ -86,20 +84,14 @@ function defaultRunner(): AgentRunner {
   return _defaultRunner;
 }
 
-function defaultRegistry(): ToolRegistry {
-  _defaultRegistry ??= createRegistry();
-  return _defaultRegistry;
-}
-
 function defaultStore(): FactoryStore {
   _defaultStore ??= factoryStore();
   return _defaultStore;
 }
 
-/** Override the default runner, registry, and/or hooks. Call once at startup. */
+/** Override the default runner and/or hooks. Call once at startup. */
 export function configure(opts: AgentTaskOptions): void {
   if (opts.runner) _defaultRunner = opts.runner;
-  if (opts.registry) _defaultRegistry = opts.registry;
   if (opts.hooks) _defaultHooks = opts.hooks;
   if (opts.store) _defaultStore = opts.store;
 }
@@ -109,13 +101,11 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
     { name: agent.id, plan: agent.spec.plan },
     async function run(input: AgentTaskInput): Promise<string> {
       const runner = opts?.runner ?? defaultRunner();
-      const registry = opts?.registry ?? defaultRegistry();
       const hooks = opts?.hooks ?? _defaultHooks;
       const store = opts?.store ?? defaultStore();
       const interceptor = new HookInterceptor(hooks);
       const runId = input.run?.id ?? randomUUID();
-      const toolNames = agent.spec.tools ?? [];
-      const tools = await registry.resolve(toolNames);
+      const tools = agent.spec.tools ?? [];
 
       await store.runs.ensureRun({
         id: runId,

@@ -1,17 +1,42 @@
 /**
- * SandboxToolSource — exposes sandbox operations as agent tools (sandbox__*).
- * The workflow binds one sandbox ID through ToolContext. The model cannot
- * select or address another run's sandbox.
+ * Sandbox tools — agent-visible sandbox operations (sandbox__*).
+ *
+ * Tools are module-level values. Call `configureSandboxProvider()` once at
+ * startup before any tool is invoked; the provider is captured lazily so
+ * agent definitions can import tools at module parse time.
  */
 import { z } from "zod";
-import type { Tool, ToolSource, ToolResult, ToolContext } from "./tools.js";
+import type { Tool, ToolResult, ToolContext } from "./tools.js";
 import type { Sandbox, SandboxProvider } from "./sandbox/index.js";
 import { collectExecOutput, shellEscape } from "./sandbox/index.js";
 
-export interface SandboxToolSourceOptions {
-  provider: SandboxProvider;
-  id?: string;
+// ---------------------------------------------------------------------------
+// Provider binding — set once at startup
+// ---------------------------------------------------------------------------
+
+let _provider: SandboxProvider | undefined;
+
+export function configureSandboxProvider(provider: SandboxProvider): void {
+  _provider = provider;
 }
+
+async function resolveSandbox(ctx: ToolContext): Promise<Sandbox> {
+  if (!_provider) {
+    throw new Error(
+      "Sandbox provider not configured — call configureSandboxProvider() at startup",
+    );
+  }
+  if (!ctx.sandboxId) {
+    throw new Error(`Agent "${ctx.agentId}" has no sandbox binding`);
+  }
+  return _provider.connect(ctx.sandboxId);
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+type Resolver = (ctx: ToolContext) => Promise<Sandbox>;
 
 const MAX_OUTPUT_CHARS = 50_000;
 
@@ -23,40 +48,14 @@ function truncate(s: string, limit = MAX_OUTPUT_CHARS): string {
   );
 }
 
-export function createSandboxToolSource(
-  opts: SandboxToolSourceOptions,
-): ToolSource {
-  const sourceId = opts.id ?? "sandbox";
-  const { provider } = opts;
-
-  async function resolve(ctx: ToolContext): Promise<Sandbox> {
-    if (!ctx.sandboxId) {
-      throw new Error(`Agent "${ctx.agentId}" has no sandbox binding`);
-    }
-    return provider.connect(ctx.sandboxId);
-  }
-
-  return {
-    id: sourceId,
-    resolve(): Tool[] {
-      return [
-        buildExecTool(resolve),
-        buildReadFileTool(resolve),
-        buildWriteFileTool(resolve),
-        buildListDirTool(resolve),
-        buildApplyPatchTool(resolve),
-        buildSearchTool(resolve),
-      ];
-    },
-  };
-}
-
-type Resolver = (ctx: ToolContext) => Promise<Sandbox>;
-
 let patchCounter = 0;
 function uniquePatchPath(): string {
   return `/tmp/.render-agent-${Date.now()}-${++patchCounter}.patch`;
 }
+
+// ---------------------------------------------------------------------------
+// Tool builders (unchanged logic, now using the shared resolver)
+// ---------------------------------------------------------------------------
 
 const execSchema = {
   command: z.string().describe("The shell command to execute."),
@@ -221,6 +220,51 @@ function buildSearchTool(resolve: Resolver): Tool<typeof searchSchema> {
         };
       }
       return { content: truncate(output) };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Module-level tool instances
+// ---------------------------------------------------------------------------
+
+export const sandboxExec = buildExecTool(resolveSandbox);
+export const sandboxReadFile = buildReadFileTool(resolveSandbox);
+export const sandboxWriteFile = buildWriteFileTool(resolveSandbox);
+export const sandboxListDir = buildListDirTool(resolveSandbox);
+export const sandboxApplyPatch = buildApplyPatchTool(resolveSandbox);
+export const sandboxSearch = buildSearchTool(resolveSandbox);
+
+/** All sandbox tools as an array, for convenience. */
+export const allSandboxTools: readonly Tool[] = [
+  sandboxExec,
+  sandboxReadFile,
+  sandboxWriteFile,
+  sandboxListDir,
+  sandboxApplyPatch,
+  sandboxSearch,
+];
+
+// ---------------------------------------------------------------------------
+// Test support — create sandbox tools bound to a specific provider
+// ---------------------------------------------------------------------------
+
+export function createSandboxToolsForProvider(provider: SandboxProvider) {
+  const resolve: Resolver = async (ctx) => {
+    if (!ctx.sandboxId) {
+      throw new Error(`Agent "${ctx.agentId}" has no sandbox binding`);
+    }
+    return provider.connect(ctx.sandboxId);
+  };
+  return {
+    exec: buildExecTool(resolve),
+    readFile: buildReadFileTool(resolve),
+    writeFile: buildWriteFileTool(resolve),
+    listDir: buildListDirTool(resolve),
+    applyPatch: buildApplyPatchTool(resolve),
+    search: buildSearchTool(resolve),
+    all(): Tool[] {
+      return [this.exec, this.readFile, this.writeFile, this.listDir, this.applyPatch, this.search];
     },
   };
 }

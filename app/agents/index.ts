@@ -1,4 +1,13 @@
-import { Agent, md } from "#factory/sdk";
+import {
+	Agent,
+	md,
+	sandboxExec,
+	sandboxReadFile,
+	sandboxWriteFile,
+	sandboxApplyPatch,
+	sandboxSearch,
+	sandboxListDir,
+} from "#factory/sdk";
 
 export const triage = Agent({
 	id: "triage",
@@ -19,7 +28,7 @@ export const analyst = Agent({
 	description:
 		"Researches the fixed repository and produces an implementation plan",
 	model: "medium",
-	tools: ["sandbox__read_file", "sandbox__list_dir", "sandbox__search"],
+	tools: [sandboxReadFile, sandboxListDir, sandboxSearch],
 	budget: { maxIterations: 30 },
 	plan: "standard",
 	prompt: md`
@@ -38,12 +47,12 @@ export const implementer = Agent({
 	description: "Implements the approved plan in an isolated sandbox",
 	model: "large",
 	tools: [
-		"sandbox__exec",
-		"sandbox__read_file",
-		"sandbox__write_file",
-		"sandbox__apply_patch",
-		"sandbox__search",
-		"sandbox__list_dir",
+		sandboxExec,
+		sandboxReadFile,
+		sandboxWriteFile,
+		sandboxApplyPatch,
+		sandboxSearch,
+		sandboxListDir,
 	],
 	budget: { maxIterations: 60 },
 	plan: "standard",

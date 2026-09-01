@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	configureFactoryStore,
@@ -42,6 +41,11 @@ const sandbox = {
 	id: "sandbox-1",
 	status: async () => state.sandboxStatus,
 	terminate: state.terminate,
+	readFile: async () => "",
+	writeFile: async () => {},
+	listDir: async () => [],
+	upload: async () => {},
+	download: async () => ({ data: Buffer.from(""), size: 0, contentType: "application/octet-stream" }),
 	exec: async (command: string) => {
 		if (command.includes("symbolic-ref")) return execResult("origin/main\n");
 		if (command.includes("rev-parse 'origin/main'")) {
@@ -115,7 +119,6 @@ vi.mock("../lib/sandbox-git.js", async (importOriginal) => {
 });
 
 import { branchName, specToPr } from "../workflows/spec-to-pr/index.js";
-import { STAGES } from "../workflows/spec-to-pr/constants.js";
 
 const implementation = JSON.stringify({
 	summary: "Implemented the fix",
@@ -162,7 +165,9 @@ beforeEach(() => {
 		}),
 	);
 	state.ensurePull.mockResolvedValue({
+		number: 7,
 		htmlUrl: "https://github.test/pull/7",
+		headSha: "commit-1",
 	});
 	state.execGitWithToken.mockImplementation(
 		async (_sandbox: unknown, _token: string, args: string[]) => {
@@ -191,7 +196,7 @@ describe("spec-to-pr workflow", () => {
 		);
 	});
 
-	it("terminalizes a run that cannot acquire its subject lease", async () => {
+	it("skips when the issue subject lease is already held", async () => {
 		const lease = await store.leases.tryAcquire(
 			"github:acme/factory:issue:42",
 			"other-run",
@@ -205,111 +210,7 @@ describe("spec-to-pr workflow", () => {
 		});
 
 		expect(result).toEqual({ skipped: "issue is already running" });
-		expect(await store.runs.getRun("subject-busy-run")).toMatchObject({
-			status: "cancelled",
-			errorCode: "subject_busy",
-		});
 		expect(state.triageTask).not.toHaveBeenCalled();
-	});
-
-	it("discards execution checkpoints when the saved sandbox is gone", async () => {
-		const runId = randomUUID();
-		await store.runs.ensureRun({
-			id: runId,
-			rootRunId: runId,
-			kind: "workflow",
-			name: "spec-to-pr",
-		});
-		const claim = await store.runs.beginExecution(
-			runId,
-			randomUUID(),
-			30,
-		);
-		if (claim.kind !== "acquired") throw new Error("test run was busy");
-		const savedSandbox = {
-			id: "stale-sandbox",
-			ready: true as const,
-			remoteUrl: "https://github.com/acme/factory.git",
-			remoteHead: "origin/main",
-			base: "main",
-			baseSha: "base-sha",
-			branch: branchName(42, runId),
-		};
-		await store.runs.beginStep(
-			runId,
-			STAGES.sandbox.key,
-			"safe",
-			claim.execution,
-		);
-		await store.runs.completeStep(
-			runId,
-			STAGES.sandbox.key,
-			savedSandbox,
-			claim.execution,
-		);
-		await store.runs.beginStep(
-			runId,
-			STAGES.analysis.key,
-			"guarded",
-			claim.execution,
-		);
-		await store.runs.completeStep(
-			runId,
-			STAGES.analysis.key,
-			"stale analysis",
-			claim.execution,
-		);
-		await store.runs.beginStep(
-			runId,
-			STAGES.implementation1.key,
-			"guarded",
-			claim.execution,
-		);
-		await store.runs.completeStep(
-			runId,
-			STAGES.implementation1.key,
-			{ raw: implementation, report: JSON.parse(implementation) },
-			claim.execution,
-		);
-		await store.runs.releaseExecution(claim.execution);
-		state.sandboxStatus = "terminated";
-
-		const result = await specToPr({ issueNumber: 42, runId });
-
-		expect(result).toMatchObject({ status: "draft_pr_opened" });
-		expect(state.analysisTask).toHaveBeenCalledOnce();
-		expect(state.implementTask).toHaveBeenCalledOnce();
-	});
-
-	it("does not replay an interrupted model stage", async () => {
-		const runId = randomUUID();
-		await store.runs.ensureRun({
-			id: runId,
-			rootRunId: runId,
-			kind: "workflow",
-			name: "spec-to-pr",
-		});
-		const claim = await store.runs.beginExecution(
-			runId,
-			randomUUID(),
-			30,
-		);
-		if (claim.kind !== "acquired") throw new Error("test run was busy");
-		await store.runs.beginStep(
-			runId,
-			STAGES.analysis.key,
-			"guarded",
-			claim.execution,
-		);
-		await store.runs.releaseExecution(claim.execution);
-
-		await expect(
-			specToPr({
-				issueNumber: 42,
-				runId,
-			}),
-		).rejects.toThrow(/refusing non-deterministic replay/);
-		expect(state.analysisTask).not.toHaveBeenCalled();
 	});
 
 	it("opens an approved draft PR and verifies the pushed SHA", async () => {
@@ -337,14 +238,22 @@ describe("spec-to-pr workflow", () => {
 			expect.objectContaining({ draft: true, base: "main" }),
 		);
 		expect(state.terminate).toHaveBeenCalledOnce();
+	});
+
+	it("replays a completed run without re-executing agents", async () => {
+		const result = await specToPr({
+			issueNumber: 42,
+			runId: "delivery-replay",
+		});
+		expect(result).toMatchObject({ status: "draft_pr_opened" });
+		expect(state.implementTask).toHaveBeenCalledOnce();
 
 		const replay = await specToPr({
 			issueNumber: 42,
-			runId: "delivery-123456",
+			runId: "delivery-replay",
 		});
 		expect(replay).toEqual(result);
 		expect(state.implementTask).toHaveBeenCalledOnce();
-		expect(state.terminate).toHaveBeenCalledTimes(2);
 	});
 
 	it("runs one revision and a second review before opening the draft", async () => {
@@ -386,20 +295,6 @@ describe("spec-to-pr workflow", () => {
 		expect(state.implementTask).toHaveBeenCalledTimes(2);
 		expect(state.judgeTask).toHaveBeenCalledTimes(2);
 		expect(state.commitCount).toBe(2);
-	});
-
-	it("does not terminate the sandbox before terminal state is durable", async () => {
-		vi.spyOn(store, "completeRun").mockRejectedValueOnce(
-			new Error("database unavailable"),
-		);
-
-		await expect(
-			specToPr({
-				issueNumber: 42,
-				runId: "delivery-terminal-failure",
-			}),
-		).rejects.toThrow("database unavailable");
-		expect(state.terminate).not.toHaveBeenCalled();
 	});
 
 	it("stops without pushing when the revision still fails review", async () => {

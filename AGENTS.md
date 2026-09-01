@@ -136,9 +136,9 @@ sdk/
   agent.ts                 Agent(), configure(), and agentTask()
   runner.ts                Provider-neutral AgentRunner interface
   runners/                 Runner implementations
-  tools.ts                 Tool, ToolSource, and ToolRegistry
+  tools.ts                 Tool type definitions and guards
   sandbox/                 Provider-neutral interfaces and implementations
-  sandbox-tool-source.ts   sandbox__* tools exposed to agents
+  sandbox-tool-source.ts   sandbox__* tools as module-level values
   hooks.ts                 Agent event interception
   models.ts                Model tier resolution
   blobs.ts                 Oversized result handoff through ArtifactStore
@@ -180,7 +180,7 @@ source, tests, this file, and `README.md` are authoritative.
   state inside the workflow.
 - Escape interpolated shell arguments with `shellEscape`; prefer argument
   arrays with `execGitWithToken` for authenticated Git operations.
-- Keep provider-specific code behind `AgentRunner`, `ToolSource`, or
+- Keep provider-specific code behind `AgentRunner` or
   `SandboxProvider` interfaces.
 - Keep persistence consumers behind `FactoryStore` capability interfaces.
   Postgres is the production adapter; unit tests use `MemoryFactoryStore`.
@@ -261,7 +261,7 @@ Agent requirements and conventions:
 - `model` may be `small`, `medium`, `large`, or a literal model identifier.
 - `budget.maxIterations` maps to the runner's maximum turns.
 - `plan` maps to Render Workflows task metadata.
-- `tools` must exactly match names available in the configured registry.
+- `tools` accepts `ResolvedTool[]`; import sandbox tools from `#factory/sdk`.
 - Use `tools: []` for host-side decisions and reviews that only inspect input.
 
 ### 2. Wrap and export it
@@ -460,22 +460,21 @@ write between stages.
 
 ## Extend tools
 
-Custom tools implement `ToolSource` from `sdk/tools.ts`.
+Custom tools implement the `Tool` interface from `sdk/tools.ts`.
 
 1. Define tools with names, descriptions, Zod input shapes, and `invoke`.
-2. Give the source a unique `id`; duplicate source IDs throw.
-3. Register it in the registry built by `app/src/workflows.ts`.
-4. Add the exact tool names to only the agents that need them.
-5. Add registry, validation, permission, and failure tests.
+2. Export them as module-level values from a dedicated module.
+3. Import and add them to the `tools` array of agents that need them.
+4. Add invocation, permission, and failure tests.
 
-Use the `source__tool` naming convention. The production registry contains the
-sandbox tool source. Agent declarations still determine the exact per-agent
-surface;
-unknown tool names fail during task execution.
+Use the `source__tool` naming convention. Agents receive tool objects
+directly — there is no registry or string-name indirection. The sandbox
+provider is configured at startup with `configureSandboxProvider()`;
+sandbox tools use it lazily at invocation time.
 
-Do not register Claude built-in filesystem or shell tools for app agents
-without an explicit security-model change. Custom sandbox tools are bridged
-through the Claude SDK as MCP tools while retaining workflow-owned
+Do not give app agents Claude's built-in `Bash`, `Read`, `Write`, or `Edit`
+tools without an explicit security-model change. Custom sandbox tools are
+bridged through the Claude SDK as MCP tools while retaining workflow-owned
 `sandboxId`.
 
 ## Extend runners and models
@@ -497,9 +496,9 @@ verify that every field on `ResolvedModel` is consumed by the runner;
 Implement `SandboxProvider` and `Sandbox` from `sdk/sandbox/types.ts`, normally
 using `BaseSandbox`; the Render implementation is the reference. Keep provider
 API code under `sdk/sandbox/`, preserve streaming exec and cancellation, and bind
-`connect(id)` only to the requested workflow-owned sandbox. Register it through
-`createSandboxToolSource({ provider })`; orchestration must still own creation
-and termination.
+`connect(id)` only to the requested workflow-owned sandbox. Set it globally with
+`configureSandboxProvider()`; orchestration must still own creation and
+termination.
 
 ## Extend hooks
 

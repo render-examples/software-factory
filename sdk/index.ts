@@ -18,14 +18,11 @@ export {
 } from "./blobs.js";
 
 export {
-  ToolRegistry,
-  createRegistry,
   isBuiltIn,
   isCustomTool,
 } from "./tools.js";
 export type {
   Tool,
-  ToolSource,
   ToolContext,
   ToolResult,
   ResolvedTool,
@@ -55,7 +52,7 @@ export {
 } from "./models.js";
 export type { ModelTier, ModelResolver, ResolvedModel, TierMap } from "./models.js";
 
-export { ClaudeRunner, ClaudeBuiltInToolSource } from "./runners/index.js";
+export { ClaudeRunner } from "./runners/index.js";
 
 export {
   BaseSandbox,
@@ -74,8 +71,22 @@ export type {
   CreateSandboxOptions,
 } from "./sandbox/index.js";
 
-export { createSandboxToolSource } from "./sandbox-tool-source.js";
-export type { SandboxToolSourceOptions } from "./sandbox-tool-source.js";
+// Sandbox tools — module-level values, usable directly in Agent({ tools: [...] })
+export {
+  configureSandboxProvider,
+  sandboxExec,
+  sandboxReadFile,
+  sandboxWriteFile,
+  sandboxListDir,
+  sandboxApplyPatch,
+  sandboxSearch,
+  allSandboxTools,
+  createSandboxToolsForProvider,
+} from "./sandbox-tool-source.js";
 
 export { RenderSandboxProvider } from "./sandbox/index.js";
 export type { RenderSandboxProviderOptions } from "./sandbox/index.js";
+
+// Durable workflow shim — same API as Durability 2.0
+export { workflow } from "./workflow.js";
+export type { WorkflowContext, WorkflowConfig, WorkflowRunContext } from "./workflow.js";

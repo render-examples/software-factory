@@ -5,7 +5,12 @@ import {
 	assertWorkflowConfig,
 	factoryRepository,
 } from "../app/lib/factory-config.js";
-import { createWorkflowRegistry } from "../app/lib/workflow-registry.js";
+import { allSandboxTools, isCustomTool } from "#factory/sdk";
+import {
+	analyst,
+	implementer,
+	triage,
+} from "../app/agents/index.js";
 
 function requireConfiguration(): void {
 	assertGatewayConfig();
@@ -56,11 +61,18 @@ async function checkWorkflowRegistration(): Promise<void> {
 	if (missing.length > 0) {
 		throw new Error(`Workflow tasks did not register: ${missing.join(", ")}`);
 	}
-	const sources = createWorkflowRegistry().sourceIds();
-	if (sources.join(",") !== "sandbox") {
-		throw new Error(
-			"Production tool registry does not match the bounded surface",
-		);
+	const sources = new Set(allSandboxTools.map((t) => t.name));
+	const agentTools = [
+		...(analyst.spec.tools ?? []),
+		...(implementer.spec.tools ?? []),
+		...(triage.spec.tools ?? []),
+	];
+	for (const tool of agentTools) {
+		if (isCustomTool(tool) && !sources.has(tool.name)) {
+			throw new Error(
+				`Agent tool "${tool.name}" is not a recognized sandbox tool`,
+			);
+		}
 	}
 }
 
