@@ -48,6 +48,10 @@ Verify a change with `npm run check` (Biome, `tsc`, Vitest). For one file:
 `npx vitest run tests/gateway.test.ts`. Validate the Blueprint with
 `render blueprints validate` when `render.yaml` changes.
 
+`npm run doctor` diagnoses a live deployment and is read-only. When you add a
+required environment variable, a task name, or a schema object, add a check for
+it there — that script is where setup mistakes get caught.
+
 ## Repository map
 
 Each directory under `app/` is one module with an `index.ts` barrel. Import
@@ -89,6 +93,7 @@ app/
   store/            Postgres: one runs table
   sql/              Schema, applied by scripts/migrate.ts
   src/              Process entrypoints
+scripts/            migrate, doctor, setup-github, create-github-app
 tests/              agents, contracts, gateway, github-auth, policy,
                     shell, tools, workflow
 ```
