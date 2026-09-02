@@ -341,26 +341,6 @@ security invariants, and test ownership.
 - Secret-shaped strings are redacted from anything posted to GitHub.
 - Automation ends at a draft PR; readiness and merge remain human decisions.
 
-## Durability, honestly
-
-There is no step memoization. If a run fails partway, nothing is resumed — a
-maintainer retries by reapplying the label. That is a deliberate trade: the
-pipeline stays readable, at the cost of redoing model work on failure. Render
-Workflows' Durability 2.0 `ctx.step()` API is the seam where resumability plugs
-in.
-
-Postgres does the coordination that actually matters, using constraints rather
-than application code:
-
-```sql
-delivery_id text not null unique          -- a redelivered webhook is a no-op
-create unique index runs_one_active_per_issue
-    on runs (issue_number) where status = 'running';
-```
-
-A single `insert ... on conflict do nothing` covers both. Zero rows inserted
-means someone else already has this issue.
-
 ## Current limitations
 
 - One deployment is bound to one GitHub repository.
@@ -368,7 +348,7 @@ means someone else already has this issue.
 - There is no public chat API, PR review trigger, or automatic PR follow-up.
 - Only one implementation/review revision is attempted; unresolved findings
   stop without a PR.
-- A failed run is not resumed, and retrying repeats every model call.
+- A failed task run is not resumed, and retrying repeats task model calls.
 - Diffs over 200,000 characters and binary diffs fail closed.
 - Render Workflows must be created separately from the Blueprint, and Workflows
   and Sandboxes product access is required.
