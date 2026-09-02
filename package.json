@@ -3,12 +3,6 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "imports": {
-    "#factory/store": "./store/index.ts",
-    "#factory/store/*": "./store/*.ts",
-    "#factory/sdk": "./sdk/index.ts",
-    "#factory/sdk/*": "./sdk/*.ts"
-  },
   "engines": {
     "node": ">=22"
   },
@@ -19,13 +13,9 @@
     "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/src/workflows.ts",
     "dev:postgres": "docker compose up postgres",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
-    "db:cleanup": "node --env-file-if-exists=.env --import tsx scripts/cleanup-store.ts",
-    "run:status": "node --env-file-if-exists=.env --import tsx scripts/run-status.ts",
-    "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts",
-    "lint": "biome lint --error-on-warnings app sdk store scripts",
+    "lint": "biome lint --error-on-warnings app scripts tests factory.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "RUN_LIVE_INTEGRATION=1 node --env-file-if-exists=.env node_modules/.bin/vitest run app/tests/integration store/tests/postgres.test.ts store/tests/postgres-concurrency.test.ts",
     "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {

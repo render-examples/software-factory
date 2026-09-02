@@ -1,39 +1,24 @@
-import { Agent, md } from "#factory/sdk";
-import {
-	sandboxApplyPatch,
-	sandboxExec,
-	sandboxListDir,
-	sandboxReadFile,
-	sandboxSearch,
-	sandboxWriteFile,
-} from "../tools/index.js";
+import { factoryConfig } from "../../factory.config.js";
+import { type Agent, md } from "../claude/index.js";
+import { writeTools } from "../tools/index.js";
 
-export const implementer = Agent({
+export const implementer: Agent = {
 	id: "implementer",
 	description: "Implements the approved plan in an isolated sandbox",
 	model: "large",
-	tools: [
-		sandboxExec,
-		sandboxReadFile,
-		sandboxWriteFile,
-		sandboxApplyPatch,
-		sandboxSearch,
-		sandboxListDir,
-	],
-	budget: { maxIterations: 60 },
+	tools: writeTools,
+	maxTurns: 60,
 	plan: "standard",
 	prompt: md`
-    You are the implementation agent. Implement the supplied plan in the
-    sandbox checkout. Do not commit, push, or run verification commands;
-    the workflow handles Git operations and verification separately.
+		You are the implementation agent. Implement the supplied plan in the
+		checkout at ${factoryConfig.repoDir}. Do not commit, push, or run
+		verification commands; the workflow owns Git and verification.
 
-    The repository directory is in the input. Focus on writing correct code
-    that follows the repository's existing patterns and conventions.
+		Write correct code that follows the repository's existing patterns and
+		conventions. When you receive verification failures, fix only the issues
+		named in the failure output — do not restructure unrelated code.
 
-    When you receive verification failures, fix only the issues identified
-    in the failure output. Do not restructure or rewrite unrelated code.
-
-    Respond ONLY with JSON:
-    { "summary": string }
-  `,
-});
+		Respond ONLY with JSON:
+		{ "summary": string }
+	`,
+};

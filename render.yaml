@@ -1,3 +1,9 @@
+# The gateway and its database.
+#
+# The Workflows service is not created here — Render Workflows services are
+# created separately with `npm run start:workflows`. Give it the same
+# DATABASE_URL (the database's internal connection string) as the gateway.
+
 databases:
   - name: render-factory-db
     plan: basic-256mb
@@ -7,6 +13,7 @@ services:
     name: render-factory-gateway
     runtime: docker
     plan: starter
+    # Applies app/sql before any new instance serves traffic.
     preDeployCommand: npm run db:migrate
     healthCheckPath: /ready
     envVars:
@@ -24,15 +31,3 @@ services:
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-
-  - type: cron
-    name: render-factory-retention
-    runtime: docker
-    plan: starter
-    schedule: "0 4 * * *"
-    dockerCommand: npm run db:cleanup
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: render-factory-db
-          property: connectionString

@@ -12,6 +12,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["sdk", "app", "store", "scripts"],
+  "include": ["app", "scripts", "tests", "factory.config.ts"],
   "exclude": ["node_modules"]
 }

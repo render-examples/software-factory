@@ -1,14 +1,23 @@
-import { agentTask } from "#factory/sdk";
+/**
+ * Agent task registration.
+ *
+ * Importing this module registers all eight agents as Render Workflows tasks.
+ * app/src/workflows.ts imports it before the workflow itself, so every task
+ * name exists by the time the workflow can call one.
+ */
 import {
-  triage,
-  analyst,
-  implementer,
-  selfReview,
-  security,
-  correctness,
-  tests,
-  judge,
+	analyst,
+	correctness,
+	implementer,
+	judge,
+	security,
+	selfReview,
+	tests,
+	triage,
 } from "../agents/index.js";
+import { agentTask } from "./agent-task.js";
+
+export { agentTask, type AgentTaskInput } from "./agent-task.js";
 
 export const triageTask = agentTask(triage);
 export const analysisTask = agentTask(analyst);
