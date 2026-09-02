@@ -212,9 +212,10 @@ npm run doctor        # diagnose the result; changes nothing
 and GitHub creates the app, its private key, and its webhook secret together,
 so none of that has to be assembled by hand. It prints the variables to set.
 
-**`setup:github`** creates or repoints the webhook and creates the trigger
-label, idempotently. Use it when you are on a PAT rather than an App. It
-generates a webhook secret if you do not supply one.
+**`setup:github`** creates the webhook and trigger label, idempotently. A
+webhook already aimed at this gateway is updated rather than duplicated. Use it
+when you are on a PAT rather than an App; it generates a webhook secret if you
+do not supply one.
 
 **`doctor`** is what to reach for when something does not work. It checks every
 required variable on both processes, that the GitHub credential can reach and
