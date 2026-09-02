@@ -1,333 +1,252 @@
-/** One-repository factory: labeled issue → analysis → implementation → review → draft PR. */
+/**
+ * spec-to-pr — labeled issue to reviewed draft pull request.
+ *
+ * This file is the narrative. The modules beside it hold the detail of each
+ * stage: intake.ts, implement.ts, review.ts, outcome.ts.
+ *
+ * Durability: there is deliberately no step memoization. If the task fails
+ * partway, nothing is resumed — a maintainer retries by reapplying the label
+ * and the run starts clean. That keeps the pipeline readable at the cost of
+ * redoing model work on failure. Render Workflows' Durability 2.0 step API is
+ * the seam where resumability would plug in.
+ */
+import { task } from "@renderinc/sdk/workflows";
+import { repository, triggerLabel } from "../../config/index.js";
 import {
-	RenderSandboxProvider,
-	shellEscape,
-	workflow,
-	type Sandbox,
-	type SerializedEnvironment,
-	type WorkflowContext,
-} from "#factory/sdk";
-import { factoryStore } from "#factory/store";
-import { factoryLabel, factoryRepository } from "../../lib/factory-config.js";
-import { githubFromEnv, type RepoRef } from "../../lib/github.js";
-import { execGitWithToken, githubRemoteUrl } from "../../lib/sandbox-git.js";
-import { factoryConfig } from "../../../factory.config.js";
-import { MAX_VERIFY_ITERATIONS, REPO_DIR } from "./constants.js";
-import {
-	type CommitCheckpoint,
-	type ImplementationCheckpoint,
-	inputSchema,
-	type IntakeCheckpoint,
-	type PullCheckpoint,
-	type ReadySandboxCheckpoint,
-	type ReviewDecision,
 	type WorkflowResult,
-} from "./contracts.js";
-import { branchName, operationId } from "./context.js";
+	workflowInputSchema,
+} from "../../contracts/index.js";
 import {
 	changesRequestedComment,
 	clarificationComment,
 	draftPrComment,
 	noChangesComment,
-	prBody,
+	pullRequestBody,
 	verifyFailedComment,
-} from "./formatting.js";
+} from "../../format/index.js";
 import {
+	branchName,
 	completeDiff,
-	ensureCommit,
-	formatVerificationFailures,
-	runCommand,
-	runVerification,
+	setupCheckout,
 	verifyPush,
-} from "./git.js";
+} from "../../git/index.js";
+import { githubFromEnv, type RepoRef } from "../../github/index.js";
+import { createSandbox } from "../../sandbox/index.js";
+import { analysisTask } from "../../tasks/index.js";
+import { finishRun, setRunBranch } from "../../store/index.js";
+import { MAX_VERIFY_ROUNDS, SANDBOX_TIMEOUT_SECONDS } from "./constants.js";
 import {
-	loadIntake,
-	runAnalysis,
-	runImplementation,
-	runReview,
-	runSelfReview,
-} from "./model-stages.js";
+	type ImplementationState,
+	implementAndCommit,
+	verifyWithFixes,
+} from "./implement.js";
+import { loadIntake } from "./intake.js";
+import { commentId, recordOutcome } from "./outcome.js";
+import { reviewDiff, runSelfReview } from "./review.js";
 
-export { branchName } from "./context.js";
-
-// ---------------------------------------------------------------------------
-// Sandbox setup
-// ---------------------------------------------------------------------------
-
-async function setupSandbox(
-	token: string,
-	repository: ReturnType<typeof factoryRepository>,
-	issueNumber: number,
-	runId: string,
-): Promise<{ sandbox: Sandbox; state: ReadySandboxCheckpoint }> {
-	const provider = new RenderSandboxProvider();
-	const sandbox = await provider.create({
-		timeoutSeconds: 24 * 60 * 60,
-		metadata: {
-			workflow: "spec-to-pr",
-			repo: repository.fullName,
-			issue: String(issueNumber),
-			run: runId,
-		},
-	});
-
-	const remoteUrl = githubRemoteUrl(repository.owner, repository.repo);
-	const clone = await execGitWithToken(sandbox, token, [
-		"git", "clone", "--depth=50", remoteUrl, REPO_DIR,
-	]);
-	if (clone.exitCode !== 0) {
-		throw new Error(`Clone failed: ${clone.output.slice(0, 500)}`);
-	}
-
-	const remoteHead = (
-		await runCommand(
-			sandbox,
-			`git -C ${shellEscape(REPO_DIR)} symbolic-ref --short refs/remotes/origin/HEAD`,
-			"Default branch discovery",
-		)
-	).trim();
-	if (!remoteHead.startsWith("origin/")) {
-		throw new Error(`Unexpected default branch ref: ${remoteHead}`);
-	}
-	const base = remoteHead.slice("origin/".length);
-	const baseSha = (
-		await runCommand(
-			sandbox,
-			`git -C ${shellEscape(REPO_DIR)} rev-parse ${shellEscape(remoteHead)}`,
-			"Base revision",
-		)
-	).trim();
-	const branch = branchName(issueNumber, runId);
-
-	await runCommand(
-		sandbox,
-		`git -C ${shellEscape(REPO_DIR)} checkout -b ${shellEscape(branch)} ${shellEscape(remoteHead)} && ` +
-			`git -C ${shellEscape(REPO_DIR)} config user.name "render-factory[bot]" && ` +
-			`git -C ${shellEscape(REPO_DIR)} config user.email "bot@render-factory.dev"`,
-		"Repository setup",
-	);
-
-	return {
-		sandbox,
-		state: { id: sandbox.id, ready: true, remoteUrl, remoteHead, base, baseSha, branch },
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Main workflow
-// ---------------------------------------------------------------------------
-
-export const specToPr = workflow(
+export const specToPr = task(
 	{
 		name: "spec-to-pr",
 		plan: "standard",
-		timeoutSeconds: 24 * 60 * 60,
-		retry: { maxRetries: 2, waitDurationMs: 45_000, backoffScaling: 2 },
+		timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
 	},
-	async function specToPr(
-		ctx: WorkflowContext,
-		rawInput: unknown,
-	): Promise<WorkflowResult> {
-		const { issueNumber, runId } = inputSchema.parse(rawInput);
-		const repository = factoryRepository();
-		const repo: RepoRef = repository;
-		const triggerLabel = factoryLabel();
-		const token = process.env.GITHUB_TOKEN;
-		if (!token) throw new Error("GITHUB_TOKEN is not set");
-		const gh = githubFromEnv();
-		const store = factoryStore();
-
-		const subjectLease = await store.leases.tryAcquire(
-			`github:${repository.fullName.toLowerCase()}:issue:${issueNumber}`,
-			runId,
-			26 * 60 * 60,
-		);
-		if (!subjectLease) {
-			return { status: "skipped", reason: "issue is already running" };
-		}
-
-		// ── Intake ──────────────────────────────────────────────────────
-
-		const intake = await ctx.step<IntakeCheckpoint>("intake", () =>
-			loadIntake({ gh, repo, issueNumber, triggerLabel, run: ctx.runContext("intake") }),
-		);
-		await ctx.step("remove-label", () =>
-			gh.removeLabel(repo, issueNumber, triggerLabel),
-		);
-
-		if (!intake.triage.hasEnoughDetail) {
-			const questions = intake.triage.questions.length
-				? intake.triage.questions
-				: ["What concrete outcome and acceptance criteria should the factory implement?"];
-			await gh.ensureIssueComment(
-				repo, issueNumber,
-				operationId(runId, "clarification"),
-				clarificationComment(questions, triggerLabel),
-			);
-			return { status: "needs_clarification", questions };
-		}
-
-		// ── Sandbox ─────────────────────────────────────────────────────
-
-		const sandboxState = await ctx.step<ReadySandboxCheckpoint>("sandbox", async () => {
-			const result = await setupSandbox(token, repository, issueNumber, runId);
-			return result.state;
-		});
-		const sandbox = await new RenderSandboxProvider().connect(sandboxState.id);
-		const environment: SerializedEnvironment = {
-			sandbox: { id: sandboxState.id },
-			workspace: {
-				repoDir: REPO_DIR,
-				repo: repository.fullName,
-				branch: sandboxState.branch,
-				baseSha: sandboxState.baseSha,
-			},
-		};
-
+	async function specToPr(rawInput: unknown): Promise<WorkflowResult> {
+		const { issueNumber, runId } = workflowInputSchema.parse(rawInput);
 		try {
-			// ── Analysis ────────────────────────────────────────────────
-			const analysis = await ctx.step("analysis", () =>
-				runAnalysis({ workItem: intake.workItem, environment, run: ctx.runContext("analysis") }),
+			const result = await run(issueNumber, runId);
+			await recordOutcome(runId, result);
+			return result;
+		} catch (error) {
+			const summary = error instanceof Error ? error.message : String(error);
+			await finishRun(runId, "failed", {
+				summary: summary.slice(0, 1000),
+			}).catch((storeError) =>
+				console.error("Failed to record run failure:", storeError),
 			);
-
-			// ── Implementation ──────────────────────────────────────────
-			let implementation = await ctx.step<ImplementationCheckpoint>("implementation", () =>
-				runImplementation({
-					message: `Work item:\n${intake.workItem}\n\nApproved analysis:\n${analysis}`,
-					environment,
-					run: ctx.runContext("implementation"),
-				}),
-			);
-			const maybeCommit = await ctx.step<CommitCheckpoint | null>("commit", () =>
-				ensureCommit({
-					sandbox, state: sandboxState, previousSha: sandboxState.baseSha,
-					message: `Implement issue #${issueNumber}: ${intake.issue.title}`,
-				}),
-			);
-			if (!maybeCommit) {
-				await gh.ensureIssueComment(repo, issueNumber, operationId(runId, "no-changes"), noChangesComment(triggerLabel));
-				return { status: "no_changes" };
-			}
-			let commit: CommitCheckpoint = maybeCommit;
-
-			// ── Verification ────────────────────────────────────────────
-			if (factoryConfig.verify.length > 0) {
-				for (let round = 0; round <= MAX_VERIFY_ITERATIONS; round++) {
-					const result = await ctx.step(`verify-${round}`, () =>
-						runVerification(sandbox, factoryConfig.verify),
-					);
-					if (result.passed) break;
-					if (round === MAX_VERIFY_ITERATIONS) {
-						const failures = formatVerificationFailures(result);
-						await gh.ensureIssueComment(
-							repo, issueNumber, operationId(runId, "verify-failed"),
-							verifyFailedComment(failures, MAX_VERIFY_ITERATIONS, triggerLabel),
-						);
-						return { status: "changes_requested", summary: `Verification failed: ${failures.slice(0, 500)}` };
-					}
-					const failures = formatVerificationFailures(result);
-					const prevSha = commit.sha;
-					implementation = await ctx.step(`verify-fix-${round}`, () =>
-						runImplementation({
-							message: `The following verification commands failed.\nFix the issues so all commands pass.\n\nWork item:\n${intake.workItem}\n\nFailures:\n${failures}`,
-							environment,
-							run: ctx.runContext(`verify-fix-${round}`),
-						}),
-					);
-					const fixCommit = await ctx.step<CommitCheckpoint | null>(`verify-fix-commit-${round}`, () =>
-						ensureCommit({
-							sandbox, state: sandboxState, previousSha: prevSha,
-							message: `Fix verification failures for issue #${issueNumber}`,
-						}),
-					);
-					if (fixCommit) commit = fixCommit;
-				}
-			}
-
-			// ── Self-review ─────────────────────────────────────────────
-			const selfReviewDiff = await completeDiff({ sandbox, state: sandboxState, headSha: commit.sha });
-			const selfReview = await ctx.step("self-review", () =>
-				runSelfReview({ diff: selfReviewDiff, workItem: intake.workItem, run: ctx.runContext("self-review") }),
-			);
-			if (selfReview.needsRevision && selfReview.issues.length > 0) {
-				const previousSha = commit.sha;
-				implementation = await ctx.step("self-review-fix", () =>
-					runImplementation({
-						message: `Fix the following self-review issues:\n${intake.workItem}\n\nOriginal analysis:\n${analysis}\n\nSelf-review issues:\n${selfReview.issues.map((issue, i) => `${i + 1}. ${issue}`).join("\n")}\n\nDo not restructure the implementation. Only fix the specific issues listed above.`,
-						environment,
-						run: ctx.runContext("self-review-fix"),
-					}),
-				);
-				const fixCommit = await ctx.step("self-review-commit", () =>
-					ensureCommit({ sandbox, state: sandboxState, previousSha, message: `Self-review fixes for issue #${issueNumber}` }),
-				);
-				if (fixCommit) commit = fixCommit;
-			}
-
-			// ── Review ──────────────────────────────────────────────────
-			let reviewDiff = await completeDiff({ sandbox, state: sandboxState, headSha: commit.sha });
-			let review = await ctx.step<ReviewDecision>("review", () =>
-				runReview({ diff: reviewDiff, implementation, run: ctx.runContext("review") }),
-			);
-
-			// ── Revision (one round if review requests changes) ─────────
-			if (review.decision === "request_changes") {
-				const priorSha = commit.sha;
-				implementation = await ctx.step("revision", () =>
-					runImplementation({
-						message: `Revise the existing implementation for this work item:\n${intake.workItem}\n\nOriginal analysis:\n${analysis}\n\nBlocking internal review:\n${review.summary}\n\n${review.details}`,
-						environment,
-						run: ctx.runContext("revision"),
-					}),
-				);
-				const revisionCommit = await ctx.step("revision-commit", () =>
-					ensureCommit({ sandbox, state: sandboxState, previousSha: priorSha, message: `Address internal review for issue #${issueNumber}` }),
-				);
-				if (revisionCommit) {
-					commit = revisionCommit;
-					reviewDiff = await completeDiff({ sandbox, state: sandboxState, headSha: commit.sha });
-					review = await ctx.step("re-review", () =>
-						runReview({ diff: reviewDiff, implementation, run: ctx.runContext("re-review") }),
-					);
-				} else {
-					review = { ...review, summary: "The revision produced no changes." };
-				}
-			}
-
-			if (review.decision !== "approve") {
-				await gh.ensureIssueComment(
-					repo, issueNumber, operationId(runId, "changes-requested"),
-					changesRequestedComment(review.summary, triggerLabel),
-				);
-				return { status: "changes_requested", summary: review.summary };
-			}
-
-			// ── Push and open PR ────────────────────────────────────────
-			const finalSha = commit.sha;
-			await ctx.step("push", () =>
-				verifyPush({ sandbox, token, state: sandboxState, expectedSha: finalSha }),
-			);
-			const pull = await ctx.step<PullCheckpoint>("pull-request", async () => {
-				const result = await gh.ensurePull(repo, {
-					title: `Fix #${issueNumber}: ${intake.issue.title}`,
-					head: sandboxState.branch,
-					base: sandboxState.base,
-					draft: true,
-					expectedHeadSha: finalSha,
-					body: prBody(issueNumber, review, implementation.raw),
-				});
-				return { number: result.number, htmlUrl: result.htmlUrl, headSha: result.headSha };
-			});
-
-			await Promise.all([
-				store.runs.addLink({ runId, kind: "git.branch", externalId: sandboxState.branch, metadata: { headSha: finalSha } }),
-				store.runs.addLink({ runId, kind: "github.pull", externalId: `${repository.fullName}#${pull.number}`, url: pull.htmlUrl, metadata: { headSha: pull.headSha } }),
-			]);
-			await gh.ensureIssueComment(repo, issueNumber, operationId(runId, "draft-pr"), draftPrComment(pull.htmlUrl));
-
-			return { status: "draft_pr_opened", pullRequest: pull.htmlUrl };
-		} finally {
-			await sandbox.terminate().catch(() => {});
+			throw error;
 		}
 	},
 );
+
+/** The pipeline. Read this top to bottom. */
+async function run(
+	issueNumber: number,
+	runId: string,
+): Promise<WorkflowResult> {
+	const repo: RepoRef = repository();
+	const label = triggerLabel();
+	const token = process.env.GITHUB_TOKEN;
+	if (!token) throw new Error("GITHUB_TOKEN is not set");
+	const gh = githubFromEnv();
+
+	// ── Intake ──────────────────────────────────────────────────────────
+	const { issue, workItem, triage } = await loadIntake(
+		gh,
+		repo,
+		issueNumber,
+		label,
+	);
+
+	// Removing the label acknowledges intake and is how a maintainer retries:
+	// reapplying it starts a fresh run.
+	await gh.removeLabel(repo, issueNumber, label);
+
+	if (!triage.hasEnoughDetail) {
+		const questions = triage.questions.length
+			? triage.questions
+			: [
+					"What concrete outcome and acceptance criteria should the factory implement?",
+				];
+		await gh.ensureIssueComment(
+			repo,
+			issueNumber,
+			commentId(runId, "clarification"),
+			clarificationComment(questions, label),
+		);
+		return { status: "needs_clarification", questions };
+	}
+
+	// ── Sandbox ─────────────────────────────────────────────────────────
+	const sandbox = await createSandbox({
+		timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
+	});
+	try {
+		const branch = branchName(issueNumber, runId);
+		const checkout = await setupCheckout(sandbox, token, repo, branch);
+		await setRunBranch(runId, branch);
+
+		// ── Analysis ────────────────────────────────────────────────────
+		const analysis = await analysisTask({
+			message: `Work item:\n${workItem}`,
+			sandboxId: sandbox.id,
+		});
+
+		// ── Implementation ──────────────────────────────────────────────
+		const first = await implementAndCommit({
+			sandbox,
+			checkout,
+			previousSha: checkout.baseSha,
+			stage: "implementer",
+			commitMessage: `Implement issue #${issueNumber}: ${issue.title}`,
+			prompt: `Work item:\n${workItem}\n\nApproved analysis:\n${analysis}`,
+		});
+		if (!first.sha) {
+			await gh.ensureIssueComment(
+				repo,
+				issueNumber,
+				commentId(runId, "no-changes"),
+				noChangesComment(label),
+			);
+			return { status: "no_changes" };
+		}
+		let state: ImplementationState = { summary: first.summary, sha: first.sha };
+
+		// ── Verification ────────────────────────────────────────────────
+		const verified = await verifyWithFixes({
+			sandbox,
+			checkout,
+			issueNumber,
+			workItem,
+			state,
+		});
+		if (!verified.passed) {
+			await gh.ensureIssueComment(
+				repo,
+				issueNumber,
+				commentId(runId, "verify-failed"),
+				verifyFailedComment(verified.failures, MAX_VERIFY_ROUNDS, label),
+			);
+			return {
+				status: "changes_requested",
+				summary: `Verification failed: ${verified.failures.slice(0, 500)}`,
+			};
+		}
+		state = verified.state;
+
+		// ── Self-review ─────────────────────────────────────────────────
+		const selfReview = await runSelfReview(
+			await completeDiff(sandbox, checkout, state.sha),
+			workItem,
+		);
+		if (selfReview.needsRevision && selfReview.issues.length > 0) {
+			const issues = selfReview.issues
+				.map((text, i) => `${i + 1}. ${text}`)
+				.join("\n");
+			const fix = await implementAndCommit({
+				sandbox,
+				checkout,
+				previousSha: state.sha,
+				stage: "self-review-fix",
+				commitMessage: `Self-review fixes for issue #${issueNumber}`,
+				prompt:
+					"Fix the following self-review issues. Do not restructure the implementation.\n\n" +
+					`Work item:\n${workItem}\n\nIssues:\n${issues}`,
+			});
+			state = { summary: fix.summary, sha: fix.sha ?? state.sha };
+		}
+
+		// ── Review ──────────────────────────────────────────────────────
+		let review = await reviewDiff(
+			await completeDiff(sandbox, checkout, state.sha),
+			state.summary,
+		);
+
+		// One revision round. If the judge still objects, stop and report.
+		if (review.decision === "request_changes") {
+			const revision = await implementAndCommit({
+				sandbox,
+				checkout,
+				previousSha: state.sha,
+				stage: "revision",
+				commitMessage: `Address internal review for issue #${issueNumber}`,
+				prompt:
+					`Revise the existing implementation.\n\nWork item:\n${workItem}\n\n` +
+					`Blocking internal review:\n${review.summary}\n\n${review.details}`,
+			});
+			if (revision.sha) {
+				state = { summary: revision.summary, sha: revision.sha };
+				review = await reviewDiff(
+					await completeDiff(sandbox, checkout, state.sha),
+					state.summary,
+				);
+			} else {
+				review = { ...review, summary: "The revision produced no changes." };
+			}
+		}
+
+		if (review.decision !== "approve") {
+			await gh.ensureIssueComment(
+				repo,
+				issueNumber,
+				commentId(runId, "changes-requested"),
+				changesRequestedComment(review.summary, label),
+			);
+			return { status: "changes_requested", summary: review.summary };
+		}
+
+		// ── Push and open the draft PR ──────────────────────────────────
+		// verifyPush confirms the remote matches the reviewed commit, so the PR
+		// can never be opened against code the judge did not see.
+		await verifyPush(sandbox, token, checkout, state.sha);
+		const pull = await gh.ensurePull(repo, {
+			title: `Fix #${issueNumber}: ${issue.title}`,
+			head: checkout.branch,
+			base: checkout.base,
+			expectedHeadSha: state.sha,
+			body: pullRequestBody(issueNumber, review, state.summary),
+		});
+		await gh.ensureIssueComment(
+			repo,
+			issueNumber,
+			commentId(runId, "draft-pr"),
+			draftPrComment(pull.htmlUrl),
+		);
+
+		// Automation stops here. It does not mark the PR ready or merge it.
+		return { status: "draft_pr_opened", pullRequest: pull.htmlUrl };
+	} finally {
+		await sandbox
+			.terminate()
+			.catch((error) => console.error("Failed to terminate sandbox:", error));
+	}
+}

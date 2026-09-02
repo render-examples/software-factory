@@ -1,6 +1,4 @@
-import { factoryConfig } from "../../../factory.config.js";
+/** Implementation fix rounds allowed before verification is declared failed. */
+export const MAX_VERIFY_ROUNDS = 3;
 
-export const REPO_DIR = factoryConfig.workspace.repoDir;
-export const MAX_ISSUE_CHARS = 12_000;
-export const MAX_REVIEW_DIFF_CHARS = 200_000;
-export const MAX_VERIFY_ITERATIONS = 3;
+export const SANDBOX_TIMEOUT_SECONDS = 24 * 60 * 60;

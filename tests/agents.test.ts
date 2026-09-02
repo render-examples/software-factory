@@ -1,0 +1,72 @@
+/**
+ * Tool access is the security boundary between an agent and the machine.
+ * These assertions are what stop a review agent from gaining write access.
+ */
+import { describe, expect, it } from "vitest";
+import * as agents from "../app/agents/index.js";
+import type { Agent } from "../app/claude/index.js";
+
+const all: Agent[] = [
+	agents.triage,
+	agents.analyst,
+	agents.implementer,
+	agents.selfReview,
+	agents.security,
+	agents.correctness,
+	agents.tests,
+	agents.judge,
+];
+
+const toolNames = (agent: Agent) => (agent.tools ?? []).map((tool) => tool.name);
+
+describe("agent definitions", () => {
+	it("registers eight agents with unique ids", () => {
+		expect(new Set(all.map((agent) => agent.id)).size).toBe(8);
+	});
+
+	it("gives every agent a prompt and a known model tier", () => {
+		for (const agent of all) {
+			expect(agent.prompt.length).toBeGreaterThan(0);
+			expect(["small", "medium", "large"]).toContain(agent.model);
+		}
+	});
+});
+
+describe("tool access", () => {
+	it("gives the analyst read-only tools", () => {
+		expect(toolNames(agents.analyst).sort()).toEqual([
+			"sandbox__list_dir",
+			"sandbox__read_file",
+			"sandbox__search",
+		]);
+	});
+
+	it("gives only the implementer write and exec tools", () => {
+		expect(toolNames(agents.implementer)).toContain("sandbox__exec");
+		expect(toolNames(agents.implementer)).toContain("sandbox__write_file");
+
+		for (const agent of all.filter((a) => a.id !== "implementer")) {
+			expect(toolNames(agent)).not.toContain("sandbox__exec");
+			expect(toolNames(agent)).not.toContain("sandbox__write_file");
+			expect(toolNames(agent)).not.toContain("sandbox__apply_patch");
+		}
+	});
+
+	it("gives reasoning-only agents no tools at all", () => {
+		for (const id of ["triage", "self-review", "security", "correctness", "tests", "judge"]) {
+			const agent = all.find((candidate) => candidate.id === id);
+			expect(toolNames(agent as Agent)).toEqual([]);
+		}
+	});
+
+	// Claude's own Bash/Read/Write/Edit would bypass the workflow-owned sandbox.
+	it("never grants a Claude built-in tool", () => {
+		const builtIns = ["Bash", "Read", "Write", "Edit", "NotebookEdit"];
+		for (const agent of all) {
+			for (const name of toolNames(agent)) {
+				expect(builtIns).not.toContain(name);
+				expect(name.startsWith("sandbox__")).toBe(true);
+			}
+		}
+	});
+});
