@@ -52,7 +52,6 @@ vi.mock("../app/github/index.js", () => ({ githubFromEnv: () => mocks.gh }));
 vi.mock("../app/sandbox/index.js", () => ({
 	createSandbox: mocks.createSandbox,
 	connectSandbox: (id: string) => ({ id }),
-	shellEscape: (value: string) => `'${value}'`,
 }));
 vi.mock("../app/store/index.js", () => ({
 	finishRun: mocks.finishRun,

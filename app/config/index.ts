@@ -1,4 +1,3 @@
-/** Environment contract for both processes. */
 export { assertGatewayEnv, assertWorkflowEnv } from "./assert.js";
 export {
 	allowedActors,

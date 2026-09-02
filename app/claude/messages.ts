@@ -1,10 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
-/**
- * The Claude Agent SDK reports usage and failures in a few shapes depending on
- * version and model. These readers accept all of them rather than guessing.
- */
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -16,6 +11,7 @@ function tokenCount(source: Record<string, unknown>, ...keys: string[]): number 
 	return 0;
 }
 
+/** Extract total token usage from a result message across SDK versions. */
 export function usageTotals(message: SDKMessage): {
 	inputTokens: number;
 	outputTokens: number;

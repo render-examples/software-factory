@@ -16,13 +16,7 @@ import {
 	type RepoRef,
 } from "./types.js";
 
-/**
- * The side effects workflow code performs on GitHub.
- *
- * Agents never touch this. Reading the issue, removing the label, commenting,
- * and opening the pull request all happen in workflow-owned code, which is
- * what keeps a model from writing to GitHub directly.
- */
+/** Workflow-owned GitHub operations. Agents never touch this. */
 export class GitHub {
 	private readonly http: GitHubHttp;
 
@@ -56,10 +50,7 @@ export class GitHub {
 		return raw.map(toComment);
 	}
 
-	/**
-	 * Post a comment at most once per operation, identified by a hidden marker.
-	 * A retried workflow re-runs this and finds its own previous comment.
-	 */
+	/** Post a comment at most once, identified by a hidden marker. */
 	async ensureIssueComment(
 		ref: RepoRef,
 		number: number,
@@ -80,7 +71,6 @@ export class GitHub {
 		);
 	}
 
-	/** Remove a label. A 404 means it is already gone, which is success. */
 	async removeLabel(
 		ref: RepoRef,
 		number: number,
@@ -97,10 +87,7 @@ export class GitHub {
 		}
 	}
 
-	/**
-	 * Reuse the open pull request for this head branch, or open a draft one.
-	 * Refuses to adopt a PR whose head is not the commit that was reviewed.
-	 */
+	/** Reuse the open PR for this head, or open a new draft. */
 	async ensurePull(
 		ref: RepoRef,
 		args: {
@@ -143,7 +130,6 @@ export class GitHub {
 	}
 }
 
-/** Build a client from GITHUB_TOKEN. Throws if unset. */
 export function githubFromEnv(fetchImpl: typeof fetch = fetch): GitHub {
 	const token = process.env.GITHUB_TOKEN;
 	if (!token) {

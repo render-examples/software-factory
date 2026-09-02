@@ -1,11 +1,9 @@
-/** Gateway process — the Hono web service. */
 import { serve } from "@hono/node-server";
 import { assertGatewayEnv } from "../config/index.js";
 import { createGateway } from "../gateway/index.js";
 
 assertGatewayEnv();
 
-// Render routes external traffic to $PORT and requires binding 0.0.0.0.
 const port = Number(process.env.PORT ?? 3000);
 const server = serve({ fetch: createGateway().fetch, hostname: "0.0.0.0", port });
 console.log(`gateway listening on :${port}`);

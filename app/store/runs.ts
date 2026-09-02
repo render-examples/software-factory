@@ -2,12 +2,8 @@ import { db } from "./pool.js";
 import type { RunRecord, RunStatus } from "./types.js";
 
 /**
- * Claim a run. Returns false when the delivery was already seen or another run
- * is still active for the issue.
- *
- * Both cases are enforced by unique constraints in app/sql, so two gateway
- * instances racing on the same webhook resolve correctly without a lock:
- * zero rows inserted means someone else already has it.
+ * Claim a run. Returns false when the delivery was already seen or another
+ * run is active for the issue — both enforced by unique constraints.
  */
 export async function claimRun(input: {
 	id: string;
@@ -23,7 +19,6 @@ export async function claimRun(input: {
 	return result.rowCount === 1;
 }
 
-/** Record the branch once the sandbox checkout exists. */
 export async function setRunBranch(id: string, branch: string): Promise<void> {
 	await db().query(
 		"update runs set branch = $2, updated_at = now() where id = $1",
@@ -31,10 +26,7 @@ export async function setRunBranch(id: string, branch: string): Promise<void> {
 	);
 }
 
-/**
- * Close out a run. Moving off 'running' also releases the per-issue index,
- * which is what lets a maintainer retry by reapplying the label.
- */
+/** Moving off 'running' releases the per-issue unique index. */
 export async function finishRun(
 	id: string,
 	status: Exclude<RunStatus, "running">,

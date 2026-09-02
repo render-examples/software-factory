@@ -2,10 +2,6 @@ import type { Finding, Review, ReviewerOutput } from "../contracts/index.js";
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
-/**
- * Render one reviewer's findings for the judge. Falls back to the raw text
- * when the reviewer did not return parseable JSON, so nothing is silently lost.
- */
 export function reviewerSection(
 	title: string,
 	parsed: ReviewerOutput | null,

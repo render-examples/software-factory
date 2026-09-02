@@ -1,9 +1,3 @@
-/**
- * What the workflow accepts, and what each agent must return.
- *
- * Model output is never trusted unparsed. Every agent that emits JSON has a
- * schema here, and the workflow fails closed when output does not match.
- */
 export {
 	implementationSchema,
 	selfReviewSchema,

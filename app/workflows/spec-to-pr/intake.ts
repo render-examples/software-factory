@@ -6,17 +6,10 @@ import { agentJson } from "../agent-json.js";
 
 export interface Intake {
 	issue: Issue;
-	/** The issue and its comments, flattened and bounded. */
 	workItem: string;
 	triage: Triage;
 }
 
-/**
- * Fetch authoritative state and decide whether the issue is actionable.
- *
- * The gateway sends only an issue number, so everything is read here — and the
- * label is re-checked because it may have been removed since the webhook.
- */
 export async function loadIntake(
 	gh: GitHub,
 	repo: RepoRef,

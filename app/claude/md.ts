@@ -1,4 +1,4 @@
-/** Tagged template that strips leading indentation from an inline prompt. */
+/** Tagged template that strips leading indentation from inline prompts. */
 export function md(strings: TemplateStringsArray, ...values: unknown[]): string {
 	const lines = String.raw(strings, ...values).split("\n");
 	while (lines.length > 0 && lines[0].trim() === "") lines.shift();

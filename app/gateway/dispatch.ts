@@ -1,9 +1,4 @@
-/**
- * Start a Render Workflows task.
- *
- * The task name must match the name given to task() in app/workflows; Render
- * addresses it as `${RENDER_WORKFLOW_SLUG}/${taskName}`.
- */
+/** Start a Render Workflows task by name. */
 export async function dispatchWorkflow(
 	taskName: string,
 	payload: { issueNumber: number; runId: string },

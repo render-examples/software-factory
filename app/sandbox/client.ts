@@ -6,7 +6,6 @@ export type SandboxesClient = InstanceType<
 
 let cached: { client: SandboxesClient; ownerId?: `tea-${string}` } | undefined;
 
-/** Lazily built so importing this module never requires credentials. */
 export function api(): { client: SandboxesClient; ownerId?: `tea-${string}` } {
 	if (!cached) {
 		const ownerId = process.env.RENDER_WORKSPACE_ID as
@@ -14,7 +13,6 @@ export function api(): { client: SandboxesClient; ownerId?: `tea-${string}` } {
 			| undefined;
 		const render = new Render({
 			ownerId,
-			// Sandboxes are always real, even when the workflow host runs locally.
 			useLocalDev: false,
 			baseUrl: "https://api.render.com",
 		});

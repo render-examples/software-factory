@@ -1,10 +1,3 @@
-/**
- * Agent task registration.
- *
- * Importing this module registers all eight agents as Render Workflows tasks.
- * app/src/workflows.ts imports it before the workflow itself, so every task
- * name exists by the time the workflow can call one.
- */
 import {
 	analyst,
 	correctness,

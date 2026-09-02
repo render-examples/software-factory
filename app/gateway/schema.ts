@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-/** Only the fields the gateway actually decides on. */
 export const issueEventSchema = z.object({
 	action: z.string(),
 	issue: z.object({

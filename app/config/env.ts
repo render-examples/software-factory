@@ -15,7 +15,6 @@ export function requireEnv(name: string): string {
 	return value;
 }
 
-/** The single repository this deployment is allowed to read and modify. */
 export function repository(): Repository {
 	const fullName = requireEnv("FACTORY_REPO");
 	if (!REPO_PATTERN.test(fullName)) {
@@ -28,15 +27,11 @@ export function repository(): Repository {
 	return { owner, repo, fullName };
 }
 
-/** The maintainer-applied label that starts an unattended run. */
 export function triggerLabel(): string {
 	return process.env.FACTORY_LABEL?.trim() || "factory";
 }
 
-/**
- * GitHub logins allowed to hand work to the factory. FACTORY_GITHUB_ACTORS
- * overrides the checked-in list so a deployment can restrict it further.
- */
+/** FACTORY_GITHUB_ACTORS overrides the checked-in list in factory.config.ts. */
 export function allowedActors(): Set<string> {
 	const override = process.env.FACTORY_GITHUB_ACTORS?.trim();
 	const raw = override ? override.split(",") : factoryConfig.actors;

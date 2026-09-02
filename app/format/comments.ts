@@ -1,8 +1,3 @@
-/**
- * Issue comments the factory posts. Each one tells the maintainer what
- * happened and how to retry, which is always "reapply the label".
- */
-
 export function clarificationComment(
 	questions: string[],
 	label: string,

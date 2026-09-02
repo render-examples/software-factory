@@ -16,10 +16,6 @@ import {
 } from "../../tasks/index.js";
 import { agentJson } from "../agent-json.js";
 
-/**
- * A cheap pass for debug artifacts and broken imports, before spending three
- * reviewers and a judge on the diff.
- */
 export function runSelfReview(
 	diff: string,
 	workItem: string,
@@ -32,7 +28,7 @@ export function runSelfReview(
 	);
 }
 
-/** Fan the diff out to three reviewers in parallel, then have the judge rule. */
+/** Fan out to three reviewers in parallel, then synthesize with the judge. */
 export async function reviewDiff(
 	diff: string,
 	implementationSummary: string,
@@ -45,8 +41,6 @@ export async function reviewDiff(
 		}),
 	]);
 
-	// A reviewer that returns unparseable output still contributes its raw
-	// text; only the judge's verdict has to be structured.
 	const details = [
 		reviewerSection(
 			"Security",

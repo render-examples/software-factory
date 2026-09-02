@@ -1,15 +1,11 @@
-import { type Sandbox, shellEscape } from "../sandbox/index.js";
+import type { Sandbox } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 import { REPO_DIR } from "./run.js";
 import type { VerificationResult } from "./types.js";
 
 const MAX_VERIFY_OUTPUT_CHARS = 10_000;
 
-/**
- * Run factoryConfig.verify in the checkout and summarize any failures.
- *
- * The workflow runs these, not the implementer, so the result is deterministic
- * and an agent cannot claim a passing build it never ran.
- */
+/** Run factoryConfig.verify commands and summarize failures. */
 export async function runVerification(
 	sandbox: Sandbox,
 	commands: readonly string[],

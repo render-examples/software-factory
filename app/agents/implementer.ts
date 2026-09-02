@@ -1,12 +1,12 @@
 import { factoryConfig } from "../../factory.config.js";
 import { type Agent, md } from "../claude/index.js";
-import { writeTools } from "../tools/index.js";
+import { allTools } from "../tools/index.js";
 
 export const implementer: Agent = {
 	id: "implementer",
 	description: "Implements the approved plan in an isolated sandbox",
 	model: "large",
-	tools: writeTools,
+	tools: allTools,
 	maxTurns: 60,
 	plan: "standard",
 	prompt: md`

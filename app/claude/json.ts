@@ -1,9 +1,6 @@
 import type { z } from "zod";
 
-/**
- * Parse strict JSON from an agent, tolerating a code fence or leading prose.
- * Returns null rather than throwing so callers choose their own fallback.
- */
+/** Parse JSON from model output. Tolerates code fences and leading prose. */
 export function parseModelJson<T>(schema: z.ZodType<T>, raw: string): T | null {
 	const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
 	const candidate =

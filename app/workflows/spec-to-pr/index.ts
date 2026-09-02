@@ -1,15 +1,4 @@
-/**
- * spec-to-pr — labeled issue to reviewed draft pull request.
- *
- * This file is the narrative. The modules beside it hold the detail of each
- * stage: intake.ts, implement.ts, review.ts, outcome.ts.
- *
- * Durability: there is deliberately no step memoization. If the task fails
- * partway, nothing is resumed — a maintainer retries by reapplying the label
- * and the run starts clean. That keeps the pipeline readable at the cost of
- * redoing model work on failure. Render Workflows' Durability 2.0 step API is
- * the seam where resumability would plug in.
- */
+/** spec-to-pr — labeled issue to reviewed draft pull request. */
 import { task } from "@renderinc/sdk/workflows";
 import { repository, triggerLabel } from "../../config/index.js";
 import {
@@ -87,8 +76,6 @@ async function run(
 		label,
 	);
 
-	// Removing the label acknowledges intake and is how a maintainer retries:
-	// reapplying it starts a fresh run.
 	await gh.removeLabel(repo, issueNumber, label);
 
 	if (!triage.hasEnoughDetail) {
@@ -225,8 +212,6 @@ async function run(
 		}
 
 		// ── Push and open the draft PR ──────────────────────────────────
-		// verifyPush confirms the remote matches the reviewed commit, so the PR
-		// can never be opened against code the judge did not see.
 		await verifyPush(sandbox, token, checkout, state.sha);
 		const pull = await gh.ensurePull(repo, {
 			title: `Fix #${issueNumber}: ${issue.title}`,
@@ -242,7 +227,6 @@ async function run(
 			draftPrComment(pull.htmlUrl),
 		);
 
-		// Automation stops here. It does not mark the PR ready or merge it.
 		return { status: "draft_pr_opened", pullRequest: pull.htmlUrl };
 	} finally {
 		await sandbox

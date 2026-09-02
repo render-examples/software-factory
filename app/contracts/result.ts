@@ -1,4 +1,3 @@
-/** Every way a run can end. Persisted as the run's status in Postgres. */
 export type WorkflowResult =
 	| { status: "needs_clarification"; questions: string[] }
 	| { status: "no_changes" }

@@ -7,10 +7,6 @@ import { dispatchWorkflow } from "./dispatch.js";
 import { issueEventSchema } from "./schema.js";
 import { verifySignature } from "./signature.js";
 
-/**
- * GitHub issue intake. Proves the request came from GitHub, confirms it is the
- * one event this factory acts on, and hands the workflow an issue number.
- */
 export function githubWebhook(): Hono {
 	const repo = repository();
 	const label = triggerLabel();
@@ -36,8 +32,6 @@ export function githubWebhook(): Hono {
 		const event = issueEventSchema.safeParse(parsed);
 		if (!event.success) return c.json({ error: "invalid payload" }, 400);
 
-		// A run starts only when a human maintainer applies the trigger label to
-		// a real issue on the one repository this deployment is bound to.
 		const payload = event.data;
 		if (
 			payload.action !== "labeled" ||
@@ -68,7 +62,6 @@ export function githubWebhook(): Hono {
 			console.error("Failed to claim run:", error);
 			return c.json({ error: "store unavailable" }, 503);
 		}
-		// Either GitHub redelivered this webhook or the issue is already running.
 		if (!claimed) return c.json({ ok: true, skipped: true });
 
 		const dispatched = await dispatchWorkflow("spec-to-pr", {
@@ -76,7 +69,6 @@ export function githubWebhook(): Hono {
 			runId,
 		});
 		if (!dispatched) {
-			// Release the claim so a redelivery or a fresh label can retry.
 			await finishRun(runId, "failed", { summary: "dispatch failed" }).catch(
 				(error) => console.error("Failed to release run claim:", error),
 			);

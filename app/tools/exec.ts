@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { shellEscape } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 import { truncate } from "./truncate.js";
 import type { Tool, ToolResult } from "./types.js";
 

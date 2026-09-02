@@ -1,10 +1,6 @@
 import { allowedActors, repository, requireEnv } from "./env.js";
 
-/**
- * Each process validates what it needs at startup, so a misconfigured deploy
- * fails immediately rather than halfway through a run.
- */
-
+/** Fail fast if the gateway is misconfigured. */
 export function assertGatewayEnv(): void {
 	repository();
 	allowedActors();
@@ -13,6 +9,7 @@ export function assertGatewayEnv(): void {
 	requireEnv("DATABASE_URL");
 }
 
+/** Fail fast if the workflows host is misconfigured. */
 export function assertWorkflowEnv(): void {
 	repository();
 	requireEnv("ANTHROPIC_API_KEY");

@@ -5,17 +5,10 @@ import { connectSandbox } from "../sandbox/index.js";
 
 export interface AgentTaskInput {
 	message: string;
-	/** Supplied by workflow code, never by the model. */
 	sandboxId?: string;
 }
 
-/**
- * Register an agent as a Render Workflows task.
- *
- * This is what makes each agent its own task run in the Render dashboard,
- * with its own instance plan and timeline — the review fan-out is visible on
- * the platform rather than hidden inside one process.
- */
+/** Turn an Agent into a Render Workflows task. */
 export function agentTask(agent: Agent) {
 	return task(
 		{ name: agent.id, plan: agent.plan },

@@ -6,10 +6,7 @@ const MAX_GET_ATTEMPTS = 3;
 const MAX_ERROR_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
-/**
- * The HTTP layer: auth headers, timeouts, retries on 429 and 5xx, response
- * size caps, and token redaction in error messages.
- */
+/** HTTP layer: auth headers, timeouts, retries on 429/5xx, size caps. */
 export class GitHubHttp {
 	private readonly api: string;
 
@@ -21,7 +18,6 @@ export class GitHubHttp {
 		this.api = api.replace(/\/$/, "");
 	}
 
-	/** Never let the token appear in a thrown message or a log line. */
 	redact(text: string): string {
 		return this.token ? text.split(this.token).join("***") : text;
 	}
@@ -41,7 +37,6 @@ export class GitHubHttp {
 
 		let response: Response | undefined;
 		let lastError: unknown;
-		// Only GETs are retried; writes are not assumed idempotent.
 		const attempts = method === "GET" ? MAX_GET_ATTEMPTS : 1;
 
 		for (let attempt = 1; attempt <= attempts; attempt++) {

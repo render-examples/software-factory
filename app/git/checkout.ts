@@ -1,15 +1,15 @@
-import { type Sandbox, shellEscape } from "../sandbox/index.js";
+import type { Sandbox } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 import { execGitWithToken, githubRemoteUrl } from "./auth.js";
 import { git, REPO_DIR } from "./run.js";
 import type { Checkout } from "./types.js";
 
-/** Deterministic per run, so a retry reuses the same branch. */
 export function branchName(issueNumber: number, runId: string): string {
 	const suffix = runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 16);
 	return `factory/issue-${issueNumber}-${suffix}`;
 }
 
-/** Clone the repository and cut the run's branch from the default branch. */
+/** Clone the repository and create the run's working branch. */
 export async function setupCheckout(
 	sandbox: Sandbox,
 	token: string,
@@ -49,11 +49,7 @@ export async function setupCheckout(
 		"Create working branch",
 	);
 	await git(sandbox, 'config user.name "render-factory[bot]"', "Set commit name");
-	await git(
-		sandbox,
-		'config user.email "bot@render-factory.dev"',
-		"Set commit email",
-	);
+	await git(sandbox, 'config user.email "bot@render-factory.dev"', "Set commit email");
 
 	return {
 		remoteUrl,

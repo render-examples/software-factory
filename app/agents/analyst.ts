@@ -1,12 +1,12 @@
 import { factoryConfig } from "../../factory.config.js";
 import { type Agent, md } from "../claude/index.js";
-import { readOnlyTools } from "../tools/index.js";
+import { readTools } from "../tools/index.js";
 
 export const analyst: Agent = {
 	id: "analyst",
 	description: "Researches the repository and produces an implementation plan",
 	model: "medium",
-	tools: readOnlyTools,
+	tools: readTools,
 	maxTurns: 30,
 	plan: "standard",
 	prompt: md`

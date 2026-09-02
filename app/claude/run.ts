@@ -9,10 +9,9 @@ import type { Sandbox } from "../sandbox/index.js";
 import type { Tool, ToolResult } from "../tools/index.js";
 import { failureReason, isRecord, usageTotals } from "./messages.js";
 
-/** Custom tools are exposed to Claude through an in-process MCP server. */
 const MCP_SERVER = "factory";
 
-/** Claude runs as a subprocess; give it only the variables it needs. */
+/** Only these env vars are forwarded to the Claude subprocess. */
 const ENV_ALLOWLIST = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_BASE_URL",
@@ -58,9 +57,8 @@ export async function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
 		systemPrompt: opts.systemPrompt,
 		model: opts.model,
 		maxTurns: opts.maxTurns,
-		// Claude's own Bash/Read/Write/Edit stay off. Agents reach the machine
-		// only through our tools, which keeps every action inside the sandbox
-		// the workflow created.
+		// Claude's built-in Bash/Read/Write/Edit stay off — agents reach
+		// the machine only through our sandbox tools.
 		tools: [],
 		allowedTools: allowed.length > 0 ? allowed : undefined,
 		permissionMode: "dontAsk",
@@ -108,11 +106,8 @@ export async function runClaude(opts: RunClaudeOptions): Promise<ClaudeRun> {
 	throw new Error(`Agent "${opts.agentId}" produced no result`);
 }
 
-/**
- * Claude reports MCP tools as `mcp__<server>__<tool>`. Policy rules are written
- * against the bare tool name, so strip the prefix before checking.
- */
-export function bareToolName(name: string): string {
+/** Strip the MCP prefix so policy rules match the bare tool name. */
+function bareToolName(name: string): string {
 	const prefix = `mcp__${MCP_SERVER}__`;
 	return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
