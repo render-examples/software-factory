@@ -84,12 +84,13 @@ app/
   sandbox/          Render Sandboxes
   shell/            shellEscape — quoting for every command we build
   git/              Clone, commit, diff, verify, push — all workflow-owned
-  github/           REST client for issues and pull requests
+  github/           REST client, plus App/PAT credential resolution
   format/           Issue to work item; results to GitHub markdown
   store/            Postgres: one runs table
   sql/              Schema, applied by scripts/migrate.ts
   src/              Process entrypoints
-tests/              Focused suite
+tests/              agents, contracts, gateway, github-auth, policy,
+                    shell, tools, workflow
 ```
 
 Keep `index.ts` thin: re-exports, plus the few lines that wire a module
@@ -125,6 +126,9 @@ Do not weaken these without an explicit security-model change:
 - The trigger label is removed only on a terminal result, never on a thrown
   error — a retry re-reads the issue and needs the label still there.
 - `factory:` status labels are cosmetic and never fail a run.
+- Resolve GitHub credentials through `githubToken()`, which returns a GitHub
+  App installation token when the `GITHUB_APP_*` trio is set and falls back to
+  `GITHUB_TOKEN`. Never read `GITHUB_TOKEN` directly.
 - The sandbox is terminated in a `finally` block.
 - `verifyPush` confirms the remote matches the reviewed commit before a PR opens.
 - Automation stops at a draft PR. It never marks ready or merges.

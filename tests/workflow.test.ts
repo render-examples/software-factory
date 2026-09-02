@@ -49,7 +49,10 @@ vi.mock("../app/tasks/index.js", () => ({
 	judgeTask: mocks.judgeTask,
 }));
 
-vi.mock("../app/github/index.js", () => ({ githubFromEnv: () => mocks.gh }));
+vi.mock("../app/github/index.js", () => ({
+	githubFromEnv: () => mocks.gh,
+	githubToken: async () => "ghs_installation_token",
+}));
 vi.mock("../app/sandbox/index.js", () => ({
 	createSandbox: mocks.createSandbox,
 	connectSandbox: (id: string) => ({ id }),
@@ -130,9 +133,11 @@ describe("happy path", () => {
 			status: "draft_pr_opened",
 			pullRequest: "https://github.com/acme/widgets/pull/7",
 		});
+		// Git gets the resolved token, which under App auth is an installation
+		// token rather than whatever sits in GITHUB_TOKEN.
 		expect(mocks.verifyPush).toHaveBeenCalledWith(
 			expect.anything(),
-			"ghp_test",
+			"ghs_installation_token",
 			expect.anything(),
 			"sha-impl",
 		);

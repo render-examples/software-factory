@@ -31,11 +31,13 @@ export async function execGitWithToken(
 	}
 
 	const askpassPath = `/tmp/render-factory-askpass-${randomUUID()}.sh`;
+	// x-access-token is what GitHub expects for App installation tokens, and is
+	// accepted as the username for a PAT too.
 	await sandbox.upload(
 		askpassPath,
 		`#!/bin/sh
 case "$1" in
-  *Username*) printf '%s\\n' 'oauth2' ;;
+  *Username*) printf '%s\\n' 'x-access-token' ;;
   *Password*) printf '%s\\n' ${shellEscape(token)} ;;
   *) exit 1 ;;
 esac

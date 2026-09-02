@@ -6,12 +6,17 @@ const MAX_GET_ATTEMPTS = 3;
 const MAX_ERROR_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
+/** Resolves the current token. App installation tokens expire and rotate. */
+export type TokenProvider = () => string | Promise<string>;
+
 /** HTTP layer: auth headers, timeouts, retries on 429/5xx, size caps. */
 export class GitHubHttp {
 	private readonly api: string;
+	/** Last token seen, kept only so it can be scrubbed from error messages. */
+	private lastToken = "";
 
 	constructor(
-		private readonly token: string,
+		private readonly token: TokenProvider,
 		private readonly fetchImpl: typeof fetch = fetch,
 		api = process.env.GITHUB_API_URL ?? DEFAULT_API,
 	) {
@@ -19,7 +24,7 @@ export class GitHubHttp {
 	}
 
 	redact(text: string): string {
-		return this.token ? text.split(this.token).join("***") : text;
+		return this.lastToken ? text.split(this.lastToken).join("***") : text;
 	}
 
 	async send<T>(
@@ -27,8 +32,11 @@ export class GitHubHttp {
 		path: string,
 		opts: { body?: unknown } = {},
 	): Promise<T> {
+		const token = await this.token();
+		this.lastToken = token;
+
 		const headers: Record<string, string> = {
-			Authorization: `Bearer ${this.token}`,
+			Authorization: `Bearer ${token}`,
 			Accept: "application/vnd.github+json",
 			"X-GitHub-Api-Version": "2022-11-28",
 			"User-Agent": "render-factory",

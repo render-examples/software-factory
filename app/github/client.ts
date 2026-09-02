@@ -1,4 +1,5 @@
 import { redactSecrets } from "../policy/index.js";
+import { githubToken } from "./auth.js";
 import {
 	type RawComment,
 	type RawIssue,
@@ -7,7 +8,7 @@ import {
 	toIssue,
 	toPull,
 } from "./raw.js";
-import { GitHubHttp } from "./request.js";
+import { GitHubHttp, type TokenProvider } from "./request.js";
 import {
 	GitHubError,
 	type Issue,
@@ -20,7 +21,11 @@ import {
 export class GitHub {
 	private readonly http: GitHubHttp;
 
-	constructor(token: string, fetchImpl: typeof fetch = fetch, api?: string) {
+	constructor(
+		token: TokenProvider,
+		fetchImpl: typeof fetch = fetch,
+		api?: string,
+	) {
 		this.http = new GitHubHttp(token, fetchImpl, api);
 	}
 
@@ -144,10 +149,7 @@ export class GitHub {
 	}
 }
 
+/** App installation token when configured, otherwise the PAT. */
 export function githubFromEnv(fetchImpl: typeof fetch = fetch): GitHub {
-	const token = process.env.GITHUB_TOKEN;
-	if (!token) {
-		throw new Error("GITHUB_TOKEN is not set — a fine-grained PAT is required");
-	}
-	return new GitHub(token, fetchImpl);
+	return new GitHub(() => githubToken(fetchImpl), fetchImpl);
 }
