@@ -197,9 +197,39 @@ Then run each process in a separate terminal:
 still create real Render Sandboxes; they do not execute repository code on your
 development machine.
 
+### Setup commands
+
+Three scripts remove most of the hand-wiring. They are ordinary TypeScript in
+`scripts/` — nothing is hidden.
+
+```bash
+npm run setup:app     # create a GitHub App via GitHub's manifest flow
+npm run setup:github  # create the webhook and trigger label
+npm run doctor        # diagnose the result; changes nothing
+```
+
+**`setup:app`** runs GitHub's App manifest flow. It serves a one-click form,
+and GitHub creates the app, its private key, and its webhook secret together,
+so none of that has to be assembled by hand. It prints the variables to set.
+
+**`setup:github`** creates or repoints the webhook and creates the trigger
+label, idempotently. Use it when you are on a PAT rather than an App. It
+generates a webhook secret if you do not supply one.
+
+**`doctor`** is what to reach for when something does not work. It checks every
+required variable on both processes, that the GitHub credential can reach and
+push to `FACTORY_REPO`, that the webhook exists at the right path with the
+right events, that the trigger label exists, that Postgres has the expected
+schema and indexes, and that all nine task names registered. Every failure
+prints its fix. It is read-only and exits non-zero, so CI can gate on it.
+
+Running `doctor` against a Render database from your laptop needs the external
+connection string with `?sslmode=require` appended. The deployed services use
+the internal string, which does not.
+
 ### Connect GitHub and run the factory
 
-Configure a GitHub webhook for `issues` events at:
+The webhook takes `issues` events at:
 
 ```text
 https://<gateway-host>/webhooks/github
@@ -209,9 +239,9 @@ Use the same secret as `GITHUB_WEBHOOK_SECRET`. A gateway running only on
 localhost needs a publicly reachable HTTPS tunnel before GitHub can deliver to
 it.
 
-Create the configured label — `factory` by default — and apply it to an issue
-as a login on the actor allowlist. Applying that label is the only way to start
-work; comments and other issue events never trigger the factory.
+Apply the configured label — `factory` by default — to an issue, as a login on
+the actor allowlist. Applying that label is the only way to start work;
+comments and other issue events never trigger the factory.
 
 Scope the GitHub credential to `FACTORY_REPO` only, grant the minimum Contents,
 Issues, and Pull Requests permissions needed to clone, push, comment, and open
@@ -404,6 +434,7 @@ security invariants, and test ownership.
 ```bash
 npm run check                        # Biome lint, TypeScript, and Vitest
 npx vitest run tests/gateway.test.ts # one focused suite
+npm run doctor                       # diagnose a live deployment
 render blueprints validate           # when render.yaml changes
 ```
 
