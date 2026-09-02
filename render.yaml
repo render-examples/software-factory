@@ -5,7 +5,7 @@
 # DATABASE_URL (the database's internal connection string) as the gateway.
 
 databases:
-  - name: render-factory-store
+  - name: render-factory-db
     plan: basic-256mb
 
 services:
@@ -19,7 +19,7 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: render-factory-store
+          name: render-factory-db
           property: connectionString
       - key: FACTORY_REPO
         sync: false
@@ -30,4 +30,7 @@ services:
       - key: RENDER_WORKFLOW_SLUG
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      # Used by the Render SDK to start the workflow task.
+      - key: RENDER_API_KEY
         sync: false

@@ -209,7 +209,7 @@ a draft PR, and protect the default branch.
 | `DATABASE_URL` | Both | Postgres connection string for the runs table |
 | `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
 | `GITHUB_TOKEN` | Workflows | Fine-grained token scoped to `FACTORY_REPO` |
-| `RENDER_API_KEY` | Workflows | Render SDK and Sandbox credential |
+| `RENDER_API_KEY` | Both | Task dispatch on the gateway; Sandboxes on Workflows |
 | `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
 | `GITHUB_API_URL` | Workflows | Optional GitHub API base URL override |
 | `PORT` | Gateway | Optional HTTP port; defaults to `3000` |
@@ -225,7 +225,7 @@ and `npm run start:workflows` do not; supply their environment through Render.
 
 1. Fork this repository.
 2. Create a Blueprint from `render.yaml`. It provisions
-   `render-factory-gateway` and `render-factory-store`.
+   `render-factory-gateway` and `render-factory-db`.
 3. Set the unsynced gateway variables listed in
    [Configuration](#configuration).
 4. Deploy the Blueprint gateway once so its pre-deploy command migrates the

@@ -6,6 +6,8 @@ export function assertGatewayEnv(): void {
 	allowedActors();
 	requireEnv("GITHUB_WEBHOOK_SECRET");
 	requireEnv("RENDER_WORKFLOW_SLUG");
+	// The Render SDK reads this when the gateway dispatches a workflow task.
+	requireEnv("RENDER_API_KEY");
 	requireEnv("DATABASE_URL");
 }
 
