@@ -57,7 +57,7 @@ export const specToPr = task(
 	},
 );
 
-/** The pipeline. Read this top to bottom. */
+/** The pipeline. */
 async function run(
 	issueNumber: number,
 	runId: string,
