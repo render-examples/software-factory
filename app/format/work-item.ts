@@ -2,10 +2,7 @@ import type { Issue, IssueComment } from "../github/index.js";
 
 const MAX_ISSUE_CHARS = 12_000;
 
-/**
- * Flatten an issue and its comments into the work item agents receive.
- * Bounded, because issue threads are unbounded user input.
- */
+/** Flatten an issue and its comments into one bounded work item string. */
 export function workItem(issue: Issue, comments: IssueComment[]): string {
 	const sections = [`# ${issue.title}`, "", issue.body || "(no description)"];
 	if (comments.length > 0) {

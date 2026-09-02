@@ -1,16 +1,11 @@
+import { shellEscape } from "../shell/index.js";
+import { collectExecOutput, mapExecEvents } from "./exec.js";
 import { api } from "./client.js";
-import { collectExecOutput, mapExecEvents, shellEscape } from "./exec.js";
 import type { ExecEvent, ExecResult, UploadData } from "./types.js";
 
-/**
- * One Render Sandbox. Workflow code owns the lifecycle; agents only reach a
- * sandbox through the tools in app/tools, which receive an instance of this
- * class already bound to the run.
- */
 export class Sandbox {
 	constructor(readonly id: string) {}
 
-	/** Stream a command's output. Use `run` unless you need it incrementally. */
 	async exec(
 		command: string,
 		opts?: { signal?: AbortSignal },
@@ -21,7 +16,6 @@ export class Sandbox {
 		);
 	}
 
-	/** Run a command to completion. A non-zero exit is returned, not thrown. */
 	async run(
 		command: string,
 		opts?: { signal?: AbortSignal },
@@ -29,7 +23,6 @@ export class Sandbox {
 		return collectExecOutput(await this.exec(command, opts));
 	}
 
-	/** Run a command and throw if it fails. `label` names the step in the error. */
 	async mustRun(command: string, label: string): Promise<string> {
 		const { output, exitCode } = await this.run(command);
 		if (exitCode !== 0) {

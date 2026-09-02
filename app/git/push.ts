@@ -3,10 +3,7 @@ import { execGitWithToken } from "./auth.js";
 import { REPO_DIR } from "./run.js";
 import type { Checkout } from "./types.js";
 
-/**
- * Push the branch and confirm the remote landed on exactly the commit that was
- * reviewed, so a pull request can never be opened against unreviewed code.
- */
+/** Push and verify the remote SHA matches the reviewed commit. */
 export async function verifyPush(
 	sandbox: Sandbox,
 	token: string,

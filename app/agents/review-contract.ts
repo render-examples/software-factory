@@ -1,6 +1,6 @@
 import { md } from "../claude/index.js";
 
-/** Shared by the three reviewers so the judge gets one comparable shape. */
+/** Shared output contract for the three parallel reviewers. */
 export const reviewerOutputContract = md`
 	Respond ONLY with JSON:
 	{

@@ -1,9 +1,3 @@
-/**
- * Git operations inside the sandbox.
- *
- * All of this is workflow-owned. Agents edit files; they never commit, push,
- * or see the GitHub token.
- */
 export { execGitWithToken, githubRemoteUrl } from "./auth.js";
 export { branchName, setupCheckout } from "./checkout.js";
 export { commitChanges, completeDiff } from "./commit.js";

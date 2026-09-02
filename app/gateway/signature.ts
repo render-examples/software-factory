@@ -1,11 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-/**
- * Verify GitHub's HMAC over the raw body.
- *
- * This runs before the body is parsed, so unauthenticated input never reaches
- * a JSON parser or a schema.
- */
+/** Verify GitHub's HMAC. Runs before the body is parsed. */
 export function verifySignature(body: string, headers: Headers): boolean {
 	const secret = process.env.GITHUB_WEBHOOK_SECRET;
 	const signature = headers.get("x-hub-signature-256");
@@ -15,7 +10,6 @@ export function verifySignature(body: string, headers: Headers): boolean {
 	try {
 		return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 	} catch {
-		// Length mismatch — timingSafeEqual throws rather than returning false.
 		return false;
 	}
 }

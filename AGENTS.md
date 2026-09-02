@@ -61,8 +61,13 @@ The dependency direction is one-way:
 sandbox → tools → claude → agents → tasks → workflows
 ```
 
-`policy` is imported by `claude` and `github`; `config`, `contracts`, and
-`format` are leaves. Adding an edge that points backwards is a design smell.
+`policy` is imported by `claude` and `github`. `shell`, `config`, `contracts`,
+and `format` are leaves — `shell` in particular is depended on by `sandbox`,
+`tools`, and `git`, which is why it is not inside any of them. Adding an edge
+that points backwards is a design smell.
+
+A barrel exports what other modules actually use. If a symbol is only used
+inside its own module, keep it out of `index.ts`.
 
 ```text
 factory.config.ts   Repo dir, verify commands, model tiers, actors
@@ -77,6 +82,7 @@ app/
   tools/            The six sandbox tools and the Tool contract
   policy/           checkToolCall, path rules, secret redaction
   sandbox/          Render Sandboxes
+  shell/            shellEscape — quoting for every command we build
   git/              Clone, commit, diff, verify, push — all workflow-owned
   github/           REST client for issues and pull requests
   format/           Issue to work item; results to GitHub markdown

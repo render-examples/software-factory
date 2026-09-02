@@ -3,10 +3,7 @@ export interface Rule {
 	label: string;
 }
 
-/**
- * Matched against the serialized tool input, so quoting tricks and flag
- * reordering still trip them.
- */
+/** Matched against serialized tool input, so quoting tricks still trip them. */
 export const RULES: Rule[] = [
 	{
 		pattern:

@@ -5,7 +5,6 @@ import type { CreateSandboxOptions } from "./types.js";
 const READY_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 1_500;
 
-/** Create a sandbox and wait until it accepts commands. */
 export async function createSandbox(
 	opts?: CreateSandboxOptions,
 ): Promise<Sandbox> {
@@ -32,7 +31,6 @@ export async function createSandbox(
 	);
 }
 
-/** Reconnect to a sandbox the workflow already created. */
 export function connectSandbox(sandboxId: string): Sandbox {
 	return new Sandbox(sandboxId);
 }

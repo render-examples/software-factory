@@ -2,12 +2,7 @@ import type { ExecEvent, ExecResult } from "./types.js";
 
 const MAX_COLLECT_CHARS = 1_000_000;
 
-/** Quote a string for safe use as a single shell argument. */
-export function shellEscape(value: string): string {
-	return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-/** Drain an exec stream into one string. Output is capped at 1 MB. */
+/** Drain an exec stream into one string. Capped at 1 MB. */
 export async function collectExecOutput(
 	events: AsyncGenerator<ExecEvent>,
 ): Promise<ExecResult> {
@@ -28,7 +23,6 @@ export async function collectExecOutput(
 	return { output: chunks.join(""), exitCode };
 }
 
-/** Normalize the Render SDK's snake_case exec stream into ExecEvent. */
 export async function* mapExecEvents(
 	source: AsyncGenerator<{
 		type: string;

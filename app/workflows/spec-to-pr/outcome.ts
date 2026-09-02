@@ -1,12 +1,10 @@
 import type { WorkflowResult } from "../../contracts/index.js";
 import { finishRun } from "../../store/index.js";
 
-/** Stable per run and operation, so a repeated comment is never duplicated. */
 export function commentId(runId: string, operation: string): string {
 	return `${runId.slice(0, 64)}-${operation}`;
 }
 
-/** One place that writes a run's terminal state to Postgres. */
 export function recordOutcome(
 	runId: string,
 	result: WorkflowResult,

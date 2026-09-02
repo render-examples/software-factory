@@ -1,13 +1,7 @@
 import { PATH_TOOLS, pathEscape } from "./paths.js";
 import { RULES } from "./rules.js";
 
-/**
- * The one gate between a model and the sandbox. Returns a rejection reason,
- * or null to allow the call.
- *
- * `name` must be the bare tool name — app/claude strips Claude's
- * `mcp__factory__` prefix before calling this.
- */
+/** Returns a rejection reason, or null to allow. */
 export function checkToolCall(
 	name: string,
 	input: Record<string, unknown>,

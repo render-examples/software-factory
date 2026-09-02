@@ -113,6 +113,7 @@ app/
   tools/            The six sandbox tools and the Tool contract
   policy/           checkToolCall, path rules, secret redaction
   sandbox/          Render Sandboxes
+  shell/            shellEscape — quoting for every command we build
   git/              Clone, commit, diff, verify, push — all workflow-owned
   github/           REST client for issues and pull requests
   format/           Issue to work item; results to GitHub markdown

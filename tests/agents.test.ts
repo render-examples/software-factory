@@ -33,7 +33,7 @@ describe("agent definitions", () => {
 });
 
 describe("tool access", () => {
-	it("gives the analyst read-only tools", () => {
+	it("gives the analyst only read tools", () => {
 		expect(toolNames(agents.analyst).sort()).toEqual([
 			"sandbox__list_dir",
 			"sandbox__read_file",
@@ -41,18 +41,21 @@ describe("tool access", () => {
 		]);
 	});
 
-	it("gives only the implementer write and exec tools", () => {
+	it("gives the implementer read + write tools", () => {
 		expect(toolNames(agents.implementer)).toContain("sandbox__exec");
 		expect(toolNames(agents.implementer)).toContain("sandbox__write_file");
+		expect(toolNames(agents.implementer)).toContain("sandbox__read_file");
+	});
 
-		for (const agent of all.filter((a) => a.id !== "implementer")) {
+	it("gives no other agent write or exec tools", () => {
+		for (const agent of all.filter((a) => a.id !== "implementer" && a.id !== "analyst")) {
 			expect(toolNames(agent)).not.toContain("sandbox__exec");
 			expect(toolNames(agent)).not.toContain("sandbox__write_file");
 			expect(toolNames(agent)).not.toContain("sandbox__apply_patch");
 		}
 	});
 
-	it("gives reasoning-only agents no tools at all", () => {
+	it("gives reasoning-only agents no tools", () => {
 		for (const id of ["triage", "self-review", "security", "correctness", "tests", "judge"]) {
 			const agent = all.find((candidate) => candidate.id === id);
 			expect(toolNames(agent as Agent)).toEqual([]);

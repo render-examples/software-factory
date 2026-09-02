@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExecResult, Sandbox } from "../sandbox/index.js";
-import { shellEscape } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 
 const GITHUB_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
@@ -17,11 +17,9 @@ export function githubRemoteUrl(owner: string, repo: string): string {
 }
 
 /**
- * Run one authenticated Git command.
- *
- * The token reaches Git through a temporary GIT_ASKPASS script, so it is never
- * written into .git/config and never appears in a command line or process
- * listing. The script is removed afterwards.
+ * Run one authenticated Git command. The token reaches Git through a
+ * temporary GIT_ASKPASS script so it never appears in .git/config
+ * or the process listing.
  */
 export async function execGitWithToken(
 	sandbox: Sandbox,
@@ -61,8 +59,6 @@ esac
 				`GIT_ASKPASS=${shellEscape(askpassPath)} GIT_TERMINAL_PROMPT=0 ${command}`,
 		);
 	} finally {
-		await sandbox.run(`rm -f ${shellEscape(askpassPath)}`).catch(() => {
-			// Terminating the sandbox is the final cleanup boundary.
-		});
+		await sandbox.run(`rm -f ${shellEscape(askpassPath)}`).catch(() => {});
 	}
 }

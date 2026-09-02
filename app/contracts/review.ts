@@ -9,7 +9,6 @@ export const findingSchema = z.object({
 	description: z.string(),
 });
 
-/** Shared by the security, correctness, and tests reviewers. */
 export const reviewerOutputSchema = z.object({
 	findings: z.array(findingSchema),
 });
@@ -30,6 +29,4 @@ export const judgeSchema = z.object({
 export type Finding = z.infer<typeof findingSchema>;
 export type ReviewerOutput = z.infer<typeof reviewerOutputSchema>;
 export type JudgeVerdict = z.infer<typeof judgeSchema>;
-
-/** The judge's verdict plus the rendered reviewer sections it summarized. */
 export type Review = JudgeVerdict & { details: string };

@@ -1,14 +1,10 @@
 import { factoryConfig } from "../../factory.config.js";
-import { type Sandbox, shellEscape } from "../sandbox/index.js";
+import type { Sandbox } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 
 export const REPO_DIR = factoryConfig.repoDir;
 
-/**
- * Run a git subcommand in the checkout, throwing on failure.
- *
- * `core.hooksPath=/dev/null` disables repository hooks: the factory clones
- * untrusted repositories, and a checked-in hook must not run as us.
- */
+/** Run a git subcommand in the checkout. Disables repo hooks for safety. */
 export function git(
 	sandbox: Sandbox,
 	subcommand: string,

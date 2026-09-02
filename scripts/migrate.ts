@@ -1,11 +1,3 @@
-/**
- * Apply the SQL in app/sql, in filename order.
- *
- * Run by the gateway's preDeployCommand in render.yaml, so the schema exists
- * before any new instance serves traffic. Each file is written to be
- * idempotent (`create ... if not exists`), which is why there is no applied-
- * migrations ledger — re-running is always safe.
- */
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

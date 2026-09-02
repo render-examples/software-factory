@@ -1,13 +1,12 @@
 import { factoryConfig } from "../../factory.config.js";
 
-/** Tools whose arguments are paths, and so must stay inside the checkout. */
 export const PATH_TOOLS = new Set([
 	"sandbox__read_file",
 	"sandbox__write_file",
 	"sandbox__list_dir",
 ]);
 
-/** Returns a reason when any string argument escapes the allowed roots. */
+/** Returns a reason if any string argument escapes the allowed roots. */
 export function pathEscape(input: Record<string, unknown>): string | null {
 	for (const value of Object.values(input)) {
 		if (typeof value !== "string") continue;

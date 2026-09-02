@@ -1,9 +1,6 @@
 const MAX_BODY_BYTES = 256 * 1024;
 
-/**
- * Read the body with a hard cap, streaming so an oversized request cannot
- * exhaust memory. Returns null when the cap is exceeded.
- */
+/** Read the body with a hard cap. Returns null when exceeded. */
 export async function readBody(request: Request): Promise<string | null> {
 	const declared = Number(request.headers.get("content-length"));
 	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return null;

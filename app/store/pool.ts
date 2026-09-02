@@ -2,7 +2,6 @@ import pg from "pg";
 
 let pool: pg.Pool | undefined;
 
-/** Lazily built so importing this module never requires a database. */
 export function db(): pg.Pool {
 	if (!pool) {
 		const connectionString = process.env.DATABASE_URL;
@@ -20,7 +19,6 @@ export function db(): pg.Pool {
 	return pool;
 }
 
-/** Readiness probe for the gateway's health check. */
 export async function ping(): Promise<void> {
 	await db().query("select 1");
 }

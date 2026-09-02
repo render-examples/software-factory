@@ -1,34 +1,25 @@
-import { type Sandbox, shellEscape } from "../sandbox/index.js";
+import type { Sandbox } from "../sandbox/index.js";
+import { shellEscape } from "../shell/index.js";
 import { git, REPO_DIR } from "./run.js";
 import type { Checkout } from "./types.js";
 
 const MAX_REVIEW_DIFF_CHARS = 200_000;
 
-/**
- * Commit whatever the implementer changed. Returns null when the tree is clean
- * and HEAD has not moved, which is how the workflow detects "no changes".
- */
+/** Commit staged changes. Returns null when nothing changed. */
 export async function commitChanges(
 	sandbox: Sandbox,
 	checkout: Checkout,
 	previousSha: string,
 	message: string,
 ): Promise<string | null> {
-	await git(
-		sandbox,
-		`checkout ${shellEscape(checkout.branch)}`,
-		"Branch verification",
-	);
+	await git(sandbox, `checkout ${shellEscape(checkout.branch)}`, "Branch verification");
 	await git(sandbox, "add -A", "Git add");
 
 	const staged = await sandbox.run(
 		`git -C ${shellEscape(REPO_DIR)} diff --cached --quiet`,
 	);
-	// 0 means nothing staged, 1 means changes staged, anything else is a failure.
 	if (staged.exitCode === 0) {
-		const head = (
-			await git(sandbox, "rev-parse HEAD", "Current revision")
-		).trim();
+		const head = (await git(sandbox, "rev-parse HEAD", "Current revision")).trim();
 		return head === previousSha ? null : head;
 	}
 	if (staged.exitCode !== 1) {
@@ -39,7 +30,7 @@ export async function commitChanges(
 	return (await git(sandbox, "rev-parse HEAD", "Committed revision")).trim();
 }
 
-/** The full diff sent to reviewers. Fails closed when too large or binary. */
+/** Full diff for reviewers. Fails closed on oversized or binary content. */
 export async function completeDiff(
 	sandbox: Sandbox,
 	checkout: Checkout,

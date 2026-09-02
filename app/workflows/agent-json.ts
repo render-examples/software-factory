@@ -1,12 +1,10 @@
 import type { z } from "zod";
 import { parseModelJson } from "../claude/index.js";
 
-/** Render's task() may run a task inline, so its result is not always a promise. */
 export type AgentCall = (message: string) => string | Promise<string>;
 
 /**
- * Call an agent that must return JSON. One repair attempt, then fail closed —
- * a model that cannot produce its contract twice does not get to proceed.
+ * Call an agent that must return JSON. One repair attempt, then fail closed.
  */
 export async function agentJson<T>(
 	call: AgentCall,

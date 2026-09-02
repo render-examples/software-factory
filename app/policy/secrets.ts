@@ -1,4 +1,3 @@
-/** Token shapes that must never reach a pull request or issue comment. */
 const SECRET_PATTERNS = [
 	/\bsk-ant-api\S{10,}/g,
 	/\bghp_\S{10,}/g,
@@ -9,10 +8,7 @@ const SECRET_PATTERNS = [
 	/\bsk-\S{20,}/g,
 ];
 
-/**
- * Strip secret-like strings from model output. Applied once at the boundary
- * where text leaves the factory for GitHub, not on every streamed event.
- */
+/** Strip secret-shaped strings. Applied once when text leaves for GitHub. */
 export function redactSecrets(text: string): string {
 	let out = text;
 	for (const pattern of SECRET_PATTERNS) {
