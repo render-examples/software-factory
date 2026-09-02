@@ -19,6 +19,19 @@ async function isBlocked(
 	return result.action === "reject";
 }
 
+/** Same check, but against a run whose workspace root came from orchestration. */
+async function isBlockedInWorkspace(
+	repoDir: string,
+	name: string,
+	input: Record<string, unknown>,
+): Promise<boolean> {
+	const result = await blockDestructiveHook.handle(toolCall(name, input), {
+		...ctx,
+		environment: { workspace: { repoDir } },
+	});
+	return result.action === "reject";
+}
+
 describe("block-destructive hook", () => {
 	describe("recursive forced deletion", () => {
 		it("blocks rm -rf /", async () => {
@@ -218,6 +231,42 @@ describe("block-destructive hook", () => {
 				await isBlocked("sandbox__write_file", {
 					path: "/tmp/test-output.txt",
 					content: "test",
+				}),
+			).toBe(false);
+		});
+
+		it("scopes paths to the workspace the run actually bound", async () => {
+			expect(
+				await isBlockedInWorkspace("/srv/checkout", "sandbox__read_file", {
+					path: "/srv/checkout/package.json",
+				}),
+			).toBe(false);
+		});
+
+		it("blocks the default root when the run binds a different workspace", async () => {
+			expect(
+				await isBlockedInWorkspace("/srv/checkout", "sandbox__read_file", {
+					path: "/home/user/repo/package.json",
+				}),
+			).toBe(true);
+		});
+
+		it("still blocks traversal inside a bound workspace", async () => {
+			expect(
+				await isBlockedInWorkspace("/srv/checkout", "sandbox__write_file", {
+					path: "/srv/checkout/../../etc/passwd",
+					content: "x",
+				}),
+			).toBe(true);
+		});
+
+		it("falls back to the configured root when no environment is bound", async () => {
+			expect(
+				await isBlocked("sandbox__read_file", { path: "/etc/shadow" }),
+			).toBe(true);
+			expect(
+				await isBlocked("sandbox__read_file", {
+					path: "/home/user/repo/package.json",
 				}),
 			).toBe(false);
 		});

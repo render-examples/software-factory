@@ -1,13 +1,11 @@
-/**
- * Gateway entrypoint — Hono web service.
- */
+/** Gateway entrypoint — Hono web service. */
 import { serve } from "@hono/node-server";
 import {
 	configureFactoryStore,
 	createPostgresFactoryStore,
 } from "#factory/store";
-import { createApp } from "../gateway/server.js";
-import { assertGatewayConfig } from "../lib/factory-config.js";
+import { createApp } from "../gateway/index.js";
+import { assertGatewayConfig } from "../lib/index.js";
 
 assertGatewayConfig();
 const store = createPostgresFactoryStore({
@@ -22,9 +20,9 @@ const server = serve({ fetch: app.fetch, hostname: "0.0.0.0", port });
 console.log(`gateway listening on :${port}`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => {
-    server.close(() => {
-      void store.close().finally(() => process.exit(0));
-    });
-  });
+	process.once(signal, () => {
+		server.close(() => {
+			void store.close().finally(() => process.exit(0));
+		});
+	});
 }

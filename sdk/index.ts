@@ -40,6 +40,13 @@ export type {
   TokenUsage,
 } from "./runner.js";
 
+// Execution environment
+export type {
+  Environment,
+  SerializedEnvironment,
+  WorkspaceInfo,
+} from "./environment.js";
+
 // Hooks
 export { HookInterceptor } from "./hooks.js";
 export type { Hook, HookResult, HookContext } from "./hooks.js";
@@ -70,19 +77,6 @@ export type {
   SandboxUploadOptions,
   CreateSandboxOptions,
 } from "./sandbox/index.js";
-
-// Sandbox tools — module-level values, usable directly in Agent({ tools: [...] })
-export {
-  configureSandboxProvider,
-  sandboxExec,
-  sandboxReadFile,
-  sandboxWriteFile,
-  sandboxListDir,
-  sandboxApplyPatch,
-  sandboxSearch,
-  allSandboxTools,
-  createSandboxToolsForProvider,
-} from "./sandbox-tool-source.js";
 
 export { RenderSandboxProvider } from "./sandbox/index.js";
 export type { RenderSandboxProviderOptions } from "./sandbox/index.js";

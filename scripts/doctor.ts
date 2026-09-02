@@ -1,16 +1,13 @@
 import { TaskRegistry } from "@renderinc/sdk/workflows";
 import { createPostgresFactoryStore } from "#factory/store";
+import { isCustomTool } from "#factory/sdk";
+import { analyst, implementer, triage } from "../app/agents/index.js";
 import {
 	assertGatewayConfig,
 	assertWorkflowConfig,
 	factoryRepository,
-} from "../app/lib/factory-config.js";
-import { allSandboxTools, isCustomTool } from "#factory/sdk";
-import {
-	analyst,
-	implementer,
-	triage,
-} from "../app/agents/index.js";
+} from "../app/lib/index.js";
+import { allSandboxTools } from "../app/tools/index.js";
 
 function requireConfiguration(): void {
 	assertGatewayConfig();

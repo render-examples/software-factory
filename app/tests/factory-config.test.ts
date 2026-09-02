@@ -33,8 +33,12 @@ describe("factory configuration", () => {
     expect(factoryLabel()).toBe("build-it");
   });
 
-  it("requires and normalizes the maintainer actor list", () => {
-    expect(() => factoryActors()).toThrow(/FACTORY_GITHUB_ACTORS/);
+  it("falls back to factory.config.ts when env var is unset", () => {
+    const actors = factoryActors();
+    expect(actors.size).toBeGreaterThan(0);
+  });
+
+  it("env var overrides factory.config.ts actors", () => {
     process.env.FACTORY_GITHUB_ACTORS = " Alice,BOB ";
     expect(factoryActors()).toEqual(new Set(["alice", "bob"]));
   });

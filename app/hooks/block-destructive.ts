@@ -5,7 +5,8 @@
  * scoped. The hook catches common destructive patterns regardless of flag
  * ordering, quoting tricks, or command chaining.
  */
-import type { Hook } from "#factory/sdk";
+import type { Hook, HookContext } from "#factory/sdk";
+import { factoryConfig } from "../../factory.config.js";
 
 interface BlockRule {
   pattern: RegExp;
@@ -85,9 +86,10 @@ const SANDBOX_TOOLS_WITH_PATHS = new Set([
   "sandbox__list_dir",
 ]);
 
-const REPO_DIR = "/home/user/repo";
-
-function containsPathEscape(input: Record<string, unknown>): string | null {
+function containsPathEscape(
+  input: Record<string, unknown>,
+  repoDir: string,
+): string | null {
   for (const value of Object.values(input)) {
     if (typeof value !== "string") continue;
     const normalized = value.replace(/\/+/g, "/");
@@ -96,7 +98,7 @@ function containsPathEscape(input: Record<string, unknown>): string | null {
     }
     if (
       normalized.startsWith("/") &&
-      !normalized.startsWith(REPO_DIR) &&
+      !normalized.startsWith(repoDir) &&
       !normalized.startsWith("/tmp/")
     ) {
       return `absolute path outside allowed directories: ${normalized.slice(0, 60)}`;
@@ -105,14 +107,22 @@ function containsPathEscape(input: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * Prefer the workspace the workflow actually bound. An unbound run still gets
+ * scoped against the configured default rather than allowing any path.
+ */
+function workspaceRoot(ctx: HookContext): string {
+  return ctx.environment?.workspace?.repoDir ?? factoryConfig.workspace.repoDir;
+}
+
 export const blockDestructiveHook: Hook = {
   name: "block-destructive",
   on: ["tool_call"],
-  async handle(event, _ctx) {
+  async handle(event, ctx) {
     if (event.type !== "tool_call") return { action: "continue" };
 
     if (SANDBOX_TOOLS_WITH_PATHS.has(event.name)) {
-      const pathViolation = containsPathEscape(event.input);
+      const pathViolation = containsPathEscape(event.input, workspaceRoot(ctx));
       if (pathViolation) {
         return {
           action: "reject",

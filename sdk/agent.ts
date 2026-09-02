@@ -10,6 +10,11 @@ import {
   type FactoryStore,
 } from "#factory/store";
 import { BLOB_THRESHOLD } from "./blobs.js";
+import type {
+  Environment,
+  SerializedEnvironment,
+} from "./environment.js";
+import type { SandboxProvider } from "./sandbox/index.js";
 import type { ResolvedTool } from "./tools.js";
 import { ClaudeRunner } from "./runners/index.js";
 import type { AgentRunner } from "./runner.js";
@@ -56,8 +61,8 @@ export function md(strings: TemplateStringsArray, ...values: unknown[]): string 
 
 export interface AgentTaskInput {
   message: string;
-  /** Workflow-owned sandbox binding; never supplied by the model. */
-  sandboxId?: string;
+  /** Workflow-owned execution environment; never supplied by the model. */
+  environment?: SerializedEnvironment;
   /** Workflow-owned logical run binding; never supplied by the model. */
   run?: AgentRunContext;
 }
@@ -73,11 +78,14 @@ export interface AgentTaskOptions {
   runner?: AgentRunner;
   hooks?: Hook[];
   store?: FactoryStore;
+  /** Resolves workflow-owned sandbox locators into live sandboxes. */
+  sandboxProvider?: SandboxProvider;
 }
 
 let _defaultRunner: AgentRunner | undefined;
 let _defaultHooks: Hook[] = [];
 let _defaultStore: FactoryStore | undefined;
+let _defaultSandboxProvider: SandboxProvider | undefined;
 
 function defaultRunner(): AgentRunner {
   _defaultRunner ??= new ClaudeRunner();
@@ -89,11 +97,35 @@ function defaultStore(): FactoryStore {
   return _defaultStore;
 }
 
-/** Override the default runner and/or hooks. Call once at startup. */
+/** Override the default runner, hooks, store, and/or sandbox provider. */
 export function configure(opts: AgentTaskOptions): void {
   if (opts.runner) _defaultRunner = opts.runner;
   if (opts.hooks) _defaultHooks = opts.hooks;
   if (opts.store) _defaultStore = opts.store;
+  if (opts.sandboxProvider) _defaultSandboxProvider = opts.sandboxProvider;
+}
+
+/**
+ * Resolve serialized locators into live capabilities. Runs once per agent run
+ * so tools share a single sandbox connection instead of reconnecting per call.
+ */
+async function rehydrateEnvironment(
+  agentId: string,
+  serialized: SerializedEnvironment | undefined,
+  provider: SandboxProvider | undefined,
+): Promise<Environment | undefined> {
+  if (!serialized) return undefined;
+  if (!serialized.sandbox) return { workspace: serialized.workspace };
+  if (!provider) {
+    throw new Error(
+      `Agent "${agentId}" was given a sandbox binding but no sandbox provider is configured; ` +
+        "call configure({ sandboxProvider }) at startup",
+    );
+  }
+  return {
+    sandbox: await provider.connect(serialized.sandbox.id),
+    workspace: serialized.workspace,
+  };
 }
 
 export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
@@ -103,6 +135,8 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       const runner = opts?.runner ?? defaultRunner();
       const hooks = opts?.hooks ?? _defaultHooks;
       const store = opts?.store ?? defaultStore();
+      const sandboxProvider =
+        opts?.sandboxProvider ?? _defaultSandboxProvider;
       const interceptor = new HookInterceptor(hooks);
       const runId = input.run?.id ?? randomUUID();
       const tools = agent.spec.tools ?? [];
@@ -142,9 +176,15 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
       }, 10_000);
       heartbeat.unref();
 
-      const hookCtx = { runId, agentId: agent.id };
       let result: string | undefined;
       try {
+        const environment = await rehydrateEnvironment(
+          agent.id,
+          input.environment,
+          sandboxProvider,
+        );
+        const hookCtx = { runId, agentId: agent.id, environment };
+
         for await (const event of runner.run({
           agentId: agent.id,
           prompt: input.message,
@@ -152,7 +192,7 @@ export function agentTask(agent: AgentDef, opts?: AgentTaskOptions) {
           tools,
           maxTurns: agent.spec.budget?.maxIterations,
           model: agent.spec.model,
-          sandboxId: input.sandboxId,
+          environment,
           interceptToolCall: (event) => interceptor.intercept(event, hookCtx),
         })) {
           if (event.type === "error") {

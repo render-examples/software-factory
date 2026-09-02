@@ -2,6 +2,7 @@
  * AgentRunner — pluggable agent execution loop.
  * Pure interfaces. Runner implementations live in sdk/runners/.
  */
+import type { Environment } from "./environment.js";
 import type { ResolvedTool } from "./tools.js";
 
 export interface TokenUsage {
@@ -41,7 +42,8 @@ export interface RunContext {
   readonly tools: readonly ResolvedTool[];
   readonly maxTurns?: number;
   readonly signal?: AbortSignal;
-  readonly sandboxId?: string;
+  /** Workflow-owned execution environment, already resolved to live objects. */
+  readonly environment?: Environment;
   /** Model size tier ("small"/"medium"/"large") or a literal model string. */
   readonly model?: string;
   /** Pre-execution policy bridge used by runners that support tool hooks. */

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryFactoryStore } from "#factory/store";
 import { Agent, agentTask, md } from "../agent.js";
 import type { Hook } from "../hooks.js";
 import type { AgentEvent, AgentRunner, RunContext } from "../runner.js";
+import type { Sandbox, SandboxProvider } from "../sandbox/index.js";
 
 class RecordingRunner implements AgentRunner {
   context?: RunContext;
@@ -184,6 +185,117 @@ describe("agentTask", () => {
       status: "failed",
       failureCount: 4,
       errorCode: "attempts_exhausted",
+    });
+  });
+
+  describe("environment rehydration", () => {
+    const sandbox = { id: "sandbox-1" } as Sandbox;
+
+    function providerWith(connect: SandboxProvider["connect"]): SandboxProvider {
+      return {
+        name: "test",
+        async create() {
+          return sandbox;
+        },
+        connect,
+      };
+    }
+
+    it("connects the sandbox once per run and shares it with the runner", async () => {
+      const connect = vi.fn().mockResolvedValue(sandbox);
+      const runner = new RecordingRunner();
+
+      await agentTask(Agent({ id: "env-test", prompt: "system", tools: [] }), {
+        runner,
+        store,
+        sandboxProvider: providerWith(connect),
+      })({
+        message: "work",
+        environment: {
+          sandbox: { id: "sandbox-1" },
+          workspace: { repoDir: "/home/user/repo" },
+        },
+      });
+
+      expect(connect).toHaveBeenCalledOnce();
+      expect(connect).toHaveBeenCalledWith("sandbox-1");
+      expect(runner.context?.environment).toEqual({
+        sandbox,
+        workspace: { repoDir: "/home/user/repo" },
+      });
+    });
+
+    it("passes workspace facts through without a sandbox binding", async () => {
+      const connect = vi.fn();
+      const runner = new RecordingRunner();
+
+      await agentTask(Agent({ id: "env-ws", prompt: "system", tools: [] }), {
+        runner,
+        store,
+        sandboxProvider: providerWith(connect),
+      })({
+        message: "work",
+        environment: { workspace: { repoDir: "/srv/checkout" } },
+      });
+
+      expect(connect).not.toHaveBeenCalled();
+      expect(runner.context?.environment).toEqual({
+        workspace: { repoDir: "/srv/checkout" },
+      });
+    });
+
+    it("omits the environment entirely when none is supplied", async () => {
+      const runner = new RecordingRunner();
+
+      await agentTask(Agent({ id: "env-none", prompt: "system", tools: [] }), {
+        runner,
+        store,
+      })({ message: "work" });
+
+      expect(runner.context?.environment).toBeUndefined();
+    });
+
+    it("fails clearly when a sandbox binding has no provider", async () => {
+      const runner = new RecordingRunner();
+
+      await expect(
+        agentTask(Agent({ id: "env-unbound", prompt: "system", tools: [] }), {
+          runner,
+          store,
+        })({
+          message: "work",
+          environment: { sandbox: { id: "sandbox-1" } },
+        }),
+      ).rejects.toThrow(/no sandbox provider is configured/);
+    });
+
+    it("exposes the environment to hooks", async () => {
+      const seen: unknown[] = [];
+      const observer: Hook = {
+        name: "observer",
+        on: ["result"],
+        async handle(_event, ctx) {
+          seen.push(ctx.environment);
+          return { action: "continue" };
+        },
+      };
+
+      await agentTask(Agent({ id: "env-hook", prompt: "system", tools: [] }), {
+        runner: new RecordingRunner(),
+        store,
+        hooks: [observer],
+        sandboxProvider: providerWith(async () => sandbox),
+      })({
+        message: "work",
+        environment: {
+          sandbox: { id: "sandbox-1" },
+          workspace: { repoDir: "/home/user/repo" },
+        },
+      });
+
+      expect(seen).toEqual([
+        { sandbox, workspace: { repoDir: "/home/user/repo" } },
+      ]);
     });
   });
 

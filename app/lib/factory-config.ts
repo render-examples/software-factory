@@ -1,3 +1,5 @@
+import { factoryConfig } from "../../factory.config.js";
+
 const FACTORY_REPO_PATTERN =
   /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
 
@@ -33,16 +35,29 @@ export function factoryLabel(): string {
 
 /**
  * GitHub logins allowed to hand work to the demo factory.
- * A fixed actor list avoids carrying a general authorization model.
+ * Reads from factory.config.ts; FACTORY_GITHUB_ACTORS env var overrides.
  */
 export function factoryActors(): Set<string> {
+  const envValue = process.env.FACTORY_GITHUB_ACTORS?.trim();
+  let raw: string[];
+  if (envValue) {
+    raw = envValue.split(",");
+  } else if (
+    Array.isArray(factoryConfig.actors) &&
+    factoryConfig.actors.length > 0
+  ) {
+    raw = factoryConfig.actors;
+  } else {
+    throw new Error(
+      "No allowed actors configured. Set FACTORY_GITHUB_ACTORS or add actors to factory.config.ts",
+    );
+  }
   const actors = new Set(
-    requireEnv("FACTORY_GITHUB_ACTORS")
-      .split(",")
-      .map((actor) => actor.trim().toLowerCase())
-      .filter(Boolean),
+    raw.map((actor) => actor.trim().toLowerCase()).filter(Boolean),
   );
-  if (actors.size === 0) throw new Error("FACTORY_GITHUB_ACTORS is empty");
+  if (actors.size === 0) {
+    throw new Error("Allowed actors list resolved to empty");
+  }
   return actors;
 }
 

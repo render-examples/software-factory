@@ -6,16 +6,17 @@ import {
 import {
 	ClaudeRunner,
 	configure,
-	configureSandboxProvider,
 	createClaudeModelResolver,
 	RenderSandboxProvider,
 } from "#factory/sdk";
 import { factoryConfig } from "../../factory.config.js";
-import { auditHook } from "../hooks/audit.js";
-import { blockDestructiveHook } from "../hooks/block-destructive.js";
-import { costTrackingHook } from "../hooks/cost-tracking.js";
-import { redactSecretsHook } from "../hooks/redact-secrets.js";
-import { assertWorkflowConfig } from "../lib/factory-config.js";
+import {
+	auditHook,
+	blockDestructiveHook,
+	costTrackingHook,
+	redactSecretsHook,
+} from "../hooks/index.js";
+import { assertWorkflowConfig } from "../lib/index.js";
 
 assertWorkflowConfig();
 
@@ -25,14 +26,13 @@ const store = createPostgresFactoryStore({
 await store.verifySchema();
 configureFactoryStore(store);
 
-configureSandboxProvider(new RenderSandboxProvider());
-
 const modelResolver = createClaudeModelResolver(factoryConfig.models);
 
 configure({
 	runner: new ClaudeRunner({ modelResolver }),
 	hooks: [auditHook, blockDestructiveHook, costTrackingHook, redactSecretsHook],
 	store,
+	sandboxProvider: new RenderSandboxProvider(),
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

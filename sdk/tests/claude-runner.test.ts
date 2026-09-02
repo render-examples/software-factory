@@ -132,7 +132,7 @@ describe("ClaudeRunner tool permissions", () => {
 		]);
 	});
 
-	it("forwards the workflow-owned sandbox binding to custom tools", async () => {
+	it("forwards the workflow-owned environment to custom tools", async () => {
 		const invoke = vi.fn().mockResolvedValue({ content: "ok" });
 		const custom: Tool<{ value: z.ZodString }> = {
 			name: "BoundTool",
@@ -140,9 +140,12 @@ describe("ClaudeRunner tool permissions", () => {
 			inputSchema: { value: z.string() },
 			invoke,
 		};
-		const options = await runWith([custom], {
-			sandboxId: "sandbox-owned-by-workflow",
-		});
+		const sandbox = { id: "sandbox-owned-by-workflow" } as never;
+		const environment = {
+			sandbox,
+			workspace: { repoDir: "/home/user/repo" },
+		};
+		const options = await runWith([custom], { environment });
 		const bridged = options.mcpServers["factory-tools"].tools[0];
 
 		await bridged.handler({ value: "input" });
@@ -151,7 +154,7 @@ describe("ClaudeRunner tool permissions", () => {
 			{ value: "input" },
 			expect.objectContaining({
 				agentId: "test-agent",
-				sandboxId: "sandbox-owned-by-workflow",
+				environment,
 			}),
 		);
 	});

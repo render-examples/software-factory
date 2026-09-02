@@ -105,12 +105,8 @@ export interface PullCheckpoint {
 }
 
 export type WorkflowResult =
-	| { skipped: string }
+	| { status: "skipped"; reason: string }
 	| { status: "needs_clarification"; questions: string[] }
 	| { status: "no_changes" }
 	| { status: "changes_requested"; summary: string }
-	| {
-			status: "draft_pr_opened";
-			decision: "approve";
-			pullRequest: string;
-	  };
+	| { status: "draft_pr_opened"; pullRequest: string };

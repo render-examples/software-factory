@@ -4,6 +4,7 @@
  * Hooks observe, transform, or veto events flowing out of any runner.
  * They attach inside agentTask() and are SDK-agnostic.
  */
+import type { Environment } from "./environment.js";
 import type { AgentEvent } from "./runner.js";
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,8 @@ export type HookResult =
 export interface HookContext {
   readonly runId: string;
   readonly agentId: string;
+  /** Workflow-owned execution environment, when the agent run has one. */
+  readonly environment?: Environment;
 }
 
 export interface Hook {

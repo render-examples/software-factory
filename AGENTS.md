@@ -5,8 +5,7 @@ later, the more specific file takes precedence for that subtree.
 
 ## What this repository is
 
-`render-factory` is a self-hosted, single-repository software factory built on
-Render Web Services, Workflows, Sandboxes, and Postgres.
+`render-factory` is a self-hosted software factory built on Render Web Services, Workflows, Sandboxes, and Postgres.
 
 The normal path is:
 
@@ -122,13 +121,14 @@ token in a Git remote URL or agent prompt.
 
 ```text
 app/
-  agents/index.ts          Agent definitions and prompts
+  agents/                  Agent definitions and barrel exports
   tasks/index.ts           Agent definitions wrapped with agentTask()
   workflows/index.ts       Orchestration workflow registration manifest
   workflows/spec-to-pr/    Issue-to-PR pipeline and helpers
   gateway/                 HTTP intake, validation, and workflow dispatch
   hooks/                   Audit, cost tracking, destructive-action block, secret redaction
-  lib/                     GitHub, config, model JSON, convention memory, sandbox Git
+  lib/                     GitHub, config, model JSON, sandbox Git
+  tools/                   Agent-visible application tool implementations
   src/server.ts            Gateway process entrypoint
   src/workflows.ts         Workflow process entrypoint and registrations
   tests/                   App, gateway, and integration tests
@@ -137,8 +137,8 @@ sdk/
   runner.ts                Provider-neutral AgentRunner interface
   runners/                 Runner implementations
   tools.ts                 Tool type definitions and guards
+  environment.ts           Serialized and rehydrated execution environment
   sandbox/                 Provider-neutral interfaces and implementations
-  sandbox-tool-source.ts   sandbox__* tools as module-level values
   hooks.ts                 Agent event interception
   models.ts                Model tier resolution
   blobs.ts                 Oversized result handoff through ArtifactStore
@@ -210,8 +210,9 @@ the security model:
   write and exec tools.
 - Do not give app agents Claude's built-in `Bash`, `Read`, `Write`, or `Edit`;
   those bypass the workflow-owned sandbox binding.
-- `sandboxId` is supplied by workflow code through `AgentTaskInput`; it is not
-  model-selected or accepted from public input.
+- The `environment` on `AgentTaskInput` is supplied by workflow code; neither
+  its sandbox binding nor its workspace facts are model-selected or accepted
+  from public input. Tools resolve the sandbox from the environment only.
 - Git pushes, labels, sandbox lifecycle, and pull request creation stay in
   orchestration code. Agents have no direct GitHub write capability.
 - Preserve a sandbox across automatic task retries; terminate it in `finally`
@@ -225,13 +226,35 @@ the security model:
 There are two kinds of Render Workflows tasks in this codebase:
 
 1. **Agent tasks** are created by `agentTask(Agent(...))`. They accept
-   `{ message: string, sandboxId?: string }` and return a string or blob ref.
-2. **Orchestration workflows** are created directly with `task(...)`. They
-   compose agents and own external side effects.
+   `{ message, environment?, run? }` and return a string or artifact ref.
+   Only `message` reaches the model; `environment` and `run` are
+   workflow-owned and never model-supplied.
+2. **Orchestration workflows** are created with `workflow(...)` from
+   `#factory/sdk`. They compose agent tasks and own external side effects.
 
-Task registration is module side-effect based. `app/src/workflows.ts` imports
-`app/tasks/index.ts` and every orchestration workflow module. There is no
-separate registry manifest.
+`app/src/workflows.ts` imports `app/tasks/index.ts` and `app/workflows/index.ts`,
+which is the registration manifest re-exporting every orchestration workflow.
+Registration still happens as a module side effect of those imports.
+
+## Agent execution environment
+
+`environment` is the context an agent runs *in*, as distinct from the prompt it
+runs *on*. It crosses the task boundary as plain JSON so it survives replay,
+then rehydrates once inside `agentTask()`:
+
+- `SerializedEnvironment` (task input) carries locators and facts:
+  `{ sandbox?: { id }, workspace?: { repoDir, repo, branch, baseSha } }`.
+- `Environment` (in-process) carries the resolved objects and is placed on
+  `RunContext`, `ToolContext`, and `HookContext`.
+
+`agentTask()` connects the sandbox once per run through the provider given to
+`configure({ sandboxProvider })`, so tools share one connection instead of
+reconnecting per call. A sandbox binding without a configured provider fails
+with an explicit error.
+
+`factory.config.ts` holds `workspace.repoDir` as the single source of truth.
+The workflow copies it into the environment; tools, hooks, and Git helpers read
+it from there rather than redefining it.
 
 ## Add an agent task
 
@@ -239,7 +262,8 @@ Use this path when adding another model-backed agent to a pipeline.
 
 ### 1. Define the agent
 
-Add the definition to `app/agents/index.ts`:
+Add the definition to `app/agents/<agent-name>.ts` and re-export it from
+`app/agents/index.ts`:
 
 ```ts
 export const docsReviewer = Agent({
@@ -261,7 +285,8 @@ Agent requirements and conventions:
 - `model` may be `small`, `medium`, `large`, or a literal model identifier.
 - `budget.maxIterations` maps to the runner's maximum turns.
 - `plan` maps to Render Workflows task metadata.
-- `tools` accepts `ResolvedTool[]`; import sandbox tools from `#factory/sdk`.
+- `tools` accepts `ResolvedTool[]`; import concrete sandbox tools from
+  `app/tools/index.ts`.
 - Use `tools: []` for host-side decisions and reviews that only inspect input.
 
 ### 2. Wrap and export it
@@ -288,8 +313,9 @@ const review = isBlobRef(rawReview)
   : rawReview;
 ```
 
-Pass `sandboxId: sandbox.id` only when the agent declares `sandbox__*` tools
-and a workflow-owned sandbox already exists.
+Pass `environment` only when the agent declares `sandbox__*` tools and a
+workflow-owned sandbox already exists. The workflow builds it once after
+sandbox setup and reuses it for every agent call in the run.
 
 `agentTask()` requires exactly one terminal runner result. It propagates runner
 errors, rejects missing or multiple results, and stores results larger than
@@ -395,8 +421,8 @@ If a workflow is internal-only, register it but do not add a gateway route.
 ## Existing `spec-to-pr` workflow behavior
 
 `app/workflows/spec-to-pr/index.ts` is the reference orchestration entrypoint;
-its sibling modules contain contracts, checkpointing, model stages, sandbox
-lifecycle, Git operations, and terminal handling. It parses and re-fetches the
+its sibling modules contain contracts, constants, model stages, formatting,
+context helpers, and Git operations. It parses and re-fetches the
 issue, checks the label, runs triage, and then removes the label as
 acknowledgment. The RunStore records each stage and event under a logical run
 ID, and the issue lease prevents overlapping runs. It reconnects to the same
@@ -462,20 +488,26 @@ write between stages.
 
 Custom tools implement the `Tool` interface from `sdk/tools.ts`.
 
-1. Define tools with names, descriptions, Zod input shapes, and `invoke`.
-2. Export them as module-level values from a dedicated module.
+1. Define concrete tools under `app/tools/` with names, descriptions, Zod
+   input shapes, and `invoke`.
+2. Export them as module-level values from `app/tools/index.ts`.
 3. Import and add them to the `tools` array of agents that need them.
 4. Add invocation, permission, and failure tests.
 
 Use the `source__tool` naming convention. Agents receive tool objects
-directly — there is no registry or string-name indirection. The sandbox
-provider is configured at startup with `configureSandboxProvider()`;
-sandbox tools use it lazily at invocation time.
+directly — there is no registry or string-name indirection. The SDK defines
+the tool, sandbox, and environment contracts; `app/tools/sandbox.ts` holds the
+concrete capabilities this application grants to agents.
+
+Tools read what they need from `ToolContext.environment`, which `agentTask()`
+has already resolved. They never take a provider, connect to a sandbox, or
+accept a sandbox selector in their input schema — a tool that cannot find
+`environment.sandbox` must fail rather than fall back to one.
 
 Do not give app agents Claude's built-in `Bash`, `Read`, `Write`, or `Edit`
 tools without an explicit security-model change. Custom sandbox tools are
-bridged through the Claude SDK as MCP tools while retaining workflow-owned
-`sandboxId`.
+bridged through the Claude SDK as MCP tools while the sandbox binding stays
+workflow-owned.
 
 ## Extend runners and models
 
@@ -496,9 +528,10 @@ verify that every field on `ResolvedModel` is consumed by the runner;
 Implement `SandboxProvider` and `Sandbox` from `sdk/sandbox/types.ts`, normally
 using `BaseSandbox`; the Render implementation is the reference. Keep provider
 API code under `sdk/sandbox/`, preserve streaming exec and cancellation, and bind
-`connect(id)` only to the requested workflow-owned sandbox. Set it globally with
-`configureSandboxProvider()`; orchestration must still own creation and
-termination.
+`connect(id)` only to the requested workflow-owned sandbox. Register the
+instance with `configure({ sandboxProvider })` at startup so `agentTask()` can
+rehydrate bindings. Orchestration must still own creation and termination.
+Concrete model-callable sandbox tools belong under `app/tools/`, not in the SDK.
 
 ## Extend hooks
 
