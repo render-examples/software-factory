@@ -80,12 +80,11 @@ async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> 
 		return;
 	}
 
-	// Match any hook already aimed at this factory, including the old route.
+	// Update a hook already aimed at this gateway rather than adding a second.
 	const mine = (existing.body ?? []).find(
 		(hook) =>
 			hook.config.url?.startsWith(gatewayUrl) ||
-			hook.config.url?.includes("/webhooks/github") ||
-			hook.config.url?.includes("/channels/github"),
+			hook.config.url?.includes("/webhooks/github"),
 	);
 
 	const config = {

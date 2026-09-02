@@ -198,23 +198,17 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 		return;
 	}
 
-	const ours = (hooks.body ?? []).filter((hook) =>
-		hook.config.url?.includes("/webhooks/github"),
-	);
-	const misrouted = (hooks.body ?? []).filter(
-		(hook) =>
-			hook.config.url?.includes("/channels/github") ||
-			(hook.config.url?.includes("render-factory") &&
-				!hook.config.url?.includes("/webhooks/github")),
-	);
+	const all = hooks.body ?? [];
+	const ours = all.filter((hook) => hook.config.url?.includes("/webhooks/github"));
 
 	if (ours.length === 0) {
+		const others = all.map((hook) => hook.config.url).filter(Boolean);
 		record({
 			level: "fail",
 			message: "No webhook points at /webhooks/github",
 			fix:
-				misrouted.length > 0
-					? `Found one at ${misrouted[0].config.url} — the route is now /webhooks/github. Run npm run setup:github.`
+				others.length > 0
+					? `Run npm run setup:github. Existing webhooks: ${others.join(", ")}`
 					: "Run npm run setup:github to create it.",
 		});
 		return;
