@@ -225,7 +225,7 @@ and `npm run start:workflows` do not; supply their environment through Render.
 
 1. Fork this repository.
 2. Create a Blueprint from `render.yaml`. It provisions
-   `render-factory-gateway` and `render-factory-db`.
+   `render-factory-gateway` and `render-factory-store`.
 3. Set the unsynced gateway variables listed in
    [Configuration](#configuration).
 4. Deploy the Blueprint gateway once so its pre-deploy command migrates the
