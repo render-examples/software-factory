@@ -108,7 +108,7 @@ app/
   workflows/       Durable orchestration (spec-to-pr pipeline)
   gateway/         HTTP intake, validation, and dispatch
   hooks/           Audit, cost tracking, destructive-action block, secret redaction
-  lib/             GitHub, config, convention memory, sandbox Git helpers
+  lib/             GitHub, config, model JSON, sandbox Git helpers
   src/             Gateway and Workflows entrypoints
   tests/           Application and integration tests
 sdk/
@@ -291,16 +291,17 @@ allowlist, budget, and prompt:
 
 ```ts
 import { Agent, md } from "#factory/sdk";
+import {
+  sandboxListDir,
+  sandboxReadFile,
+  sandboxSearch,
+} from "../tools/index.js";
 
 export const dependencyAnalyst = Agent({
   id: "dependency-analyst",
   description: "Inspects dependencies and proposes a safe upgrade plan",
   model: "medium",
-  tools: [
-    "sandbox__read_file",
-    "sandbox__list_dir",
-    "sandbox__search",
-  ],
+  tools: [sandboxReadFile, sandboxListDir, sandboxSearch],
   budget: { maxIterations: 20 },
   plan: "standard",
   prompt: md`
@@ -311,18 +312,26 @@ export const dependencyAnalyst = Agent({
 });
 ```
 
-Define agents in `app/agents/index.ts`, wrap them with `agentTask()` in
-`app/tasks/index.ts`, and call them from orchestration code. An agent's `id`
-is also its registered task name, so keep it unique and stable.
+Define agents under `app/agents/`, re-export them from its index, wrap them
+with `agentTask()` in `app/tasks/index.ts`, and call them from orchestration
+code. An agent's `id` is also its registered task name, so keep it unique and
+stable.
 
 Tool lists are runtime allowlists. Read-only analysis agents receive
 read-only sandbox tools; only implementation receives write and execution
-tools.
+tools. Concrete agent tools live under `app/tools/`; the SDK supplies the
+`Tool` and sandbox contracts they implement.
+
+Agent tasks take `{ message, environment?, run? }`. Only `message` reaches the
+model. `environment` is workflow-owned context — the sandbox binding plus
+workspace facts like `repoDir` — that crosses the task boundary as JSON and is
+resolved once per run into live objects for tools and hooks. `run` carries the
+lineage used to record child agent runs.
 
 `app/workflows/spec-to-pr/index.ts` contains the issue-to-PR orchestration;
-its sibling modules isolate checkpoint, model-stage, sandbox, Git, and
-terminal logic. Workflow code owns trusted input fetching, sandbox creation
-and cleanup, GitHub writes, Git pushes, checkpoints, and retries.
+its sibling modules isolate model-stage, formatting, context, Git, and contract
+logic. Workflow code owns trusted input fetching, sandbox creation and cleanup,
+GitHub writes, Git pushes, and durable steps.
 
 New workflows should validate `unknown` input immediately, keep dispatch
 payloads small, live under `app/workflows/<workflow-name>/`, and be exported

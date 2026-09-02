@@ -8,6 +8,7 @@ import {
 	tool as sdkTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Environment } from "../environment.js";
 import type { AgentRunner, AgentEvent, RunContext, TokenUsage } from "../runner.js";
 import {
 	isBuiltIn,
@@ -156,7 +157,7 @@ export class ClaudeRunner implements AgentRunner {
 
 		if (customTools.length > 0) {
 			const toolDefs = customTools.map((t) =>
-				bridgeToolToSdk(t, ctx.agentId, ctx.sandboxId, ctx.signal),
+				bridgeToolToSdk(t, ctx.agentId, ctx.environment, ctx.signal),
 			);
 			options.mcpServers = {
 				[MCP_SERVER_NAME]: createSdkMcpServer({
@@ -189,10 +190,10 @@ export class ClaudeRunner implements AgentRunner {
 function bridgeToolToSdk(
 	tool: Tool,
 	agentId: string,
-	sandboxId?: string,
+	environment?: Environment,
 	signal?: AbortSignal,
 ) {
-	const toolCtx: ToolContext = { agentId, sandboxId, signal };
+	const toolCtx: ToolContext = { agentId, environment, signal };
 
 	return sdkTool(
 		tool.name,

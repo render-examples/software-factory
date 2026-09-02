@@ -3,6 +3,7 @@
  * Agents declare tools as values; the runner receives them directly.
  */
 import type { z } from "zod";
+import type { Environment } from "./environment.js";
 
 export type ZodShape = Record<string, z.ZodType>;
 
@@ -11,7 +12,8 @@ export type InferShape<T extends ZodShape> = z.output<z.ZodObject<T>>;
 
 export interface ToolContext {
   readonly agentId: string;
-  readonly sandboxId?: string;
+  /** Workflow-owned execution environment, already resolved to live objects. */
+  readonly environment?: Environment;
   readonly signal?: AbortSignal;
 }
 

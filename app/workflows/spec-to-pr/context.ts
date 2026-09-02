@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import type { WorkspaceInfo } from "#factory/sdk";
 import type { Issue, IssueComment } from "../../lib/github.js";
-import { MAX_ISSUE_CHARS, REPO_DIR } from "./constants.js";
+import { MAX_ISSUE_CHARS } from "./constants.js";
 
 export function issueContext(issue: Issue, comments: IssueComment[]): string {
 	const sections = [`# ${issue.title}`, "", issue.body || "(no description)"];
@@ -13,8 +14,9 @@ export function issueContext(issue: Issue, comments: IssueComment[]): string {
 	return sections.join("\n").slice(0, MAX_ISSUE_CHARS);
 }
 
-export function sandboxContext(): string {
-	return `repoDir: ${REPO_DIR}`;
+/** Tells the model where the checkout lives, derived from the environment. */
+export function workspacePreamble(workspace: WorkspaceInfo): string {
+	return `repoDir: ${workspace.repoDir}`;
 }
 
 export function operationId(runId: string, operation: string): string {

@@ -209,7 +209,7 @@ describe("spec-to-pr workflow", () => {
 			runId: "subject-busy-run",
 		});
 
-		expect(result).toEqual({ skipped: "issue is already running" });
+		expect(result).toEqual({ status: "skipped", reason: "issue is already running" });
 		expect(state.triageTask).not.toHaveBeenCalled();
 	});
 
@@ -221,7 +221,6 @@ describe("spec-to-pr workflow", () => {
 
 		expect(result).toEqual({
 			status: "draft_pr_opened",
-			decision: "approve",
 			pullRequest: "https://github.test/pull/7",
 		});
 		expect(state.implementTask).toHaveBeenCalledOnce();
@@ -290,7 +289,6 @@ describe("spec-to-pr workflow", () => {
 
 		expect(result).toMatchObject({
 			status: "draft_pr_opened",
-			decision: "approve",
 		});
 		expect(state.implementTask).toHaveBeenCalledTimes(2);
 		expect(state.judgeTask).toHaveBeenCalledTimes(2);

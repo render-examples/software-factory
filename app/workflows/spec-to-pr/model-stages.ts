@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
-import type { AgentRunContext } from "#factory/sdk";
+import type {
+	AgentRunContext,
+	SerializedEnvironment,
+	WorkflowRunContext,
+} from "#factory/sdk";
 import {
 	analysisTask,
 	correctnessTask,
@@ -27,17 +31,17 @@ import {
 	selfReviewSchema,
 	triageSchema,
 } from "./contracts.js";
-import { issueContext, sandboxContext } from "./context.js";
+import { issueContext, workspacePreamble } from "./context.js";
 
-interface ParentRun {
-	rootRunId: string;
-	runId: string;
-	stepKey: string;
-	generation: number;
+/** Renders the workspace facts an agent needs, sourced from the environment. */
+function environmentPreamble(environment: SerializedEnvironment): string {
+	return environment.workspace
+		? `${workspacePreamble(environment.workspace)}\n\n`
+		: "";
 }
 
 function childRun(
-	parent: ParentRun,
+	parent: WorkflowRunContext,
 	agentName: string,
 	invocation = "primary",
 ): AgentRunContext {
@@ -87,7 +91,7 @@ interface LoadIntakeOptions {
 	repo: RepoRef;
 	issueNumber: number;
 	triggerLabel: string;
-	run: ParentRun;
+	run: WorkflowRunContext;
 }
 
 export async function loadIntake({
@@ -127,19 +131,19 @@ export async function loadIntake({
 
 interface RunAnalysisOptions {
 	workItem: string;
-	sandboxId: string;
-	run: ParentRun;
+	environment: SerializedEnvironment;
+	run: WorkflowRunContext;
 }
 
 export async function runAnalysis({
 	workItem,
-	sandboxId,
+	environment,
 	run,
 }: RunAnalysisOptions): Promise<string> {
 	return resolveAgentResult(
 		await analysisTask({
-			message: `${sandboxContext()}\n\nWork item:\n${workItem}`,
-			sandboxId,
+			message: `${environmentPreamble(environment)}Work item:\n${workItem}`,
+			environment,
 			run: childRun(run, "analyst"),
 		}),
 	);
@@ -155,19 +159,19 @@ export function requireImplementationReport(raw: string): ImplementationReport {
 
 interface RunImplementationOptions {
 	message: string;
-	sandboxId: string;
-	run: ParentRun;
+	environment: SerializedEnvironment;
+	run: WorkflowRunContext;
 }
 
 export async function runImplementation({
 	message,
-	sandboxId,
+	environment,
 	run,
 }: RunImplementationOptions): Promise<ImplementationCheckpoint> {
 	const raw = await resolveAgentResult(
 		await implementTask({
-			message,
-			sandboxId,
+			message: `${environmentPreamble(environment)}${message}`,
+			environment,
 			run: childRun(run, "implementer"),
 		}),
 	);
@@ -177,7 +181,7 @@ export async function runImplementation({
 interface RunSelfReviewOptions {
 	diff: string;
 	workItem: string;
-	run: ParentRun;
+	run: WorkflowRunContext;
 }
 
 export async function runSelfReview({
@@ -243,7 +247,7 @@ function formatReviewerSection(
 interface RunReviewOptions {
 	diff: string;
 	implementation: ImplementationCheckpoint;
-	run: ParentRun;
+	run: WorkflowRunContext;
 }
 
 export async function runReview({
