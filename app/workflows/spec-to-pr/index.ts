@@ -19,7 +19,11 @@ import {
 	setupCheckout,
 	verifyPush,
 } from "../../git/index.js";
-import { githubFromEnv, type RepoRef } from "../../github/index.js";
+import {
+	githubFromEnv,
+	githubToken,
+	type RepoRef,
+} from "../../github/index.js";
 import { createSandbox } from "../../sandbox/index.js";
 import { analysisTask } from "../../tasks/index.js";
 import { finishRun, setRunBranch } from "../../store/index.js";
@@ -89,9 +93,9 @@ async function run(
 ): Promise<WorkflowResult> {
 	const repo: RepoRef = repository();
 	const label = triggerLabel();
-	const token = process.env.GITHUB_TOKEN;
-	if (!token) throw new Error("GITHUB_TOKEN is not set");
 	const gh = githubFromEnv();
+	// Git needs a concrete token; under App auth this is an installation token.
+	const token = await githubToken();
 
 	// ── Intake ──────────────────────────────────────────────────────────
 	const { issue, workItem, triage } = await loadIntake(

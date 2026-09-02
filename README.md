@@ -14,7 +14,7 @@ render-factory is for engineering and platform teams that want to build and
 customize cloud agent workflows, with a focus on coding agents.
 
 It is also a **reference architecture**. The whole system is about 3,000 lines
-across fourteen modules with no framework layer between the code and the
+across fifteen modules with no framework layer between the code and the
 platform, so you can follow a run from webhook to pull request without leaving
 `app/`. Read it, fork it, and extend it.
 
@@ -22,6 +22,9 @@ platform, so you can follow a run from webhook to pull request without leaving
 
 - **Own the infrastructure.** Execution, credentials, and durable state stay in
   your Render workspace.
+- **Answer the security review.** Agents reach the machine only through
+  workflow-owned sandbox tools, and GitHub access can be a scoped App with
+  hourly tokens rather than someone's personal access token.
 - **Run agents safely.** Isolated sandboxes and least-privilege tool access
   constrain every agent.
 - **See the pipeline.** Each of the eight agents is its own Render Workflows
@@ -210,9 +213,25 @@ Create the configured label — `factory` by default — and apply it to an issu
 as a login on the actor allowlist. Applying that label is the only way to start
 work; comments and other issue events never trigger the factory.
 
-Scope the GitHub token to `FACTORY_REPO` only, grant the minimum Contents,
+Scope the GitHub credential to `FACTORY_REPO` only, grant the minimum Contents,
 Issues, and Pull Requests permissions needed to clone, push, comment, and open
 a draft PR, and protect the default branch.
+
+### Who the factory appears as
+
+With a **GitHub App**, comments and pull requests are attributed to the app
+(`your-app[bot]`) and it authenticates with installation tokens that expire
+after an hour. Create an App with Contents, Issues, and Pull Requests write
+permissions, install it on the repository, then set `GITHUB_APP_ID`,
+`GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID`.
+
+With a **fine-grained PAT**, everything the factory does on the API is
+attributed to the token's owner — the issue reads as though a maintainer wrote
+the comments and opened the PR. Commits are still authored as
+`render-factory[bot]`, because Git identity is set inside the sandbox.
+
+The App path is worth the extra setup for a demo or anything customer-facing.
+The PAT path is faster for a first run.
 
 ## Configuration
 
@@ -225,7 +244,10 @@ a draft PR, and protect the default branch.
 | `RENDER_WORKFLOW_SLUG` | Gateway | Deployed Workflows service slug, without a task name |
 | `DATABASE_URL` | Both | Postgres connection string for the runs table |
 | `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
-| `GITHUB_TOKEN` | Workflows | Fine-grained token scoped to `FACTORY_REPO` |
+| `GITHUB_APP_ID` | Workflows | GitHub App ID (preferred over a PAT) |
+| `GITHUB_APP_PRIVATE_KEY` | Workflows | App private key: PEM, escaped PEM, or base64 |
+| `GITHUB_APP_INSTALLATION_ID` | Workflows | Installation on `FACTORY_REPO` |
+| `GITHUB_TOKEN` | Workflows | Fine-grained PAT; fallback when no App is set |
 | `RENDER_API_KEY` | Both | Task dispatch on the gateway; Sandboxes on Workflows |
 | `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
 | `GITHUB_API_URL` | Workflows | Optional GitHub API base URL override |
@@ -295,13 +317,13 @@ a prompt.
 
 ```ts
 import { type Agent, md } from "../claude/index.js";
-import { readOnlyTools } from "../tools/index.js";
+import { readTools } from "../tools/index.js";
 
 export const dependencyAnalyst: Agent = {
   id: "dependency-analyst",
   description: "Inspects dependencies and proposes a safe upgrade plan",
   model: "medium",
-  tools: readOnlyTools,
+  tools: readTools,
   maxTurns: 20,
   plan: "standard",
   prompt: md`
@@ -317,8 +339,10 @@ Define it under `app/agents/`, re-export it from that index, wrap it with
 agent's `id` is also its registered Render task name, so keep it unique and
 stable.
 
-Tool lists are runtime allowlists. Analysis agents get `readOnlyTools`; only
-the implementer gets `writeTools`. Agents that only reason about their input
+Tool lists are runtime allowlists composed from two disjoint sets: `readTools`
+(read, list, search) and `writeTools` (exec, write, apply-patch), with
+`allTools` being both. Analysis agents get `readTools`; only the implementer
+gets `allTools`. Agents that only reason about their input
 declare no tools at all, and Claude's own `Bash`, `Read`, `Write`, and `Edit`
 are never granted.
 
@@ -354,6 +378,9 @@ security invariants, and test ownership.
 - Malformed structured model output fails closed after one repair attempt.
 - The GitHub token never enters a prompt, a Git remote URL, or a command line;
   it reaches Git through a temporary askpass script.
+- Configured as a GitHub App, the factory holds no long-lived credential — it
+  signs a short JWT with the app's private key and exchanges it for an
+  installation token that expires within the hour.
 - The reviewed local commit must match the remote SHA before a PR is created.
 - Secret-shaped strings are redacted from anything posted to GitHub.
 - Automation ends at a draft PR; readiness and merge remain human decisions.
