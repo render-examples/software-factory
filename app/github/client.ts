@@ -71,6 +71,20 @@ export class GitHub {
 		);
 	}
 
+	/** Adding a label that does not exist in the repository creates it. */
+	async addLabels(
+		ref: RepoRef,
+		number: number,
+		labels: readonly string[],
+	): Promise<void> {
+		if (labels.length === 0) return;
+		await this.http.send(
+			"POST",
+			`/repos/${ref.owner}/${ref.repo}/issues/${number}/labels`,
+			{ body: { labels } },
+		);
+	}
+
 	async removeLabel(
 		ref: RepoRef,
 		number: number,

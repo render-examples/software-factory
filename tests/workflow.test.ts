@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	gh: {
 		getIssue: vi.fn(),
 		listIssueComments: vi.fn(),
+		addLabels: vi.fn(),
 		removeLabel: vi.fn(),
 		ensureIssueComment: vi.fn(),
 		ensurePull: vi.fn(),
@@ -84,6 +85,8 @@ beforeEach(() => {
 		labels: ["factory"],
 	});
 	mocks.gh.listIssueComments.mockResolvedValue([]);
+	mocks.gh.addLabels.mockResolvedValue(undefined);
+	mocks.gh.removeLabel.mockResolvedValue(undefined);
 	mocks.gh.ensurePull.mockResolvedValue({
 		number: 7,
 		htmlUrl: "https://github.com/acme/widgets/pull/7",
@@ -144,9 +147,61 @@ describe("happy path", () => {
 		);
 	});
 
-	it("removes the trigger label to acknowledge intake", async () => {
+	it("removes the trigger label once the run is over", async () => {
 		await run(INPUT);
 		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(expect.anything(), 42, "factory");
+	});
+
+	it("advances the status label through each phase, then to pr-open", async () => {
+		await run(INPUT);
+
+		const applied = mocks.gh.addLabels.mock.calls.map((call) => call[2][0]);
+		expect(applied).toEqual([
+			"factory:analyzing",
+			"factory:implementing",
+			"factory:reviewing",
+			"factory:pr-open",
+		]);
+	});
+
+	it("adds the next status label before removing the previous one", async () => {
+		await run(INPUT);
+
+		// The issue must never be briefly unlabeled between phases.
+		const order = [
+			...mocks.gh.addLabels.mock.calls.map((c) => ({ op: "add", label: c[2][0] })),
+			...mocks.gh.removeLabel.mock.calls.map((c) => ({ op: "remove", label: c[2] })),
+		];
+		const addAnalyzing = order.findIndex(
+			(e) => e.op === "add" && e.label === "factory:implementing",
+		);
+		const removeAnalyzing = order.findIndex(
+			(e) => e.op === "remove" && e.label === "factory:analyzing",
+		);
+		expect(addAnalyzing).toBeGreaterThanOrEqual(0);
+		expect(removeAnalyzing).toBeGreaterThanOrEqual(0);
+	});
+
+	it("clears status labels left by an earlier run", async () => {
+		mocks.gh.getIssue.mockResolvedValue({
+			number: 42,
+			title: "Add retries",
+			body: "Please add retries.",
+			labels: ["factory", "factory:failed", "bug"],
+		});
+
+		await run(INPUT);
+
+		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:failed",
+		);
+		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"bug",
+		);
 	});
 
 	it("fans the diff out to three reviewers in parallel", async () => {
@@ -173,6 +228,9 @@ describe("early exits", () => {
 		expect(result).toEqual({ status: "needs_clarification", questions: ["Which client?"] });
 		expect(mocks.createSandbox).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
+		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
+			"factory:needs-detail",
+		]);
 	});
 
 	it("stops when the implementer changed nothing", async () => {
@@ -237,6 +295,37 @@ describe("failure handling", () => {
 
 		await expect(run(INPUT)).rejects.toThrow("model unavailable");
 		expect(mocks.terminate).toHaveBeenCalledOnce();
+	});
+
+	it("marks the issue factory:failed when a stage throws", async () => {
+		mocks.analysisTask.mockRejectedValue(new Error("model unavailable"));
+
+		await expect(run(INPUT)).rejects.toThrow("model unavailable");
+		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
+			"factory:failed",
+		]);
+	});
+
+	// Removing it would make Render's retry fail at intake with a misleading
+	// "no longer has the label" error, masking the real cause.
+	it("keeps the trigger label on failure so a retry can re-read the issue", async () => {
+		mocks.analysisTask.mockRejectedValue(new Error("sandbox api 520"));
+
+		await expect(run(INPUT)).rejects.toThrow("sandbox api 520");
+		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory",
+		);
+	});
+
+	// Labels are cosmetic; a labelling outage must not fail an otherwise good run.
+	it("still opens the pull request when labelling fails", async () => {
+		mocks.gh.addLabels.mockRejectedValue(new Error("labels API down"));
+
+		const result = await run(INPUT);
+
+		expect(result).toMatchObject({ status: "draft_pr_opened" });
 	});
 
 	it("fails closed when an agent cannot produce valid JSON twice", async () => {

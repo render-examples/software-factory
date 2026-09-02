@@ -122,6 +122,9 @@ Do not weaken these without an explicit security-model change:
 - Analysis gets read-only tools; only the implementer gets write and exec.
 - `sandboxId` comes from workflow code, never from the model.
 - Git pushes, labels, sandbox lifecycle, and PR creation stay in workflow code.
+- The trigger label is removed only on a terminal result, never on a thrown
+  error — a retry re-reads the issue and needs the label still there.
+- `factory:` status labels are cosmetic and never fail a run.
 - The sandbox is terminated in a `finally` block.
 - `verifyPush` confirms the remote matches the reviewed commit before a PR opens.
 - Automation stops at a draft PR. It never marks ready or merges.

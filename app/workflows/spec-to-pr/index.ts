@@ -30,6 +30,13 @@ import {
 	verifyWithFixes,
 } from "./implement.js";
 import { loadIntake } from "./intake.js";
+import {
+	clearStatusLabels,
+	STATUS,
+	type FactoryStatus,
+	statusLabeler,
+	terminalStatus,
+} from "./labels.js";
 import { commentId, recordOutcome } from "./outcome.js";
 import { reviewDiff, runSelfReview } from "./review.js";
 
@@ -41,9 +48,22 @@ export const specToPr = task(
 	},
 	async function specToPr(rawInput: unknown): Promise<WorkflowResult> {
 		const { issueNumber, runId } = workflowInputSchema.parse(rawInput);
+		let setStatus: ((next: FactoryStatus) => Promise<void>) | undefined;
+
 		try {
-			const result = await run(issueNumber, runId);
+			const repo = repository();
+			const gh = githubFromEnv();
+			setStatus = statusLabeler(gh, repo, issueNumber);
+
+			const result = await run(issueNumber, runId, setStatus);
 			await recordOutcome(runId, result);
+			await setStatus(terminalStatus(result));
+
+			// The trigger label comes off only once the run is genuinely over,
+			// because reapplying it is how a maintainer retries.
+			await gh
+				.removeLabel(repo, issueNumber, triggerLabel())
+				.catch((error) => console.error("Failed to remove trigger label:", error));
 			return result;
 		} catch (error) {
 			const summary = error instanceof Error ? error.message : String(error);
@@ -52,6 +72,10 @@ export const specToPr = task(
 			}).catch((storeError) =>
 				console.error("Failed to record run failure:", storeError),
 			);
+			// Deliberately leave the trigger label in place: Render retries this
+			// task, and the retry re-reads the issue. Removing it here would make
+			// every retry fail at intake and mask the original error.
+			await setStatus?.(STATUS.failed);
 			throw error;
 		}
 	},
@@ -61,6 +85,7 @@ export const specToPr = task(
 async function run(
 	issueNumber: number,
 	runId: string,
+	setStatus: (next: FactoryStatus) => Promise<void>,
 ): Promise<WorkflowResult> {
 	const repo: RepoRef = repository();
 	const label = triggerLabel();
@@ -76,7 +101,7 @@ async function run(
 		label,
 	);
 
-	await gh.removeLabel(repo, issueNumber, label);
+	await clearStatusLabels(gh, repo, issueNumber, issue.labels);
 
 	if (!triage.hasEnoughDetail) {
 		const questions = triage.questions.length
@@ -103,12 +128,14 @@ async function run(
 		await setRunBranch(runId, branch);
 
 		// ── Analysis ────────────────────────────────────────────────────
+		await setStatus(STATUS.analyzing);
 		const analysis = await analysisTask({
 			message: `Work item:\n${workItem}`,
 			sandboxId: sandbox.id,
 		});
 
 		// ── Implementation ──────────────────────────────────────────────
+		await setStatus(STATUS.implementing);
 		const first = await implementAndCommit({
 			sandbox,
 			checkout,
@@ -173,6 +200,7 @@ async function run(
 		}
 
 		// ── Review ──────────────────────────────────────────────────────
+		await setStatus(STATUS.reviewing);
 		let review = await reviewDiff(
 			await completeDiff(sandbox, checkout, state.sha),
 			state.summary,

@@ -39,9 +39,9 @@ platform, so you can follow a run from webhook to pull request without leaving
    action, and label. It claims the run in Postgres and dispatches only the
    issue number and a run ID.
 4. The workflow fetches authoritative issue and comment state from GitHub.
-5. Triage decides whether the issue has enough detail, and the workflow removes
-   the intake label as acknowledgment. If clarification is needed, it comments
-   and stops.
+5. Triage decides whether the issue has enough detail. The workflow swaps the
+   intake label for a status label as acknowledgment. If clarification is
+   needed, it comments and stops.
 6. Accepted work gets an isolated sandbox and a deterministic `factory/` branch.
 7. The analyst explores the checkout read-only and produces a grounded plan.
 8. The implementer edits the checkout. It never commits, pushes, or verifies.
@@ -58,6 +58,23 @@ platform, so you can follow a run from webhook to pull request without leaving
 
 Automation stops at a draft PR. It never marks ready and never merges. If
 clarification or a retry is needed, a maintainer reapplies the label.
+
+### Status labels
+
+The issue carries a `factory:` label showing where the run is, so an in-flight
+run is visible without opening the dashboard. In-flight labels are
+`factory:analyzing`, `factory:implementing`, and `factory:reviewing`; a run
+ends on `factory:pr-open`, `factory:needs-detail`, `factory:no-changes`,
+`factory:changes-requested`, or `factory:failed`.
+
+The `factory` trigger label stays on the issue for the whole run and comes off
+only when the run reaches a terminal result. That is deliberate: Render retries
+a failed task, and the retry re-reads the issue from GitHub. If the label were
+removed up front, every retry would fail at intake with "issue no longer has
+the label" and hide whatever actually went wrong.
+
+Reapplying `factory` starts a fresh run and clears the previous status label.
+Labels are cosmetic — if the GitHub labels API fails, the run continues.
 
 ## Architecture
 
