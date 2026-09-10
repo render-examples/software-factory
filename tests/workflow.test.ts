@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	judgeTask: vi.fn(),
 	gh: {
 		getIssue: vi.fn(),
+		getRepoSnapshot: vi.fn(),
 		listIssueComments: vi.fn(),
 		addLabels: vi.fn(),
 		removeLabel: vi.fn(),
@@ -88,6 +89,12 @@ beforeEach(() => {
 		labels: ["factory"],
 	});
 	mocks.gh.listIssueComments.mockResolvedValue([]);
+	mocks.gh.getRepoSnapshot.mockResolvedValue({
+		defaultBranch: "main",
+		paths: ["src/client.ts"],
+		truncated: false,
+		files: [],
+	});
 	mocks.gh.addLabels.mockResolvedValue(undefined);
 	mocks.gh.removeLabel.mockResolvedValue(undefined);
 	mocks.gh.ensurePull.mockResolvedValue({

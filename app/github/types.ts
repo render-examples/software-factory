@@ -26,6 +26,16 @@ export interface PullRequest {
 	headSha: string;
 }
 
+/** Enough of the repository to reason about it without a checkout. */
+export interface RepoSnapshot {
+	defaultBranch: string;
+	/** Repository paths, filtered and capped. */
+	paths: string[];
+	/** True when the tree was cut short, by GitHub or by us. */
+	truncated: boolean;
+	files: { path: string; content: string }[];
+}
+
 export class GitHubError extends Error {
 	constructor(
 		readonly status: number,

@@ -42,9 +42,12 @@ platform, so you can follow a run from webhook to pull request without leaving
    action, and label. It claims the run in Postgres and dispatches only the
    issue number and a run ID.
 4. The workflow fetches authoritative issue and comment state from GitHub.
-5. Triage decides whether the issue has enough detail. The workflow swaps the
-   intake label for a status label as acknowledgment. If clarification is
-   needed, it comments and stops.
+5. Triage decides whether the maintainer's intent is clear. It runs before any
+   sandbox exists, so the workflow hands it the repository described rather
+   than checked out — the file list, the README, and `package.json`, fetched
+   over the API — and it is told to leave facts about the code to the analyst.
+   The workflow swaps the intake label for a status label as acknowledgment.
+   If clarification is genuinely needed, it comments and stops.
 6. Accepted work gets an isolated sandbox and a deterministic `factory/` branch.
 7. The analyst explores the checkout read-only and produces a grounded plan.
 8. The implementer edits the checkout. It never commits, pushes, or verifies.

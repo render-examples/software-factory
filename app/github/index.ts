@@ -7,4 +7,5 @@ export {
 	type IssueComment,
 	type PullRequest,
 	type RepoRef,
+	type RepoSnapshot,
 } from "./types.js";
