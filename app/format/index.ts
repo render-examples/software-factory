@@ -6,4 +6,4 @@ export {
 	verifyFailedComment,
 } from "./comments.js";
 export { pullRequestBody, reviewerSection, reviewSummary } from "./review.js";
-export { workItem } from "./work-item.js";
+export { repoBrief, workItem } from "./work-item.js";
