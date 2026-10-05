@@ -1,5 +1,5 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
-import { parseModelJson } from "../../claude/index.js";
+import { parseModelJson } from "../../runners/index.js";
 import {
 	judgeSchema,
 	type Review,
@@ -21,9 +21,10 @@ export function runSelfReview(
 	ctx: TaskContext,
 	diff: string,
 	workItem: string,
+	runId: string,
 ): Promise<SelfReview> {
 	return agentJson(
-		(message) => ctx.run(selfReviewTask, { message }),
+		(message) => ctx.run(selfReviewTask, { runId, message }),
 		selfReviewSchema,
 		`Work item:\n${workItem}\n\nComplete diff:\n${diff}`,
 		"self-review",
@@ -35,11 +36,13 @@ export async function reviewDiff(
 	ctx: TaskContext,
 	diff: string,
 	implementationSummary: string,
+	runId: string,
 ): Promise<Review> {
 	const [securityRaw, correctnessRaw, testsRaw] = await Promise.all([
-		ctx.run(securityTask, { message: diff }),
-		ctx.run(correctnessTask, { message: diff }),
+		ctx.run(securityTask, { runId, message: diff }),
+		ctx.run(correctnessTask, { runId, message: diff }),
 		ctx.run(testsTask, {
+			runId,
 			message: `${implementationSummary}\n\nComplete diff:\n${diff}`,
 		}),
 	]);
@@ -63,7 +66,7 @@ export async function reviewDiff(
 	].join("\n\n");
 
 	const verdict = await agentJson(
-		(message) => ctx.run(judgeTask, { message }),
+		(message) => ctx.run(judgeTask, { runId, message }),
 		judgeSchema,
 		`${details}\n\nComplete diff:\n${diff}`,
 		"judge",

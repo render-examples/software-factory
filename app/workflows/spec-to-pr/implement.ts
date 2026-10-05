@@ -17,6 +17,7 @@ export interface ImplementationState {
 }
 
 export interface ImplementOptions {
+	runId: string;
 	sandbox: Sandbox;
 	checkout: Checkout;
 	prompt: string;
@@ -32,6 +33,7 @@ export async function implementAndCommit(
 	const { summary } = await agentJson(
 		(message) =>
 			ctx.run(implementTask, {
+				runId: opts.runId,
 				message,
 				sandboxId: opts.sandbox.id,
 			}),
@@ -56,6 +58,7 @@ export type VerificationOutcome =
 export async function verifyWithFixes(
 	ctx: TaskContext,
 	opts: {
+		runId: string;
 		sandbox: Sandbox;
 		checkout: Checkout;
 		issueNumber: number;
@@ -64,17 +67,13 @@ export async function verifyWithFixes(
 	},
 ): Promise<VerificationOutcome> {
 	const repo = target();
-	if (repo.verify.length === 0)
-		return { passed: true, state: opts.state };
+	if (repo.verify.length === 0) return { passed: true, state: opts.state };
 
 	const maxRounds = factoryConfig.limits.repairRounds;
 	let state = opts.state;
 
 	for (let round = 0; round <= maxRounds; round++) {
-		const verification = await runVerification(
-			opts.sandbox,
-			repo.verify,
-		);
+		const verification = await runVerification(opts.sandbox, repo.verify);
 		if (verification.passed) return { passed: true, state };
 		if (round === maxRounds) {
 			return {
@@ -84,6 +83,7 @@ export async function verifyWithFixes(
 		}
 
 		const fix = await implementAndCommit(ctx, {
+			runId: opts.runId,
 			sandbox: opts.sandbox,
 			checkout: opts.checkout,
 			previousSha: state.sha,
