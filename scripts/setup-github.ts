@@ -97,12 +97,12 @@ async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> 
 	if (mine) {
 		const updated = await call("PATCH", `${base}/hooks/${mine.id}`, {
 			config,
-			events: ["issues"],
-			active: true,
-		});
-		record(
-			updated.ok
-				? { level: "ok", message: `Updated webhook ${mine.id} to ${target}` }
+		events: ["issues", "issue_comment", "pull_request"],
+		active: true,
+	});
+	record(
+		updated.ok
+			? { level: "ok", message: `Updated webhook ${mine.id} to ${target}` }
 				: { level: "fail", message: `Could not update webhook (HTTP ${updated.status})` },
 		);
 		return;
@@ -111,7 +111,7 @@ async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> 
 	const created = await call("POST", `${base}/hooks`, {
 		name: "web",
 		active: true,
-		events: ["issues"],
+		events: ["issues", "issue_comment", "pull_request"],
 		config,
 	});
 	record(

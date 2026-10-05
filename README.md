@@ -49,9 +49,9 @@ policy administration, billing, and fleet operations are outside its scope.
   parallel specialist review, a judge, remote-SHA verification, and a human
   draft-PR decision. More gates improve evidence, but add model cost and
   latency; smaller workflows may need fewer reviewers.
-- **Short-lived, scoped source-control credentials.** A GitHub App can mint
-  installation tokens, which reach Git through a temporary askpass script and
-  never enter prompts or remotes. The tradeoff is more setup than a PAT.
+- **Short-lived, scoped source-control credentials.** A GitHub App mints
+  installation tokens scoped to the target repository. They reach Git through
+  a temporary askpass script and never enter prompts or remotes.
 
 ## Run lifecycle
 
@@ -252,53 +252,43 @@ Use the same secret as `GITHUB_WEBHOOK_SECRET`. A gateway running only on
 localhost needs a publicly reachable HTTPS tunnel before GitHub can deliver to
 it.
 
-Apply the configured label — `factory` by default — to an issue, as a login on
-the actor allowlist. Applying that label is the only way to start work;
-comments and other issue events never trigger the factory.
+Apply the trigger label (`factory:full-run` by default) to an issue, as a
+login on the actor allowlist. Applying that label is the only way to start
+work in this milestone.
 
-Scope the GitHub credential to `FACTORY_REPO` only, grant the minimum Contents,
-Issues, and Pull Requests permissions needed to clone, push, comment, and open
-a draft PR, and protect the default branch.
+Scope the GitHub App to the target repository, grant Contents, Issues, and
+Pull Requests write permissions, and protect the default branch.
 
 ### Who the factory appears as
 
-With a **GitHub App**, comments and pull requests are attributed to the app
-(`your-app[bot]`) and it authenticates with installation tokens that expire
-after an hour. Create an App with Contents, Issues, and Pull Requests write
-permissions, install it on the repository, then set `GITHUB_APP_ID`,
-`GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID`.
-
-With a **fine-grained PAT**, everything the factory does on the API is
-attributed to the token's owner — the issue reads as though a maintainer wrote
-the comments and opened the PR. Commits are still authored as
-`render-factory[bot]`, because Git identity is set inside the sandbox.
-
-The App path is worth the extra setup for production use or anything public.
-The PAT path is faster for a first run.
+Comments and pull requests are attributed to the GitHub App
+(`your-app[bot]`). The factory authenticates with installation tokens that
+expire after an hour. Create an App with Contents, Issues, and Pull Requests
+write permissions, install it on the target repository, then set
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID`.
+Commits are authored as `render-factory[bot]`.
 
 ## Configuration
 
 | Variable | Service | Purpose |
 |---|---|---|
-| `FACTORY_REPO` | Both | The only repository the factory can operate on |
-| `FACTORY_LABEL` | Both | Intake label; defaults to `factory` |
 | `FACTORY_GITHUB_ACTORS` | Gateway | Comma-separated GitHub logins allowed to apply the label; overrides `factory.config.ts` |
 | `GITHUB_WEBHOOK_SECRET` | Gateway | HMAC secret; use at least 32 random characters |
 | `RENDER_WORKFLOW_SLUG` | Gateway | Deployed Workflows service slug, without a task name |
-| `DATABASE_URL` | Both | Postgres connection string for the runs table |
+| `DATABASE_URL` | Both | Postgres connection string |
 | `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
-| `GITHUB_APP_ID` | Workflows | GitHub App ID (preferred over a PAT) |
+| `GITHUB_APP_ID` | Workflows | GitHub App ID (required) |
 | `GITHUB_APP_PRIVATE_KEY` | Workflows | App private key: PEM, escaped PEM, or base64 |
-| `GITHUB_APP_INSTALLATION_ID` | Workflows | Installation on `FACTORY_REPO` |
-| `GITHUB_TOKEN` | Workflows | Fine-grained PAT; fallback when no App is set |
+| `GITHUB_APP_INSTALLATION_ID` | Workflows | Installation on the target repository |
 | `RENDER_API_KEY` | Both | Task dispatch on the gateway; Sandboxes on Workflows |
 | `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
 | `GITHUB_API_URL` | Workflows | Optional GitHub API base URL override |
 | `PORT` | Gateway | Optional HTTP port; defaults to `3000` |
 
-Both processes must use the same `FACTORY_REPO`, `FACTORY_LABEL`, and Postgres
-database. `DATABASE_URL` points to local Docker in `.env.example`; the gateway
-Blueprint wires its production value automatically.
+The target repository is configured in `factory.config.ts` (not an env var).
+Both processes must use the same Postgres database. `DATABASE_URL` points to
+local Docker in `.env.example`; the gateway Blueprint wires its production
+value automatically.
 
 Development scripts load `.env`. The production commands `npm run start:gateway`
 and `npm run start:workflows` do not; supply their environment through Render.
@@ -330,10 +320,10 @@ the schema is applied before any new instance serves traffic.
 
 ## Adaptation seams
 
-- **Repository policy:** start in `factory.config.ts` with the allowed actors,
-  model tiers, checkout path, and verification commands. Verification runs in
-  workflow code—not by model assertion—and empty commands deliberately remove
-  that evidence.
+- **Repository policy:** start in `factory.config.ts` with the target
+  repository, labels, model tiers, checkout path, and verification commands.
+  Verification runs in workflow code—not by model assertion—and empty commands
+  deliberately remove that evidence.
 - **Agent roles:** add an agent when a separate context, model tier, or
   capability boundary is useful. Tools are runtime allowlists; giving an agent
   write access is a security decision, not prompt wording.
@@ -351,7 +341,7 @@ conventions, security invariants, and test ownership.
 ## Safety boundaries
 
 - The webhook signature is checked before the body is parsed or dispatched.
-- One deployment is bound to one validated `FACTORY_REPO`.
+- One deployment is bound to one validated target repository from `factory.config.ts`.
 - Only `issues.labeled`, from a human on the actor allowlist, starts a run.
   Bots, pull requests, other repositories, and other events are skipped.
 - The gateway never receives the repository token.
@@ -362,9 +352,8 @@ conventions, security invariants, and test ownership.
 - Malformed structured model output fails closed after one repair attempt.
 - The GitHub token never enters a prompt, a Git remote URL, or a command line;
   it reaches Git through a temporary askpass script.
-- Configured as a GitHub App, the factory holds no long-lived credential — it
-  signs a short JWT with the app's private key and exchanges it for an
-  installation token that expires within the hour.
+- The factory signs a short JWT with the app's private key and exchanges it
+  for an installation token that expires within the hour.
 - The reviewed local commit must match the remote SHA before a PR is created.
 - Secret-shaped strings are redacted from anything posted to GitHub.
 - Automation ends at a draft PR; readiness and merge remain human decisions.
