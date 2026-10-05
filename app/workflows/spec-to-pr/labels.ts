@@ -1,24 +1,38 @@
+import { factoryConfig } from "../../../factory.config.js";
 import type { WorkflowResult } from "../../contracts/index.js";
 import type { GitHub, RepoRef } from "../../github/index.js";
 
-const PREFIX = "factory:";
+const STATUS_PREFIX = "factory-status:";
+
+/** All trigger labels that must never be removed by status-label cleanup. */
+const TRIGGER_LABELS = new Set([
+	factoryConfig.labels.triage,
+	factoryConfig.labels.fullRun,
+	factoryConfig.labels.specApproved,
+	factoryConfig.labels.prReview,
+]);
 
 /** Where a run is, and how it ended. Visible on the issue while it works. */
 export const STATUS = {
-	analyzing: `${PREFIX}analyzing`,
-	implementing: `${PREFIX}implementing`,
-	reviewing: `${PREFIX}reviewing`,
-	prOpen: `${PREFIX}pr-open`,
-	needsDetail: `${PREFIX}needs-detail`,
-	noChanges: `${PREFIX}no-changes`,
-	changesRequested: `${PREFIX}changes-requested`,
-	failed: `${PREFIX}failed`,
+	analyzing: `${STATUS_PREFIX}analyzing`,
+	implementing: `${STATUS_PREFIX}implementing`,
+	reviewing: `${STATUS_PREFIX}reviewing`,
+	prOpen: `${STATUS_PREFIX}pr-open`,
+	needsDetail: `${STATUS_PREFIX}needs-detail`,
+	noChanges: `${STATUS_PREFIX}no-changes`,
+	changesRequested: `${STATUS_PREFIX}changes-requested`,
+	failed: `${STATUS_PREFIX}failed`,
 } as const;
 
 export type FactoryStatus = (typeof STATUS)[keyof typeof STATUS];
 
 export function isStatusLabel(label: string): boolean {
-	return label.startsWith(PREFIX);
+	return label.startsWith(STATUS_PREFIX);
+}
+
+/** True when this label is a trigger label that must never be auto-removed. */
+export function isTriggerLabel(label: string): boolean {
+	return TRIGGER_LABELS.has(label);
 }
 
 export function terminalStatus(result: WorkflowResult): FactoryStatus {
@@ -41,7 +55,9 @@ export async function clearStatusLabels(
 	issueNumber: number,
 	currentLabels: readonly string[],
 ): Promise<void> {
-	for (const label of currentLabels.filter(isStatusLabel)) {
+	for (const label of currentLabels.filter(
+		(l) => isStatusLabel(l) && !isTriggerLabel(l),
+	)) {
 		await gh.removeLabel(repo, issueNumber, label).catch((error) =>
 			console.error(`Failed to clear status label ${label}:`, error),
 		);
