@@ -3,6 +3,7 @@
  * no GitHub, no Postgres. What is under test is the control flow.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskContext } from "@renderinc/sdk/workflows";
 import type { WorkflowResult } from "../app/contracts/index.js";
 
 const mocks = vi.hoisted(() => ({
@@ -34,20 +35,27 @@ const mocks = vi.hoisted(() => ({
 	setRunBranch: vi.fn(),
 }));
 
-// task() normally registers with Render; here it just hands back the handler.
+// In SDK 1.x, task() returns a TaskDefinition { name, func }. The mock
+// preserves the handler so tests can invoke it with a fake TaskContext.
 vi.mock("@renderinc/sdk/workflows", () => ({
-	task: (_config: unknown, handler: unknown) => handler,
+	task: (config: { name: string }, handler: unknown) => ({
+		name: config.name,
+		func: handler,
+	}),
 }));
 
+// Mock tasks as TaskDefinition-shaped objects whose func delegates to the
+// vi.fn() mocks above. The ctx argument is forwarded but ignored by the
+// mocks — they return their preset values regardless.
 vi.mock("../app/tasks/index.js", () => ({
-	triageTask: mocks.triageTask,
-	analysisTask: mocks.analysisTask,
-	implementTask: mocks.implementTask,
-	selfReviewTask: mocks.selfReviewTask,
-	securityTask: mocks.securityTask,
-	correctnessTask: mocks.correctnessTask,
-	testsTask: mocks.testsTask,
-	judgeTask: mocks.judgeTask,
+	triageTask: { name: "triage", func: mocks.triageTask },
+	analysisTask: { name: "analyst", func: mocks.analysisTask },
+	implementTask: { name: "implementer", func: mocks.implementTask },
+	selfReviewTask: { name: "self-review", func: mocks.selfReviewTask },
+	securityTask: { name: "security", func: mocks.securityTask },
+	correctnessTask: { name: "correctness", func: mocks.correctnessTask },
+	testsTask: { name: "tests", func: mocks.testsTask },
+	judgeTask: { name: "judge", func: mocks.judgeTask },
 }));
 
 vi.mock("../app/github/index.js", () => ({
@@ -72,7 +80,21 @@ vi.mock("../app/git/index.js", () => ({
 }));
 
 const { specToPr } = await import("../app/workflows/index.js");
-const run = specToPr as unknown as (input: unknown) => Promise<WorkflowResult>;
+
+/** ctx.run dispatches to the mock task's func, forwarding args. */
+const mockCtx: TaskContext = {
+	metadata: {},
+	run: vi.fn().mockImplementation(
+		async (taskDef: { func: (...args: unknown[]) => unknown }, ...args: unknown[]) =>
+			taskDef.func(mockCtx, ...args),
+	),
+};
+
+const run = (input: unknown): Promise<WorkflowResult> =>
+	(specToPr as unknown as { func: (ctx: TaskContext, input: unknown) => Promise<WorkflowResult> }).func(
+		mockCtx,
+		input,
+	);
 
 const INPUT = { issueNumber: 42, runId: "run-0001" };
 
@@ -287,7 +309,10 @@ describe("review outcomes", () => {
 		const result = await run(INPUT);
 
 		expect(result).toMatchObject({ status: "draft_pr_opened" });
-		const messages = mocks.implementTask.mock.calls.map((call) => call[0].message);
+		// In 1.x the mock func receives (ctx, input), so the input is at [1].
+		const messages = mocks.implementTask.mock.calls.map(
+			(call: unknown[]) => (call[1] as { message: string }).message,
+		);
 		expect(messages.some((m: string) => m.includes("tsc: type error"))).toBe(true);
 	});
 

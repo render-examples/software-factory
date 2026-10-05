@@ -1,4 +1,4 @@
-import { task } from "@renderinc/sdk/workflows";
+import { type TaskContext, task } from "@renderinc/sdk/workflows";
 import { factoryConfig } from "../../factory.config.js";
 import { type Agent, runClaude } from "../claude/index.js";
 import { connectSandbox } from "../sandbox/index.js";
@@ -12,7 +12,10 @@ export interface AgentTaskInput {
 export function agentTask(agent: Agent) {
 	return task(
 		{ name: agent.id, plan: agent.plan },
-		async function runAgent(input: AgentTaskInput): Promise<string> {
+		async function runAgent(
+			_ctx: TaskContext,
+			input: AgentTaskInput,
+		): Promise<string> {
 			const run = await runClaude({
 				agentId: agent.id,
 				systemPrompt: agent.prompt,

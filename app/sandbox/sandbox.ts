@@ -61,6 +61,12 @@ export class Sandbox {
 		await client.upload(this.id, path, data, ownerId);
 	}
 
+	async download(path: string): Promise<Buffer> {
+		const { client, ownerId } = api();
+		const result = await client.download(this.id, path, ownerId);
+		return result.data;
+	}
+
 	async terminate(): Promise<void> {
 		const { client, ownerId } = api();
 		await client.terminate(this.id, ownerId);

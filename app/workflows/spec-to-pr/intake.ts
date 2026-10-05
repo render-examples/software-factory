@@ -1,3 +1,4 @@
+import type { TaskContext } from "@renderinc/sdk/workflows";
 import { type Triage, triageSchema } from "../../contracts/index.js";
 import {
 	repoBrief,
@@ -14,6 +15,7 @@ export interface Intake {
 }
 
 export async function loadIntake(
+	ctx: TaskContext,
 	gh: GitHub,
 	repo: RepoRef,
 	issueNumber: number,
@@ -39,7 +41,7 @@ export async function loadIntake(
 		});
 
 	const triage = await agentJson(
-		(message) => triageTask({ message }),
+		(message) => ctx.run(triageTask, { message }),
 		triageSchema,
 		`${brief}\n\n---\n\n# Work item\n\n${workItem}`,
 		"triage",
