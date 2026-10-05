@@ -60,6 +60,7 @@ export {
 	type SpecRecord,
 	type SpecVersionRecord,
 } from "./specs.js";
+export { getRunCost, addRunCost } from "./costs.js";
 export type {
 	ArtifactRecord,
 	DeliveryOutcome,
