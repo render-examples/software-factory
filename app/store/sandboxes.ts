@@ -84,6 +84,129 @@ export async function listStaleLeases(): Promise<SandboxRecord[]> {
 	return rows.map(mapSandboxRow);
 }
 
+/** Mark a sandbox as ready with its base SHA and lockfile hash. */
+export async function markSandboxReady(
+	id: string,
+	baseSha: string,
+	lockfileHash: string,
+	expiresAt: Date,
+): Promise<void> {
+	await db().query(
+		`UPDATE sandboxes
+		 SET status = 'warm', base_sha = $2, lockfile_hash = $3,
+		     ready_at = now(), expires_at = $4
+		 WHERE id = $1`,
+		[id, baseSha, lockfileHash, expiresAt],
+	);
+}
+
+export async function markSandboxFailed(id: string): Promise<void> {
+	await db().query(`UPDATE sandboxes SET status = 'failed' WHERE id = $1`, [
+		id,
+	]);
+}
+
+export async function markSandboxTerminated(id: string): Promise<void> {
+	await db().query(
+		`UPDATE sandboxes SET status = 'released', released_at = now()
+		 WHERE id = $1`,
+		[id],
+	);
+}
+
+/** Update the provider_id after sandbox creation completes. */
+export async function setSandboxProviderId(
+	id: string,
+	providerId: string,
+): Promise<void> {
+	await db().query(`UPDATE sandboxes SET provider_id = $2 WHERE id = $1`, [
+		id,
+		providerId,
+	]);
+}
+
+/** Update status from creating to preparing. */
+export async function markSandboxPreparing(id: string): Promise<void> {
+	await db().query(`UPDATE sandboxes SET status = 'preparing' WHERE id = $1`, [
+		id,
+	]);
+}
+
+/**
+ * Count sandboxes by status. Used by pool maintenance to decide how
+ * many new sandboxes to create.
+ */
+export async function countSandboxesByStatus(
+	statuses: readonly string[],
+): Promise<number> {
+	const { rows } = await db().query(
+		`SELECT count(*)::int AS cnt FROM sandboxes
+		 WHERE status = ANY($1)`,
+		[statuses],
+	);
+	return rows[0].cnt;
+}
+
+/**
+ * Warm sandboxes eligible for recycling: older than `maxAgeMinutes`,
+ * expiring within 30 minutes, or whose base_sha differs from the
+ * current tip.
+ */
+export async function listRecyclableSandboxes(
+	maxAgeMinutes: number,
+	currentBaseSha: string,
+): Promise<SandboxRecord[]> {
+	const { rows } = await db().query(
+		`SELECT id, provider_id, status, base_sha, lockfile_hash,
+		        run_id, created_at, ready_at, expires_at,
+		        leased_at, released_at
+		 FROM sandboxes
+		 WHERE status = 'warm'
+		   AND (
+		     ready_at < now() - make_interval(mins => $1)
+		     OR expires_at < now() + interval '30 minutes'
+		     OR base_sha != $2
+		   )`,
+		[maxAgeMinutes, currentBaseSha],
+	);
+	return rows.map(mapSandboxRow);
+}
+
+/**
+ * Sandboxes past their expiry time OR leased to terminal runs.
+ * Only returns sandboxes that are recorded in this table.
+ */
+export async function listExpiredSandboxes(): Promise<SandboxRecord[]> {
+	const { rows } = await db().query(
+		`SELECT id, provider_id, status, base_sha, lockfile_hash,
+		        run_id, created_at, ready_at, expires_at,
+		        leased_at, released_at
+		 FROM sandboxes
+		 WHERE (status NOT IN ('released', 'failed') AND expires_at < now())
+		    OR (status = 'leased' AND run_id IS NOT NULL AND EXISTS (
+		          SELECT 1 FROM runs r
+		          WHERE r.id = sandboxes.run_id
+		            AND r.status IN ('completed', 'failed', 'cancelled')
+		        ))`,
+	);
+	return rows.map(mapSandboxRow);
+}
+
+/** All sandboxes leased to a given run. */
+export async function listSandboxesForRun(
+	runId: string,
+): Promise<SandboxRecord[]> {
+	const { rows } = await db().query(
+		`SELECT id, provider_id, status, base_sha, lockfile_hash,
+		        run_id, created_at, ready_at, expires_at,
+		        leased_at, released_at
+		 FROM sandboxes
+		 WHERE run_id = $1 AND status = 'leased'`,
+		[runId],
+	);
+	return rows.map(mapSandboxRow);
+}
+
 function mapSandboxRow(row: Record<string, unknown>): SandboxRecord {
 	return {
 		id: row.id as string,

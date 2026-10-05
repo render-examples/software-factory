@@ -37,6 +37,15 @@ export {
 	leaseSandbox,
 	releaseSandbox,
 	listStaleLeases,
+	markSandboxReady,
+	markSandboxFailed,
+	markSandboxTerminated,
+	setSandboxProviderId,
+	markSandboxPreparing,
+	countSandboxesByStatus,
+	listRecyclableSandboxes,
+	listExpiredSandboxes,
+	listSandboxesForRun,
 } from "./sandboxes.js";
 export {
 	createSpec,
