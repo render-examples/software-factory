@@ -1,6 +1,6 @@
 {
   "name": "render-factory",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +19,7 @@
     "lint": "biome lint --error-on-warnings app scripts tests factory.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {

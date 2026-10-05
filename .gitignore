@@ -8,3 +8,4 @@ dist
 .pgtest
 .pnpm-store/*
 tmp/
+.DS_Store
