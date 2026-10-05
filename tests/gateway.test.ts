@@ -2,15 +2,17 @@ import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	claimRun: vi.fn(),
+	createQueuedRun: vi.fn(),
 	finishRun: vi.fn(),
+	recordDelivery: vi.fn(),
 	ping: vi.fn(),
 	startTask: vi.fn(),
 }));
 
 vi.mock("../app/store/index.js", () => ({
-	claimRun: mocks.claimRun,
+	createQueuedRun: mocks.createQueuedRun,
 	finishRun: mocks.finishRun,
+	recordDelivery: mocks.recordDelivery,
 	ping: mocks.ping,
 }));
 
@@ -28,8 +30,8 @@ function payload(overrides: Record<string, unknown> = {}) {
 	return {
 		action: "labeled",
 		issue: { number: 42 },
-		label: { name: "factory" },
-		repository: { full_name: "acme/widgets" },
+		label: { name: "factory:full-run" },
+		repository: { full_name: "jacobprall/render-factory-sample" },
 		sender: { login: "Maintainer", type: "User" },
 		...overrides,
 	};
@@ -58,13 +60,12 @@ function post(
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.claimRun.mockResolvedValue(true);
+	mocks.createQueuedRun.mockResolvedValue(true);
 	mocks.finishRun.mockResolvedValue(undefined);
+	mocks.recordDelivery.mockResolvedValue(undefined);
 	mocks.ping.mockResolvedValue(undefined);
 	mocks.startTask.mockResolvedValue({ taskRunId: "trn-1" });
 
-	process.env.FACTORY_REPO = "acme/widgets";
-	process.env.FACTORY_LABEL = "factory";
 	process.env.FACTORY_GITHUB_ACTORS = "maintainer";
 	process.env.GITHUB_WEBHOOK_SECRET = SECRET;
 	process.env.RENDER_WORKFLOW_SLUG = "wfs-1";
@@ -88,7 +89,7 @@ describe("authentication", () => {
 	it("rejects a wrong signature before parsing the body", async () => {
 		const response = await post(payload(), { signature: "sha256=deadbeef" });
 		expect(response.status).toBe(401);
-		expect(mocks.claimRun).not.toHaveBeenCalled();
+		expect(mocks.createQueuedRun).not.toHaveBeenCalled();
 	});
 
 	it("rejects a request with no signature", async () => {
@@ -134,16 +135,32 @@ describe("event filtering", () => {
 });
 
 describe("dispatch", () => {
-	it("claims the run and starts the workflow task", async () => {
+	it("creates a queued run and starts the workflow task", async () => {
 		const response = await post(payload());
 
 		expect(response.status).toBe(202);
-		expect(mocks.claimRun).toHaveBeenCalledWith(
-			expect.objectContaining({ deliveryId: "delivery-0001", issueNumber: 42 }),
+		expect(mocks.createQueuedRun).toHaveBeenCalledWith(
+			expect.objectContaining({
+				repo: "jacobprall/render-factory-sample",
+				subjectKind: "issue",
+				subjectNumber: 42,
+				workflow: "spec-to-pr",
+			}),
 		);
 		expect(mocks.startTask).toHaveBeenCalledWith(
 			"wfs-1/spec-to-pr",
 			[expect.objectContaining({ issueNumber: 42 })],
+		);
+	});
+
+	it("records a delivery", async () => {
+		await post(payload());
+		expect(mocks.recordDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				deliveryId: "delivery-0001",
+				event: "issues",
+				outcome: "accepted",
+			}),
 		);
 	});
 
@@ -152,15 +169,15 @@ describe("dispatch", () => {
 		expect(response.status).toBe(202);
 	});
 
-	it("skips when the claim is refused as a redelivery or an active issue", async () => {
-		mocks.claimRun.mockResolvedValue(false);
+	it("skips when the run claim is refused (duplicate active run)", async () => {
+		mocks.createQueuedRun.mockResolvedValue(false);
 		const response = await post(payload());
 
 		expect(await response.json()).toMatchObject({ skipped: true });
 		expect(mocks.startTask).not.toHaveBeenCalled();
 	});
 
-	it("releases the claim when dispatch fails so a retry can succeed", async () => {
+	it("releases the run when dispatch fails so a retry can succeed", async () => {
 		mocks.startTask.mockRejectedValue(new Error("render unavailable"));
 		const response = await post(payload());
 

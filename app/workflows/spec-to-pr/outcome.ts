@@ -11,16 +11,21 @@ export function recordOutcome(
 ): Promise<void> {
 	switch (result.status) {
 		case "draft_pr_opened":
-			return finishRun(runId, result.status, {
-				pullRequest: result.pullRequest,
+			return finishRun(runId, "completed", {
+				outcome: "draft_pr_opened",
+				result: { pullRequest: result.pullRequest },
 			});
 		case "changes_requested":
-			return finishRun(runId, result.status, { summary: result.summary });
+			return finishRun(runId, "completed", {
+				outcome: "changes_requested",
+				summary: result.summary,
+			});
 		case "needs_clarification":
-			return finishRun(runId, result.status, {
+			return finishRun(runId, "completed", {
+				outcome: "needs_clarification",
 				summary: result.questions.join(" "),
 			});
-		default:
-			return finishRun(runId, result.status);
+		case "no_changes":
+			return finishRun(runId, "completed", { outcome: "no_changes" });
 	}
 }
