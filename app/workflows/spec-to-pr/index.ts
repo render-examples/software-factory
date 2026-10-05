@@ -1,10 +1,5 @@
 /** spec-to-pr — labeled issue to reviewed draft pull request. */
-import { type TaskContext, task } from "@renderinc/sdk/workflows";
-import { repository, triggerLabel } from "../../config/index.js";
-import {
-	type WorkflowResult,
-	workflowInputSchema,
-} from "../../contracts/index.js";
+import { repository } from "../../config/index.js";
 import {
 	changesRequestedComment,
 	clarificationComment,
@@ -19,14 +14,11 @@ import {
 	setupCheckout,
 	verifyPush,
 } from "../../git/index.js";
-import {
-	githubFromEnv,
-	githubToken,
-	type RepoRef,
-} from "../../github/index.js";
+import { githubToken, type RepoRef } from "../../github/index.js";
 import { createSandbox } from "../../sandbox/index.js";
+import { mergeRunResult } from "../../store/index.js";
 import { analysisTask } from "../../tasks/index.js";
-import { finishRun, mergeRunResult, setRunStage } from "../../store/index.js";
+import { type LifecycleResult, runWorkflow } from "../lifecycle.js";
 import { MAX_VERIFY_ROUNDS, SANDBOX_TIMEOUT_SECONDS } from "./constants.js";
 import {
 	type ImplementationState,
@@ -34,111 +26,72 @@ import {
 	verifyWithFixes,
 } from "./implement.js";
 import { loadIntake } from "./intake.js";
-import {
-	clearStatusLabels,
-	STATUS,
-	type FactoryStatus,
-	statusLabeler,
-	terminalStatus,
-} from "./labels.js";
-import { commentId, recordOutcome } from "./outcome.js";
+import { clearStatusLabels, STATUS } from "./labels.js";
 import { reviewDiff, runSelfReview } from "./review.js";
 
-export const specToPr = task(
-	{
-		name: "spec-to-pr",
-		plan: "standard",
-		timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
-	},
-	async function specToPr(
-		ctx: TaskContext,
-		rawInput: unknown,
-	): Promise<WorkflowResult> {
-		const { issueNumber, runId } = workflowInputSchema.parse(rawInput);
-		let setStatus: ((next: FactoryStatus) => Promise<void>) | undefined;
+function commentId(runId: string, operation: string): string {
+	return `${runId.slice(0, 64)}-${operation}`;
+}
 
-		try {
-			const repo = repository();
-			const gh = githubFromEnv();
-			setStatus = statusLabeler(gh, repo, issueNumber);
+export const specToPr = runWorkflow(
+	"spec-to-pr",
+	{ timeoutSeconds: SANDBOX_TIMEOUT_SECONDS },
+	async (lc): Promise<LifecycleResult> => {
+		const { ctx, run, gh, setStatus, throwIfCancelled, defer } = lc;
+		const repo: RepoRef = repository();
+		const runId = run.id;
+		const issueNumber = run.subjectNumber;
+		const triggerLabel = (run.trigger as Record<string, unknown> | null)
+			?.label as string | undefined;
+		const label = triggerLabel ?? "";
+		const token = await githubToken();
 
-			const result = await pipeline(ctx, issueNumber, runId, setStatus);
-			await recordOutcome(runId, result);
-			await setStatus(terminalStatus(result));
-
-			// The trigger label comes off only once the run is genuinely over,
-			// because reapplying it is how a maintainer retries.
-			await gh
-				.removeLabel(repo, issueNumber, triggerLabel())
-				.catch((error) =>
-					console.error("Failed to remove trigger label:", error),
-				);
-			return result;
-		} catch (error) {
-			const summary = error instanceof Error ? error.message : String(error);
-			await finishRun(runId, "failed", {
-				outcome: "error",
-				summary: summary.slice(0, 1000),
-			}).catch((storeError) =>
-				console.error("Failed to record run failure:", storeError),
-			);
-			// Deliberately leave the trigger label in place: Render retries this
-			// task, and the retry re-reads the issue. Removing it here would make
-			// every retry fail at intake and mask the original error.
-			await setStatus?.(STATUS.failed);
-			throw error;
-		}
-	},
-);
-
-/** The pipeline. */
-async function pipeline(
-	ctx: TaskContext,
-	issueNumber: number,
-	runId: string,
-	setStatus: (next: FactoryStatus) => Promise<void>,
-): Promise<WorkflowResult> {
-	const repo: RepoRef = repository();
-	const label = triggerLabel();
-	const gh = githubFromEnv();
-	// Git needs a concrete token; under App auth this is an installation token.
-	const token = await githubToken();
-
-	// ── Intake ──────────────────────────────────────────────────────────
-	const { issue, workItem, triage } = await loadIntake(
-		ctx,
-		gh,
-		repo,
-		issueNumber,
-		label,
-	);
-
-	await clearStatusLabels(gh, repo, issueNumber, issue.labels);
-
-	if (!triage.hasEnoughDetail) {
-		const questions = triage.questions.length
-			? triage.questions
-			: [
-					"What concrete outcome and acceptance criteria should the factory implement?",
-				];
-		await gh.ensureIssueComment(
+		// ── Intake ──────────────────────────────────────────────────────
+		const { issue, workItem, triage } = await loadIntake(
+			ctx,
+			gh,
 			repo,
 			issueNumber,
-			commentId(runId, "clarification"),
-			clarificationComment(questions, label),
+			label,
 		);
-		return { status: "needs_clarification", questions };
-	}
 
-	// ── Sandbox ─────────────────────────────────────────────────────────
-	const sandbox = await createSandbox({
-		timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
-	});
-	try {
+		await clearStatusLabels(gh, repo, issueNumber, issue.labels);
+
+		if (!triage.hasEnoughDetail) {
+			const questions = triage.questions.length
+				? triage.questions
+				: [
+						"What concrete outcome and acceptance criteria should the factory implement?",
+					];
+			return {
+				status: "completed",
+				outcome: "needs_clarification",
+				result: { questions },
+				comment: {
+					body: clarificationComment(questions, label),
+					operationId: commentId(runId, "clarification"),
+				},
+				removeLabels: triggerLabel ? [triggerLabel] : [],
+			};
+		}
+
+		// ── Sandbox ─────────────────────────────────────────────────────
+		const sandbox = await createSandbox({
+			timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
+		});
+		defer(async () => {
+			await sandbox
+				.terminate()
+				.catch((error: unknown) =>
+					console.error("Failed to terminate sandbox:", error),
+				);
+		});
+
 		const branch = branchName(issueNumber, runId);
 		const checkout = await setupCheckout(sandbox, token, repo, branch);
 		await mergeRunResult(runId, { branch });
-		await setRunStage(runId, "implement");
+
+		await throwIfCancelled();
 
 		// ── Analysis ────────────────────────────────────────────────────
 		await setStatus(STATUS.analyzing);
@@ -146,6 +99,8 @@ async function pipeline(
 			message: `Work item:\n${workItem}`,
 			sandboxId: sandbox.id,
 		});
+
+		await throwIfCancelled();
 
 		// ── Implementation ──────────────────────────────────────────────
 		await setStatus(STATUS.implementing);
@@ -158,13 +113,15 @@ async function pipeline(
 			prompt: `Work item:\n${workItem}\n\nApproved analysis:\n${analysis}`,
 		});
 		if (!first.sha) {
-			await gh.ensureIssueComment(
-				repo,
-				issueNumber,
-				commentId(runId, "no-changes"),
-				noChangesComment(label),
-			);
-			return { status: "no_changes" };
+			return {
+				status: "completed",
+				outcome: "no_changes",
+				comment: {
+					body: noChangesComment(label),
+					operationId: commentId(runId, "no-changes"),
+				},
+				removeLabels: triggerLabel ? [triggerLabel] : [],
+			};
 		}
 		let state: ImplementationState = {
 			summary: first.summary,
@@ -180,18 +137,26 @@ async function pipeline(
 			state,
 		});
 		if (!verified.passed) {
-			await gh.ensureIssueComment(
-				repo,
-				issueNumber,
-				commentId(runId, "verify-failed"),
-				verifyFailedComment(verified.failures, MAX_VERIFY_ROUNDS, label),
-			);
 			return {
-				status: "changes_requested",
-				summary: `Verification failed: ${verified.failures.slice(0, 500)}`,
+				status: "completed",
+				outcome: "changes_requested",
+				result: {
+					summary: `Verification failed: ${verified.failures.slice(0, 500)}`,
+				},
+				comment: {
+					body: verifyFailedComment(
+						verified.failures,
+						MAX_VERIFY_ROUNDS,
+						label,
+					),
+					operationId: commentId(runId, "verify-failed"),
+				},
+				removeLabels: triggerLabel ? [triggerLabel] : [],
 			};
 		}
 		state = verified.state;
+
+		await throwIfCancelled();
 
 		// ── Self-review ─────────────────────────────────────────────────
 		const selfReview = await runSelfReview(
@@ -216,6 +181,8 @@ async function pipeline(
 			state = { summary: fix.summary, sha: fix.sha ?? state.sha };
 		}
 
+		await throwIfCancelled();
+
 		// ── Review ──────────────────────────────────────────────────────
 		await setStatus(STATUS.reviewing);
 		let review = await reviewDiff(
@@ -224,7 +191,6 @@ async function pipeline(
 			state.summary,
 		);
 
-		// One revision round. If the judge still objects, stop and report.
 		if (review.decision === "request_changes") {
 			const revision = await implementAndCommit(ctx, {
 				sandbox,
@@ -249,13 +215,16 @@ async function pipeline(
 		}
 
 		if (review.decision !== "approve") {
-			await gh.ensureIssueComment(
-				repo,
-				issueNumber,
-				commentId(runId, "changes-requested"),
-				changesRequestedComment(review.summary, label),
-			);
-			return { status: "changes_requested", summary: review.summary };
+			return {
+				status: "completed",
+				outcome: "changes_requested",
+				result: { summary: review.summary },
+				comment: {
+					body: changesRequestedComment(review.summary, label),
+					operationId: commentId(runId, "changes-requested"),
+				},
+				removeLabels: triggerLabel ? [triggerLabel] : [],
+			};
 		}
 
 		// ── Push and open the draft PR ──────────────────────────────────
@@ -267,19 +236,16 @@ async function pipeline(
 			expectedHeadSha: state.sha,
 			body: pullRequestBody(issueNumber, review, state.summary),
 		});
-		await gh.ensureIssueComment(
-			repo,
-			issueNumber,
-			commentId(runId, "draft-pr"),
-			draftPrComment(pull.htmlUrl),
-		);
 
-		return { status: "draft_pr_opened", pullRequest: pull.htmlUrl };
-	} finally {
-		await sandbox
-			.terminate()
-			.catch((error) =>
-				console.error("Failed to terminate sandbox:", error),
-			);
-	}
-}
+		return {
+			status: "completed",
+			outcome: "draft_pr_opened",
+			result: { pullRequest: pull.htmlUrl, branch },
+			comment: {
+				body: draftPrComment(pull.htmlUrl),
+				operationId: commentId(runId, "draft-pr"),
+			},
+			removeLabels: triggerLabel ? [triggerLabel] : [],
+		};
+	},
+);
