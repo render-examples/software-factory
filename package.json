@@ -9,8 +9,11 @@
   "scripts": {
     "start:gateway": "tsx app/src/server.ts",
     "start:workflows": "tsx app/src/workflows.ts",
+    "start:dispatcher": "tsx app/src/dispatcher.ts",
+    "start:maintenance": "tsx app/src/maintenance.ts",
     "dev:gateway": "RENDER_USE_LOCAL_DEV=true node --env-file=.env node_modules/.bin/tsx watch app/src/server.ts",
     "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/src/workflows.ts",
+    "dev:dispatcher": "node --env-file=.env node_modules/.bin/tsx watch app/src/dispatcher.ts",
     "dev:postgres": "docker compose up postgres",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts",
