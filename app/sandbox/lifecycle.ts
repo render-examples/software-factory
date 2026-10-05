@@ -12,6 +12,7 @@ export async function createSandbox(
 	const created = await client.create({
 		ownerId,
 		timeoutSeconds: opts?.timeoutSeconds,
+		...(opts?.networkPolicy ? { networkPolicy: opts.networkPolicy } : {}),
 	});
 
 	const deadline = Date.now() + READY_TIMEOUT_MS;

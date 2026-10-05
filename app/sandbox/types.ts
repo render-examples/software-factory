@@ -13,4 +13,8 @@ export interface ExecResult {
 
 export interface CreateSandboxOptions {
 	timeoutSeconds?: number;
+	networkPolicy?: {
+		default: "allow-all" | "deny-all" | "allow-list";
+		allowedDomains?: string[];
+	};
 }

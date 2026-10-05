@@ -196,6 +196,15 @@ export class GitHub {
 		}
 	}
 
+	/** The tip SHA of a branch. */
+	async getBranchTipSha(ref: RepoRef, branch: string): Promise<string> {
+		const data = await this.http.send<{ object: { sha: string } }>(
+			"GET",
+			`/repos/${ref.owner}/${ref.repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+		);
+		return data.object.sha;
+	}
+
 	/** Reuse the open PR for this head, or open a new draft. */
 	async ensurePull(
 		ref: RepoRef,
