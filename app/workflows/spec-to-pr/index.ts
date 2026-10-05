@@ -1,5 +1,5 @@
 /** spec-to-pr — labeled issue to reviewed draft pull request. */
-import { task } from "@renderinc/sdk/workflows";
+import { type TaskContext, task } from "@renderinc/sdk/workflows";
 import { repository, triggerLabel } from "../../config/index.js";
 import {
 	type WorkflowResult,
@@ -50,7 +50,10 @@ export const specToPr = task(
 		plan: "standard",
 		timeoutSeconds: SANDBOX_TIMEOUT_SECONDS,
 	},
-	async function specToPr(rawInput: unknown): Promise<WorkflowResult> {
+	async function specToPr(
+		ctx: TaskContext,
+		rawInput: unknown,
+	): Promise<WorkflowResult> {
 		const { issueNumber, runId } = workflowInputSchema.parse(rawInput);
 		let setStatus: ((next: FactoryStatus) => Promise<void>) | undefined;
 
@@ -59,7 +62,7 @@ export const specToPr = task(
 			const gh = githubFromEnv();
 			setStatus = statusLabeler(gh, repo, issueNumber);
 
-			const result = await run(issueNumber, runId, setStatus);
+			const result = await pipeline(ctx, issueNumber, runId, setStatus);
 			await recordOutcome(runId, result);
 			await setStatus(terminalStatus(result));
 
@@ -67,7 +70,9 @@ export const specToPr = task(
 			// because reapplying it is how a maintainer retries.
 			await gh
 				.removeLabel(repo, issueNumber, triggerLabel())
-				.catch((error) => console.error("Failed to remove trigger label:", error));
+				.catch((error) =>
+					console.error("Failed to remove trigger label:", error),
+				);
 			return result;
 		} catch (error) {
 			const summary = error instanceof Error ? error.message : String(error);
@@ -86,7 +91,8 @@ export const specToPr = task(
 );
 
 /** The pipeline. */
-async function run(
+async function pipeline(
+	ctx: TaskContext,
 	issueNumber: number,
 	runId: string,
 	setStatus: (next: FactoryStatus) => Promise<void>,
@@ -99,6 +105,7 @@ async function run(
 
 	// ── Intake ──────────────────────────────────────────────────────────
 	const { issue, workItem, triage } = await loadIntake(
+		ctx,
 		gh,
 		repo,
 		issueNumber,
@@ -133,14 +140,14 @@ async function run(
 
 		// ── Analysis ────────────────────────────────────────────────────
 		await setStatus(STATUS.analyzing);
-		const analysis = await analysisTask({
+		const analysis = await ctx.run(analysisTask, {
 			message: `Work item:\n${workItem}`,
 			sandboxId: sandbox.id,
 		});
 
 		// ── Implementation ──────────────────────────────────────────────
 		await setStatus(STATUS.implementing);
-		const first = await implementAndCommit({
+		const first = await implementAndCommit(ctx, {
 			sandbox,
 			checkout,
 			previousSha: checkout.baseSha,
@@ -157,10 +164,13 @@ async function run(
 			);
 			return { status: "no_changes" };
 		}
-		let state: ImplementationState = { summary: first.summary, sha: first.sha };
+		let state: ImplementationState = {
+			summary: first.summary,
+			sha: first.sha,
+		};
 
 		// ── Verification ────────────────────────────────────────────────
-		const verified = await verifyWithFixes({
+		const verified = await verifyWithFixes(ctx, {
 			sandbox,
 			checkout,
 			issueNumber,
@@ -183,6 +193,7 @@ async function run(
 
 		// ── Self-review ─────────────────────────────────────────────────
 		const selfReview = await runSelfReview(
+			ctx,
 			await completeDiff(sandbox, checkout, state.sha),
 			workItem,
 		);
@@ -190,7 +201,7 @@ async function run(
 			const issues = selfReview.issues
 				.map((text, i) => `${i + 1}. ${text}`)
 				.join("\n");
-			const fix = await implementAndCommit({
+			const fix = await implementAndCommit(ctx, {
 				sandbox,
 				checkout,
 				previousSha: state.sha,
@@ -206,13 +217,14 @@ async function run(
 		// ── Review ──────────────────────────────────────────────────────
 		await setStatus(STATUS.reviewing);
 		let review = await reviewDiff(
+			ctx,
 			await completeDiff(sandbox, checkout, state.sha),
 			state.summary,
 		);
 
 		// One revision round. If the judge still objects, stop and report.
 		if (review.decision === "request_changes") {
-			const revision = await implementAndCommit({
+			const revision = await implementAndCommit(ctx, {
 				sandbox,
 				checkout,
 				previousSha: state.sha,
@@ -225,6 +237,7 @@ async function run(
 			if (revision.sha) {
 				state = { summary: revision.summary, sha: revision.sha };
 				review = await reviewDiff(
+					ctx,
 					await completeDiff(sandbox, checkout, state.sha),
 					state.summary,
 				);
@@ -263,6 +276,8 @@ async function run(
 	} finally {
 		await sandbox
 			.terminate()
-			.catch((error) => console.error("Failed to terminate sandbox:", error));
+			.catch((error) =>
+				console.error("Failed to terminate sandbox:", error),
+			);
 	}
 }

@@ -1,6 +1,11 @@
+import type { TaskContext } from "@renderinc/sdk/workflows";
 import { factoryConfig } from "../../../factory.config.js";
 import { implementationSchema } from "../../contracts/index.js";
-import { type Checkout, commitChanges, runVerification } from "../../git/index.js";
+import {
+	type Checkout,
+	commitChanges,
+	runVerification,
+} from "../../git/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 import { implementTask } from "../../tasks/index.js";
 import { agentJson } from "../agent-json.js";
@@ -21,10 +26,12 @@ export interface ImplementOptions {
 }
 
 export async function implementAndCommit(
+	ctx: TaskContext,
 	opts: ImplementOptions,
 ): Promise<{ summary: string; sha: string | null }> {
 	const { summary } = await agentJson(
-		(message) => implementTask({ message, sandboxId: opts.sandbox.id }),
+		(message) =>
+			ctx.run(implementTask, { message, sandboxId: opts.sandbox.id }),
 		implementationSchema,
 		opts.prompt,
 		opts.stage,
@@ -43,13 +50,16 @@ export type VerificationOutcome =
 	| { passed: false; failures: string };
 
 /** Run verify commands, feeding failures back for up to MAX_VERIFY_ROUNDS. */
-export async function verifyWithFixes(opts: {
-	sandbox: Sandbox;
-	checkout: Checkout;
-	issueNumber: number;
-	workItem: string;
-	state: ImplementationState;
-}): Promise<VerificationOutcome> {
+export async function verifyWithFixes(
+	ctx: TaskContext,
+	opts: {
+		sandbox: Sandbox;
+		checkout: Checkout;
+		issueNumber: number;
+		workItem: string;
+		state: ImplementationState;
+	},
+): Promise<VerificationOutcome> {
 	let state = opts.state;
 	if (factoryConfig.verify.length === 0) return { passed: true, state };
 
@@ -63,7 +73,7 @@ export async function verifyWithFixes(opts: {
 			return { passed: false, failures: verification.failures };
 		}
 
-		const fix = await implementAndCommit({
+		const fix = await implementAndCommit(ctx, {
 			sandbox: opts.sandbox,
 			checkout: opts.checkout,
 			previousSha: state.sha,

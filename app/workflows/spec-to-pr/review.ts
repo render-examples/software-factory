@@ -1,3 +1,4 @@
+import type { TaskContext } from "@renderinc/sdk/workflows";
 import { parseModelJson } from "../../claude/index.js";
 import {
 	judgeSchema,
@@ -17,11 +18,12 @@ import {
 import { agentJson } from "../agent-json.js";
 
 export function runSelfReview(
+	ctx: TaskContext,
 	diff: string,
 	workItem: string,
 ): Promise<SelfReview> {
 	return agentJson(
-		(message) => selfReviewTask({ message }),
+		(message) => ctx.run(selfReviewTask, { message }),
 		selfReviewSchema,
 		`Work item:\n${workItem}\n\nComplete diff:\n${diff}`,
 		"self-review",
@@ -30,13 +32,14 @@ export function runSelfReview(
 
 /** Fan out to three reviewers in parallel, then synthesize with the judge. */
 export async function reviewDiff(
+	ctx: TaskContext,
 	diff: string,
 	implementationSummary: string,
 ): Promise<Review> {
 	const [securityRaw, correctnessRaw, testsRaw] = await Promise.all([
-		securityTask({ message: diff }),
-		correctnessTask({ message: diff }),
-		testsTask({
+		ctx.run(securityTask, { message: diff }),
+		ctx.run(correctnessTask, { message: diff }),
+		ctx.run(testsTask, {
 			message: `${implementationSummary}\n\nComplete diff:\n${diff}`,
 		}),
 	]);
@@ -60,7 +63,7 @@ export async function reviewDiff(
 	].join("\n\n");
 
 	const verdict = await agentJson(
-		(message) => judgeTask({ message }),
+		(message) => ctx.run(judgeTask, { message }),
 		judgeSchema,
 		`${details}\n\nComplete diff:\n${diff}`,
 		"judge",
