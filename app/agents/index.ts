@@ -1,3 +1,5 @@
+export type { Agent } from "./types.js";
+
 /** The eight agents, in pipeline order. */
 export { triage } from "./triage.js";
 export { analyst } from "./analyst.js";

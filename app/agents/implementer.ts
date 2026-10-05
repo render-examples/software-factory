@@ -1,12 +1,13 @@
 import { target } from "../config/index.js";
-import { type Agent, md } from "../claude/index.js";
-import { allTools } from "../tools/index.js";
+import { md } from "../runners/index.js";
+import { execTools, readTools, writeTools } from "../tools/index.js";
+import type { Agent } from "./types.js";
 
 export const implementer: Agent = {
 	id: "implementer",
 	description: "Implements the approved plan in an isolated sandbox",
 	model: "large",
-	tools: allTools,
+	tools: [...readTools, ...writeTools, ...execTools],
 	maxTurns: 60,
 	plan: "standard",
 	prompt: md`

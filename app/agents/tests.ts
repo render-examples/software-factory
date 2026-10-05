@@ -1,5 +1,6 @@
-import { type Agent, md } from "../claude/index.js";
+import { md } from "../runners/index.js";
 import { reviewerOutputContract } from "./review-contract.js";
+import type { Agent } from "./types.js";
 
 export const tests: Agent = {
 	id: "tests",

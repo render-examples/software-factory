@@ -1,4 +1,4 @@
-import { md } from "../claude/index.js";
+import { md } from "../runners/index.js";
 
 /** Shared output contract for the three parallel reviewers. */
 export const reviewerOutputContract = md`

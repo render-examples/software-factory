@@ -1,4 +1,5 @@
-import { type Agent, md } from "../claude/index.js";
+import { md } from "../runners/index.js";
+import type { Agent } from "./types.js";
 
 export const triage: Agent = {
 	id: "triage",
