@@ -217,6 +217,93 @@ export async function getRun(id: string): Promise<RunRecord | null> {
 	return mapRunRow(rows[0]);
 }
 
+/**
+ * Return a run to queued with a future dispatch_after.
+ * Used by the dispatcher on retryable errors.
+ */
+export async function requeueForDispatch(
+	runId: string,
+	dispatchAfter: Date,
+): Promise<void> {
+	await db().query(
+		`UPDATE runs
+		 SET status = 'queued',
+		     dispatch_after = $2,
+		     updated_at = now()
+		 WHERE id = $1 AND status = 'dispatched'`,
+		[runId, dispatchAfter],
+	);
+}
+
+/** Find runs stuck in dispatched status beyond a threshold. */
+export async function findStaleDispatched(
+	staleMinutes: number,
+): Promise<Array<{ id: string; workflow: string }>> {
+	const { rows } = await db().query(
+		`SELECT id, workflow FROM runs
+		 WHERE status = 'dispatched'
+		   AND dispatched_at < now() - make_interval(mins => $1)`,
+		[staleMinutes],
+	);
+	return rows.map((r: { id: string; workflow: string }) => ({
+		id: r.id,
+		workflow: r.workflow,
+	}));
+}
+
+/** Re-queue a stale dispatched run back to queued. */
+export async function requeueStaleDispatched(runId: string): Promise<boolean> {
+	const result = await db().query(
+		`UPDATE runs
+		 SET status = 'queued',
+		     dispatch_after = now(),
+		     updated_at = now()
+		 WHERE id = $1 AND status = 'dispatched'`,
+		[runId],
+	);
+	return (result.rowCount ?? 0) === 1;
+}
+
+/** Find running runs with no recent heartbeat. */
+export async function findLostExecutions(
+	silentMinutes: number,
+): Promise<Array<{ id: string }>> {
+	const { rows } = await db().query(
+		`SELECT id FROM runs
+		 WHERE status = 'running'
+		   AND (heartbeat_at IS NULL OR heartbeat_at < now() - make_interval(mins => $1))
+		   AND started_at < now() - make_interval(mins => $1)`,
+		[silentMinutes],
+	);
+	return rows.map((r: { id: string }) => ({ id: r.id }));
+}
+
+/**
+ * Find the active (non-terminal) run for a subject.
+ * Used by the cancel command to locate the run to cancel.
+ */
+export async function findActiveRunForSubject(
+	repo: string,
+	subjectKind: SubjectKind,
+	subjectNumber: number,
+): Promise<RunRecord | null> {
+	const { rows } = await db().query(
+		`SELECT id, repo, subject_kind, subject_number, workflow,
+		        status, stage, outcome, result, summary, trigger,
+		        input, previous_run_id, cancel_requested_at,
+		        dispatch_attempts, dispatch_after, dispatched_at,
+		        heartbeat_at, started_at, completed_at,
+		        cost_usd, created_at, updated_at
+		 FROM runs
+		 WHERE repo = $1 AND subject_kind = $2 AND subject_number = $3
+		   AND status IN ('queued', 'dispatched', 'running')
+		 LIMIT 1`,
+		[repo, subjectKind, subjectNumber],
+	);
+	if (rows.length === 0) return null;
+	return mapRunRow(rows[0]);
+}
+
 function mapRunRow(row: Record<string, unknown>): RunRecord {
 	return {
 		id: row.id as string,
