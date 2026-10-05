@@ -16,7 +16,6 @@ const APP_VARS = [
 	"GITHUB_APP_ID",
 	"GITHUB_APP_PRIVATE_KEY",
 	"GITHUB_APP_INSTALLATION_ID",
-	"GITHUB_TOKEN",
 ] as const;
 
 function tokenResponse(token: string, expiresInMs: number) {
@@ -43,22 +42,18 @@ afterEach(() => {
 	for (const name of APP_VARS) delete process.env[name];
 });
 
-describe("PAT fallback", () => {
-	it("uses GITHUB_TOKEN when no app is configured", async () => {
-		process.env.GITHUB_TOKEN = "ghp_personal";
-		expect(await githubToken()).toBe("ghp_personal");
-		expect(usingGitHubApp()).toBe(false);
+describe("App-only auth", () => {
+	it("throws when no app credentials are present", async () => {
+		await expect(githubToken()).rejects.toThrow(/GitHub App credentials required/);
 	});
 
-	it("throws when neither credential is present", async () => {
-		await expect(githubToken()).rejects.toThrow(/No GitHub credentials/);
-	});
-
-	it("falls back to the PAT when the app config is incomplete", async () => {
+	it("throws when app config is incomplete", async () => {
 		process.env.GITHUB_APP_ID = "123456";
-		process.env.GITHUB_TOKEN = "ghp_personal";
-		expect(await githubToken()).toBe("ghp_personal");
-		expect(usingGitHubApp()).toBe(false);
+		await expect(githubToken()).rejects.toThrow(/GitHub App credentials required/);
+	});
+
+	it("usingGitHubApp always returns true", () => {
+		expect(usingGitHubApp()).toBe(true);
 	});
 });
 
@@ -68,14 +63,12 @@ describe("GitHub App", () => {
 		const fetchImpl = tokenResponse("ghs_install", 60 * 60 * 1000);
 
 		expect(await githubToken(fetchImpl)).toBe("ghs_install");
-		expect(usingGitHubApp()).toBe(true);
 
 		const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
 			.calls[0];
 		expect(String(url)).toContain("/app/installations/7891011/access_tokens");
 		expect((init as RequestInit).method).toBe("POST");
 
-		// A JWT is three base64url segments; the app never sends the raw key.
 		const auth = String(
 			(init as RequestInit).headers &&
 				((init as RequestInit).headers as Record<string, string>).Authorization,
@@ -84,12 +77,14 @@ describe("GitHub App", () => {
 		expect(auth).not.toContain("PRIVATE KEY");
 	});
 
-	it("prefers the app over a PAT when both are set", async () => {
+	it("scopes tokens to the target repository", async () => {
 		useApp();
-		process.env.GITHUB_TOKEN = "ghp_personal";
-		expect(await githubToken(tokenResponse("ghs_install", 3_600_000))).toBe(
-			"ghs_install",
-		);
+		const fetchImpl = tokenResponse("ghs_scoped", 3_600_000);
+		await githubToken(fetchImpl);
+
+		const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+		const body = JSON.parse((init as RequestInit).body as string);
+		expect(body.repositories).toContain("render-factory-sample");
 	});
 
 	it("caches the token instead of exchanging on every call", async () => {
@@ -103,7 +98,6 @@ describe("GitHub App", () => {
 		expect(fetchImpl).toHaveBeenCalledTimes(1);
 	});
 
-	// A run can outlive the one-hour lifetime, so renew before it lapses.
 	it("re-exchanges when the cached token is near expiry", async () => {
 		useApp();
 		const fetchImpl = tokenResponse("ghs_install", 60_000);
@@ -112,6 +106,26 @@ describe("GitHub App", () => {
 		await githubToken(fetchImpl);
 
 		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+
+	it("caches separately per permission set", async () => {
+		useApp();
+		const fetchImpl = tokenResponse("ghs_a", 3_600_000);
+		await githubToken(fetchImpl);
+		await githubToken({ permissions: { contents: "read" }, fetch: fetchImpl });
+		await githubToken(fetchImpl);
+
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+
+	it("narrows permissions when requested", async () => {
+		useApp();
+		const fetchImpl = tokenResponse("ghs_narrow", 3_600_000);
+		await githubToken({ permissions: { contents: "read" }, fetch: fetchImpl });
+
+		const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+		const body = JSON.parse((init as RequestInit).body as string);
+		expect(body.permissions).toEqual({ contents: "read" });
 	});
 
 	it("accepts a base64-encoded private key", async () => {

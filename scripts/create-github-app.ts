@@ -176,6 +176,6 @@ console.log(dim("The private key is base64-encoded so it survives as a single-li
 heading("Set this on the gateway");
 console.log(`\nGITHUB_WEBHOOK_SECRET=${credentials.webhook_secret}\n`);
 console.log(
-	yellow("Remove GITHUB_TOKEN once the App works — otherwise nothing changes, since the App takes precedence."),
+	yellow("GitHub App authentication is required — no PAT fallback."),
 );
 console.log(dim("\nVerify with: npm run doctor"));

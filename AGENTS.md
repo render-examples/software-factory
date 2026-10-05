@@ -74,7 +74,7 @@ A barrel exports what other modules actually use. If a symbol is only used
 inside its own module, keep it out of `index.ts`.
 
 ```text
-factory.config.ts   Repo dir, verify commands, model tiers, actors
+factory.config.ts   Repository targets, labels, models, pool, limits
 app/
   config/           Environment parsing and per-process validation
   gateway/          Signature, body cap, filters, dispatch, health
@@ -90,7 +90,7 @@ app/
   git/              Clone, commit, diff, verify, push — all workflow-owned
   github/           REST client, plus App/PAT credential resolution
   format/           Issue to work item; results to GitHub markdown
-  store/            Postgres: one runs table
+  store/            Postgres: runs, deliveries, events, specs, sandboxes, artifacts
   sql/              Schema, applied by scripts/migrate.ts
   src/              Process entrypoints
 scripts/            migrate, doctor, setup-github, create-github-app
@@ -119,8 +119,8 @@ so a reader can see the module's surface at a glance.
 
 Do not weaken these without an explicit security-model change:
 
-- One deployment is bound to one validated `FACTORY_REPO`.
-- Only `issues.labeled` from an allowed human actor starts a run.
+- One deployment is bound to one validated target repository (`factoryConfig.repos[0]`).
+- Only `issues.labeled` with a configured trigger label from an allowed human actor starts a run.
 - The webhook signature is verified before the body is parsed.
 - Agents receive only the tools listed in their definition. Claude's built-in
   `Bash`, `Read`, `Write`, and `Edit` are never granted — `claude.ts` always
@@ -130,10 +130,10 @@ Do not weaken these without an explicit security-model change:
 - Git pushes, labels, sandbox lifecycle, and PR creation stay in workflow code.
 - The trigger label is removed only on a terminal result, never on a thrown
   error — a retry re-reads the issue and needs the label still there.
-- `factory:` status labels are cosmetic and never fail a run.
-- Resolve GitHub credentials through `githubToken()`, which returns a GitHub
-  App installation token when the `GITHUB_APP_*` trio is set and falls back to
-  `GITHUB_TOKEN`. Never read `GITHUB_TOKEN` directly.
+- `factory-status:` status labels are cosmetic and never fail a run.
+- Resolve GitHub credentials through `githubToken()`, which mints a GitHub
+  App installation token scoped to the target repository. There is no PAT
+  fallback.
 - The sandbox is terminated in a `finally` block.
 - `verifyPush` confirms the remote matches the reviewed commit before a PR opens.
 - Automation stops at a draft PR. It never marks ready or merges.
