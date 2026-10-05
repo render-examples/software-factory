@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { parseModelJson } from "../claude/index.js";
+import { parseModelJson } from "../runners/index.js";
 
 export type AgentCall = (message: string) => string | Promise<string>;
 

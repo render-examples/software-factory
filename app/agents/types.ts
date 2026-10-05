@@ -1,4 +1,4 @@
-import type { ModelTier } from "../../factory.config.js";
+import type { ModelTier, RunnerName } from "../../factory.config.js";
 import type { Tool } from "../tools/index.js";
 
 export interface Agent {
@@ -11,4 +11,6 @@ export interface Agent {
 	readonly maxTurns?: number;
 	/** Render Workflows instance plan. */
 	readonly plan?: string;
+	/** Overrides `factoryConfig.agents.runner` for this agent. */
+	readonly runner?: RunnerName;
 }

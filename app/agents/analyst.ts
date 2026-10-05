@@ -1,6 +1,7 @@
 import { target } from "../config/index.js";
-import { type Agent, md } from "../claude/index.js";
+import { md } from "../runners/index.js";
 import { readTools } from "../tools/index.js";
+import type { Agent } from "./types.js";
 
 export const analyst: Agent = {
 	id: "analyst",
