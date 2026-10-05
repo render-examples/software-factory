@@ -5,36 +5,80 @@ const mocks = vi.hoisted(() => ({
 	acceptDelivery: vi.fn(),
 	finishRun: vi.fn(),
 	recordDelivery: vi.fn(),
+	requestCancel: vi.fn(),
+	findActiveRunForSubject: vi.fn(),
+	getCurrentSpec: vi.fn(),
 	ping: vi.fn(),
-	startTask: vi.fn(),
+	appendEvent: vi.fn(),
 }));
 
 vi.mock("../app/store/index.js", () => ({
 	acceptDelivery: mocks.acceptDelivery,
 	finishRun: mocks.finishRun,
 	recordDelivery: mocks.recordDelivery,
+	requestCancel: mocks.requestCancel,
+	findActiveRunForSubject: mocks.findActiveRunForSubject,
+	getCurrentSpec: mocks.getCurrentSpec,
 	ping: mocks.ping,
 }));
 
-vi.mock("@renderinc/sdk", () => ({
-	Render: class {
-		workflows = { startTask: mocks.startTask };
-	},
+vi.mock("../app/store/events.js", () => ({
+	appendEvent: mocks.appendEvent,
 }));
 
 const { createGateway } = await import("../app/gateway/index.js");
 
 const SECRET = "webhook-secret";
 
-function payload(overrides: Record<string, unknown> = {}) {
+function issuePayload(overrides: Record<string, unknown> = {}) {
 	return {
 		action: "labeled",
-		issue: { number: 42 },
+		issue: {
+			number: 42,
+			labels: [{ name: "factory:full-run" }],
+		},
 		label: { name: "factory:full-run" },
 		repository: {
 			full_name: "jacobprall/render-factory-sample",
 		},
-		sender: { login: "Maintainer", type: "User" },
+		sender: { login: "Maintainer", id: 1, type: "User" },
+		...overrides,
+	};
+}
+
+function commentPayload(overrides: Record<string, unknown> = {}) {
+	return {
+		action: "created",
+		issue: {
+			number: 42,
+			labels: [{ name: "factory:triage" }],
+		},
+		comment: {
+			id: 100,
+			body: "Here is more detail about the issue",
+			author_association: "OWNER",
+			user: { login: "Maintainer", id: 1, type: "User" },
+		},
+		repository: {
+			full_name: "jacobprall/render-factory-sample",
+		},
+		sender: { login: "Maintainer", id: 1, type: "User" },
+		...overrides,
+	};
+}
+
+function prPayload(overrides: Record<string, unknown> = {}) {
+	return {
+		action: "labeled",
+		pull_request: {
+			number: 10,
+			head: { sha: "abc123" },
+		},
+		label: { name: "factory:pr-review" },
+		repository: {
+			full_name: "jacobprall/render-factory-sample",
+		},
+		sender: { login: "Maintainer", id: 1, type: "User" },
 		...overrides,
 	};
 }
@@ -76,12 +120,13 @@ beforeEach(() => {
 		followUpCreated: false,
 	});
 	mocks.recordDelivery.mockResolvedValue(undefined);
+	mocks.requestCancel.mockResolvedValue(true);
+	mocks.findActiveRunForSubject.mockResolvedValue(null);
+	mocks.getCurrentSpec.mockResolvedValue(null);
 	mocks.ping.mockResolvedValue(undefined);
-	mocks.startTask.mockResolvedValue({ taskRunId: "trn-1" });
+	mocks.appendEvent.mockResolvedValue("1");
 
-	process.env.FACTORY_GITHUB_ACTORS = "maintainer";
 	process.env.GITHUB_WEBHOOK_SECRET = SECRET;
-	process.env.RENDER_WORKFLOW_SLUG = "wfs-1";
 });
 
 describe("health", () => {
@@ -100,7 +145,7 @@ describe("health", () => {
 
 describe("authentication", () => {
 	it("rejects a wrong signature before parsing the body", async () => {
-		const response = await post(payload(), {
+		const response = await post(issuePayload(), {
 			signature: "sha256=deadbeef",
 		});
 		expect(response.status).toBe(401);
@@ -108,7 +153,7 @@ describe("authentication", () => {
 	});
 
 	it("rejects a request with no signature", async () => {
-		const response = await post(payload(), { signature: "" });
+		const response = await post(issuePayload(), { signature: "" });
 		expect(response.status).toBe(401);
 	});
 
@@ -121,12 +166,11 @@ describe("authentication", () => {
 });
 
 describe("event filtering", () => {
-	it("ignores events other than issues", async () => {
-		const response = await post(payload(), { event: "push" });
-		expect(await response.json()).toMatchObject({
-			ignored: true,
-		});
-		expect(mocks.startTask).not.toHaveBeenCalled();
+	it("ignores events other than issues, issue_comment, pull_request", async () => {
+		const response = await post(issuePayload(), { event: "push" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
 	});
 
 	it("rejects malformed JSON that carries a valid signature", async () => {
@@ -135,82 +179,288 @@ describe("event filtering", () => {
 	});
 
 	it.each([
-		["a non-labeled action", payload({ action: "opened" })],
-		["a different label", payload({ label: { name: "bug" } })],
+		["a non-labeled action", issuePayload({ action: "opened" })],
+		["a different label", issuePayload({ label: { name: "bug" } })],
 		[
 			"another repository",
-			payload({ repository: { full_name: "acme/other" } }),
+			issuePayload({ repository: { full_name: "acme/other" } }),
 		],
-		["a pull request", payload({ issue: { number: 42, pull_request: {} } })],
+		[
+			"a pull request in issue event",
+			issuePayload({ issue: { number: 42, labels: [], pull_request: {} } }),
+		],
 		[
 			"a bot sender",
-			payload({
-				sender: { login: "maintainer", type: "Bot" },
-			}),
-		],
-		[
-			"an actor not on the allowlist",
-			payload({
-				sender: { login: "stranger", type: "User" },
+			issuePayload({
+				sender: { login: "bot", id: 1, type: "Bot" },
 			}),
 		],
 	])("skips %s", async (_label, body) => {
 		const response = await post(body);
-		expect(await response.json()).toMatchObject({
-			skipped: true,
-		});
-		expect(mocks.startTask).not.toHaveBeenCalled();
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
 	});
 
 	it("requires a well-formed delivery ID", async () => {
-		expect((await post(payload(), { delivery: null })).status).toBe(400);
-		expect((await post(payload(), { delivery: "short" })).status).toBe(400);
+		expect((await post(issuePayload(), { delivery: null })).status).toBe(400);
+		expect((await post(issuePayload(), { delivery: "short" })).status).toBe(
+			400,
+		);
 	});
 });
 
-describe("dispatch", () => {
-	it("accepts a delivery and starts the workflow task", async () => {
-		const response = await post(payload());
-
+describe("issue labeled triggers", () => {
+	it("factory:triage creates a triage run", async () => {
+		const body = issuePayload({
+			label: { name: "factory:triage" },
+			issue: { number: 42, labels: [{ name: "factory:triage" }] },
+		});
+		const response = await post(body);
 		expect(response.status).toBe(202);
 		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
 			expect.objectContaining({
-				delivery: expect.objectContaining({
-					deliveryId: "delivery-0001",
-				}),
 				run: expect.objectContaining({
-					repo: "jacobprall/render-factory-sample",
+					workflow: "triage",
 					subjectKind: "issue",
 					subjectNumber: 42,
+				}),
+			}),
+		);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.autoAdvance).toBe(false);
+	});
+
+	it("factory:full-run creates a triage run with autoAdvance", async () => {
+		const response = await post(issuePayload());
+		expect(response.status).toBe(202);
+		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				run: expect.objectContaining({
+					workflow: "triage",
+				}),
+			}),
+		);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.autoAdvance).toBe(true);
+	});
+
+	it("factory:spec-approved creates a spec-to-pr run", async () => {
+		mocks.getCurrentSpec.mockResolvedValue({
+			id: "spec-1",
+			currentVersion: 2,
+		});
+		const body = issuePayload({
+			label: { name: "factory:spec-approved" },
+			issue: { number: 42, labels: [{ name: "factory:spec-approved" }] },
+		});
+		const response = await post(body);
+		expect(response.status).toBe(202);
+		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				run: expect.objectContaining({
 					workflow: "spec-to-pr",
 				}),
 			}),
 		);
-		expect(mocks.startTask).toHaveBeenCalledWith("wfs-1/spec-to-pr", [
-			expect.objectContaining({ issueNumber: 42 }),
-		]);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.specId).toBe("spec-1");
+		expect(runInput.specVersion).toBe(2);
+		expect(runInput.autoAdvance).toBe(false);
 	});
 
-	it("matches the actor allowlist case-insensitively", async () => {
-		const response = await post(
-			payload({
-				sender: { login: "MAINTAINER", type: "User" },
+	it("factory:spec-approved with factory:full-run sets autoAdvance", async () => {
+		mocks.getCurrentSpec.mockResolvedValue(null);
+		const body = issuePayload({
+			label: { name: "factory:spec-approved" },
+			issue: {
+				number: 42,
+				labels: [
+					{ name: "factory:spec-approved" },
+					{ name: "factory:full-run" },
+				],
+			},
+		});
+		const response = await post(body);
+		expect(response.status).toBe(202);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.autoAdvance).toBe(true);
+		expect(runInput.specId).toBeNull();
+	});
+
+	it("ignores an unrecognized label", async () => {
+		const body = issuePayload({
+			label: { name: "help-wanted" },
+		});
+		const response = await post(body);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+});
+
+describe("issue comment triggers", () => {
+	it("reply on an issue with triage label creates a triage run", async () => {
+		const response = await post(commentPayload(), {
+			event: "issue_comment",
+		});
+		expect(response.status).toBe(202);
+		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				run: expect.objectContaining({
+					workflow: "triage",
+					subjectKind: "issue",
+					subjectNumber: 42,
+				}),
 			}),
 		);
-		expect(response.status).toBe(202);
 	});
 
+	it("reply on an issue with full-run label sets autoAdvance", async () => {
+		const body = commentPayload({
+			issue: {
+				number: 42,
+				labels: [{ name: "factory:full-run" }],
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.autoAdvance).toBe(true);
+	});
+
+	it("ignores replies on issues without triage/full-run labels", async () => {
+		const body = commentPayload({
+			issue: {
+				number: 42,
+				labels: [{ name: "bug" }],
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+
+	it("drops comments containing a factory marker", async () => {
+		const body = commentPayload({
+			comment: {
+				id: 101,
+				body: "Some text <!-- render-factory:spec:abc --> more text",
+				author_association: "OWNER",
+				user: { login: "Maintainer", id: 1, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+
+	it("drops comments from non-collaborators", async () => {
+		const body = commentPayload({
+			comment: {
+				id: 102,
+				body: "I want to help",
+				author_association: "NONE",
+				user: { login: "Stranger", id: 99, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+
+	it("ignores bot comments", async () => {
+		const body = commentPayload({
+			sender: { login: "some-bot", id: 2, type: "Bot" },
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+	});
+
+	it("handles /factory cancel command", async () => {
+		mocks.findActiveRunForSubject.mockResolvedValue({
+			id: "run-123",
+			status: "running",
+		});
+		const body = commentPayload({
+			comment: {
+				id: 103,
+				body: "/factory cancel",
+				author_association: "OWNER",
+				user: { login: "Maintainer", id: 1, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			cancel: true,
+			runId: "run-123",
+		});
+		expect(mocks.requestCancel).toHaveBeenCalledWith("run-123");
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+
+	it("cancel command when no active run does not error", async () => {
+		mocks.findActiveRunForSubject.mockResolvedValue(null);
+		const body = commentPayload({
+			comment: {
+				id: 104,
+				body: "/factory cancel",
+				author_association: "OWNER",
+				user: { login: "Maintainer", id: 1, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			cancel: true,
+			runId: null,
+		});
+		expect(mocks.requestCancel).not.toHaveBeenCalled();
+	});
+});
+
+describe("pull request labeled triggers", () => {
+	it("factory:pr-review creates a pr-review run", async () => {
+		const response = await post(prPayload(), { event: "pull_request" });
+		expect(response.status).toBe(202);
+		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				run: expect.objectContaining({
+					workflow: "pr-review",
+					subjectKind: "pull_request",
+					subjectNumber: 10,
+				}),
+			}),
+		);
+		const runInput = mocks.acceptDelivery.mock.calls[0][0].run.input;
+		expect(runInput.prNumber).toBe(10);
+		expect(runInput.headSha).toBe("abc123");
+	});
+
+	it("ignores non-pr-review labels on pull requests", async () => {
+		const body = prPayload({
+			label: { name: "needs-review" },
+		});
+		const response = await post(body, { event: "pull_request" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
+	});
+});
+
+describe("delivery deduplication", () => {
 	it("returns 202 for a redelivered webhook", async () => {
 		mocks.acceptDelivery.mockResolvedValue({
 			outcome: "duplicate",
 		});
-		const response = await post(payload());
-
+		const response = await post(issuePayload());
 		expect(response.status).toBe(202);
-		expect(await response.json()).toMatchObject({
-			skipped: true,
-		});
-		expect(mocks.startTask).not.toHaveBeenCalled();
+		expect(await response.json()).toMatchObject({ skipped: true });
 	});
 
 	it("returns 202 when a run is already active", async () => {
@@ -218,27 +468,19 @@ describe("dispatch", () => {
 			outcome: "duplicate_active_run",
 			runCreated: false,
 		});
-		const response = await post(payload());
-
+		const response = await post(issuePayload());
 		expect(response.status).toBe(202);
-		expect(mocks.startTask).not.toHaveBeenCalled();
 	});
+});
 
-	it("releases the run when dispatch fails", async () => {
-		mocks.startTask.mockRejectedValue(new Error("render unavailable"));
-		const response = await post(payload());
-
-		expect(response.status).toBe(502);
-		expect(mocks.finishRun).toHaveBeenCalledWith(
-			expect.any(String),
-			"failed",
-			expect.objectContaining({ summary: "dispatch failed" }),
-		);
-	});
-
-	it("fails when the workflow slug is not configured", async () => {
-		process.env.RENDER_WORKFLOW_SLUG = "";
-		const response = await post(payload());
-		expect(response.status).toBe(502);
+describe("wrong repo", () => {
+	it("ignores events from non-target repositories", async () => {
+		const body = issuePayload({
+			repository: { full_name: "someone-else/other-repo" },
+		});
+		const response = await post(body);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
 	});
 });
