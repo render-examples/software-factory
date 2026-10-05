@@ -1,4 +1,4 @@
-import { factoryConfig } from "../../factory.config.js";
+import { target } from "../config/index.js";
 
 export const PATH_TOOLS = new Set([
 	"sandbox__read_file",
@@ -8,6 +8,7 @@ export const PATH_TOOLS = new Set([
 
 /** Returns a reason if any string argument escapes the allowed roots. */
 export function pathEscape(input: Record<string, unknown>): string | null {
+	const repoDir = target().repoDir;
 	for (const value of Object.values(input)) {
 		if (typeof value !== "string") continue;
 		const normalized = value.replace(/\/+/g, "/");
@@ -17,7 +18,7 @@ export function pathEscape(input: Record<string, unknown>): string | null {
 		}
 		if (
 			normalized.startsWith("/") &&
-			!normalized.startsWith(factoryConfig.repoDir) &&
+			!normalized.startsWith(repoDir) &&
 			!normalized.startsWith("/tmp/")
 		) {
 			return `absolute path outside the checkout: ${normalized.slice(0, 60)}`;

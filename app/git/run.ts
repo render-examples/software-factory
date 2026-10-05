@@ -1,8 +1,8 @@
-import { factoryConfig } from "../../factory.config.js";
+import { target } from "../config/index.js";
 import type { Sandbox } from "../sandbox/index.js";
 import { shellEscape } from "../shell/index.js";
 
-export const REPO_DIR = factoryConfig.repoDir;
+export const REPO_DIR = target().repoDir;
 
 /** Run a git subcommand in the checkout. Disables repo hooks for safety. */
 export function git(

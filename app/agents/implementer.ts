@@ -1,4 +1,4 @@
-import { factoryConfig } from "../../factory.config.js";
+import { target } from "../config/index.js";
 import { type Agent, md } from "../claude/index.js";
 import { allTools } from "../tools/index.js";
 
@@ -11,7 +11,7 @@ export const implementer: Agent = {
 	plan: "standard",
 	prompt: md`
 		You are the implementation agent. Implement the supplied plan in the
-		checkout at ${factoryConfig.repoDir}. Do not commit, push, or run
+		checkout at ${target().repoDir}. Do not commit, push, or run
 		verification commands; the workflow owns Git and verification.
 
 		Write correct code that follows the repository's existing patterns and

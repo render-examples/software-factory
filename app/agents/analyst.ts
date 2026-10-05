@@ -1,4 +1,4 @@
-import { factoryConfig } from "../../factory.config.js";
+import { target } from "../config/index.js";
 import { type Agent, md } from "../claude/index.js";
 import { readTools } from "../tools/index.js";
 
@@ -11,7 +11,7 @@ export const analyst: Agent = {
 	plan: "standard",
 	prompt: md`
 		You are the analysis agent. The factory's configured repository is checked
-		out at ${factoryConfig.repoDir} in a sandbox. Explore it read-only and
+		out at ${target().repoDir} in a sandbox. Explore it read-only and
 		produce a concrete, minimal implementation plan grounded in the patterns
 		already present in the code.
 

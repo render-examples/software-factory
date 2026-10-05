@@ -1,5 +1,5 @@
 import { type TaskContext, task } from "@renderinc/sdk/workflows";
-import { factoryConfig } from "../../factory.config.js";
+import { modelFor } from "../config/index.js";
 import { type Agent, runClaude } from "../claude/index.js";
 import { connectSandbox } from "../sandbox/index.js";
 
@@ -10,6 +10,7 @@ export interface AgentTaskInput {
 
 /** Turn an Agent into a Render Workflows task. */
 export function agentTask(agent: Agent) {
+	const model = modelFor(agent.model);
 	return task(
 		{ name: agent.id, plan: agent.plan },
 		async function runAgent(
@@ -20,7 +21,7 @@ export function agentTask(agent: Agent) {
 				agentId: agent.id,
 				systemPrompt: agent.prompt,
 				prompt: input.message,
-				model: factoryConfig.models[agent.model],
+				model,
 				maxTurns: agent.maxTurns,
 				tools: agent.tools,
 				sandbox: input.sandboxId ? connectSandbox(input.sandboxId) : undefined,
@@ -30,7 +31,7 @@ export function agentTask(agent: Agent) {
 				JSON.stringify({
 					event: "agent_completed",
 					agent: agent.id,
-					model: factoryConfig.models[agent.model],
+					model,
 					inputTokens: run.inputTokens,
 					outputTokens: run.outputTokens,
 				}),
