@@ -1,11 +1,14 @@
-export { assertGatewayEnv, assertWorkflowEnv } from "./assert.js";
 export {
-	allowedActors,
+	assertDispatcherEnv,
+	assertGatewayEnv,
+	assertMaintenanceEnv,
+	assertWorkflowEnv,
+} from "./assert.js";
+export {
 	modelFor,
 	repository,
 	requireEnv,
 	target,
-	triggerLabel,
 	type Repository,
 } from "./env.js";
 export { validateConfig } from "./validate.js";

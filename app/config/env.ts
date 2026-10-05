@@ -39,23 +39,3 @@ export function modelFor(tier: ModelTier, runner?: RunnerName): string {
 	if (!models) throw new Error(`No models configured for runner "${r}"`);
 	return models[tier];
 }
-
-/** The label that starts a full pipeline run. */
-export function triggerLabel(): string {
-	return factoryConfig.labels.fullRun;
-}
-
-/** FACTORY_GITHUB_ACTORS overrides the checked-in list in factory.config.ts. */
-export function allowedActors(): Set<string> {
-	const override = process.env.FACTORY_GITHUB_ACTORS?.trim();
-	const raw = override ? override.split(",") : factoryConfig.actors;
-	const actors = new Set(
-		raw.map((actor) => actor.trim().toLowerCase()).filter(Boolean),
-	);
-	if (actors.size === 0) {
-		throw new Error(
-			"No allowed actors. Set FACTORY_GITHUB_ACTORS or add actors to factory.config.ts",
-		);
-	}
-	return actors;
-}

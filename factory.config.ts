@@ -33,7 +33,6 @@ export interface FactoryConfig {
 	labels: FactoryLabels;
 	commandPrefix: string;
 	minimumPermission: string;
-	actors: string[];
 	agents: {
 		runner: RunnerName;
 		models: Partial<Record<RunnerName, Record<ModelTier, string>>>;
@@ -86,7 +85,6 @@ export const factoryConfig = defineFactoryConfig({
 	},
 	commandPrefix: "/factory",
 	minimumPermission: "write",
-	actors: ["jacobprall", "R4ph-t"],
 	agents: {
 		runner: "claude",
 		models: {

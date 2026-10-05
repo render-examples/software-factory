@@ -9,7 +9,8 @@
  */
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
-import { repository, triggerLabel } from "../app/config/index.js";
+import { factoryConfig } from "../factory.config.js";
+import { repository } from "../app/config/index.js";
 import { githubToken } from "../app/github/index.js";
 import {
 	ask,
@@ -42,7 +43,6 @@ function record(finding: Finding): void {
 }
 
 const repo = repository();
-const label = triggerLabel();
 const token = await githubToken();
 const base = `${API}/repos/${repo.owner}/${repo.repo}`;
 
@@ -142,31 +142,41 @@ async function ensureWebhook(
 	);
 }
 
-async function ensureLabel(): Promise<void> {
-	heading("Trigger label");
+const LABEL_DESCRIPTIONS: Record<string, string> = {
+	triage: "Start a triage round for this issue",
+	fullRun: "Full run: triage through PR review",
+	specApproved: "Approve the spec and start implementation",
+	prReview: "Run the PR reviewer on this pull request",
+};
 
-	const found = await call(
-		"GET",
-		`${base}/labels/${encodeURIComponent(label)}`,
-	);
-	if (found.ok) {
-		record({ level: "ok", message: `Label "${label}" already exists` });
-		return;
+async function ensureLabels(): Promise<void> {
+	heading("Trigger labels");
+
+	const labels = factoryConfig.labels;
+	for (const [key, labelName] of Object.entries(labels)) {
+		const found = await call(
+			"GET",
+			`${base}/labels/${encodeURIComponent(labelName)}`,
+		);
+		if (found.ok) {
+			record({ level: "ok", message: `Label "${labelName}" already exists` });
+			continue;
+		}
+
+		const created = await call("POST", `${base}/labels`, {
+			name: labelName,
+			color: LABEL_COLOR,
+			description: LABEL_DESCRIPTIONS[key] ?? "Factory label",
+		});
+		record(
+			created.ok
+				? { level: "ok", message: `Created label "${labelName}"` }
+				: {
+						level: "fail",
+						message: `Could not create label "${labelName}" (HTTP ${created.status})`,
+					},
+		);
 	}
-
-	const created = await call("POST", `${base}/labels`, {
-		name: label,
-		color: LABEL_COLOR,
-		description: "Hand this issue to the factory",
-	});
-	record(
-		created.ok
-			? { level: "ok", message: `Created label "${label}"` }
-			: {
-					level: "fail",
-					message: `Could not create label (HTTP ${created.status})`,
-				},
-	);
 }
 
 console.log(`\nConfiguring ${bold(repo.fullName)}`);
@@ -180,7 +190,8 @@ const generated = !values.secret && !process.env.GITHUB_WEBHOOK_SECRET;
 
 if (!values.yes) {
 	console.log(`\n  webhook  ${gatewayUrl}/webhooks/github`);
-	console.log(`  label    ${label}`);
+	const allLabels = Object.values(factoryConfig.labels);
+	console.log(`  labels   ${allLabels.join(", ")}`);
 	console.log(
 		`  secret   ${generated ? "newly generated" : "from --secret or the environment"}`,
 	);
@@ -191,7 +202,7 @@ if (!values.yes) {
 }
 
 await ensureWebhook(gatewayUrl, secret);
-await ensureLabel();
+await ensureLabels();
 
 if (generated) {
 	console.log(`\n${bold("Set this on the gateway as GITHUB_WEBHOOK_SECRET:")}`);
