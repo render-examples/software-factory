@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	createQueuedRun: vi.fn(),
+	acceptDelivery: vi.fn(),
 	finishRun: vi.fn(),
 	recordDelivery: vi.fn(),
 	ping: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../app/store/index.js", () => ({
-	createQueuedRun: mocks.createQueuedRun,
+	acceptDelivery: mocks.acceptDelivery,
 	finishRun: mocks.finishRun,
 	recordDelivery: mocks.recordDelivery,
 	ping: mocks.ping,
@@ -31,7 +31,9 @@ function payload(overrides: Record<string, unknown> = {}) {
 		action: "labeled",
 		issue: { number: 42 },
 		label: { name: "factory:full-run" },
-		repository: { full_name: "jacobprall/render-factory-sample" },
+		repository: {
+			full_name: "jacobprall/render-factory-sample",
+		},
 		sender: { login: "Maintainer", type: "User" },
 		...overrides,
 	};
@@ -39,7 +41,11 @@ function payload(overrides: Record<string, unknown> = {}) {
 
 function post(
 	body: unknown,
-	opts: { signature?: string; event?: string; delivery?: string | null } = {},
+	opts: {
+		signature?: string;
+		event?: string;
+		delivery?: string | null;
+	} = {},
 ) {
 	const raw = typeof body === "string" ? body : JSON.stringify(body);
 	const headers: Record<string, string> = {
@@ -49,7 +55,8 @@ function post(
 			opts.signature ??
 			`sha256=${createHmac("sha256", SECRET).update(raw).digest("hex")}`,
 	};
-	if (opts.delivery !== null) headers["x-github-delivery"] = opts.delivery ?? "delivery-0001";
+	if (opts.delivery !== null)
+		headers["x-github-delivery"] = opts.delivery ?? "delivery-0001";
 
 	return createGateway().request("/webhooks/github", {
 		method: "POST",
@@ -60,8 +67,14 @@ function post(
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.createQueuedRun.mockResolvedValue(true);
-	mocks.finishRun.mockResolvedValue(undefined);
+	mocks.acceptDelivery.mockResolvedValue({
+		outcome: "accepted",
+		runCreated: true,
+	});
+	mocks.finishRun.mockResolvedValue({
+		finished: true,
+		followUpCreated: false,
+	});
 	mocks.recordDelivery.mockResolvedValue(undefined);
 	mocks.ping.mockResolvedValue(undefined);
 	mocks.startTask.mockResolvedValue({ taskRunId: "trn-1" });
@@ -87,9 +100,11 @@ describe("health", () => {
 
 describe("authentication", () => {
 	it("rejects a wrong signature before parsing the body", async () => {
-		const response = await post(payload(), { signature: "sha256=deadbeef" });
+		const response = await post(payload(), {
+			signature: "sha256=deadbeef",
+		});
 		expect(response.status).toBe(401);
-		expect(mocks.createQueuedRun).not.toHaveBeenCalled();
+		expect(mocks.acceptDelivery).not.toHaveBeenCalled();
 	});
 
 	it("rejects a request with no signature", async () => {
@@ -98,7 +113,9 @@ describe("authentication", () => {
 	});
 
 	it("rejects a body over the size cap", async () => {
-		const response = await post(JSON.stringify({ padding: "x".repeat(300 * 1024) }));
+		const response = await post(
+			JSON.stringify({ padding: "x".repeat(300 * 1024) }),
+		);
 		expect(response.status).toBe(413);
 	});
 });
@@ -106,7 +123,9 @@ describe("authentication", () => {
 describe("event filtering", () => {
 	it("ignores events other than issues", async () => {
 		const response = await post(payload(), { event: "push" });
-		expect(await response.json()).toMatchObject({ ignored: true });
+		expect(await response.json()).toMatchObject({
+			ignored: true,
+		});
 		expect(mocks.startTask).not.toHaveBeenCalled();
 	});
 
@@ -118,13 +137,28 @@ describe("event filtering", () => {
 	it.each([
 		["a non-labeled action", payload({ action: "opened" })],
 		["a different label", payload({ label: { name: "bug" } })],
-		["another repository", payload({ repository: { full_name: "acme/other" } })],
+		[
+			"another repository",
+			payload({ repository: { full_name: "acme/other" } }),
+		],
 		["a pull request", payload({ issue: { number: 42, pull_request: {} } })],
-		["a bot sender", payload({ sender: { login: "maintainer", type: "Bot" } })],
-		["an actor not on the allowlist", payload({ sender: { login: "stranger", type: "User" } })],
+		[
+			"a bot sender",
+			payload({
+				sender: { login: "maintainer", type: "Bot" },
+			}),
+		],
+		[
+			"an actor not on the allowlist",
+			payload({
+				sender: { login: "stranger", type: "User" },
+			}),
+		],
 	])("skips %s", async (_label, body) => {
 		const response = await post(body);
-		expect(await response.json()).toMatchObject({ skipped: true });
+		expect(await response.json()).toMatchObject({
+			skipped: true,
+		});
 		expect(mocks.startTask).not.toHaveBeenCalled();
 	});
 
@@ -135,49 +169,62 @@ describe("event filtering", () => {
 });
 
 describe("dispatch", () => {
-	it("creates a queued run and starts the workflow task", async () => {
+	it("accepts a delivery and starts the workflow task", async () => {
 		const response = await post(payload());
 
 		expect(response.status).toBe(202);
-		expect(mocks.createQueuedRun).toHaveBeenCalledWith(
+		expect(mocks.acceptDelivery).toHaveBeenCalledWith(
 			expect.objectContaining({
-				repo: "jacobprall/render-factory-sample",
-				subjectKind: "issue",
-				subjectNumber: 42,
-				workflow: "spec-to-pr",
+				delivery: expect.objectContaining({
+					deliveryId: "delivery-0001",
+				}),
+				run: expect.objectContaining({
+					repo: "jacobprall/render-factory-sample",
+					subjectKind: "issue",
+					subjectNumber: 42,
+					workflow: "spec-to-pr",
+				}),
 			}),
 		);
-		expect(mocks.startTask).toHaveBeenCalledWith(
-			"wfs-1/spec-to-pr",
-			[expect.objectContaining({ issueNumber: 42 })],
-		);
-	});
-
-	it("records a delivery", async () => {
-		await post(payload());
-		expect(mocks.recordDelivery).toHaveBeenCalledWith(
-			expect.objectContaining({
-				deliveryId: "delivery-0001",
-				event: "issues",
-				outcome: "accepted",
-			}),
-		);
+		expect(mocks.startTask).toHaveBeenCalledWith("wfs-1/spec-to-pr", [
+			expect.objectContaining({ issueNumber: 42 }),
+		]);
 	});
 
 	it("matches the actor allowlist case-insensitively", async () => {
-		const response = await post(payload({ sender: { login: "MAINTAINER", type: "User" } }));
+		const response = await post(
+			payload({
+				sender: { login: "MAINTAINER", type: "User" },
+			}),
+		);
 		expect(response.status).toBe(202);
 	});
 
-	it("skips when the run claim is refused (duplicate active run)", async () => {
-		mocks.createQueuedRun.mockResolvedValue(false);
+	it("returns 202 for a redelivered webhook", async () => {
+		mocks.acceptDelivery.mockResolvedValue({
+			outcome: "duplicate",
+		});
 		const response = await post(payload());
 
-		expect(await response.json()).toMatchObject({ skipped: true });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			skipped: true,
+		});
 		expect(mocks.startTask).not.toHaveBeenCalled();
 	});
 
-	it("releases the run when dispatch fails so a retry can succeed", async () => {
+	it("returns 202 when a run is already active", async () => {
+		mocks.acceptDelivery.mockResolvedValue({
+			outcome: "duplicate_active_run",
+			runCreated: false,
+		});
+		const response = await post(payload());
+
+		expect(response.status).toBe(202);
+		expect(mocks.startTask).not.toHaveBeenCalled();
+	});
+
+	it("releases the run when dispatch fails", async () => {
 		mocks.startTask.mockRejectedValue(new Error("render unavailable"));
 		const response = await post(payload());
 

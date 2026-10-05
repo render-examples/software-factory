@@ -21,7 +21,12 @@ export function validateConfig(): void {
 	}
 
 	const labels = factoryConfig.labels;
-	const labelValues = [labels.triage, labels.fullRun, labels.specApproved, labels.prReview];
+	const labelValues = [
+		labels.triage,
+		labels.fullRun,
+		labels.specApproved,
+		labels.prReview,
+	];
 	const labelSet = new Set(labelValues);
 	if (labelSet.size !== labelValues.length) {
 		throw new Error("All label names in factoryConfig.labels must be distinct");
@@ -43,12 +48,16 @@ export function validateConfig(): void {
 	}
 
 	if (repo.verify.length === 0) {
-		console.warn("Warning: repos[0].verify is empty — no verification commands will run");
+		console.warn(
+			"Warning: repos[0].verify is empty — no verification commands will run",
+		);
 	}
 
 	if (repo.preview) {
 		if (!repo.preview.serviceName) {
-			throw new Error("repos[0].preview.serviceName is required when preview is configured");
+			throw new Error(
+				"repos[0].preview.serviceName is required when preview is configured",
+			);
 		}
 	}
 }

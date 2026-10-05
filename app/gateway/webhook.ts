@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { allowedActors, repository, triggerLabel } from "../config/index.js";
-import { createQueuedRun, finishRun, recordDelivery } from "../store/index.js";
+import { acceptDelivery, finishRun, recordDelivery } from "../store/index.js";
 import { readBody } from "./body.js";
 import { dispatchWorkflow } from "./dispatch.js";
 import { issueEventSchema } from "./schema.js";
@@ -15,7 +15,9 @@ export function githubWebhook(): Hono {
 
 	app.post("/webhooks/github", async (c) => {
 		const body = await readBody(c.req.raw);
-		if (body === null) return c.json({ error: "payload too large" }, 413);
+		if (body === null) {
+			return c.json({ error: "payload too large" }, 413);
+		}
 		if (!verifySignature(body, c.req.raw.headers)) {
 			return c.json({ error: "invalid signature" }, 401);
 		}
@@ -42,7 +44,9 @@ export function githubWebhook(): Hono {
 			return c.json({ error: "invalid json" }, 400);
 		}
 		const event = issueEventSchema.safeParse(parsed);
-		if (!event.success) return c.json({ error: "invalid payload" }, 400);
+		if (!event.success) {
+			return c.json({ error: "invalid payload" }, 400);
+		}
 
 		const payload = event.data;
 		if (
@@ -65,46 +69,44 @@ export function githubWebhook(): Hono {
 		}
 
 		const runId = randomUUID();
-		let claimed: boolean;
+		let result: Awaited<ReturnType<typeof acceptDelivery>>;
 		try {
-			claimed = await createQueuedRun({
-				id: runId,
-				repo: repo.fullName,
-				subjectKind: "issue",
-				subjectNumber: payload.issue.number,
-				workflow: "spec-to-pr",
-				trigger: {
+			result = await acceptDelivery({
+				delivery: {
 					deliveryId,
 					event: "issues",
-					label: label,
-					actor: payload.sender.login,
+					action: "labeled",
+					detail: {
+						runId,
+						issueNumber: payload.issue.number,
+					},
+				},
+				run: {
+					id: runId,
+					repo: repo.fullName,
+					subjectKind: "issue",
+					subjectNumber: payload.issue.number,
+					workflow: "spec-to-pr",
+					trigger: {
+						deliveryId,
+						event: "issues",
+						label,
+						actor: payload.sender.login,
+					},
 				},
 			});
 		} catch (error) {
-			console.error("Failed to create run:", error);
+			console.error("Failed to accept delivery:", error);
 			return c.json({ error: "store unavailable" }, 503);
 		}
 
-		if (!claimed) {
-			await recordDelivery({
-				deliveryId,
-				event: "issues",
-				action: "labeled",
-				outcome: "duplicate_active_run",
-				detail: { issueNumber: payload.issue.number },
-			});
-			return c.json({ ok: true, skipped: true });
+		if (
+			result.outcome === "duplicate" ||
+			result.outcome === "duplicate_active_run"
+		) {
+			return c.json({ ok: true, skipped: true }, 202);
 		}
 
-		await recordDelivery({
-			deliveryId,
-			event: "issues",
-			action: "labeled",
-			outcome: "accepted",
-			detail: { runId, issueNumber: payload.issue.number },
-		});
-
-		// Gateway still dispatches directly in M2; M3 moves this to the dispatcher.
 		const dispatched = await dispatchWorkflow("spec-to-pr", {
 			issueNumber: payload.issue.number,
 			runId,
@@ -113,9 +115,7 @@ export function githubWebhook(): Hono {
 			await finishRun(runId, "failed", {
 				outcome: "dispatch_failed",
 				summary: "dispatch failed",
-			}).catch((error) =>
-				console.error("Failed to release run claim:", error),
-			);
+			}).catch((error) => console.error("Failed to release run claim:", error));
 			return c.json({ error: "dispatch failed" }, 502);
 		}
 

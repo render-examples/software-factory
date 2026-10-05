@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 	runVerification: vi.fn(),
 	verifyPush: vi.fn(),
 	finishRun: vi.fn(),
+	mergeRunResult: vi.fn(),
 	setRunStage: vi.fn(),
 }));
 
@@ -68,6 +69,7 @@ vi.mock("../app/sandbox/index.js", () => ({
 }));
 vi.mock("../app/store/index.js", () => ({
 	finishRun: mocks.finishRun,
+	mergeRunResult: mocks.mergeRunResult,
 	setRunStage: mocks.setRunStage,
 }));
 vi.mock("../app/git/index.js", () => ({
@@ -135,7 +137,10 @@ beforeEach(() => {
 		'{"decision":"approve","riskTier":"trivial","summary":"Clean.","topFindings":[]}',
 	);
 
-	mocks.createSandbox.mockResolvedValue({ id: "sbx-1", terminate: mocks.terminate });
+	mocks.createSandbox.mockResolvedValue({
+		id: "sbx-1",
+		terminate: mocks.terminate,
+	});
 	mocks.terminate.mockResolvedValue(undefined);
 	mocks.setupCheckout.mockResolvedValue({
 		remoteUrl: "https://github.com/acme/widgets.git",
@@ -147,7 +152,11 @@ beforeEach(() => {
 	mocks.completeDiff.mockResolvedValue("diff --git a/x b/x");
 	mocks.runVerification.mockResolvedValue({ passed: true, failures: "" });
 	mocks.verifyPush.mockResolvedValue(undefined);
-	mocks.finishRun.mockResolvedValue(undefined);
+	mocks.finishRun.mockResolvedValue({
+		finished: true,
+		followUpCreated: false,
+	});
+	mocks.mergeRunResult.mockResolvedValue(undefined);
 	mocks.setRunStage.mockResolvedValue(undefined);
 });
 
@@ -174,20 +183,28 @@ describe("happy path", () => {
 			"completed",
 			expect.objectContaining({
 				outcome: "draft_pr_opened",
-				result: expect.objectContaining({ pullRequest: expect.stringContaining("/pull/7") }),
+				result: expect.objectContaining({
+					pullRequest: expect.stringContaining("/pull/7"),
+				}),
 			}),
 		);
 	});
 
 	it("removes the trigger label once the run is over", async () => {
 		await run(INPUT);
-		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(expect.anything(), 42, "factory:full-run");
+		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:full-run",
+		);
 	});
 
 	it("advances the status label through each phase, then to pr-open", async () => {
 		await run(INPUT);
 
-		const applied = mocks.gh.addLabels.mock.calls.map((call: unknown[]) => (call[2] as string[])[0]);
+		const applied = mocks.gh.addLabels.mock.calls.map(
+			(call: unknown[]) => (call[2] as string[])[0],
+		);
 		expect(applied).toEqual([
 			"factory-status:analyzing",
 			"factory-status:implementing",
@@ -200,8 +217,14 @@ describe("happy path", () => {
 		await run(INPUT);
 
 		const order = [
-			...mocks.gh.addLabels.mock.calls.map((c: unknown[]) => ({ op: "add", label: (c[2] as string[])[0] })),
-			...mocks.gh.removeLabel.mock.calls.map((c: unknown[]) => ({ op: "remove", label: c[2] as string })),
+			...mocks.gh.addLabels.mock.calls.map((c: unknown[]) => ({
+				op: "add",
+				label: (c[2] as string[])[0],
+			})),
+			...mocks.gh.removeLabel.mock.calls.map((c: unknown[]) => ({
+				op: "remove",
+				label: c[2] as string,
+			})),
 		];
 		const addAnalyzing = order.findIndex(
 			(e) => e.op === "add" && e.label === "factory-status:implementing",
@@ -256,7 +279,10 @@ describe("early exits", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toEqual({ status: "needs_clarification", questions: ["Which client?"] });
+		expect(result).toEqual({
+			status: "needs_clarification",
+			questions: ["Which client?"],
+		});
 		expect(mocks.createSandbox).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
 		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
@@ -275,10 +301,19 @@ describe("early exits", () => {
 	});
 
 	it("refuses to run when the label was removed before the workflow started", async () => {
-		mocks.gh.getIssue.mockResolvedValue({ number: 42, title: "t", body: "b", labels: [] });
+		mocks.gh.getIssue.mockResolvedValue({
+			number: 42,
+			title: "t",
+			body: "b",
+			labels: [],
+		});
 
 		await expect(run(INPUT)).rejects.toThrow(/no longer has/);
-		expect(mocks.finishRun).toHaveBeenCalledWith("run-0001", "failed", expect.anything());
+		expect(mocks.finishRun).toHaveBeenCalledWith(
+			"run-0001",
+			"failed",
+			expect.anything(),
+		);
 	});
 });
 
@@ -311,11 +346,16 @@ describe("review outcomes", () => {
 			(call: unknown[]) =>
 				(call[1] as { message: string }).message,
 		);
-		expect(messages.some((m: string) => m.includes("tsc: type error"))).toBe(true);
+		expect(
+			messages.some((m: string) => m.includes("tsc: type error")),
+		).toBe(true);
 	});
 
 	it("gives up after the verification round limit", async () => {
-		mocks.runVerification.mockResolvedValue({ passed: false, failures: "still failing" });
+		mocks.runVerification.mockResolvedValue({
+			passed: false,
+			failures: "still failing",
+		});
 
 		const result = await run(INPUT);
 

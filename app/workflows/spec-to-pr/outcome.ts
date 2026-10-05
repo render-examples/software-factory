@@ -5,27 +5,33 @@ export function commentId(runId: string, operation: string): string {
 	return `${runId.slice(0, 64)}-${operation}`;
 }
 
-export function recordOutcome(
+export async function recordOutcome(
 	runId: string,
 	result: WorkflowResult,
 ): Promise<void> {
 	switch (result.status) {
 		case "draft_pr_opened":
-			return finishRun(runId, "completed", {
+			await finishRun(runId, "completed", {
 				outcome: "draft_pr_opened",
 				result: { pullRequest: result.pullRequest },
 			});
+			return;
 		case "changes_requested":
-			return finishRun(runId, "completed", {
+			await finishRun(runId, "completed", {
 				outcome: "changes_requested",
 				summary: result.summary,
 			});
+			return;
 		case "needs_clarification":
-			return finishRun(runId, "completed", {
+			await finishRun(runId, "completed", {
 				outcome: "needs_clarification",
 				summary: result.questions.join(" "),
 			});
+			return;
 		case "no_changes":
-			return finishRun(runId, "completed", { outcome: "no_changes" });
+			await finishRun(runId, "completed", {
+				outcome: "no_changes",
+			});
+			return;
 	}
 }

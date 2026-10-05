@@ -222,10 +222,11 @@ export class GitHub {
 function interesting(path: string): boolean {
 	return !path
 		.split("/")
-		.some((segment) => segment.startsWith(".") || IGNORED_SEGMENTS.has(segment));
+		.some(
+			(segment) => segment.startsWith(".") || IGNORED_SEGMENTS.has(segment),
+		);
 }
 
-/** App installation token when configured, otherwise the PAT. */
 export function githubFromEnv(fetchImpl: typeof fetch = fetch): GitHub {
-	return new GitHub(() => githubToken(fetchImpl), fetchImpl);
+	return new GitHub(() => githubToken({ fetch: fetchImpl }), fetchImpl);
 }

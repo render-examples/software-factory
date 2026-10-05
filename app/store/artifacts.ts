@@ -3,7 +3,12 @@ import { factoryConfig } from "../../factory.config.js";
 import { db } from "./pool.js";
 import type { ArtifactRecord } from "./types.js";
 
-export type ArtifactKind = "screenshot" | "trace" | "transcript" | "log" | "report";
+export type ArtifactKind =
+	| "screenshot"
+	| "trace"
+	| "transcript"
+	| "log"
+	| "report";
 
 export async function putArtifact(input: {
 	runId: string;
@@ -71,7 +76,9 @@ export async function putArtifact(input: {
 	};
 }
 
-export async function getArtifact(id: string): Promise<{ record: ArtifactRecord; bytes: Buffer } | null> {
+export async function getArtifact(
+	id: string,
+): Promise<{ record: ArtifactRecord; bytes: Buffer } | null> {
 	const { rows } = await db().query(
 		`SELECT id, run_id, kind, content_type, bytes, size, sha256, link_token_hash, created_at, expires_at
 		 FROM artifacts WHERE id = $1`,
@@ -95,7 +102,9 @@ export async function getArtifact(id: string): Promise<{ record: ArtifactRecord;
 	};
 }
 
-export async function getArtifactByLinkToken(token: string): Promise<{ record: ArtifactRecord; bytes: Buffer } | null> {
+export async function getArtifactByLinkToken(
+	token: string,
+): Promise<{ record: ArtifactRecord; bytes: Buffer } | null> {
 	const hash = createHash("sha256").update(token).digest("hex");
 	const { rows } = await db().query(
 		`SELECT id, run_id, kind, content_type, bytes, size, sha256, link_token_hash, created_at, expires_at
@@ -121,6 +130,8 @@ export async function getArtifactByLinkToken(token: string): Promise<{ record: A
 }
 
 export async function deleteExpiredArtifacts(): Promise<number> {
-	const result = await db().query("DELETE FROM artifacts WHERE expires_at <= now()");
+	const result = await db().query(
+		"DELETE FROM artifacts WHERE expires_at <= now()",
+	);
 	return result.rowCount ?? 0;
 }

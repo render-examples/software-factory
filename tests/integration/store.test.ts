@@ -5,8 +5,16 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://postgres:postgres@localhost:55432/rf_m2";
-const sqlDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "app", "sql");
+const DATABASE_URL =
+	process.env.DATABASE_URL ??
+	"postgresql://postgres:postgres@localhost:55432/rf_m2";
+const sqlDir = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"..",
+	"app",
+	"sql",
+);
 
 let pool: pg.Pool;
 
@@ -17,7 +25,9 @@ async function applyMigrations(client: pg.PoolClient): Promise<void> {
 			applied_at timestamptz NOT NULL DEFAULT now()
 		)
 	`);
-	const files = (await readdir(sqlDir)).filter((f) => f.endsWith(".sql")).sort();
+	const files = (await readdir(sqlDir))
+		.filter((f) => f.endsWith(".sql"))
+		.sort();
 	const { rows } = await client.query("SELECT filename FROM schema_migrations");
 	const applied = new Set(rows.map((r: { filename: string }) => r.filename));
 	for (const file of files) {
@@ -25,7 +35,10 @@ async function applyMigrations(client: pg.PoolClient): Promise<void> {
 		const sql = await readFile(join(sqlDir, file), "utf8");
 		await client.query("BEGIN");
 		await client.query(sql);
-		await client.query("INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]);
+		await client.query(
+			"INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+			[file],
+		);
 		await client.query("COMMIT");
 	}
 }
@@ -55,7 +68,9 @@ describe("migrations", () => {
 		const client = await pool.connect();
 		try {
 			await applyMigrations(client);
-			const { rows } = await client.query("SELECT filename FROM schema_migrations ORDER BY filename");
+			const { rows } = await client.query(
+				"SELECT filename FROM schema_migrations ORDER BY filename",
+			);
 			expect(rows.length).toBeGreaterThanOrEqual(2);
 		} finally {
 			client.release();
@@ -63,7 +78,9 @@ describe("migrations", () => {
 	});
 
 	it("schema_migrations tracks applied files", async () => {
-		const { rows } = await pool.query("SELECT filename FROM schema_migrations ORDER BY filename");
+		const { rows } = await pool.query(
+			"SELECT filename FROM schema_migrations ORDER BY filename",
+		);
 		const filenames = rows.map((r: { filename: string }) => r.filename);
 		expect(filenames).toContain("0001_init.sql");
 		expect(filenames).toContain("0002_phases.sql");
@@ -99,14 +116,22 @@ describe("migrations on top of 0001 data", () => {
 					applied_at timestamptz NOT NULL DEFAULT now()
 				)
 			`);
-			await client.query("INSERT INTO schema_migrations (filename) VALUES ('0001_init.sql') ON CONFLICT DO NOTHING");
+			await client.query(
+				"INSERT INTO schema_migrations (filename) VALUES ('0001_init.sql') ON CONFLICT DO NOTHING",
+			);
 			const sql0002 = await readFile(join(sqlDir, "0002_phases.sql"), "utf8");
 			await client.query(sql0002);
-			await client.query("INSERT INTO schema_migrations (filename) VALUES ('0002_phases.sql') ON CONFLICT DO NOTHING");
+			await client.query(
+				"INSERT INTO schema_migrations (filename) VALUES ('0002_phases.sql') ON CONFLICT DO NOTHING",
+			);
 
 			// Check status migrations
-			const { rows } = await client.query("SELECT id, status, outcome, repo FROM runs ORDER BY id");
-			const byId = Object.fromEntries(rows.map((r: Record<string, unknown>) => [r.id, r]));
+			const { rows } = await client.query(
+				"SELECT id, status, outcome, repo FROM runs ORDER BY id",
+			);
+			const byId = Object.fromEntries(
+				rows.map((r: Record<string, unknown>) => [r.id, r]),
+			);
 
 			expect(byId["old-running"].status).toBe("running");
 			expect(byId["old-draft"].status).toBe("completed");
@@ -229,7 +254,10 @@ describe("finishRun with follow-up", () => {
 			client.release();
 		}
 
-		await pool.query("DELETE FROM runs WHERE id IN ($1, $2)", [runId, followUpId]);
+		await pool.query("DELETE FROM runs WHERE id IN ($1, $2)", [
+			runId,
+			followUpId,
+		]);
 	});
 });
 
@@ -320,6 +348,225 @@ describe("concurrent warm-sandbox claims", () => {
 		for (const id of sbIds) {
 			await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
 		}
+	});
+});
+
+describe("finishRun guards and semantics", () => {
+	it("refuses to overwrite a terminal run", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number,
+			   workflow, status, outcome, summary)
+			 VALUES ($1, 'o/r', 'issue', 500, 'spec-to-pr',
+			   'completed', 'done', 'original summary')`,
+			[id],
+		);
+
+		const { finishRun } = await import("../../app/store/runs.js");
+		const result = await finishRun(id, "failed", {
+			outcome: "error",
+			summary: "should not appear",
+		});
+		expect(result.finished).toBe(false);
+
+		const { rows } = await pool.query(
+			"SELECT status, outcome, summary FROM runs WHERE id = $1",
+			[id],
+		);
+		expect(rows[0].status).toBe("completed");
+		expect(rows[0].outcome).toBe("done");
+		expect(rows[0].summary).toBe("original summary");
+
+		await pool.query("DELETE FROM runs WHERE id = $1", [id]);
+	});
+
+	it("preserves existing values when caller omits them", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number,
+			   workflow, status, outcome, summary)
+			 VALUES ($1, 'o/r', 'issue', 501, 'spec-to-pr',
+			   'running', 'early_outcome', 'early summary')`,
+			[id],
+		);
+
+		const { finishRun } = await import("../../app/store/runs.js");
+		await finishRun(id, "completed", {});
+
+		const { rows } = await pool.query(
+			"SELECT outcome, summary FROM runs WHERE id = $1",
+			[id],
+		);
+		expect(rows[0].outcome).toBe("early_outcome");
+		expect(rows[0].summary).toBe("early summary");
+
+		await pool.query("DELETE FROM runs WHERE id = $1", [id]);
+	});
+
+	it("does not create a follow-up when the run was not finished", async () => {
+		const id = randomUUID();
+		const followUp = randomUUID();
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number,
+			   workflow, status)
+			 VALUES ($1, 'o/r', 'issue', 502, 'spec-to-pr', 'completed')`,
+			[id],
+		);
+
+		const { finishRun } = await import("../../app/store/runs.js");
+		const result = await finishRun(id, "failed", {
+			followUp: {
+				id: followUp,
+				repo: "o/r",
+				subjectKind: "issue",
+				subjectNumber: 502,
+				workflow: "triage",
+			},
+		});
+		expect(result.finished).toBe(false);
+		expect(result.followUpCreated).toBe(false);
+
+		const { rows } = await pool.query("SELECT id FROM runs WHERE id = $1", [
+			followUp,
+		]);
+		expect(rows).toHaveLength(0);
+
+		await pool.query("DELETE FROM runs WHERE id = $1", [id]);
+	});
+});
+
+describe("acceptDelivery deduplication", () => {
+	it("redelivery after the first run finished creates no second run", async () => {
+		const deliveryId = `del-${randomUUID().slice(0, 8)}`;
+		const run1 = randomUUID();
+		const run2 = randomUUID();
+
+		const { acceptDelivery } = await import("../../app/store/deliveries.js");
+
+		const first = await acceptDelivery({
+			delivery: {
+				deliveryId,
+				event: "issues",
+				action: "labeled",
+			},
+			run: {
+				id: run1,
+				repo: "o/r",
+				subjectKind: "issue",
+				subjectNumber: 600,
+				workflow: "spec-to-pr",
+			},
+		});
+		expect(first.outcome).toBe("accepted");
+
+		// Complete the run so the uniqueness index allows another
+		await pool.query(
+			`UPDATE runs SET status = 'completed', outcome = 'done'
+			 WHERE id = $1`,
+			[run1],
+		);
+
+		// Redeliver with the same delivery ID
+		const second = await acceptDelivery({
+			delivery: {
+				deliveryId,
+				event: "issues",
+				action: "labeled",
+			},
+			run: {
+				id: run2,
+				repo: "o/r",
+				subjectKind: "issue",
+				subjectNumber: 600,
+				workflow: "spec-to-pr",
+			},
+		});
+		expect(second.outcome).toBe("duplicate");
+
+		// Only one run should exist
+		const { rows } = await pool.query(
+			"SELECT id FROM runs WHERE repo = 'o/r' AND subject_number = 600",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].id).toBe(run1);
+
+		await pool.query("DELETE FROM deliveries WHERE delivery_id = $1", [
+			deliveryId,
+		]);
+		await pool.query("DELETE FROM runs WHERE id = $1", [run1]);
+	});
+});
+
+describe("claimWarmSandbox expiry guard", () => {
+	it("skips expired sandboxes", async () => {
+		const expiredId = randomUUID();
+		const freshId = randomUUID();
+
+		// One expired, one fresh
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, ready_at, expires_at)
+			 VALUES ($1, 'warm', now(), now() - interval '1 hour')`,
+			[expiredId],
+		);
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, ready_at, expires_at)
+			 VALUES ($1, 'warm', now(), now() + interval '2 hours')`,
+			[freshId],
+		);
+
+		const { claimWarmSandbox } = await import("../../app/store/sandboxes.js");
+		const claimed = await claimWarmSandbox("run-x");
+
+		expect(claimed).not.toBeNull();
+		expect(claimed?.id).toBe(freshId);
+
+		// The expired one remains warm
+		const { rows } = await pool.query(
+			"SELECT status FROM sandboxes WHERE id = $1",
+			[expiredId],
+		);
+		expect(rows[0].status).toBe("warm");
+
+		await pool.query("DELETE FROM sandboxes WHERE id IN ($1, $2)", [
+			expiredId,
+			freshId,
+		]);
+	});
+});
+
+describe("addSpecVersion auto-version", () => {
+	it("atomically increments and returns the version", async () => {
+		const specId = randomUUID();
+
+		const { createSpec, addSpecVersion, getSpec } = await import(
+			"../../app/store/specs.js"
+		);
+
+		await createSpec({
+			id: specId,
+			repo: "o/r",
+			issueNumber: 700,
+		});
+
+		const v1 = await addSpecVersion({
+			specId,
+			document: { title: "v1" },
+			markdown: "# v1",
+		});
+		expect(v1).toBe(1);
+
+		const v2 = await addSpecVersion({
+			specId,
+			document: { title: "v2" },
+			markdown: "# v2",
+		});
+		expect(v2).toBe(2);
+
+		const spec = await getSpec(specId);
+		expect(spec?.currentVersion).toBe(2);
+
+		await pool.query("DELETE FROM spec_versions WHERE spec_id = $1", [specId]);
+		await pool.query("DELETE FROM specs WHERE id = $1", [specId]);
 	});
 });
 

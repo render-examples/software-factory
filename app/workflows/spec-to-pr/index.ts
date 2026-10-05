@@ -26,7 +26,7 @@ import {
 } from "../../github/index.js";
 import { createSandbox } from "../../sandbox/index.js";
 import { analysisTask } from "../../tasks/index.js";
-import { finishRun, setRunStage } from "../../store/index.js";
+import { finishRun, mergeRunResult, setRunStage } from "../../store/index.js";
 import { MAX_VERIFY_ROUNDS, SANDBOX_TIMEOUT_SECONDS } from "./constants.js";
 import {
 	type ImplementationState,
@@ -137,6 +137,7 @@ async function pipeline(
 	try {
 		const branch = branchName(issueNumber, runId);
 		const checkout = await setupCheckout(sandbox, token, repo, branch);
+		await mergeRunResult(runId, { branch });
 		await setRunStage(runId, "implement");
 
 		// ── Analysis ────────────────────────────────────────────────────

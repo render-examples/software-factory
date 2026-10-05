@@ -58,9 +58,11 @@ export async function clearStatusLabels(
 	for (const label of currentLabels.filter(
 		(l) => isStatusLabel(l) && !isTriggerLabel(l),
 	)) {
-		await gh.removeLabel(repo, issueNumber, label).catch((error) =>
-			console.error(`Failed to clear status label ${label}:`, error),
-		);
+		await gh
+			.removeLabel(repo, issueNumber, label)
+			.catch((error) =>
+				console.error(`Failed to clear status label ${label}:`, error),
+			);
 	}
 }
 

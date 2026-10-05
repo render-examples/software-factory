@@ -6,7 +6,12 @@ export {
 	deleteExpiredArtifacts,
 	type ArtifactKind,
 } from "./artifacts.js";
-export { recordDelivery, getDelivery } from "./deliveries.js";
+export {
+	acceptDelivery,
+	recordDelivery,
+	getDelivery,
+	type AcceptDeliveryResult,
+} from "./deliveries.js";
 export { appendEvent, listEventsByRun } from "./events.js";
 export {
 	createQueuedRun,
@@ -15,9 +20,11 @@ export {
 	heartbeat,
 	requestCancel,
 	finishRun,
+	mergeRunResult,
 	setRunStage,
 	getRun,
 	type CreateRunInput,
+	type FinishRunResult,
 } from "./runs.js";
 export {
 	recordSandbox,
