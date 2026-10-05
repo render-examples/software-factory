@@ -4,11 +4,8 @@
  * Every check reports what is wrong and how to fix it. Read-only by design:
  * it never creates or edits a resource.
  */
-import {
-	allowedActors,
-	repository,
-	triggerLabel,
-} from "../app/config/index.js";
+import { factoryConfig } from "../factory.config.js";
+import { repository } from "../app/config/index.js";
 import { validateConfig } from "../app/config/index.js";
 import { githubToken } from "../app/github/index.js";
 import { db } from "../app/store/index.js";
@@ -80,20 +77,6 @@ function checkConfiguration(): void {
 		});
 	}
 
-	try {
-		const actors = allowedActors();
-		record({
-			level: "ok",
-			message: `${actors.size} allowed actor${actors.size === 1 ? "" : "s"}`,
-		});
-	} catch {
-		record({
-			level: "fail",
-			message: "No allowed actors",
-			fix: "Set FACTORY_GITHUB_ACTORS or add actors to factory.config.ts.",
-		});
-	}
-
 	const secret = process.env.GITHUB_WEBHOOK_SECRET?.trim() ?? "";
 	if (!secret) {
 		record({
@@ -131,6 +114,19 @@ function checkConfiguration(): void {
 			fix: "Set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID. Run npm run setup:app to create one.",
 		});
 	}
+}
+
+function checkDispatcherEnv(): void {
+	heading("Dispatcher environment");
+
+	present(
+		"RENDER_API_KEY",
+		"Required by the dispatcher to start workflow tasks.",
+	);
+	present(
+		"RENDER_WORKFLOW_SLUG",
+		"The slug of the factory-workflows service. Set it or use fromService in render.yaml.",
+	);
 }
 
 async function checkGitHub(): Promise<void> {
@@ -186,20 +182,22 @@ async function checkGitHub(): Promise<void> {
 		record({ level: "ok", message: "Credential can push" });
 	}
 
-	const label = triggerLabel();
-	const labelCheck = await github(
-		`${base}/labels/${encodeURIComponent(label)}`,
-		token,
-	);
-	record(
-		labelCheck.ok
-			? { level: "ok", message: `Trigger label "${label}" exists` }
-			: {
-					level: "fail",
-					message: `Trigger label "${label}" does not exist`,
-					fix: "Run npm run setup:github, or create it by hand.",
-				},
-	);
+	const labels = factoryConfig.labels;
+	for (const [key, labelName] of Object.entries(labels)) {
+		const labelCheck = await github(
+			`${base}/labels/${encodeURIComponent(labelName)}`,
+			token,
+		);
+		record(
+			labelCheck.ok
+				? { level: "ok", message: `Label "${labelName}" (${key}) exists` }
+				: {
+						level: "fail",
+						message: `Label "${labelName}" (${key}) does not exist`,
+						fix: "Run npm run setup:github, or create it by hand.",
+					},
+		);
+	}
 
 	await checkWebhook(base, token);
 }
@@ -249,15 +247,18 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 				},
 	);
 
-	record(
-		hook.events.includes("issues")
-			? { level: "ok", message: "Webhook subscribes to issues" }
-			: {
-					level: "fail",
-					message: `Webhook subscribes to ${hook.events.join(", ") || "nothing"}`,
-					fix: "It must include the issues event.",
-				},
-	);
+	const requiredEvents = ["issues", "issue_comment", "pull_request"];
+	for (const event of requiredEvents) {
+		record(
+			hook.events.includes(event)
+				? { level: "ok", message: `Webhook subscribes to ${event}` }
+				: {
+						level: "fail",
+						message: `Webhook does not subscribe to ${event}`,
+						fix: `Add ${event} to the webhook events.`,
+					},
+		);
+	}
 }
 
 async function checkPostgres(): Promise<void> {
@@ -364,6 +365,7 @@ async function checkTasks(): Promise<void> {
 }
 
 checkConfiguration();
+checkDispatcherEnv();
 await checkGitHub();
 await checkPostgres();
 await checkTasks();

@@ -1,5 +1,5 @@
 import { validateConfig } from "./validate.js";
-import { allowedActors, repository, requireEnv } from "./env.js";
+import { repository, requireEnv } from "./env.js";
 
 /** GitHub App credentials are required — no PAT fallback. */
 function requireGitHubApp(): void {
@@ -18,9 +18,16 @@ function requireGitHubApp(): void {
 export function assertGatewayEnv(): void {
 	validateConfig();
 	repository();
-	allowedActors();
 	requireEnv("GITHUB_WEBHOOK_SECRET");
 	requireEnv("DATABASE_URL");
+}
+
+/** Fail fast if the dispatcher is misconfigured. */
+export function assertDispatcherEnv(): void {
+	validateConfig();
+	requireEnv("DATABASE_URL");
+	requireEnv("RENDER_API_KEY");
+	requireEnv("RENDER_WORKFLOW_SLUG");
 }
 
 /** Fail fast if the workflows host is misconfigured. */
@@ -32,4 +39,13 @@ export function assertWorkflowEnv(): void {
 	requireEnv("RENDER_API_KEY");
 	requireEnv("RENDER_WORKSPACE_ID");
 	requireEnv("DATABASE_URL");
+}
+
+/** Fail fast if the maintenance cron is misconfigured. */
+export function assertMaintenanceEnv(): void {
+	validateConfig();
+	requireEnv("DATABASE_URL");
+	requireEnv("RENDER_API_KEY");
+	requireEnv("RENDER_WORKSPACE_ID");
+	requireGitHubApp();
 }
