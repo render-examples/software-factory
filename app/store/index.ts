@@ -23,6 +23,11 @@ export {
 	mergeRunResult,
 	setRunStage,
 	getRun,
+	requeueForDispatch,
+	findStaleDispatched,
+	requeueStaleDispatched,
+	findLostExecutions,
+	findActiveRunForSubject,
 	type CreateRunInput,
 	type FinishRunResult,
 } from "./runs.js";
