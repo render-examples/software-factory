@@ -53,6 +53,7 @@ export const specToPr = runWorkflow(
 			repo,
 			issueNumber,
 			label,
+			runId,
 		);
 
 		await clearStatusLabels(gh, repo, issueNumber, issue.labels);
@@ -96,6 +97,7 @@ export const specToPr = runWorkflow(
 		// ── Analysis ────────────────────────────────────────────────────
 		await setStatus(STATUS.analyzing);
 		const analysis = await ctx.run(analysisTask, {
+			runId,
 			message: `Work item:\n${workItem}`,
 			sandboxId: sandbox.id,
 		});
@@ -105,6 +107,7 @@ export const specToPr = runWorkflow(
 		// ── Implementation ──────────────────────────────────────────────
 		await setStatus(STATUS.implementing);
 		const first = await implementAndCommit(ctx, {
+			runId,
 			sandbox,
 			checkout,
 			previousSha: checkout.baseSha,
@@ -130,6 +133,7 @@ export const specToPr = runWorkflow(
 
 		// ── Verification ────────────────────────────────────────────────
 		const verified = await verifyWithFixes(ctx, {
+			runId,
 			sandbox,
 			checkout,
 			issueNumber,
@@ -163,12 +167,14 @@ export const specToPr = runWorkflow(
 			ctx,
 			await completeDiff(sandbox, checkout, state.sha),
 			workItem,
+			runId,
 		);
 		if (selfReview.needsRevision && selfReview.issues.length > 0) {
 			const issues = selfReview.issues
 				.map((text, i) => `${i + 1}. ${text}`)
 				.join("\n");
 			const fix = await implementAndCommit(ctx, {
+				runId,
 				sandbox,
 				checkout,
 				previousSha: state.sha,
@@ -189,10 +195,12 @@ export const specToPr = runWorkflow(
 			ctx,
 			await completeDiff(sandbox, checkout, state.sha),
 			state.summary,
+			runId,
 		);
 
 		if (review.decision === "request_changes") {
 			const revision = await implementAndCommit(ctx, {
+				runId,
 				sandbox,
 				checkout,
 				previousSha: state.sha,
@@ -208,6 +216,7 @@ export const specToPr = runWorkflow(
 					ctx,
 					await completeDiff(sandbox, checkout, state.sha),
 					state.summary,
+					runId,
 				);
 			} else {
 				review = { ...review, summary: "The revision produced no changes." };

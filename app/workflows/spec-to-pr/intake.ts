@@ -1,9 +1,6 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import { type Triage, triageSchema } from "../../contracts/index.js";
-import {
-	repoBrief,
-	workItem as buildWorkItem,
-} from "../../format/index.js";
+import { repoBrief, workItem as buildWorkItem } from "../../format/index.js";
 import type { GitHub, Issue, RepoRef } from "../../github/index.js";
 import { triageTask } from "../../tasks/index.js";
 import { agentJson } from "../agent-json.js";
@@ -20,6 +17,7 @@ export async function loadIntake(
 	repo: RepoRef,
 	issueNumber: number,
 	label: string,
+	runId: string,
 ): Promise<Intake> {
 	const issue = await gh.getIssue(repo, issueNumber);
 	if (!issue.labels.includes(label)) {
@@ -29,9 +27,6 @@ export async function loadIntake(
 	const comments = await gh.listIssueComments(repo, issueNumber);
 	const workItem = buildWorkItem(issue, comments);
 
-	// Triage runs before the sandbox, so it gets the repository described
-	// rather than checked out. Losing this must not fail the run: the analyst
-	// reads the real thing a moment later.
 	const brief = await gh
 		.getRepoSnapshot(repo)
 		.then((snapshot) => repoBrief(`${repo.owner}/${repo.repo}`, snapshot))
@@ -41,7 +36,7 @@ export async function loadIntake(
 		});
 
 	const triage = await agentJson(
-		(message) => ctx.run(triageTask, { message }),
+		(message) => ctx.run(triageTask, { runId, message }),
 		triageSchema,
 		`${brief}\n\n---\n\n# Work item\n\n${workItem}`,
 		"triage",
