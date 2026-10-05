@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const DATABASE_URL =
 	process.env.DATABASE_URL ??
-	"postgresql://postgres:postgres@localhost:55432/rf_m2";
+	"postgresql://postgres:postgres@localhost:55432/rf_m3";
 const sqlDir = join(
 	dirname(fileURLToPath(import.meta.url)),
 	"..",
@@ -628,5 +628,88 @@ describe("artifact caps", () => {
 
 		await pool.query("DELETE FROM artifacts WHERE run_id = $1", [runId]);
 		await pool.query("DELETE FROM runs WHERE id = $1", [runId]);
+	});
+});
+
+describe("stale-dispatch requeue", () => {
+	it("finds runs stuck in dispatched beyond the threshold", async () => {
+		const staleId = randomUUID();
+		const freshId = randomUUID();
+
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number, workflow, status, dispatched_at)
+			 VALUES ($1, 'o/r', 'issue', $2, 'spec-to-pr', 'dispatched', now() - interval '10 minutes')`,
+			[staleId, 700],
+		);
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number, workflow, status, dispatched_at)
+			 VALUES ($1, 'o/r', 'issue', $2, 'spec-to-pr', 'dispatched', now() - interval '1 minute')`,
+			[freshId, 701],
+		);
+
+		const { findStaleDispatched, requeueStaleDispatched } = await import(
+			"../../app/store/runs.js"
+		);
+
+		const stale = await findStaleDispatched(5);
+		const staleIds = stale.map((r: { id: string }) => r.id);
+		expect(staleIds).toContain(staleId);
+		expect(staleIds).not.toContain(freshId);
+
+		const requeued = await requeueStaleDispatched(staleId);
+		expect(requeued).toBe(true);
+
+		const { rows } = await pool.query("SELECT status FROM runs WHERE id = $1", [
+			staleId,
+		]);
+		expect(rows[0].status).toBe("queued");
+
+		await pool.query("DELETE FROM runs WHERE id IN ($1, $2)", [
+			staleId,
+			freshId,
+		]);
+	});
+});
+
+describe("lost-execution detection", () => {
+	it("finds running runs with no recent heartbeat", async () => {
+		const lostId = randomUUID();
+		const healthyId = randomUUID();
+
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number, workflow, status, started_at, heartbeat_at)
+			 VALUES ($1, 'o/r', 'issue', $2, 'triage', 'running', now() - interval '15 minutes', now() - interval '12 minutes')`,
+			[lostId, 800],
+		);
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number, workflow, status, started_at, heartbeat_at)
+			 VALUES ($1, 'o/r', 'issue', $2, 'triage', 'running', now() - interval '5 minutes', now() - interval '1 minute')`,
+			[healthyId, 801],
+		);
+
+		const { findLostExecutions } = await import("../../app/store/runs.js");
+		const lost = await findLostExecutions(10);
+		const lostIds = lost.map((r: { id: string }) => r.id);
+
+		expect(lostIds).toContain(lostId);
+		expect(lostIds).not.toContain(healthyId);
+
+		const { finishRun } = await import("../../app/store/runs.js");
+		await finishRun(lostId, "failed", {
+			outcome: "execution_lost",
+			summary: "No heartbeat",
+		});
+
+		const { rows } = await pool.query(
+			"SELECT status, outcome FROM runs WHERE id = $1",
+			[lostId],
+		);
+		expect(rows[0].status).toBe("failed");
+		expect(rows[0].outcome).toBe("execution_lost");
+
+		await pool.query("DELETE FROM runs WHERE id IN ($1, $2)", [
+			lostId,
+			healthyId,
+		]);
 	});
 });

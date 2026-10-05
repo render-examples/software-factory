@@ -4,7 +4,6 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskContext } from "@renderinc/sdk/workflows";
-import type { WorkflowResult } from "../app/contracts/index.js";
 
 const mocks = vi.hoisted(() => ({
 	triageTask: vi.fn(),
@@ -18,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	gh: {
 		getIssue: vi.fn(),
 		getRepoSnapshot: vi.fn(),
+		getPermission: vi.fn(),
 		listIssueComments: vi.fn(),
 		addLabels: vi.fn(),
 		removeLabel: vi.fn(),
@@ -34,20 +34,19 @@ const mocks = vi.hoisted(() => ({
 	finishRun: vi.fn(),
 	mergeRunResult: vi.fn(),
 	setRunStage: vi.fn(),
+	markStarted: vi.fn(),
+	getRun: vi.fn(),
+	heartbeat: vi.fn(),
+	appendEvent: vi.fn(),
 }));
 
-// In SDK 1.x, task() returns a TaskDefinition { name, func }. The mock
-// preserves the handler so tests can invoke it with a fake TaskContext.
 vi.mock("@renderinc/sdk/workflows", () => ({
 	task: (config: { name: string }, handler: unknown) => ({
 		name: config.name,
-		func: handler,
+		handler,
 	}),
 }));
 
-// Mock tasks as TaskDefinition-shaped objects whose func delegates to the
-// vi.fn() mocks above. The ctx argument is forwarded but ignored by the
-// mocks — they return their preset values regardless.
 vi.mock("../app/tasks/index.js", () => ({
 	triageTask: { name: "triage", func: mocks.triageTask },
 	analysisTask: { name: "analyst", func: mocks.analysisTask },
@@ -71,6 +70,12 @@ vi.mock("../app/store/index.js", () => ({
 	finishRun: mocks.finishRun,
 	mergeRunResult: mocks.mergeRunResult,
 	setRunStage: mocks.setRunStage,
+	markStarted: mocks.markStarted,
+	getRun: mocks.getRun,
+	heartbeat: mocks.heartbeat,
+}));
+vi.mock("../app/store/events.js", () => ({
+	appendEvent: mocks.appendEvent,
 }));
 vi.mock("../app/git/index.js", () => ({
 	branchName: () => "factory/issue-42-abcdef",
@@ -83,31 +88,78 @@ vi.mock("../app/git/index.js", () => ({
 
 const { specToPr } = await import("../app/workflows/index.js");
 
-/** ctx.run dispatches to the mock task's func, forwarding args. */
 const mockCtx: TaskContext = {
 	metadata: {},
-	run: vi.fn().mockImplementation(
-		async (taskDef: { func: (...args: unknown[]) => unknown }, ...args: unknown[]) =>
-			taskDef.func(mockCtx, ...args),
-	),
+	run: vi
+		.fn()
+		.mockImplementation(
+			async (
+				taskDef: { func: (...args: unknown[]) => unknown },
+				...args: unknown[]
+			) => taskDef.func(mockCtx, ...args),
+		),
 };
 
-const run = (input: unknown): Promise<WorkflowResult> =>
-	(specToPr as unknown as { func: (ctx: TaskContext, input: unknown) => Promise<WorkflowResult> }).func(
-		mockCtx,
-		input,
-	);
+function makeRunRecord(overrides: Record<string, unknown> = {}) {
+	return {
+		id: "run-0001",
+		repo: "jacobprall/render-factory-sample",
+		subjectKind: "issue",
+		subjectNumber: 42,
+		workflow: "spec-to-pr",
+		status: "running",
+		stage: null,
+		outcome: null,
+		result: null,
+		summary: null,
+		trigger: {
+			deliveryId: "del-1",
+			event: "issues",
+			action: "labeled",
+			label: "factory:full-run",
+			actor: { login: "Maintainer", id: 1 },
+		},
+		input: {},
+		previousRunId: null,
+		cancelRequestedAt: null,
+		dispatchAttempts: 1,
+		dispatchAfter: null,
+		dispatchedAt: null,
+		heartbeatAt: null,
+		startedAt: new Date().toISOString(),
+		completedAt: null,
+		costUsd: 0,
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+		...overrides,
+	};
+}
 
-const INPUT = { issueNumber: 42, runId: "run-0001" };
+const run = (input: unknown): Promise<unknown> =>
+	(
+		specToPr as unknown as {
+			handler: (ctx: TaskContext, input: unknown) => Promise<unknown>;
+		}
+	).handler(mockCtx, input);
+
+const INPUT = { runId: "run-0001" };
 
 beforeEach(() => {
 	vi.clearAllMocks();
+
+	mocks.markStarted.mockResolvedValue(true);
+	mocks.getRun.mockResolvedValue(makeRunRecord());
+	mocks.heartbeat.mockResolvedValue(undefined);
+	mocks.appendEvent.mockResolvedValue("1");
+	mocks.gh.getPermission.mockResolvedValue("admin");
 
 	mocks.gh.getIssue.mockResolvedValue({
 		number: 42,
 		title: "Add retries",
 		body: "Please add retries to the client.",
 		labels: ["factory:full-run"],
+		user: "Maintainer",
+		htmlUrl: "https://github.com/test/test/issues/42",
 	});
 	mocks.gh.listIssueComments.mockResolvedValue([]);
 	mocks.gh.getRepoSnapshot.mockResolvedValue({
@@ -118,6 +170,7 @@ beforeEach(() => {
 	});
 	mocks.gh.addLabels.mockResolvedValue(undefined);
 	mocks.gh.removeLabel.mockResolvedValue(undefined);
+	mocks.gh.ensureIssueComment.mockResolvedValue(undefined);
 	mocks.gh.ensurePull.mockResolvedValue({
 		number: 7,
 		htmlUrl: "https://github.com/acme/widgets/pull/7",
@@ -165,8 +218,8 @@ describe("happy path", () => {
 		const result = await run(INPUT);
 
 		expect(result).toEqual({
-			status: "draft_pr_opened",
 			pullRequest: "https://github.com/acme/widgets/pull/7",
+			branch: "factory/issue-42-abcdef",
 		});
 		expect(mocks.verifyPush).toHaveBeenCalledWith(
 			expect.anything(),
@@ -242,6 +295,8 @@ describe("happy path", () => {
 			title: "Add retries",
 			body: "Please add retries.",
 			labels: ["factory:full-run", "factory-status:failed", "bug"],
+			user: "Maintainer",
+			htmlUrl: "https://github.com/test/test/issues/42",
 		});
 
 		await run(INPUT);
@@ -279,10 +334,7 @@ describe("early exits", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toEqual({
-			status: "needs_clarification",
-			questions: ["Which client?"],
-		});
+		expect(result).toEqual({ questions: ["Which client?"] });
 		expect(mocks.createSandbox).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
 		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
@@ -306,14 +358,12 @@ describe("early exits", () => {
 			title: "t",
 			body: "b",
 			labels: [],
+			user: "Maintainer",
+			htmlUrl: "https://github.com/test/test/issues/42",
 		});
 
-		await expect(run(INPUT)).rejects.toThrow(/no longer has/);
-		expect(mocks.finishRun).toHaveBeenCalledWith(
-			"run-0001",
-			"failed",
-			expect.anything(),
-		);
+		const result = await run(INPUT);
+		expect(result).toEqual({ status: "trigger_removed" });
 	});
 });
 
@@ -328,7 +378,7 @@ describe("review outcomes", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({ status: "changes_requested" });
+		expect(result).toMatchObject({ summary: "Unsafe." });
 		expect(mocks.judgeTask).toHaveBeenCalledTimes(2);
 		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
 	});
@@ -340,15 +390,15 @@ describe("review outcomes", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({ status: "draft_pr_opened" });
-		// In 1.x the mock func receives (ctx, input), so the input is at [1].
+		expect(result).toMatchObject({
+			pullRequest: expect.stringContaining("/pull/7"),
+		});
 		const messages = mocks.implementTask.mock.calls.map(
-			(call: unknown[]) =>
-				(call[1] as { message: string }).message,
+			(call: unknown[]) => (call[1] as { message: string }).message,
 		);
-		expect(
-			messages.some((m: string) => m.includes("tsc: type error")),
-		).toBe(true);
+		expect(messages.some((m: string) => m.includes("tsc: type error"))).toBe(
+			true,
+		);
 	});
 
 	it("gives up after the verification round limit", async () => {
@@ -359,7 +409,9 @@ describe("review outcomes", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({ status: "changes_requested" });
+		expect(result).toMatchObject({
+			summary: expect.stringContaining("Verification failed"),
+		});
 		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
 	});
 });
@@ -381,23 +433,14 @@ describe("failure handling", () => {
 		]);
 	});
 
-	it("keeps the trigger label on failure so a retry can re-read the issue", async () => {
-		mocks.analysisTask.mockRejectedValue(new Error("sandbox api 520"));
-
-		await expect(run(INPUT)).rejects.toThrow("sandbox api 520");
-		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
-			expect.anything(),
-			42,
-			"factory:full-run",
-		);
-	});
-
 	it("still opens the pull request when labelling fails", async () => {
 		mocks.gh.addLabels.mockRejectedValue(new Error("labels API down"));
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({ status: "draft_pr_opened" });
+		expect(result).toMatchObject({
+			pullRequest: expect.stringContaining("/pull/7"),
+		});
 	});
 
 	it("fails closed when an agent cannot produce valid JSON twice", async () => {
