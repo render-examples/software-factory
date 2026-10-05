@@ -11,8 +11,20 @@ export const RULES: Rule[] = [
 		label: "recursive forced deletion of root or home",
 	},
 	{
-		pattern: /\bgit\s+push\b.*(?:--force\b|-[^\s]*f\b)/,
-		label: "git force push",
+		pattern: /\bgit\s+push\b/,
+		label: "git push",
+	},
+	{
+		pattern: /\bgit\s+remote\b/,
+		label: "git remote",
+	},
+	{
+		pattern: /\bgit\s+config\s+--global\b/,
+		label: "git config --global",
+	},
+	{
+		pattern: /\bgit\s+credential\b/,
+		label: "git credential",
 	},
 	{
 		pattern: /\b(?:DROP\s+(?:TABLE|DATABASE)|TRUNCATE\s+TABLE)\b/i,
