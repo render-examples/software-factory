@@ -1,4 +1,9 @@
-import { type FactoryConfig, type ModelTier, type RunnerName, factoryConfig } from "../../factory.config.js";
+import {
+	type FactoryConfig,
+	type ModelTier,
+	type RunnerName,
+	factoryConfig,
+} from "../../factory.config.js";
 
 export interface Repository {
 	owner: string;
@@ -35,7 +40,7 @@ export function modelFor(tier: ModelTier, runner?: RunnerName): string {
 	return models[tier];
 }
 
-/** The label that starts a full pipeline run (kept for backward compat). */
+/** The label that starts a full pipeline run. */
 export function triggerLabel(): string {
 	return factoryConfig.labels.fullRun;
 }

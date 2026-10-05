@@ -38,7 +38,9 @@ async function envReadsInSource(): Promise<Set<string>> {
 			for (const m of content.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
 				vars.add(m[1]);
 			}
-			for (const m of content.matchAll(/process\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g)) {
+			for (const m of content.matchAll(
+				/process\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g,
+			)) {
 				vars.add(m[1]);
 			}
 		}
@@ -54,6 +56,8 @@ describe(".env.example completeness", () => {
 		const documented = await envExampleVars();
 		const used = await envReadsInSource();
 		const missing = [...used].filter((v) => !documented.has(v)).sort();
-		expect(missing, `Missing from .env.example: ${missing.join(", ")}`).toEqual([]);
+		expect(missing, `Missing from .env.example: ${missing.join(", ")}`).toEqual(
+			[],
+		);
 	});
 });

@@ -3,10 +3,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { db } from "../app/store/index.js";
 
-const LOCK_ID = 0x72656E646572; // "render" as a stable advisory lock key
+const LOCK_ID = 0x72656e646572; // "render" as a stable advisory lock key
 
-const sqlDir = join(dirname(fileURLToPath(import.meta.url)), "..", "app", "sql");
-const files = (await readdir(sqlDir)).filter((name) => name.endsWith(".sql")).sort();
+const sqlDir = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"app",
+	"sql",
+);
+const files = (await readdir(sqlDir))
+	.filter((name) => name.endsWith(".sql"))
+	.sort();
 
 const pool = db();
 const client = await pool.connect();

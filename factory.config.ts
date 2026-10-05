@@ -33,7 +33,6 @@ export interface FactoryConfig {
 	labels: FactoryLabels;
 	commandPrefix: string;
 	minimumPermission: string;
-	/** Kept for M2; M3 replaces with a live permission check. */
 	actors: string[];
 	agents: {
 		runner: RunnerName;
@@ -53,7 +52,15 @@ export interface FactoryConfig {
 		artifactBytes: number;
 		runArtifactBytes: number;
 	};
-	pricing: Record<string, { inputPerMTok: number; outputPerMTok: number; cacheReadPerMTok?: number; cacheWritePerMTok?: number }>;
+	pricing: Record<
+		string,
+		{
+			inputPerMTok: number;
+			outputPerMTok: number;
+			cacheReadPerMTok?: number;
+			cacheWritePerMTok?: number;
+		}
+	>;
 }
 
 export function defineFactoryConfig(config: FactoryConfig): FactoryConfig {
@@ -83,7 +90,11 @@ export const factoryConfig = defineFactoryConfig({
 	agents: {
 		runner: "claude",
 		models: {
-			claude: { small: "claude-haiku-4-5", medium: "claude-sonnet-5", large: "claude-opus-5" },
+			claude: {
+				small: "claude-haiku-4-5",
+				medium: "claude-sonnet-5",
+				large: "claude-opus-5",
+			},
 		},
 	},
 	review: { specialists: ["security", "correctness", "performance", "tests"] },

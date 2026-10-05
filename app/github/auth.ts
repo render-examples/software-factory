@@ -1,11 +1,6 @@
 import { createSign } from "node:crypto";
 import { repository } from "../config/index.js";
 
-/**
- * GitHub App authentication only. Installation tokens are scoped to the
- * target repository and optionally narrowed to a permission subset.
- */
-
 const API = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -15,7 +10,13 @@ interface AppCredentials {
 	installationId: string;
 }
 
-/** One cache entry per distinct permission set. */
+export type PermissionSet = Record<string, string>;
+
+export interface GitHubTokenOptions {
+	permissions?: PermissionSet;
+	fetch?: typeof fetch;
+}
+
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function appCredentials(): AppCredentials {
@@ -28,12 +29,16 @@ function appCredentials(): AppCredentials {
 				"GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID.",
 		);
 	}
-	return { appId, privateKey: normalizePrivateKey(privateKey), installationId };
+	return {
+		appId,
+		privateKey: normalizePrivateKey(privateKey),
+		installationId,
+	};
 }
 
 /**
- * Accept the PEM as-is, with escaped newlines, or base64-encoded — env vars
- * make real newlines awkward and every deployment tool escapes them
+ * Accept the PEM as-is, with escaped newlines, or base64-encoded — env
+ * vars make real newlines awkward and every deployment tool escapes them
  * differently.
  */
 function normalizePrivateKey(value: string): string {
@@ -45,11 +50,9 @@ function base64url(value: string | Buffer): string {
 	return Buffer.from(value).toString("base64url");
 }
 
-/** Short-lived JWT proving we hold the app's private key. */
 function appJwt({ appId, privateKey }: AppCredentials): string {
 	const now = Math.floor(Date.now() / 1000);
 	const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-	// Backdated for clock skew; GitHub rejects an exp more than 10 minutes out.
 	const payload = base64url(
 		JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }),
 	);
@@ -58,8 +61,6 @@ function appJwt({ appId, privateKey }: AppCredentials): string {
 	signer.update(`${header}.${payload}`);
 	return `${header}.${payload}.${signer.sign(privateKey, "base64url")}`;
 }
-
-export type PermissionSet = Record<string, string>;
 
 async function installationToken(
 	credentials: AppCredentials,
@@ -97,11 +98,16 @@ async function installationToken(
 		);
 	}
 
-	const result = (await response.json()) as { token: string; expires_at: string };
-	return { token: result.token, expiresAt: Date.parse(result.expires_at) };
+	const result = (await response.json()) as {
+		token: string;
+		expires_at: string;
+	};
+	return {
+		token: result.token,
+		expiresAt: Date.parse(result.expires_at),
+	};
 }
 
-/** Stable cache key for a permission set. */
 function cacheKey(permissions?: PermissionSet): string {
 	if (!permissions) return "__default__";
 	return Object.entries(permissions)
@@ -115,19 +121,10 @@ function cacheKey(permissions?: PermissionSet): string {
  * Tokens are cached per permission set and renewed before expiry.
  */
 export async function githubToken(
-	fetchImplOrOptions?: typeof fetch | { permissions?: PermissionSet; fetch?: typeof fetch },
+	opts: GitHubTokenOptions = {},
 ): Promise<string> {
-	let fetchImpl: typeof fetch;
-	let permissions: PermissionSet | undefined;
-
-	if (typeof fetchImplOrOptions === "function") {
-		fetchImpl = fetchImplOrOptions;
-	} else if (fetchImplOrOptions) {
-		fetchImpl = fetchImplOrOptions.fetch ?? fetch;
-		permissions = fetchImplOrOptions.permissions;
-	} else {
-		fetchImpl = fetch;
-	}
+	const fetchImpl = opts.fetch ?? fetch;
+	const { permissions } = opts;
 
 	const credentials = appCredentials();
 	const key = cacheKey(permissions);
@@ -137,14 +134,11 @@ export async function githubToken(
 		return cached.token;
 	}
 
-	const result = await installationToken(credentials, fetchImpl, { permissions });
+	const result = await installationToken(credentials, fetchImpl, {
+		permissions,
+	});
 	tokenCache.set(key, result);
 	return result.token;
-}
-
-/** True — the factory always acts as a GitHub App. */
-export function usingGitHubApp(): boolean {
-	return true;
 }
 
 /** Test seam. */

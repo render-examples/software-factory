@@ -4,9 +4,13 @@
  * Every check reports what is wrong and how to fix it. Read-only by design:
  * it never creates or edits a resource.
  */
-import { allowedActors, repository, triggerLabel } from "../app/config/index.js";
+import {
+	allowedActors,
+	repository,
+	triggerLabel,
+} from "../app/config/index.js";
 import { validateConfig } from "../app/config/index.js";
-import { githubToken, usingGitHubApp } from "../app/github/index.js";
+import { githubToken } from "../app/github/index.js";
 import { db } from "../app/store/index.js";
 import { type Finding, exitWith, heading, print } from "./support.js";
 
@@ -69,7 +73,10 @@ function checkConfiguration(): void {
 		record({
 			level: "fail",
 			message: "Target repository is not configured",
-			fix: error instanceof Error ? error.message : "Set repos[0] in factory.config.ts",
+			fix:
+				error instanceof Error
+					? error.message
+					: "Set repos[0] in factory.config.ts",
 		});
 	}
 
@@ -108,8 +115,15 @@ function checkConfiguration(): void {
 	present("ANTHROPIC_API_KEY", "Required by the workflows host.");
 	present("RENDER_WORKSPACE_ID", "Required to create sandboxes.");
 
-	if (usingGitHubApp()) {
-		record({ level: "ok", message: "GitHub App credentials configured" });
+	const hasApp =
+		process.env.GITHUB_APP_ID?.trim() &&
+		process.env.GITHUB_APP_PRIVATE_KEY?.trim() &&
+		process.env.GITHUB_APP_INSTALLATION_ID?.trim();
+	if (hasApp) {
+		record({
+			level: "ok",
+			message: "GitHub App credentials configured",
+		});
 	} else {
 		record({
 			level: "fail",
@@ -147,7 +161,10 @@ async function checkGitHub(): Promise<void> {
 	}
 
 	const base = `/repos/${repo.owner}/${repo.repo}`;
-	const info = await github<{ permissions?: Record<string, boolean> }>(base, token);
+	const info = await github<{ permissions?: Record<string, boolean> }>(
+		base,
+		token,
+	);
 	if (!info.ok) {
 		record({
 			level: "fail",
@@ -202,7 +219,9 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 	}
 
 	const all = hooks.body ?? [];
-	const ours = all.filter((hook) => hook.config.url?.includes("/webhooks/github"));
+	const ours = all.filter((hook) =>
+		hook.config.url?.includes("/webhooks/github"),
+	);
 
 	if (ours.length === 0) {
 		const others = all.map((hook) => hook.config.url).filter(Boolean);
@@ -223,7 +242,11 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 	record(
 		hook.active
 			? { level: "ok", message: "Webhook is active" }
-			: { level: "fail", message: "Webhook is inactive", fix: "Enable it in repository settings." },
+			: {
+					level: "fail",
+					message: "Webhook is inactive",
+					fix: "Enable it in repository settings.",
+				},
 	);
 
 	record(

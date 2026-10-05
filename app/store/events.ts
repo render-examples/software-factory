@@ -27,7 +27,9 @@ export async function appendEvent(input: {
 	return String(rows[0].id);
 }
 
-export async function listEventsByRun(runId: string): Promise<RunEventRecord[]> {
+export async function listEventsByRun(
+	runId: string,
+): Promise<RunEventRecord[]> {
 	const { rows } = await db().query(
 		`SELECT id, run_id, type, stage, span_id, parent_span_id, phase, payload, created_at
 		 FROM run_events WHERE run_id = $1 ORDER BY id`,
