@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
 	runVerification: vi.fn(),
 	verifyPush: vi.fn(),
 	finishRun: vi.fn(),
-	setRunBranch: vi.fn(),
+	setRunStage: vi.fn(),
 }));
 
 // In SDK 1.x, task() returns a TaskDefinition { name, func }. The mock
@@ -68,7 +68,7 @@ vi.mock("../app/sandbox/index.js", () => ({
 }));
 vi.mock("../app/store/index.js", () => ({
 	finishRun: mocks.finishRun,
-	setRunBranch: mocks.setRunBranch,
+	setRunStage: mocks.setRunStage,
 }));
 vi.mock("../app/git/index.js", () => ({
 	branchName: () => "factory/issue-42-abcdef",
@@ -100,15 +100,12 @@ const INPUT = { issueNumber: 42, runId: "run-0001" };
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	process.env.FACTORY_REPO = "acme/widgets";
-	process.env.FACTORY_LABEL = "factory";
-	process.env.GITHUB_TOKEN = "ghp_test";
 
 	mocks.gh.getIssue.mockResolvedValue({
 		number: 42,
 		title: "Add retries",
 		body: "Please add retries to the client.",
-		labels: ["factory"],
+		labels: ["factory:full-run"],
 	});
 	mocks.gh.listIssueComments.mockResolvedValue([]);
 	mocks.gh.getRepoSnapshot.mockResolvedValue({
@@ -151,7 +148,7 @@ beforeEach(() => {
 	mocks.runVerification.mockResolvedValue({ passed: true, failures: "" });
 	mocks.verifyPush.mockResolvedValue(undefined);
 	mocks.finishRun.mockResolvedValue(undefined);
-	mocks.setRunBranch.mockResolvedValue(undefined);
+	mocks.setRunStage.mockResolvedValue(undefined);
 });
 
 describe("happy path", () => {
@@ -162,8 +159,6 @@ describe("happy path", () => {
 			status: "draft_pr_opened",
 			pullRequest: "https://github.com/acme/widgets/pull/7",
 		});
-		// Git gets the resolved token, which under App auth is an installation
-		// token rather than whatever sits in GITHUB_TOKEN.
 		expect(mocks.verifyPush).toHaveBeenCalledWith(
 			expect.anything(),
 			"ghs_installation_token",
@@ -176,41 +171,43 @@ describe("happy path", () => {
 		);
 		expect(mocks.finishRun).toHaveBeenCalledWith(
 			"run-0001",
-			"draft_pr_opened",
-			expect.objectContaining({ pullRequest: expect.stringContaining("/pull/7") }),
+			"completed",
+			expect.objectContaining({
+				outcome: "draft_pr_opened",
+				result: expect.objectContaining({ pullRequest: expect.stringContaining("/pull/7") }),
+			}),
 		);
 	});
 
 	it("removes the trigger label once the run is over", async () => {
 		await run(INPUT);
-		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(expect.anything(), 42, "factory");
+		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(expect.anything(), 42, "factory:full-run");
 	});
 
 	it("advances the status label through each phase, then to pr-open", async () => {
 		await run(INPUT);
 
-		const applied = mocks.gh.addLabels.mock.calls.map((call) => call[2][0]);
+		const applied = mocks.gh.addLabels.mock.calls.map((call: unknown[]) => (call[2] as string[])[0]);
 		expect(applied).toEqual([
-			"factory:analyzing",
-			"factory:implementing",
-			"factory:reviewing",
-			"factory:pr-open",
+			"factory-status:analyzing",
+			"factory-status:implementing",
+			"factory-status:reviewing",
+			"factory-status:pr-open",
 		]);
 	});
 
 	it("adds the next status label before removing the previous one", async () => {
 		await run(INPUT);
 
-		// The issue must never be briefly unlabeled between phases.
 		const order = [
-			...mocks.gh.addLabels.mock.calls.map((c) => ({ op: "add", label: c[2][0] })),
-			...mocks.gh.removeLabel.mock.calls.map((c) => ({ op: "remove", label: c[2] })),
+			...mocks.gh.addLabels.mock.calls.map((c: unknown[]) => ({ op: "add", label: (c[2] as string[])[0] })),
+			...mocks.gh.removeLabel.mock.calls.map((c: unknown[]) => ({ op: "remove", label: c[2] as string })),
 		];
 		const addAnalyzing = order.findIndex(
-			(e) => e.op === "add" && e.label === "factory:implementing",
+			(e) => e.op === "add" && e.label === "factory-status:implementing",
 		);
 		const removeAnalyzing = order.findIndex(
-			(e) => e.op === "remove" && e.label === "factory:analyzing",
+			(e) => e.op === "remove" && e.label === "factory-status:analyzing",
 		);
 		expect(addAnalyzing).toBeGreaterThanOrEqual(0);
 		expect(removeAnalyzing).toBeGreaterThanOrEqual(0);
@@ -221,7 +218,7 @@ describe("happy path", () => {
 			number: 42,
 			title: "Add retries",
 			body: "Please add retries.",
-			labels: ["factory", "factory:failed", "bug"],
+			labels: ["factory:full-run", "factory-status:failed", "bug"],
 		});
 
 		await run(INPUT);
@@ -229,7 +226,7 @@ describe("happy path", () => {
 		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
 			expect.anything(),
 			42,
-			"factory:failed",
+			"factory-status:failed",
 		);
 		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
 			expect.anything(),
@@ -263,7 +260,7 @@ describe("early exits", () => {
 		expect(mocks.createSandbox).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
 		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
-			"factory:needs-detail",
+			"factory-status:needs-detail",
 		]);
 	});
 
@@ -311,7 +308,8 @@ describe("review outcomes", () => {
 		expect(result).toMatchObject({ status: "draft_pr_opened" });
 		// In 1.x the mock func receives (ctx, input), so the input is at [1].
 		const messages = mocks.implementTask.mock.calls.map(
-			(call: unknown[]) => (call[1] as { message: string }).message,
+			(call: unknown[]) =>
+				(call[1] as { message: string }).message,
 		);
 		expect(messages.some((m: string) => m.includes("tsc: type error"))).toBe(true);
 	});
@@ -334,17 +332,15 @@ describe("failure handling", () => {
 		expect(mocks.terminate).toHaveBeenCalledOnce();
 	});
 
-	it("marks the issue factory:failed when a stage throws", async () => {
+	it("marks the issue factory-status:failed when a stage throws", async () => {
 		mocks.analysisTask.mockRejectedValue(new Error("model unavailable"));
 
 		await expect(run(INPUT)).rejects.toThrow("model unavailable");
 		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
-			"factory:failed",
+			"factory-status:failed",
 		]);
 	});
 
-	// Removing it would make Render's retry fail at intake with a misleading
-	// "no longer has the label" error, masking the real cause.
 	it("keeps the trigger label on failure so a retry can re-read the issue", async () => {
 		mocks.analysisTask.mockRejectedValue(new Error("sandbox api 520"));
 
@@ -352,11 +348,10 @@ describe("failure handling", () => {
 		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
 			expect.anything(),
 			42,
-			"factory",
+			"factory:full-run",
 		);
 	});
 
-	// Labels are cosmetic; a labelling outage must not fail an otherwise good run.
 	it("still opens the pull request when labelling fails", async () => {
 		mocks.gh.addLabels.mockRejectedValue(new Error("labels API down"));
 

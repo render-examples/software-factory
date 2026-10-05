@@ -26,7 +26,7 @@ import {
 } from "../../github/index.js";
 import { createSandbox } from "../../sandbox/index.js";
 import { analysisTask } from "../../tasks/index.js";
-import { finishRun, setRunBranch } from "../../store/index.js";
+import { finishRun, setRunStage } from "../../store/index.js";
 import { MAX_VERIFY_ROUNDS, SANDBOX_TIMEOUT_SECONDS } from "./constants.js";
 import {
 	type ImplementationState,
@@ -77,6 +77,7 @@ export const specToPr = task(
 		} catch (error) {
 			const summary = error instanceof Error ? error.message : String(error);
 			await finishRun(runId, "failed", {
+				outcome: "error",
 				summary: summary.slice(0, 1000),
 			}).catch((storeError) =>
 				console.error("Failed to record run failure:", storeError),
@@ -136,7 +137,7 @@ async function pipeline(
 	try {
 		const branch = branchName(issueNumber, runId);
 		const checkout = await setupCheckout(sandbox, token, repo, branch);
-		await setRunBranch(runId, branch);
+		await setRunStage(runId, "implement");
 
 		// ── Analysis ────────────────────────────────────────────────────
 		await setStatus(STATUS.analyzing);
