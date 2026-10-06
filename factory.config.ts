@@ -79,7 +79,13 @@ export const factoryConfig = defineFactoryConfig({
 			baseBranch: "main",
 			repoDir: "/home/user/repo",
 			setup: { install: "npm ci", browsers: true },
-			verify: ["npm run build", "npx vitest run"],
+			verify: ["npm run build", "npm test"],
+			dev: {
+				start: "npm run dev -- --port 3000",
+				port: 3000,
+				healthPath: "/",
+			},
+			preview: { serviceName: "sample-web" },
 		},
 	],
 	labels: {
