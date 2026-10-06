@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	},
 	lease: vi.fn(),
 	release: vi.fn(),
+	listTrackedFiles: vi.fn(),
 	markStarted: vi.fn(),
 	getRun: vi.fn(),
 	heartbeat: vi.fn(),
@@ -72,6 +73,10 @@ vi.mock("../app/workspaces/index.js", () => ({
 	release: mocks.release,
 }));
 
+vi.mock("../app/git/index.js", () => ({
+	listTrackedFiles: mocks.listTrackedFiles,
+}));
+
 function makeRun(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "run-t1",
@@ -104,6 +109,26 @@ function makeRun(overrides: Record<string, unknown> = {}) {
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		...overrides,
+	};
+}
+
+function humanComment(id: number, body: string, user = "Maintainer") {
+	return {
+		id,
+		body,
+		user,
+		authorType: "User",
+		createdAt: "2026-01-01T00:00:00Z",
+	};
+}
+
+function botComment(id: number, body: string, user = "factory-bot") {
+	return {
+		id,
+		body,
+		user,
+		authorType: "Bot",
+		createdAt: "2026-01-01T00:00:00Z",
 	};
 }
 
@@ -191,6 +216,7 @@ beforeEach(() => {
 		headSha: "sha-head",
 	});
 	mocks.release.mockResolvedValue(undefined);
+	mocks.listTrackedFiles.mockResolvedValue(new Set(["src/client.ts"]));
 
 	mocks.getCurrentSpec.mockResolvedValue(null);
 	mocks.getSpecVersion.mockResolvedValue(null);
@@ -295,7 +321,6 @@ describe("triage workflow", () => {
 					outcome: "declined",
 				}),
 			);
-			// Decline removes the trigger label (default behavior).
 			const finishCall = mocks.finishRun.mock.calls[0][2];
 			expect(finishCall.followUp).toBeUndefined();
 		});
@@ -312,7 +337,6 @@ describe("triage workflow", () => {
 					relevantPaths: [],
 				}),
 			);
-			// Return nonsense twice.
 			mocks.specWriterTask
 				.mockResolvedValueOnce("I am not JSON")
 				.mockResolvedValueOnce("Still not JSON");
@@ -360,7 +384,6 @@ describe("triage workflow", () => {
 
 	describe("spec comment editing in place", () => {
 		it("edits the same comment on round 2", async () => {
-			// Round 2: spec already exists
 			mocks.getCurrentSpec.mockResolvedValue({
 				id: "spec-1",
 				repo: "jacobprall/render-factory-sample",
@@ -378,7 +401,7 @@ describe("triage workflow", () => {
 				specId: "spec-1",
 				version: 1,
 				document: validSpec,
-				markdown: JSON.stringify(validSpec),
+				markdown: "# v1",
 				notes: validNotes,
 				lastCommentId: "100",
 				runId: "run-prev",
@@ -409,20 +432,16 @@ describe("triage workflow", () => {
 			const wf = triageWorkflow as unknown as TaskShape;
 			await wf.handler(mockCtx, { runId: "run-t1" });
 
-			// Should NOT create a new spec row
 			expect(mocks.createSpec).not.toHaveBeenCalled();
-			// Should add version 2
 			expect(mocks.addSpecVersion).toHaveBeenCalledWith(
 				expect.objectContaining({ specId: "spec-1" }),
 			);
-			// Should use upsertMarkedComment (same marker)
 			expect(mocks.gh.upsertMarkedComment).toHaveBeenCalledWith(
 				expect.anything(),
 				42,
 				expect.stringContaining("spec:spec-1"),
 				expect.anything(),
 			);
-			// Result should have version 2
 			const finishCall = mocks.finishRun.mock.calls[0][2];
 			expect(finishCall.result).toEqual({ specId: "spec-1", version: 2 });
 		});
@@ -464,7 +483,6 @@ describe("triage workflow", () => {
 				"factory:spec-approved",
 			);
 
-			// The spec comment should note that approval was removed
 			const upsertCall = mocks.gh.upsertMarkedComment.mock.calls[0];
 			const commentBody = upsertCall[3] as string;
 			expect(commentBody).toContain("spec-approved");
@@ -486,30 +504,11 @@ describe("triage workflow", () => {
 				JSON.stringify({ spec: validSpec, notes: validNotes }),
 			);
 
-			// First call returns initial comments
 			mocks.gh.listIssueComments
+				.mockResolvedValueOnce([humanComment(100, "Please handle retries")])
 				.mockResolvedValueOnce([
-					{
-						id: 100,
-						body: "Please handle retries",
-						user: "Maintainer",
-						createdAt: "2026-01-01T00:00:00Z",
-					},
-				])
-				// Second call (re-fetch at end) returns a newer comment
-				.mockResolvedValueOnce([
-					{
-						id: 100,
-						body: "Please handle retries",
-						user: "Maintainer",
-						createdAt: "2026-01-01T00:00:00Z",
-					},
-					{
-						id: 200,
-						body: "Also handle timeouts",
-						user: "Maintainer",
-						createdAt: "2026-01-01T00:01:00Z",
-					},
+					humanComment(100, "Please handle retries"),
+					humanComment(200, "Also handle timeouts"),
 				]);
 
 			const { triageWorkflow } = await import(
@@ -538,14 +537,7 @@ describe("triage workflow", () => {
 				JSON.stringify({ spec: validSpec, notes: validNotes }),
 			);
 
-			const sameComments = [
-				{
-					id: 100,
-					body: "Please handle retries",
-					user: "Maintainer",
-					createdAt: "2026-01-01T00:00:00Z",
-				},
-			];
+			const sameComments = [humanComment(100, "Please handle retries")];
 			mocks.gh.listIssueComments.mockResolvedValue(sameComments);
 
 			const { triageWorkflow } = await import(
@@ -569,17 +561,9 @@ describe("triage workflow", () => {
 				}),
 			);
 
-			// Even if new comments exist
 			mocks.gh.listIssueComments
 				.mockResolvedValueOnce([])
-				.mockResolvedValueOnce([
-					{
-						id: 300,
-						body: "New comment",
-						user: "Maintainer",
-						createdAt: "2026-01-01T00:01:00Z",
-					},
-				]);
+				.mockResolvedValueOnce([humanComment(300, "New comment")]);
 
 			const { triageWorkflow } = await import(
 				"../app/workflows/triage/index.js"
@@ -605,26 +589,16 @@ describe("triage workflow", () => {
 				JSON.stringify({ spec: validSpec, notes: validNotes }),
 			);
 
-			const commentsWithMarker = [
-				{
-					id: 100,
-					body: "Please handle retries",
-					user: "Maintainer",
-					createdAt: "2026-01-01T00:00:00Z",
-				},
-			];
-			const freshWithMarker = [
-				...commentsWithMarker,
-				{
-					id: 200,
-					body: "<!-- render-factory:spec:abc --> spec comment",
-					user: "github-actions[bot]",
-					createdAt: "2026-01-01T00:01:00Z",
-				},
-			];
 			mocks.gh.listIssueComments
-				.mockResolvedValueOnce(commentsWithMarker)
-				.mockResolvedValueOnce(freshWithMarker);
+				.mockResolvedValueOnce([humanComment(100, "Please handle retries")])
+				.mockResolvedValueOnce([
+					humanComment(100, "Please handle retries"),
+					botComment(
+						200,
+						"<!-- render-factory:spec:abc --> spec comment",
+						"github-actions[bot]",
+					),
+				]);
 
 			const { triageWorkflow } = await import(
 				"../app/workflows/triage/index.js"
@@ -634,6 +608,121 @@ describe("triage workflow", () => {
 
 			const finishCall = mocks.finishRun.mock.calls[0][2];
 			expect(finishCall.followUp).toBeUndefined();
+		});
+
+		it("ignores Bot-type comments even without a marker", async () => {
+			mocks.triageTask.mockResolvedValue(
+				JSON.stringify({
+					decision: "draft",
+					questions: [],
+					rationale: "Clear",
+					findings: "found it",
+					relevantPaths: [],
+				}),
+			);
+			mocks.specWriterTask.mockResolvedValue(
+				JSON.stringify({ spec: validSpec, notes: validNotes }),
+			);
+
+			mocks.gh.listIssueComments
+				.mockResolvedValueOnce([humanComment(100, "Please handle retries")])
+				.mockResolvedValueOnce([
+					humanComment(100, "Please handle retries"),
+					botComment(200, "Some bot comment without a marker"),
+				]);
+
+			const { triageWorkflow } = await import(
+				"../app/workflows/triage/index.js"
+			);
+			const wf = triageWorkflow as unknown as TaskShape;
+			await wf.handler(mockCtx, { runId: "run-t1" });
+
+			const finishCall = mocks.finishRun.mock.calls[0][2];
+			expect(finishCall.followUp).toBeUndefined();
+		});
+
+		it("reply-triggered asked round with no newer comment queues no follow-up", async () => {
+			// This is the regression test for the infinite-loop bug.
+			// The trigger is an issue_comment, meaning a human reply started
+			// this round. If no comment with a strictly greater ID appeared
+			// during the run, no follow-up should be queued.
+			mocks.getRun.mockResolvedValue(
+				makeRun({
+					trigger: {
+						deliveryId: "del-1",
+						event: "issue_comment",
+						action: "created",
+						commentId: 100,
+						actor: { login: "Maintainer", id: 1 },
+					},
+				}),
+			);
+
+			mocks.triageTask.mockResolvedValue(
+				JSON.stringify({
+					decision: "ask",
+					questions: ["Which client?"],
+					rationale: "Ambiguous",
+					findings: "",
+					relevantPaths: [],
+				}),
+			);
+
+			const theComments = [humanComment(100, "Here is my reply")];
+			// Both fetches return the same list — no new comment arrived.
+			mocks.gh.listIssueComments.mockResolvedValue(theComments);
+
+			const { triageWorkflow } = await import(
+				"../app/workflows/triage/index.js"
+			);
+			const wf = triageWorkflow as unknown as TaskShape;
+			await wf.handler(mockCtx, { runId: "run-t1" });
+
+			const finishCall = mocks.finishRun.mock.calls[0][2];
+			expect(finishCall.followUp).toBeUndefined();
+		});
+
+		it("reply-triggered asked round with one newer comment queues exactly one follow-up", async () => {
+			mocks.getRun.mockResolvedValue(
+				makeRun({
+					trigger: {
+						deliveryId: "del-1",
+						event: "issue_comment",
+						action: "created",
+						commentId: 100,
+						actor: { login: "Maintainer", id: 1 },
+					},
+				}),
+			);
+
+			mocks.triageTask.mockResolvedValue(
+				JSON.stringify({
+					decision: "ask",
+					questions: ["Which client?"],
+					rationale: "Ambiguous",
+					findings: "",
+					relevantPaths: [],
+				}),
+			);
+
+			// Intake fetch sees comment 100.
+			mocks.gh.listIssueComments
+				.mockResolvedValueOnce([humanComment(100, "My reply")])
+				// Fresh fetch at end sees 100 + 200.
+				.mockResolvedValueOnce([
+					humanComment(100, "My reply"),
+					humanComment(200, "Another reply during the run"),
+				]);
+
+			const { triageWorkflow } = await import(
+				"../app/workflows/triage/index.js"
+			);
+			const wf = triageWorkflow as unknown as TaskShape;
+			await wf.handler(mockCtx, { runId: "run-t1" });
+
+			const finishCall = mocks.finishRun.mock.calls[0][2];
+			expect(finishCall.followUp).toBeDefined();
+			expect(finishCall.followUp.workflow).toBe("triage");
 		});
 	});
 
@@ -697,7 +786,6 @@ describe("triage workflow", () => {
 
 			const finishCall = mocks.finishRun.mock.calls[0][2];
 			expect(finishCall.followUp).toBeUndefined();
-			// removeLabels: [] means the lifecycle won't remove the trigger label
 		});
 
 		it("keeps the trigger label on spec_drafted (removeLabels: [])", async () => {
@@ -719,8 +807,6 @@ describe("triage workflow", () => {
 			);
 			const wf = triageWorkflow as unknown as TaskShape;
 			await wf.handler(mockCtx, { runId: "run-t1" });
-
-			// The workflow returns removeLabels: [] for spec_drafted
 		});
 	});
 
@@ -747,6 +833,65 @@ describe("triage workflow", () => {
 				name: "main",
 			});
 			expect(mocks.release).toHaveBeenCalledWith("run-t1");
+		});
+	});
+
+	describe("spec markdown storage", () => {
+		it("stores rendered markdown not JSON in spec_versions", async () => {
+			mocks.triageTask.mockResolvedValue(
+				JSON.stringify({
+					decision: "draft",
+					questions: [],
+					rationale: "Clear",
+					findings: "found it",
+					relevantPaths: [],
+				}),
+			);
+			mocks.specWriterTask.mockResolvedValue(
+				JSON.stringify({ spec: validSpec, notes: validNotes }),
+			);
+
+			const { triageWorkflow } = await import(
+				"../app/workflows/triage/index.js"
+			);
+			const wf = triageWorkflow as unknown as TaskShape;
+			await wf.handler(mockCtx, { runId: "run-t1" });
+
+			const addCall = mocks.addSpecVersion.mock.calls[0][0];
+			expect(addCall.markdown).toContain("### Problem");
+			expect(addCall.markdown).toContain("### Acceptance criteria");
+			expect(addCall.markdown).not.toContain('"title"');
+		});
+	});
+
+	describe("path warnings via existingPaths", () => {
+		it("passes tracked files to validateSpec for path warnings", async () => {
+			mocks.listTrackedFiles.mockResolvedValue(new Set(["src/other.ts"]));
+
+			mocks.triageTask.mockResolvedValue(
+				JSON.stringify({
+					decision: "draft",
+					questions: [],
+					rationale: "Clear",
+					findings: "found it",
+					relevantPaths: [],
+				}),
+			);
+			mocks.specWriterTask.mockResolvedValue(
+				JSON.stringify({ spec: validSpec, notes: validNotes }),
+			);
+
+			const { triageWorkflow } = await import(
+				"../app/workflows/triage/index.js"
+			);
+			const wf = triageWorkflow as unknown as TaskShape;
+			await wf.handler(mockCtx, { runId: "run-t1" });
+
+			// validSpec has path "src/client.ts" which is not in existingPaths
+			// so the spec comment should show a path warning
+			const upsertCall = mocks.gh.upsertMarkedComment.mock.calls[0];
+			const body = upsertCall[3] as string;
+			expect(body).toContain("src/client.ts does not exist yet");
 		});
 	});
 });
