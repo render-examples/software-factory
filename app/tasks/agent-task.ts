@@ -11,6 +11,7 @@ import {
 import { connectSandbox } from "../sandbox/index.js";
 import { putArtifact } from "../store/index.js";
 import { addRunCost, getRunCost } from "../store/index.js";
+import { createBrowserTools, type Tool } from "../tools/index.js";
 import { startSpan, point } from "../telemetry/index.js";
 import { z } from "zod";
 import { BudgetExceededError } from "./errors.js";
@@ -19,6 +20,7 @@ export const agentTaskInputSchema = z.object({
 	runId: z.string().min(1),
 	message: z.string().min(1),
 	sandboxId: z.string().optional(),
+	browser: z.object({ origins: z.array(z.string()) }).optional(),
 });
 
 export type AgentTaskInput = z.infer<typeof agentTaskInputSchema>;
@@ -59,7 +61,18 @@ export function agentTask(agent: Agent) {
 			const runner = resolveRunner(agent);
 			const runnerName = agent.runner ?? factoryConfig.agents.runner;
 			const model = modelFor(agent.model, runnerName);
-			const tools = agent.tools ?? [];
+			const agentTools: Tool[] = [...(agent.tools ?? [])];
+
+			if (input.browser?.origins?.length) {
+				agentTools.push(
+					...createBrowserTools({
+						allowedOrigins: input.browser.origins,
+						runId,
+					}),
+				);
+			}
+
+			const tools = agentTools;
 
 			const span = await startSpan(runId, "agent.run", {
 				payload: {

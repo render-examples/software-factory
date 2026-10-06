@@ -156,8 +156,23 @@ const enforcePolicy = async (input: {
 };
 
 function toContentBlocks(result: ToolResult) {
+	const content: Array<
+		| { type: "text"; text: string }
+		| { type: "image"; data: string; mimeType: string }
+	> = [{ type: "text" as const, text: result.content }];
+
+	if (result.images) {
+		for (const img of result.images) {
+			content.push({
+				type: "image" as const,
+				data: img.png.toString("base64"),
+				mimeType: "image/png",
+			});
+		}
+	}
+
 	return {
-		content: [{ type: "text" as const, text: result.content }],
+		content,
 		isError: result.isError ?? false,
 	};
 }

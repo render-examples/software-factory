@@ -388,6 +388,8 @@ function mapOutcomeToStatus(outcome: string): FactoryStatus | undefined {
 		case "draft_pr_opened":
 		case "pr_opened":
 			return STATUS.prOpen;
+		case "review_submitted":
+			return STATUS.reviewing;
 		case "needs_clarification":
 		case "asked":
 		case "spec_drafted":
