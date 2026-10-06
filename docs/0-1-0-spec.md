@@ -22,7 +22,7 @@ This specification describes how to evolve `code-factory-demo` into render-facto
 6. [Changes by module](#6-changes-by-module)
 7. [Data model](#7-data-model)
 8. [Publishing through the Git Data API](#8-publishing-through-the-git-data-api)
-9. [Workspaces and the warm pool](#9-workspaces-and-the-warm-pool)
+9. [Workspaces and snapshots](#9-workspaces-and-snapshots)
 10. [Agents, runners, and tools](#10-agents-runners-and-tools)
 11. [Observability, cost, and the trace UI](#11-observability-cost-and-the-trace-ui)
 12. [Configuration and environment](#12-configuration-and-environment)
@@ -82,7 +82,7 @@ The design follows a few principles:
 | `factory-gateway` | Web Service | `app/src/server.ts` | Verifies webhooks, records deliveries, creates queued runs, sets cancel flags; serves the read API, the trace UI, and artifact links |
 | `factory-dispatcher` | Background Worker (new) | `app/src/dispatcher.ts` | Polls queued runs and starts their Workflow task |
 | `factory-workflows` | Workflows | `app/src/workflows.ts` | Runs the three workflows and all agent tasks; owns GitHub writes and publishing |
-| `factory-maintenance` | Cron Job (new) | `app/src/maintenance.ts` | Re-queues stuck dispatches, fails runs that stopped heartbeating, keeps the warm pool topped up and recycled, reaps sandboxes, expires artifacts |
+| `factory-maintenance` | Cron Job (new) | `app/src/maintenance.ts` | Re-queues stuck dispatches, fails runs that stopped heartbeating, reaps sandboxes, keeps the repository snapshot current, expires artifacts |
 | `factory-db` | Postgres | — | All state, including artifacts |
 | Sandboxes | Render Sandboxes | — | All repository execution |
 | Preview environments | The *target* repository's Blueprint | — | Per-PR deploys that the PR Reviewer tests against |
@@ -99,7 +99,7 @@ flowchart LR
     DSP["factory-dispatcher<br/>Background Worker"]
     WF["factory-workflows<br/>Workflows"]
     MT["factory-maintenance<br/>Cron Job"]
-    SB["Sandboxes<br/>warm pool + leased"]
+    SB["Sandboxes<br/>per-run from snapshots"]
     PV["Preview environments<br/>target repo"]
   end
   GH -- "webhooks" --> GW
@@ -108,11 +108,11 @@ flowchart LR
   DSP -- "start task" --> WF
   WF <--> DB
   WF <--> LLM
-  WF -- "lease, exec, release" --> SB
+  WF -- "open, exec, close" --> SB
   WF -- "comments, commits, PRs, reviews" --> GH
   WF -- "deploy status" --> PV
   MT --> DB
-  MT -- "prepare, recycle, reap" --> SB
+  MT -- "reap, snapshot" --> SB
   SB -. "browser tests" .-> PV
 ```
 
@@ -205,8 +205,8 @@ Every workflow is registered through `runWorkflow(name, handler)`. It handles th
 3. Start a 30-second heartbeat on `runs.heartbeat_at` (B-01).
 4. Check that the triggering actor (the label sender or comment author) has at least `minimumPermission` on the repository, via the GitHub collaborator-permission API (D-08, O-7). If not, comment and finish as `rejected`.
 5. Check the trigger is still valid. The trigger label must still be present; a PR under review must still be open.
-6. Run the handler. It receives `stage(name)` for span events, `cancelled()` (checked at stage boundaries), a budget check, and lease helpers for workspaces.
-7. In `finally`, release every sandbox leased by the run.
+6. Run the handler. It receives `stage(name)` for span events, `cancelled()` (checked at stage boundaries), a budget check, and workspace helpers.
+7. In `finally`, close every sandbox opened by the run.
 8. On a terminal result:
    - write the outcome, and queue any follow-up run, in one transaction;
    - post the terminal comment through `ensureIssueComment`;
@@ -223,7 +223,7 @@ Each run is one round of the conversation.
 | Stage | What happens |
 |---|---|
 | `intake` | Load the issue, its comments, and the issue's current spec with its saved notes, if there is one. |
-| `workspace` | Lease a warm sandbox at the base branch (D-14). |
+| `workspace` | Open a sandbox at the base branch (D-14). |
 | `assess` | The `triage` agent, now with read tools on the checkout, returns `ask` (with questions), `draft`, or `decline` (with a reason). If a spec already exists, `draft` means revise it using the new comments. |
 | `ask` | Post the questions as one comment. Outcome `asked`. |
 | `draft` | The `spec-writer` agent (read tools) produces a `Spec` plus notes for later rounds. Workflow code validates it (§5.2), stores a new version, and creates or edits the spec comment in place. If `factory:spec-approved` is on the issue, remove it and say so (B-04). Outcome `spec_drafted`. |
@@ -238,7 +238,7 @@ Today, this file is the whole pipeline. It becomes the implementation phase only
 | Stage | What happens | Change from the demo |
 |---|---|---|
 | `intake` | Load the spec version recorded in the run's input. If there is none, comment and finish `no_spec`. Mark that version approved by the trigger actor. Remove the conversation labels. | Replaces `loadIntake`, which ran the triage agent |
-| `workspace` | Lease a warm sandbox and create the branch `factory/issue-<n>-<runId16>` at the base SHA | Replaces `createSandbox` plus `setupCheckout` |
+| `workspace` | Open a sandbox and create the branch `factory/issue-<n>-<runId16>` at the base SHA | Replaces `createSandbox` plus `setupCheckout` |
 | `implement` | `implementer` works from the spec; workflow code commits | The input is the approved spec instead of the analyst's plan. The analyst becomes `spec-writer` in Triage. |
 | `verify` | `verifyWithFixes`, using the repository target's `verify` commands, with at most `limits.repairRounds` (2) repair rounds. If it still fails, finish `verification_failed`. | `MAX_VERIFY_ROUNDS` (3) becomes config |
 | `self-review` | `selfReview` checks the full diff against the spec. One fix pass is allowed, then verification runs again. Unfixed issues are listed in the PR body. | Unchanged, except the input is the spec |
@@ -257,7 +257,7 @@ Other outcomes: `no_changes`, `verification_failed`, `publish_refused`, `budget_
 | Stage | What happens |
 |---|---|
 | `intake` | Load the PR. If it is closed, finish `pr_closed`. Load the diff against the base. Find the spec through the PR body marker, falling back to the linked issue. |
-| `workspace` | Lease a fresh warm sandbox, fetch `refs/pull/<n>/head`, check out `headSha`, and reinstall if the lockfile changed (B-10). |
+| `workspace` | Open a fresh sandbox, fetch `refs/pull/<n>/head`, check out `headSha`, and reinstall if the lockfile changed (B-10). |
 | `verify` | Run the `verify` commands and record their results as evidence. Failures do not stop the review. |
 | `specialists` | Run each specialist listed in `review.specialists` in parallel with `ctx.run` (D-18, O-11). The default list is `security`, `correctness`, `performance`, and `tests`. Each specialist gets read tools on the PR checkout, the diff, the spec, and the verification results. Each returns findings with file, line, severity, confidence, and evidence. |
 | `local-ux` | Start `dev.start` in the background, poll `dev.healthPath`, then run `ux-tester` with browser tools limited to `localhost:<port>`. Screenshots become artifacts. This stage is skipped if the server does not become healthy, and the dev log is attached instead (O-8). |
@@ -462,11 +462,12 @@ This is the demo's `dispatch.ts` logic, moved out of the request path.
 ### 6.13 `app/sandbox/` and `app/workspaces/` (new)
 
 - `app/sandbox/` remains the thin adapter, updated for SDK 1.x, with `download` added. `createSandbox` passes `pool.network` to the platform when it creates a sandbox (D-13, O-12).
-- `app/workspaces/` replaces direct use of `createSandbox` with the warm pool (§9). Its parts:
-  - `lease.ts`: `lease(runId, ref)` and `release(runId)`;
-  - `prepare.ts`: clone, install, and browser setup;
+- `app/workspaces/` replaces direct use of `createSandbox` with per-run sandboxes restored from snapshots (§9). Its parts:
+  - `workspace.ts`: `openWorkspace(runId, ref)` and `closeWorkspace(runId)`;
+  - `snapshot.ts`: `ensureSnapshot()` under an advisory lock;
+  - `reap.ts`: terminate sandboxes that should no longer be running;
   - `credentials.ts`: a fetch-only credential helper, moved from `git/auth.ts`;
-  - `pool.ts`: top-up, recycle, and reap, called by maintenance.
+  - `maintenance.ts`: reap, ensureSnapshot, prune retired snapshots.
 
 ### 6.14 `app/git/` and `app/publish/` (new)
 
@@ -532,7 +533,8 @@ Migration `app/sql/0002_phases.sql` evolves the demo's `runs` table and adds six
 | `run_events` (new) | `id` bigserial; `run_id`; `type`; `stage`; `span_id`; `parent_span_id`; `phase` (`start`, `end`, or `point`); `payload` jsonb; `created_at`. Index on `(run_id, id)`. |
 | `specs` (new) | `id`; `repo`; `issue_number`; `status` (`draft`, `approved`, `superseded`); `current_version`; `approved_version`; `approved_by`; `approved_at`; `comment_id`; timestamps. At most one non-superseded spec per issue. |
 | `spec_versions` (new) | Primary key `(spec_id, version)`; `document` jsonb (`Spec`); `markdown`; `notes` jsonb; `last_comment_id`; `run_id`; `created_at` |
-| `sandboxes` (new) | `id`; `provider_id` (null while being created); `status` (`creating`, `preparing`, `warm`, `leased`, `released`, `failed`); `base_sha`; `lockfile_hash`; `run_id`; `created_at`, `ready_at`, `expires_at`, `leased_at`, `released_at` |
+| `snapshots` (new) | `id` = provider `snp-…` id; `sandbox_group_id`; `name`; `repo`; `base_sha`; `lockfile_hash`; `build_key`; `status` (`available`, `retired`); `created_at`; `expires_at`; `retired_at` |
+| `sandboxes` (new) | `id`; `provider_id` (null while being created); `status` (`creating`, `preparing`, `ready`, `failed`, `terminated`); `base_sha`; `lockfile_hash`; `run_id`; `role` (`builder`, `run`); `snapshot_id`; `created_at`, `ready_at`, `expires_at`, `terminated_at` |
 | `artifacts` (new) | `id`; `run_id`; `kind` (`screenshot`, `trace`, `transcript`, `log`, `report`); `content_type`; `bytes` bytea; `size`; `sha256`; `link_token_hash` (unique, nullable); `created_at`; `expires_at` |
 
 Size caps (B-08): 5 MB per artifact and 50 MB per run. Maintenance deletes artifacts after 30 days. Runs, events, and specs are kept indefinitely.
@@ -558,28 +560,33 @@ Size caps (B-08): 5 MB per artifact and 50 MB per run. Maintenance deletes artif
 
 ---
 
-## 9. Workspaces and the warm pool
+## 9. Workspaces and snapshots
 
-`app/workspaces` is a library. The Workflows service calls it during runs, and the maintenance cron calls it to keep the pool healthy (D-12).
+`app/workspaces` is a library. The Workflows service calls it during runs, and the maintenance cron calls it to keep the snapshot current.
 
-**Warm state (D-12).** Maintenance keeps `pool.size` sandboxes (default 3) in status `warm`. Each one has:
+**Builder → snapshot.** Maintenance builds one builder sandbox per base commit, snapshots its filesystem, and retires previous snapshots. Each run creates its own sandbox from this snapshot.
 
-- the base branch cloned into `repoDir`;
-- `setup.install` already run;
-- Playwright browsers installed, if `setup.browsers` is true;
-- credentials scrubbed.
+1. `ensureSnapshot()` acquires a Postgres advisory lock and checks whether the current available snapshot still matches the build key (a hash of the base SHA, `setup.install`, browsers flag, the Playwright version, and `RENDER_GIT_COMMIT`). If it does and its expiry is more than 12 hours away, it returns immediately.
+2. Otherwise it creates a **builder** sandbox with `networkPolicy: { default: "allow-all" }` and explicit `timeoutSeconds`. The builder row is recorded in `sandboxes` (role `builder`) before the platform call, so a crash leaves a row for reaping.
+3. The builder clones the base branch with the read token (via `credentials.ts`), verifies credential scrub, then runs `setup.install` and the Playwright install. Third-party code runs only after the token is gone.
+4. A manifest (`/home/user/.factory/manifest.json`) is written and verified (repo, baseSha, lockfileHash, buildKey). The build key is computed from the cloned HEAD, not the tip read before cloning.
+5. `snapshots.create({ kind: "filesystem", name: "render-factory-<owner>-<repo>" })` is called and polled until `available` (timeout 20 min).
+6. The builder is terminated in `finally`. The snapshot is recorded in the `snapshots` table, and previous snapshots for the same repo are retired and pruned from the provider.
 
-Each warm sandbox records its base SHA and lockfile hash. Maintenance recycles a warm sandbox when it is older than `pool.refreshAfterMinutes` (B-09), when it has less than 30 minutes of lifetime left (O-3), or when the base branch tip has moved.
+**Per-run sandboxes.** `openWorkspace(runId, ref)`:
 
-**Lease.** `lease(runId, ref)`:
+1. `ensureSnapshot()` (builds inline only if no usable snapshot exists).
+2. Record a `sandboxes` row (role `run`, `run_id`, `snapshot_id`, status `creating`) before creating.
+3. Create the sandbox from the snapshot with `networkPolicy` from config when set and explicit `timeoutSeconds`.
+4. Refuse and terminate if the returned network policy is wider than requested (deny-all < allow-list < allow-all).
+5. Verify inside the sandbox before use: manifest matches the snapshot row (baseSha, buildKey), `git rev-parse HEAD` equals the snapshot's baseSha, `.git/config` has no credential.
+6. Fetch the requested ref with the read token, check out the pinned SHA, compute `baseSha` per ref kind (branch → tip; pull → merge-base; sha → sha), reinstall if the lockfile hash differs from the snapshot's.
+7. Mark the row `ready`; on any failure terminate the sandbox and mark it `failed`.
+8. On `SandboxSnapshotNotFoundError`, retire only that snapshot, call `ensureSnapshot()` again, and retry once.
 
-1. Claim a warm row with `FOR UPDATE SKIP LOCKED`. If the pool is empty, prepare a sandbox on the spot instead of waiting.
-2. Fetch the requested ref: the base branch, or `refs/pull/<n>/head`.
-3. Check out the pinned SHA.
-4. Rerun `setup.install` if the lockfile hash changed.
-5. Return `{ sandbox, repoDir, baseSha, headSha }`.
+`closeWorkspace(runId)` terminates every sandbox recorded for the run and marks it `terminated` (idempotent; termination errors are logged, the row is still marked).
 
-**Credential phase.** Only `workspaces/credentials.ts` handles tokens, both in preparation and in lease:
+**Credential phase.** Only `workspaces/credentials.ts` handles tokens, both in the builder and in openWorkspace:
 
 1. Mint a `contents: read` installation token.
 2. Write a one-time `GIT_ASKPASS` script with mode `0700`.
@@ -589,17 +596,21 @@ Each warm sandbox records its base SHA and lockfile hash. Maintenance recycles a
 
 No agent tool and no PR code runs before step 5 completes.
 
-**Release.** Every workflow releases its sandboxes in `finally`. Maintenance terminates leased sandboxes whose run is terminal, and only sandboxes recorded in the `sandboxes` table, because the Render workspace may contain sandboxes that belong to other systems.
+**Release.** Every workflow terminates its sandboxes in `finally` via `closeWorkspace`. Maintenance terminates run sandboxes whose run is terminal, and only sandboxes recorded in the `sandboxes` table, because the Render workspace may contain sandboxes that belong to other systems.
 
-**Network (D-13).** Every sandbox is created with the native network policy in `pool.network`, passed through unchanged (O-12). Preparation and runs need to reach:
+**Network (D-13).** The builder always gets `allow-all` for egress (git, npm, apt). Run sandboxes are created with the native network policy in `sandbox.network`, passed through unchanged. Sandboxes need egress to:
 
 | Destination | Needed for |
 |---|---|
-| `github.com` | Clone and fetch |
-| The package registries `setup.install` uses | Installing dependencies |
+| `github.com` | Fetch during openWorkspace |
+| The package registries `setup.install` uses | Lockfile-change reinstall |
 | The preview environment's domain | Preview UX testing, when previews are enabled |
 
 Anything beyond those is the operator's choice. A narrower policy reduces what a prompt-injected agent could reach (§13.4).
+
+**Rebuild triggers.** A new snapshot is built when: the base branch tip SHA changes, the build key changes (code deploy, install command change, browser config change), or the current snapshot expires within 12 hours.
+
+**Maintenance order.** `runWorkspaceMaintenance`: reap (terminal runs, expired, stuck in-flight, stale builders) → `ensureSnapshot()` → prune retired snapshots. Each step logs and continues on failure.
 
 ---
 
@@ -668,7 +679,7 @@ Workflows and agent tasks append to `run_events` through `app/telemetry`. Every 
 | Kind | Events |
 |---|---|
 | Run lifecycle | `run.accepted`, `run.dispatched`, `run.started`, `run.completed`, `run.failed`, `run.cancelled`, `run.rejected` |
-| Spans | `stage`, `agent.run`, `verify.command`, `workspace.lease` |
+| Spans | `stage`, `agent.run`, `verify.command`, `workspace.open` |
 | Points | `agent.tool`, `agent.cost`, `github.write`, `artifact.stored`, `budget.exceeded` |
 
 The demo's `console.log(JSON.stringify(...))` lines stay as service logs.
@@ -743,10 +754,9 @@ export const factoryConfig = defineFactoryConfig({
     },
   },
   review: { specialists: ["security", "correctness", "performance", "tests"] },
-  pool: {
-    size: 3,
-    refreshAfterMinutes: 60,
-    sandboxTimeoutSeconds: 7_200,
+  sandbox: {
+    timeoutSeconds: 7_200,
+    builderTimeoutSeconds: 7_200,
     network: {},   // Render native sandbox network policy, passed through unchanged (O-12)
   },
   limits: {
@@ -817,7 +827,7 @@ Webhook events: Issues, Issue comment, and Pull request.
 9. Automation ends at a draft PR and a COMMENT review. It never approves, never requests changes, never marks a PR ready, and never merges.
 10. Spec-to-PR implements exactly the spec version that was current when the approval label was applied.
 11. At most one non-terminal run exists per subject.
-12. Sandboxes are released in `finally`. Maintenance only terminates sandboxes recorded in `sandboxes`.
+12. Sandboxes are terminated in `finally`. Maintenance only terminates sandboxes recorded in `sandboxes`.
 13. Cross-process state lives in Postgres.
 
 ### 13.4 Accepted risks
@@ -920,7 +930,7 @@ The demo's convention stays: tests never call live Render, GitHub, model APIs, o
 - the lifecycle's compare-and-set claim;
 - follow-up runs;
 - approval binding;
-- workspace lease with a fake sandbox;
+- workspace open with a fake sandbox;
 - the change-set refusal rules and tree-hash verification, against a fake GitHub;
 - validation of inline review positions;
 - pinned agent tool lists;
@@ -962,7 +972,7 @@ Each milestone is one or more PRs to `code-factory-demo`. Every milestone keeps 
 | M1. SDK 1.x | Task signatures and `ctx.run`; sandbox client; behavior unchanged | 6.2 | The existing `spec-to-pr` turns a labeled issue in a scratch repository into a draft PR on SDK 1.x |
 | M2. Config and data | New `factory.config.ts` and validation; migration `0002`; store modules; App-only auth | 6.3, 6.7, 6.15, 7, 12 | Every process refuses to start on an invalid config; migration `0002` applies to a database that has `0001` rows; no code reads `GITHUB_TOKEN` or `FACTORY_*` |
 | M3. Ingress and dispatch | Gateway routing and persistence; dispatcher worker; `lifecycle.ts`; events; `render.yaml` adds the worker and the cron | 3, 4.1, 6.5, 6.6, 11.1 | A label creates a queued run and the dispatcher starts it; the gateway holds no `RENDER_API_KEY`; duplicate deliveries and duplicate starts are dropped (tests); `/factory cancel` stops a run at the next stage boundary |
-| M4. Workspaces | `app/workspaces` lease and prepare; pool maintenance; replace `createSandbox` | 6.13, 9 | Maintenance keeps 3 warm sandboxes; a lease returns a checkout at the requested SHA with no credential in `.git/config`; leased sandboxes are released after any terminal run |
+| M4. Workspaces | `app/workspaces` openWorkspace/closeWorkspace; snapshot maintenance; replace `createSandbox` | 6.13, 9 | Each run creates its sandbox from the current snapshot; `openWorkspace` returns a checkout at the requested SHA with no credential in `.git/config`; sandboxes are terminated after any terminal run |
 | M5. Runners | `AgentRunner`; move Claude; port the OpenAI runner; cost and budget | 6.10, 6.11, 10.1, 11.2 | One agent can run on either runner by changing config; `runs.cost_usd` accumulates; a run that exceeds `perRunUsd` ends `budget_exceeded` |
 | M6. Triage | Triage workflow; specs; `spec-writer`; spec comment; follow-up rounds | 4.2, 5 | `factory:triage` on a vague issue posts questions; a reply produces spec v1 in one comment; a second reply edits that same comment to v2; a reply that arrives during a round is picked up by a follow-up round |
 | M7. Spec-to-PR | Spec input; remove triage and review fan-out; Git Data publisher; auto-advance | 4.3, 6.14, 8 | `factory:spec-approved` produces a draft PR whose tree SHA matches the sandbox; symlinks and workflow-file changes are refused; with `factory:full-run`, a PR Reviewer run is queued |
@@ -1007,7 +1017,7 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 | D-09 | Agent loops run in the Workflows service; model credentials never enter sandboxes | 2.2, 10 |
 | D-10 | Claude and OpenAI runners behind `AgentRunner` | 10.1 |
 | D-11 | The gateway only persists; a small dispatcher polls `runs` and starts tasks | 6.6 |
-| D-12 | Workspaces are a library with a warm pool of 3 prepared sandboxes, maintained by the cron | 9 |
+| D-12 | Each run creates its sandbox from the current repository snapshot; the maintenance cron keeps the snapshot current | 9 |
 | D-13 | Sandbox egress is set by Render's native network policy, configured in `pool.network`; the factory adds no isolation machinery | 9, 13.4 |
 | D-14 | Triage researches in a pool sandbox | 4.2 |
 | D-15 | Specs are versioned in Postgres and shown as one issue comment, edited in place | 5 |
@@ -1045,8 +1055,8 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 | B-06 | The agent roster and model tiers | 10.2 |
 | B-07 | `perRunUsd` defaults to $20 | 12.1 |
 | B-08 | Artifacts: 5 MB each, 50 MB per run, kept 30 days | 7 |
-| B-09 | Pool sandboxes are refreshed after 60 minutes or when the base branch moves | 9 |
-| B-10 | PR Reviewer always leases a fresh sandbox at the PR head | 4.4 |
+| B-09 | Sandbox snapshots are rebuilt when the base branch moves, the build key changes, or the current snapshot expires within 12 hours | 9 |
+| B-10 | PR Reviewer always opens a fresh sandbox at the PR head | 4.4 |
 | B-11 | One remote commit per PR | 8 |
 | B-12 | Changes to `.github/workflows/**` are refused unless allowed | 8 |
 | B-13 | The trace UI is server-rendered Hono JSX with no build step | 11.3 |
@@ -1058,9 +1068,9 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 
 | ID | Question | Affects |
 |---|---|---|
-| O-1 | What is the SDK 1.x sandbox client surface (create, get, exec, upload, download, owner ID) compared with the demo's adapter? | 6.2, 6.13 |
+| O-1 | SDK 1.x sandbox client surface (create, get, exec, upload, download, terminate, snapshots) is confirmed and wrapped in `app/sandbox/`. All calls are paced and retried on 429/503. `createSandbox` returns the network policy from the running state. | 6.2, 6.13 |
 | O-2 | What is the maximum Workflow task timeout? It bounds long implementer and review runs. | 11.2 |
-| O-3 | What is the maximum sandbox lifetime? It drives pool recycling. | 9 |
+| O-3 | SDK 1.x `createSandbox` accepts `snapshotId` and `timeoutSeconds`; maximum sandbox lifetime is bounded by `timeoutSeconds` (up to 86400). Per-run sandboxes inherit the configured timeout. | 9 |
 | O-4 | Which Render API endpoints find a PR's preview service and its deploy status for a commit? | 4.4 |
 | O-5 | What are the size limits on Workflow task arguments and results? Diffs and specs are passed to agents. | 6.10 |
 | O-6 | Is native compaction available in the Claude Agent SDK with built-in tools disabled, and what is the OpenAI equivalent? | 10.1 |
@@ -1069,4 +1079,4 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 | O-9 | What are the Blueprint fields for `workflow` services, and the `fromService` slug property? | 14.1 |
 | O-10 | How does a Render cron behave when runs overlap, and what is its maximum run time? Pool preparation runs inside it. | 14.1 |
 | O-11 | What are the Workflows limits on concurrent child tasks? Specialists run in parallel. | 4.4 |
-| O-12 | What is the shape of Render's native sandbox network policy (destination allowlists, defaults), and which SDK version exposes it? | 9, 12.1 |
+| O-12 | SDK 1.x returns `networkPolicy` on both `create` and `get`; `openWorkspace` checks it after creation and refuses wider policies. `sandbox.network` in config passes the value through unchanged. | 9, 12.1 |
