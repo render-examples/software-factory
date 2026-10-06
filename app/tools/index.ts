@@ -4,6 +4,10 @@ export { sandboxApplyPatch } from "./patch.js";
 export { sandboxSearch } from "./search.js";
 export { execTools, readTools, writeTools } from "./sets.js";
 export { MAX_OUTPUT_CHARS, MAX_READ_CHARS, truncate } from "./truncate.js";
+export {
+	createBrowserTools,
+	type BrowserToolOptions,
+} from "./browser/index.js";
 export type {
 	InferShape,
 	Tool,

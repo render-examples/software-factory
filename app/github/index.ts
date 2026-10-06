@@ -7,6 +7,13 @@ export {
 	type GitDataClient,
 	type TreeEntry,
 } from "./git-data.js";
+export {
+	getPull,
+	getPullDiff,
+	ensureReview,
+	type PullDetail,
+	type ReviewComment,
+} from "./pulls.js";
 export { GitHubHttp, type TokenProvider } from "./request.js";
 export {
 	GitHubError,

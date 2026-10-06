@@ -10,10 +10,18 @@ export {
 	findingSchema,
 	judgeSchema,
 	reviewerOutputSchema,
+	specialistFindingSchema,
+	specialistOutputSchema,
+	synthesisCommentSchema,
+	synthesisSchema,
 	type Finding,
 	type JudgeVerdict,
 	type Review,
 	type ReviewerOutput,
+	type SpecialistFinding,
+	type SpecialistOutput,
+	type Synthesis,
+	type SynthesisComment,
 } from "./review.js";
 export {
 	acceptanceCriterionSchema,
@@ -31,3 +39,11 @@ export {
 	type Triage,
 	type TriageDecision,
 } from "./triage.js";
+export {
+	uxResultSchema,
+	uxTestOutputSchema,
+	uxVerdictSchema,
+	type UxResult,
+	type UxTestOutput,
+	type UxVerdict,
+} from "./ux.js";

@@ -30,3 +30,36 @@ export type Finding = z.infer<typeof findingSchema>;
 export type ReviewerOutput = z.infer<typeof reviewerOutputSchema>;
 export type JudgeVerdict = z.infer<typeof judgeSchema>;
 export type Review = JudgeVerdict & { details: string };
+
+/* ── PR Reviewer schemas (M8) ────────────────────────────────────── */
+
+export const specialistFindingSchema = z.object({
+	path: z.string(),
+	line: z.number().int().min(1),
+	severity: severitySchema,
+	confidence: z.number().int().min(0).max(100),
+	title: z.string(),
+	body: z.string(),
+	evidence: z.string(),
+});
+
+export const specialistOutputSchema = z.object({
+	findings: z.array(specialistFindingSchema),
+});
+
+export const synthesisCommentSchema = z.object({
+	path: z.string(),
+	line: z.number().int().min(1),
+	body: z.string(),
+});
+
+export const synthesisSchema = z.object({
+	summary: z.string(),
+	riskTier: z.enum(["trivial", "low", "medium", "high"]),
+	comments: z.array(synthesisCommentSchema),
+});
+
+export type SpecialistFinding = z.infer<typeof specialistFindingSchema>;
+export type SpecialistOutput = z.infer<typeof specialistOutputSchema>;
+export type SynthesisComment = z.infer<typeof synthesisCommentSchema>;
+export type Synthesis = z.infer<typeof synthesisSchema>;
