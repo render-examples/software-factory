@@ -713,3 +713,38 @@ describe("lost-execution detection", () => {
 		]);
 	});
 });
+
+describe("addRunCost atomicity", () => {
+	it("accumulates cost_usd atomically under concurrency", async () => {
+		const runId = randomUUID();
+		await pool.query(
+			`INSERT INTO runs (id, repo, subject_kind, subject_number, workflow, status, cost_usd)
+			 VALUES ($1, 'o/r', 'issue', 900, 'spec-to-pr', 'running', 0)`,
+			[runId],
+		);
+
+		const { addRunCost, getRunCost } = await import(
+			"../../app/store/costs.js"
+		);
+
+		const increment = 0.005;
+		const concurrency = 20;
+
+		await Promise.all(
+			Array.from({ length: concurrency }, () =>
+				addRunCost(runId, increment),
+			),
+		);
+
+		const total = await getRunCost(runId);
+		expect(total).toBeCloseTo(increment * concurrency, 4);
+
+		await pool.query("DELETE FROM runs WHERE id = $1", [runId]);
+	});
+
+	it("returns 0 for a nonexistent run", async () => {
+		const { getRunCost } = await import("../../app/store/costs.js");
+		const cost = await getRunCost("nonexistent-run-id");
+		expect(cost).toBe(0);
+	});
+});

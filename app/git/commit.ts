@@ -12,14 +12,20 @@ export async function commitChanges(
 	previousSha: string,
 	message: string,
 ): Promise<string | null> {
-	await git(sandbox, `checkout ${shellEscape(checkout.branch)}`, "Branch verification");
+	await git(
+		sandbox,
+		`checkout ${shellEscape(checkout.branch)}`,
+		"Branch verification",
+	);
 	await git(sandbox, "add -A", "Git add");
 
 	const staged = await sandbox.run(
 		`git -C ${shellEscape(REPO_DIR)} diff --cached --quiet`,
 	);
 	if (staged.exitCode === 0) {
-		const head = (await git(sandbox, "rev-parse HEAD", "Current revision")).trim();
+		const head = (
+			await git(sandbox, "rev-parse HEAD", "Current revision")
+		).trim();
 		return head === previousSha ? null : head;
 	}
 	if (staged.exitCode !== 1) {
