@@ -28,6 +28,11 @@ export interface FactoryLabels {
 	prReview: string;
 }
 
+export interface SandboxNetworkPolicy {
+	default: "allow-all" | "deny-all" | "allow-list";
+	allowedDomains?: string[];
+}
+
 export interface FactoryConfig {
 	repos: [RepoTarget, ...RepoTarget[]];
 	labels: FactoryLabels;
@@ -42,7 +47,7 @@ export interface FactoryConfig {
 		size: number;
 		refreshAfterMinutes: number;
 		sandboxTimeoutSeconds: number;
-		network: Record<string, unknown>;
+		network?: SandboxNetworkPolicy;
 	};
 	limits: {
 		repairRounds: number;
@@ -100,7 +105,7 @@ export const factoryConfig = defineFactoryConfig({
 		size: 3,
 		refreshAfterMinutes: 60,
 		sandboxTimeoutSeconds: 7_200,
-		network: {},
+		network: undefined,
 	},
 	limits: {
 		repairRounds: 2,

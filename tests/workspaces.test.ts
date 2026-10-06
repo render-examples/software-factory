@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ExecResult } from "../app/sandbox/types.js";
 
@@ -56,11 +55,18 @@ function createFakeSandbox(responses: ScriptedResponse[]) {
 	};
 }
 
+const FAKE_HASH =
+	"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
 /* ── Credential tests ───────────────────────────────────────────── */
 
-vi.mock("../app/github/auth.js", () => ({
+vi.mock("../app/github/index.js", () => ({
 	githubToken: vi.fn(async () => "ghs_test_token_12345"),
 	resetTokenCache: vi.fn(),
+	GitHub: vi.fn(),
+	githubFromEnv: vi.fn(),
+	GitHubHttp: vi.fn(),
+	GitHubError: vi.fn(),
 }));
 
 vi.mock("../app/sandbox/client.js", () => ({
@@ -280,7 +286,61 @@ describe("credentials", () => {
 	});
 });
 
+/* ── Lockfile hash tests ────────────────────────────────────────── */
+
+describe("lockfileHashInSandbox", () => {
+	it("uses sha256sum inside the sandbox", async () => {
+		const sandbox = createFakeSandbox([
+			{
+				match: "sha256sum",
+				result: {
+					output: `${FAKE_HASH}  /home/user/repo/package-lock.json\n`,
+					exitCode: 0,
+				},
+			},
+		]);
+
+		const { lockfileHashInSandbox } = await import("../app/workspaces/hash.js");
+		const hash = await lockfileHashInSandbox(
+			sandbox as never,
+			"/home/user/repo",
+		);
+		expect(hash).toBe(FAKE_HASH);
+	});
+
+	it("returns empty-file hash when no lockfile exists", async () => {
+		const sandbox = createFakeSandbox([]);
+
+		const { lockfileHashInSandbox } = await import("../app/workspaces/hash.js");
+		const hash = await lockfileHashInSandbox(
+			sandbox as never,
+			"/home/user/repo",
+		);
+		expect(hash).toBe(
+			"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		);
+	});
+});
+
 /* ── Lease tests ────────────────────────────────────────────────── */
+
+function mockConfig() {
+	vi.doMock("../app/config/index.js", () => ({
+		target: () => ({
+			owner: "jacobprall",
+			name: "render-factory-sample",
+			baseBranch: "main",
+			repoDir: "/home/user/repo",
+			setup: { install: "npm ci" },
+			verify: [],
+		}),
+		repository: () => ({
+			owner: "jacobprall",
+			repo: "render-factory-sample",
+			fullName: "jacobprall/render-factory-sample",
+		}),
+	}));
+}
 
 describe("lease logic", () => {
 	beforeEach(() => {
@@ -294,7 +354,7 @@ describe("lease logic", () => {
 			providerId: "sbx-warm-1",
 			status: "leased",
 			baseSha: "abc123",
-			lockfileHash: createHash("sha256").update("lock-content").digest("hex"),
+			lockfileHash: FAKE_HASH,
 			runId: "run-1",
 			createdAt: new Date().toISOString(),
 			readyAt: new Date().toISOString(),
@@ -304,22 +364,23 @@ describe("lease logic", () => {
 		};
 
 		const fakeSb = createFakeSandbox([
-			{ match: "rev-parse", result: { output: "abc123\n", exitCode: 0 } },
+			{ match: "rev-parse", result: { output: "tip-sha\n", exitCode: 0 } },
 			{ match: "checkout", result: { output: "", exitCode: 0 } },
 			{
-				match: "package-lock.json",
-				result: { output: "lock-content", exitCode: 0 },
+				match: "sha256sum",
+				result: { output: `${FAKE_HASH}  pkg\n`, exitCode: 0 },
 			},
 		]);
 
 		const mockClaimWarm = vi.fn().mockResolvedValue(warmRecord);
 		const mockPrepareSandbox = vi.fn();
 
-		vi.doMock("../app/store/sandboxes.js", () => ({
+		vi.doMock("../app/store/index.js", () => ({
 			claimWarmSandbox: mockClaimWarm,
 			leaseSandbox: vi.fn(),
 			listSandboxesForRun: vi.fn().mockResolvedValue([]),
 			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
 		}));
 		vi.doMock("../app/sandbox/index.js", () => ({
 			connectSandbox: vi.fn().mockReturnValue(fakeSb),
@@ -333,21 +394,10 @@ describe("lease logic", () => {
 			cloneWithReadToken: vi.fn(),
 			fetchWithReadToken: vi.fn(),
 		}));
-		vi.doMock("../app/config/env.js", () => ({
-			target: () => ({
-				owner: "jacobprall",
-				name: "render-factory-sample",
-				baseBranch: "main",
-				repoDir: "/home/user/repo",
-				setup: { install: "npm ci", browsers: true },
-				verify: [],
-			}),
-			repository: () => ({
-				owner: "jacobprall",
-				repo: "render-factory-sample",
-				fullName: "jacobprall/render-factory-sample",
-			}),
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
 		}));
+		mockConfig();
 
 		const { lease } = await import("../app/workspaces/lease.js");
 		const result = await lease("run-1", { kind: "branch", name: "main" });
@@ -357,30 +407,198 @@ describe("lease logic", () => {
 		expect(mockClaimWarm).toHaveBeenCalledWith("run-1");
 	});
 
-	it("cold path prepares when no warm sandbox available", async () => {
-		const coldSandbox = createFakeSandbox([
-			{ match: "rev-parse", result: { output: "def456\n", exitCode: 0 } },
+	it("branch ref sets baseSha = headSha = fetched tip", async () => {
+		const warmRecord = {
+			id: "warm-br-1",
+			providerId: "sbx-warm-br",
+			status: "leased",
+			baseSha: "old-sha",
+			lockfileHash: FAKE_HASH,
+			runId: "run-br",
+			createdAt: new Date().toISOString(),
+			readyAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			leasedAt: new Date().toISOString(),
+			releasedAt: null,
+		};
+
+		const fakeSb = createFakeSandbox([
+			{
+				match: "rev-parse",
+				result: { output: "fetched-tip-sha\n", exitCode: 0 },
+			},
+			{ match: "checkout", result: { output: "", exitCode: 0 } },
+		]);
+
+		vi.doMock("../app/store/index.js", () => ({
+			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
+			leaseSandbox: vi.fn(),
+			listSandboxesForRun: vi.fn().mockResolvedValue([]),
+			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
+		}));
+		vi.doMock("../app/sandbox/index.js", () => ({
+			connectSandbox: vi.fn().mockReturnValue(fakeSb),
+			createSandbox: vi.fn(),
+			Sandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/prepare.js", () => ({
+			prepareSandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/credentials.js", () => ({
+			cloneWithReadToken: vi.fn(),
+			fetchWithReadToken: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
+		}));
+		mockConfig();
+
+		const { lease } = await import("../app/workspaces/lease.js");
+		const result = await lease("run-br", { kind: "branch", name: "main" });
+
+		expect(result.baseSha).toBe("fetched-tip-sha");
+		expect(result.headSha).toBe("fetched-tip-sha");
+		expect(result.baseBranch).toBe("main");
+	});
+
+	it("PR ref sets baseSha = merge-base and fetches base branch", async () => {
+		const warmRecord = {
+			id: "warm-pr-1",
+			providerId: "sbx-warm-pr",
+			status: "leased",
+			baseSha: "old-sha",
+			lockfileHash: FAKE_HASH,
+			runId: "run-pr",
+			createdAt: new Date().toISOString(),
+			readyAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			leasedAt: new Date().toISOString(),
+			releasedAt: null,
+		};
+
+		const fakeSb = createFakeSandbox([
 			{ match: "checkout", result: { output: "", exitCode: 0 } },
 			{
-				match: "package-lock.json",
-				result: { output: "lock-content", exitCode: 0 },
+				match: "merge-base",
+				result: { output: "merge-base-sha\n", exitCode: 0 },
 			},
 		]);
 
-		const mockClaimWarm = vi.fn().mockResolvedValue(null);
-		const mockLeaseSandbox = vi.fn();
+		const fetchedRefspecs: string[] = [];
+		vi.doMock("../app/store/index.js", () => ({
+			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
+			leaseSandbox: vi.fn(),
+			listSandboxesForRun: vi.fn().mockResolvedValue([]),
+			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
+		}));
+		vi.doMock("../app/sandbox/index.js", () => ({
+			connectSandbox: vi.fn().mockReturnValue(fakeSb),
+			createSandbox: vi.fn(),
+			Sandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/prepare.js", () => ({
+			prepareSandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/credentials.js", () => ({
+			cloneWithReadToken: vi.fn(),
+			fetchWithReadToken: vi.fn(
+				async (_sb: unknown, _dir: string, refspec: string) => {
+					fetchedRefspecs.push(refspec);
+				},
+			),
+		}));
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
+		}));
+		mockConfig();
+
+		const { lease } = await import("../app/workspaces/lease.js");
+		const result = await lease("run-pr", {
+			kind: "pull",
+			number: 42,
+			headSha: "pr-head-sha",
+		});
+
+		expect(result.headSha).toBe("pr-head-sha");
+		expect(result.baseSha).toBe("merge-base-sha");
+		expect(fetchedRefspecs).toContain("refs/pull/42/head");
+		expect(fetchedRefspecs).toContain("main");
+	});
+
+	it("sha ref sets baseSha = headSha = sha", async () => {
+		const warmRecord = {
+			id: "warm-sha-1",
+			providerId: "sbx-warm-sha",
+			status: "leased",
+			baseSha: "old-sha",
+			lockfileHash: FAKE_HASH,
+			runId: "run-sha",
+			createdAt: new Date().toISOString(),
+			readyAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			leasedAt: new Date().toISOString(),
+			releasedAt: null,
+		};
+
+		const fakeSb = createFakeSandbox([
+			{ match: "checkout", result: { output: "", exitCode: 0 } },
+		]);
+
+		vi.doMock("../app/store/index.js", () => ({
+			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
+			leaseSandbox: vi.fn(),
+			listSandboxesForRun: vi.fn().mockResolvedValue([]),
+			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
+		}));
+		vi.doMock("../app/sandbox/index.js", () => ({
+			connectSandbox: vi.fn().mockReturnValue(fakeSb),
+			createSandbox: vi.fn(),
+			Sandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/prepare.js", () => ({
+			prepareSandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/credentials.js", () => ({
+			cloneWithReadToken: vi.fn(),
+			fetchWithReadToken: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
+		}));
+		mockConfig();
+
+		const { lease } = await import("../app/workspaces/lease.js");
+		const result = await lease("run-sha", {
+			kind: "sha",
+			sha: "exact-sha-123",
+		});
+
+		expect(result.baseSha).toBe("exact-sha-123");
+		expect(result.headSha).toBe("exact-sha-123");
+	});
+
+	it("cold path passes leaseTo to prepareSandbox", async () => {
+		const coldSandbox = createFakeSandbox([
+			{ match: "rev-parse", result: { output: "def456\n", exitCode: 0 } },
+			{ match: "checkout", result: { output: "", exitCode: 0 } },
+		]);
+
 		const mockPrepareSandbox = vi.fn().mockResolvedValue({
 			sandbox: coldSandbox,
 			sandboxRecordId: "cold-sb-1",
 			baseSha: "def456",
-			lockfileHash: createHash("sha256").update("lock-content").digest("hex"),
+			lockfileHash: FAKE_HASH,
 		});
 
-		vi.doMock("../app/store/sandboxes.js", () => ({
-			claimWarmSandbox: mockClaimWarm,
-			leaseSandbox: mockLeaseSandbox,
+		vi.doMock("../app/store/index.js", () => ({
+			claimWarmSandbox: vi.fn().mockResolvedValue(null),
+			leaseSandbox: vi.fn(),
 			listSandboxesForRun: vi.fn().mockResolvedValue([]),
 			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
 		}));
 		vi.doMock("../app/sandbox/index.js", () => ({
 			connectSandbox: vi.fn(),
@@ -394,47 +612,25 @@ describe("lease logic", () => {
 			cloneWithReadToken: vi.fn(),
 			fetchWithReadToken: vi.fn(),
 		}));
-		vi.doMock("../app/config/env.js", () => ({
-			target: () => ({
-				owner: "jacobprall",
-				name: "render-factory-sample",
-				baseBranch: "main",
-				repoDir: "/home/user/repo",
-				setup: { install: "npm ci" },
-				verify: [],
-			}),
-			repository: () => ({
-				owner: "jacobprall",
-				repo: "render-factory-sample",
-				fullName: "jacobprall/render-factory-sample",
-			}),
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
 		}));
+		mockConfig();
 
 		const { lease } = await import("../app/workspaces/lease.js");
-		const result = await lease("run-2", { kind: "branch", name: "main" });
+		await lease("run-cold", { kind: "branch", name: "main" });
 
-		expect(result.sandboxRecordId).toBe("cold-sb-1");
-		expect(mockPrepareSandbox).toHaveBeenCalled();
-		expect(mockLeaseSandbox).toHaveBeenCalledWith("cold-sb-1", "run-2");
+		expect(mockPrepareSandbox).toHaveBeenCalledWith({ leaseTo: "run-cold" });
 	});
 
-	it("PR ref fetches refs/pull/<n>/head and checks out headSha", async () => {
-		const sandbox = createFakeSandbox([
-			{ match: "checkout", result: { output: "", exitCode: 0 } },
-			{
-				match: "package-lock.json",
-				result: { output: "lock-content", exitCode: 0 },
-			},
-		]);
-
-		const lockHash = createHash("sha256").update("lock-content").digest("hex");
+	it("lockfile change triggers reinstall", async () => {
 		const warmRecord = {
-			id: "warm-pr-1",
-			providerId: "sbx-warm-pr",
+			id: "warm-lf-1",
+			providerId: "sbx-warm-lf",
 			status: "leased",
-			baseSha: "abc123",
-			lockfileHash: lockHash,
-			runId: "run-pr-1",
+			baseSha: "old-sha",
+			lockfileHash: "old-hash",
+			runId: "run-lf-1",
 			createdAt: new Date().toISOString(),
 			readyAt: new Date().toISOString(),
 			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
@@ -442,69 +638,9 @@ describe("lease logic", () => {
 			releasedAt: null,
 		};
 
-		let fetchedRefspec = "";
-		vi.doMock("../app/store/sandboxes.js", () => ({
-			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
-			leaseSandbox: vi.fn(),
-			listSandboxesForRun: vi.fn().mockResolvedValue([]),
-			markSandboxTerminated: vi.fn(),
-		}));
-		vi.doMock("../app/sandbox/index.js", () => ({
-			connectSandbox: vi.fn().mockReturnValue(sandbox),
-			createSandbox: vi.fn(),
-			Sandbox: vi.fn(),
-		}));
-		vi.doMock("../app/workspaces/prepare.js", () => ({
-			prepareSandbox: vi.fn(),
-		}));
-		vi.doMock("../app/workspaces/credentials.js", () => ({
-			cloneWithReadToken: vi.fn(),
-			fetchWithReadToken: vi.fn(
-				async (_sb: unknown, _dir: string, refspec: string) => {
-					fetchedRefspec = refspec;
-				},
-			),
-		}));
-		vi.doMock("../app/config/env.js", () => ({
-			target: () => ({
-				owner: "jacobprall",
-				name: "render-factory-sample",
-				baseBranch: "main",
-				repoDir: "/home/user/repo",
-				setup: { install: "npm ci" },
-				verify: [],
-			}),
-			repository: () => ({
-				owner: "jacobprall",
-				repo: "render-factory-sample",
-				fullName: "jacobprall/render-factory-sample",
-			}),
-		}));
-
-		const { lease } = await import("../app/workspaces/lease.js");
-		const result = await lease("run-pr-1", {
-			kind: "pull",
-			number: 42,
-			headSha: "pr-sha-abc",
-		});
-
-		expect(result.headSha).toBe("pr-sha-abc");
-		expect(fetchedRefspec).toBe("refs/pull/42/head");
-	});
-
-	it("lockfile change triggers reinstall", async () => {
-		const priorHash = createHash("sha256")
-			.update("old-lockfile-content")
-			.digest("hex");
-		const newLockContent = "new-lockfile-content";
-
 		const sandbox = createFakeSandbox([
-			{ match: "rev-parse", result: { output: "new-sha\n", exitCode: 0 } },
+			{ match: "rev-parse", result: { output: "sha\n", exitCode: 0 } },
 			{ match: "checkout", result: { output: "", exitCode: 0 } },
-			{
-				match: "package-lock.json",
-				result: { output: newLockContent, exitCode: 0 },
-			},
 		]);
 
 		let reinstallRan = false;
@@ -517,25 +653,12 @@ describe("lease logic", () => {
 			return origMustRun(command, label);
 		}) as typeof sandbox.mustRun;
 
-		const warmRecord = {
-			id: "warm-lf-1",
-			providerId: "sbx-warm-lf",
-			status: "leased",
-			baseSha: "old-sha",
-			lockfileHash: priorHash,
-			runId: "run-lf-1",
-			createdAt: new Date().toISOString(),
-			readyAt: new Date().toISOString(),
-			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-			leasedAt: new Date().toISOString(),
-			releasedAt: null,
-		};
-
-		vi.doMock("../app/store/sandboxes.js", () => ({
+		vi.doMock("../app/store/index.js", () => ({
 			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
 			leaseSandbox: vi.fn(),
 			listSandboxesForRun: vi.fn().mockResolvedValue([]),
 			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
 		}));
 		vi.doMock("../app/sandbox/index.js", () => ({
 			connectSandbox: vi.fn().mockReturnValue(sandbox),
@@ -549,26 +672,85 @@ describe("lease logic", () => {
 			cloneWithReadToken: vi.fn(),
 			fetchWithReadToken: vi.fn(),
 		}));
-		vi.doMock("../app/config/env.js", () => ({
-			target: () => ({
-				owner: "jacobprall",
-				name: "render-factory-sample",
-				baseBranch: "main",
-				repoDir: "/home/user/repo",
-				setup: { install: "npm ci" },
-				verify: [],
-			}),
-			repository: () => ({
-				owner: "jacobprall",
-				repo: "render-factory-sample",
-				fullName: "jacobprall/render-factory-sample",
-			}),
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue("new-different-hash"),
 		}));
+		mockConfig();
 
 		const { lease } = await import("../app/workspaces/lease.js");
 		await lease("run-lf-1", { kind: "branch", name: "main" });
 
 		expect(reinstallRan).toBe(true);
+	});
+
+	it("retries with cold sandbox when warm fails (item 8)", async () => {
+		const warmRecord = {
+			id: "warm-fail-1",
+			providerId: "sbx-warm-fail",
+			status: "leased",
+			baseSha: "sha",
+			lockfileHash: FAKE_HASH,
+			runId: "run-retry",
+			createdAt: new Date().toISOString(),
+			readyAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+			leasedAt: new Date().toISOString(),
+			releasedAt: null,
+		};
+
+		const failSb = createFakeSandbox([]);
+
+		const coldSb = createFakeSandbox([
+			{ match: "rev-parse", result: { output: "cold-sha\n", exitCode: 0 } },
+			{ match: "checkout", result: { output: "", exitCode: 0 } },
+		]);
+
+		const mockPrepareSandbox = vi.fn().mockResolvedValue({
+			sandbox: coldSb,
+			sandboxRecordId: "cold-retry-1",
+			baseSha: "cold-sha",
+			lockfileHash: FAKE_HASH,
+		});
+
+		let fetchCallCount = 0;
+		vi.doMock("../app/store/index.js", () => ({
+			claimWarmSandbox: vi.fn().mockResolvedValue(warmRecord),
+			leaseSandbox: vi.fn(),
+			listSandboxesForRun: vi.fn().mockResolvedValue([]),
+			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
+		}));
+		vi.doMock("../app/sandbox/index.js", () => ({
+			connectSandbox: vi.fn().mockReturnValue(failSb),
+			createSandbox: vi.fn(),
+			Sandbox: vi.fn(),
+		}));
+		vi.doMock("../app/workspaces/prepare.js", () => ({
+			prepareSandbox: mockPrepareSandbox,
+		}));
+		vi.doMock("../app/workspaces/credentials.js", () => ({
+			cloneWithReadToken: vi.fn(),
+			fetchWithReadToken: vi.fn().mockImplementation(async () => {
+				fetchCallCount++;
+				if (fetchCallCount === 1) {
+					throw new Error("Platform sandbox gone");
+				}
+			}),
+		}));
+		vi.doMock("../app/workspaces/hash.js", () => ({
+			lockfileHashInSandbox: vi.fn().mockResolvedValue(FAKE_HASH),
+		}));
+		mockConfig();
+
+		const { lease } = await import("../app/workspaces/lease.js");
+		const result = await lease("run-retry", {
+			kind: "branch",
+			name: "main",
+		});
+
+		expect(result.sandboxRecordId).toBe("cold-retry-1");
+		expect(mockPrepareSandbox).toHaveBeenCalledWith({ leaseTo: "run-retry" });
+		expect(failSb.terminated.value).toBe(true);
 	});
 });
 
@@ -583,11 +765,14 @@ describe("pool decisions", () => {
 	it("maintainPool counts in-flight rows to avoid over-provisioning", async () => {
 		let prepareCount = 0;
 
-		vi.doMock("../app/store/sandboxes.js", () => ({
-			countSandboxesByStatus: vi.fn().mockResolvedValue(2),
-			listRecyclableSandboxes: vi.fn().mockResolvedValue([]),
-			listExpiredSandboxes: vi.fn().mockResolvedValue([]),
+		vi.doMock("../app/store/index.js", () => ({
+			countPoolSandboxes: vi.fn().mockResolvedValue(2),
+			claimRecyclableSandboxes: vi.fn().mockResolvedValue([]),
+			claimExpiredWarmSandboxes: vi.fn().mockResolvedValue([]),
+			listTerminalLeasedSandboxes: vi.fn().mockResolvedValue([]),
+			listStuckInFlightSandboxes: vi.fn().mockResolvedValue([]),
 			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi.fn(),
 		}));
 		vi.doMock("../app/workspaces/prepare.js", () => ({
 			prepareSandbox: vi.fn().mockImplementation(async () => {
@@ -606,13 +791,11 @@ describe("pool decisions", () => {
 				return "current-sha";
 			}
 		}
-		vi.doMock("../app/github/client.js", () => ({
+		vi.doMock("../app/github/index.js", () => ({
 			GitHub: FakeGitHub,
-		}));
-		vi.doMock("../app/github/auth.js", () => ({
 			githubToken: vi.fn().mockResolvedValue("test-token"),
 		}));
-		vi.doMock("../app/config/env.js", () => ({
+		vi.doMock("../app/config/index.js", () => ({
 			target: () => ({
 				owner: "test",
 				name: "repo",
@@ -630,21 +813,19 @@ describe("pool decisions", () => {
 		const { maintainPool } = await import("../app/workspaces/pool.js");
 		await maintainPool();
 
-		// pool.size is 3, 2 in-flight → 1 new
 		expect(prepareCount).toBe(1);
 	});
 
-	it("reapSandboxes terminates expired sandboxes", async () => {
+	it("reapSandboxes terminates expired warm sandboxes atomically", async () => {
 		const terminatedIds: string[] = [];
 
-		vi.doMock("../app/store/sandboxes.js", () => ({
-			countSandboxesByStatus: vi.fn().mockResolvedValue(0),
-			listRecyclableSandboxes: vi.fn().mockResolvedValue([]),
-			listExpiredSandboxes: vi.fn().mockResolvedValue([
+		vi.doMock("../app/store/index.js", () => ({
+			listTerminalLeasedSandboxes: vi.fn().mockResolvedValue([]),
+			claimExpiredWarmSandboxes: vi.fn().mockResolvedValue([
 				{
 					id: "exp-1",
 					providerId: "sbx-exp-1",
-					status: "warm",
+					status: "released",
 					baseSha: null,
 					lockfileHash: null,
 					runId: null,
@@ -655,9 +836,11 @@ describe("pool decisions", () => {
 					releasedAt: null,
 				},
 			]),
+			listStuckInFlightSandboxes: vi.fn().mockResolvedValue([]),
 			markSandboxTerminated: vi.fn().mockImplementation(async (id: string) => {
 				terminatedIds.push(id);
 			}),
+			markSandboxFailed: vi.fn(),
 		}));
 		vi.doMock("../app/sandbox/index.js", () => ({
 			connectSandbox: vi.fn().mockReturnValue({
@@ -668,6 +851,46 @@ describe("pool decisions", () => {
 		const { reapSandboxes } = await import("../app/workspaces/pool.js");
 		await reapSandboxes();
 
-		expect(terminatedIds).toContain("exp-1");
+		// expired warm sandboxes are already transitioned by the atomic claim
+		// terminal leased ones go through markSandboxTerminated
+		expect(terminatedIds).toHaveLength(0);
+	});
+
+	it("reapSandboxes marks stuck in-flight rows as failed", async () => {
+		const failedIds: string[] = [];
+
+		vi.doMock("../app/store/index.js", () => ({
+			listTerminalLeasedSandboxes: vi.fn().mockResolvedValue([]),
+			claimExpiredWarmSandboxes: vi.fn().mockResolvedValue([]),
+			listStuckInFlightSandboxes: vi.fn().mockResolvedValue([
+				{
+					id: "stuck-1",
+					providerId: "sbx-stuck-1",
+					status: "creating",
+					baseSha: null,
+					lockfileHash: null,
+					runId: null,
+					createdAt: new Date(Date.now() - 3600_000).toISOString(),
+					readyAt: null,
+					expiresAt: null,
+					leasedAt: null,
+					releasedAt: null,
+				},
+			]),
+			markSandboxTerminated: vi.fn(),
+			markSandboxFailed: vi
+				.fn()
+				.mockImplementation(async (id: string) => failedIds.push(id)),
+		}));
+		vi.doMock("../app/sandbox/index.js", () => ({
+			connectSandbox: vi.fn().mockReturnValue({
+				terminate: vi.fn().mockResolvedValue(undefined),
+			}),
+		}));
+
+		const { reapSandboxes } = await import("../app/workspaces/pool.js");
+		await reapSandboxes();
+
+		expect(failedIds).toContain("stuck-1");
 	});
 });

@@ -7,18 +7,20 @@ export async function recordSandbox(input: {
 	status: string;
 	baseSha?: string;
 	lockfileHash?: string;
+	runId?: string;
 	expiresAt?: Date;
 }): Promise<void> {
 	await db().query(
 		`INSERT INTO sandboxes
-		   (id, provider_id, status, base_sha, lockfile_hash, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		   (id, provider_id, status, base_sha, lockfile_hash, run_id, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			input.id,
 			input.providerId ?? null,
 			input.status,
 			input.baseSha ?? null,
 			input.lockfileHash ?? null,
+			input.runId ?? null,
 			input.expiresAt ?? null,
 		],
 	);
@@ -84,20 +86,47 @@ export async function listStaleLeases(): Promise<SandboxRecord[]> {
 	return rows.map(mapSandboxRow);
 }
 
-/** Mark a sandbox as ready with its base SHA and lockfile hash. */
+/**
+ * Mark a preparing sandbox as ready. Guards: only from 'preparing'.
+ * Returns whether the transition applied.
+ */
 export async function markSandboxReady(
 	id: string,
 	baseSha: string,
 	lockfileHash: string,
 	expiresAt: Date,
-): Promise<void> {
-	await db().query(
+): Promise<boolean> {
+	const result = await db().query(
 		`UPDATE sandboxes
 		 SET status = 'warm', base_sha = $2, lockfile_hash = $3,
 		     ready_at = now(), expires_at = $4
-		 WHERE id = $1`,
+		 WHERE id = $1 AND status = 'preparing'`,
 		[id, baseSha, lockfileHash, expiresAt],
 	);
+	return (result.rowCount ?? 0) === 1;
+}
+
+/**
+ * Mark a preparing sandbox as ready and leased in one step.
+ * Used by the cold path so a concurrent claimWarmSandbox cannot
+ * steal the sandbox between warm and lease. Guards: only from 'preparing'.
+ */
+export async function markSandboxReadyAndLeased(
+	id: string,
+	runId: string,
+	baseSha: string,
+	lockfileHash: string,
+	expiresAt: Date,
+): Promise<boolean> {
+	const result = await db().query(
+		`UPDATE sandboxes
+		 SET status = 'leased', run_id = $2, base_sha = $3,
+		     lockfile_hash = $4, ready_at = now(), expires_at = $5,
+		     leased_at = now()
+		 WHERE id = $1 AND status = 'preparing'`,
+		[id, runId, baseSha, lockfileHash, expiresAt],
+	);
+	return (result.rowCount ?? 0) === 1;
 }
 
 export async function markSandboxFailed(id: string): Promise<void> {
@@ -109,7 +138,7 @@ export async function markSandboxFailed(id: string): Promise<void> {
 export async function markSandboxTerminated(id: string): Promise<void> {
 	await db().query(
 		`UPDATE sandboxes SET status = 'released', released_at = now()
-		 WHERE id = $1`,
+		 WHERE id = $1 AND status NOT IN ('released', 'failed')`,
 		[id],
 	);
 }
@@ -125,69 +154,114 @@ export async function setSandboxProviderId(
 	]);
 }
 
-/** Update status from creating to preparing. */
-export async function markSandboxPreparing(id: string): Promise<void> {
-	await db().query(`UPDATE sandboxes SET status = 'preparing' WHERE id = $1`, [
-		id,
-	]);
+/**
+ * Transition from creating to preparing. Guards: only from 'creating'.
+ * Returns whether it applied.
+ */
+export async function markSandboxPreparing(id: string): Promise<boolean> {
+	const result = await db().query(
+		`UPDATE sandboxes SET status = 'preparing'
+		 WHERE id = $1 AND status = 'creating'`,
+		[id],
+	);
+	return (result.rowCount ?? 0) === 1;
 }
 
 /**
- * Count sandboxes by status. Used by pool maintenance to decide how
- * many new sandboxes to create.
+ * Count warm and recent in-flight sandboxes. In-flight rows
+ * (creating/preparing) older than 30 minutes are excluded since
+ * they are likely stuck.
  */
-export async function countSandboxesByStatus(
-	statuses: readonly string[],
-): Promise<number> {
+export async function countPoolSandboxes(): Promise<number> {
 	const { rows } = await db().query(
 		`SELECT count(*)::int AS cnt FROM sandboxes
-		 WHERE status = ANY($1)`,
-		[statuses],
+		 WHERE status = 'warm'
+		    OR (status IN ('creating', 'preparing')
+		        AND created_at > now() - interval '30 minutes')`,
 	);
 	return rows[0].cnt;
 }
 
 /**
- * Warm sandboxes eligible for recycling: older than `maxAgeMinutes`,
- * expiring within 30 minutes, or whose base_sha differs from the
- * current tip.
+ * Atomically claim warm sandboxes eligible for recycling by
+ * transitioning them from warm → released. Returns only the rows
+ * this call transitioned, preventing TOCTOU races with lease claims.
  */
-export async function listRecyclableSandboxes(
+export async function claimRecyclableSandboxes(
 	maxAgeMinutes: number,
 	currentBaseSha: string,
 ): Promise<SandboxRecord[]> {
 	const { rows } = await db().query(
-		`SELECT id, provider_id, status, base_sha, lockfile_hash,
-		        run_id, created_at, ready_at, expires_at,
-		        leased_at, released_at
-		 FROM sandboxes
-		 WHERE status = 'warm'
-		   AND (
-		     ready_at < now() - make_interval(mins => $1)
-		     OR expires_at < now() + interval '30 minutes'
-		     OR base_sha != $2
-		   )`,
+		`UPDATE sandboxes
+		 SET status = 'released', released_at = now()
+		 WHERE id IN (
+		   SELECT id FROM sandboxes
+		   WHERE status = 'warm'
+		     AND (
+		       ready_at < now() - make_interval(mins => $1)
+		       OR expires_at < now() + interval '30 minutes'
+		       OR base_sha != $2
+		     )
+		   FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING id, provider_id, status, base_sha, lockfile_hash,
+		           run_id, created_at, ready_at, expires_at,
+		           leased_at, released_at`,
 		[maxAgeMinutes, currentBaseSha],
 	);
 	return rows.map(mapSandboxRow);
 }
 
 /**
- * Sandboxes past their expiry time OR leased to terminal runs.
- * Only returns sandboxes that are recorded in this table.
+ * Atomically claim expired warm sandboxes by transitioning
+ * warm → released, preventing TOCTOU races with lease claims.
  */
-export async function listExpiredSandboxes(): Promise<SandboxRecord[]> {
+export async function claimExpiredWarmSandboxes(): Promise<SandboxRecord[]> {
+	const { rows } = await db().query(
+		`UPDATE sandboxes
+		 SET status = 'released', released_at = now()
+		 WHERE id IN (
+		   SELECT id FROM sandboxes
+		   WHERE status = 'warm'
+		     AND expires_at < now()
+		   FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING id, provider_id, status, base_sha, lockfile_hash,
+		           run_id, created_at, ready_at, expires_at,
+		           leased_at, released_at`,
+	);
+	return rows.map(mapSandboxRow);
+}
+
+/**
+ * Leased sandboxes whose run is terminal. These are safe to
+ * terminate because the run will not use them again.
+ */
+export async function listTerminalLeasedSandboxes(): Promise<SandboxRecord[]> {
+	const { rows } = await db().query(
+		`SELECT s.id, s.provider_id, s.status, s.base_sha,
+		        s.lockfile_hash, s.run_id, s.created_at, s.ready_at,
+		        s.expires_at, s.leased_at, s.released_at
+		 FROM sandboxes s
+		 JOIN runs r ON r.id = s.run_id
+		 WHERE s.status = 'leased'
+		   AND r.status IN ('completed', 'failed', 'cancelled')`,
+	);
+	return rows.map(mapSandboxRow);
+}
+
+/**
+ * In-flight rows (creating/preparing) older than 30 minutes are
+ * likely stuck after a crash. Returns them for termination.
+ */
+export async function listStuckInFlightSandboxes(): Promise<SandboxRecord[]> {
 	const { rows } = await db().query(
 		`SELECT id, provider_id, status, base_sha, lockfile_hash,
 		        run_id, created_at, ready_at, expires_at,
 		        leased_at, released_at
 		 FROM sandboxes
-		 WHERE (status NOT IN ('released', 'failed') AND expires_at < now())
-		    OR (status = 'leased' AND run_id IS NOT NULL AND EXISTS (
-		          SELECT 1 FROM runs r
-		          WHERE r.id = sandboxes.run_id
-		            AND r.status IN ('completed', 'failed', 'cancelled')
-		        ))`,
+		 WHERE status IN ('creating', 'preparing')
+		   AND created_at < now() - interval '30 minutes'`,
 	);
 	return rows.map(mapSandboxRow);
 }

@@ -2,7 +2,12 @@ export {
 	cloneWithReadToken,
 	fetchWithReadToken,
 } from "./credentials.js";
-export { prepareSandbox, type PrepareResult } from "./prepare.js";
+export { lockfileHashInSandbox } from "./hash.js";
+export {
+	prepareSandbox,
+	type PrepareResult,
+	type PrepareOpts,
+} from "./prepare.js";
 export {
 	lease,
 	release,

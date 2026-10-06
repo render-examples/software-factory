@@ -1,36 +1,18 @@
-import { createHash, randomUUID } from "node:crypto";
-import { target } from "../config/env.js";
+import { randomUUID } from "node:crypto";
+import { target } from "../config/index.js";
 import { factoryConfig } from "../../factory.config.js";
 import { createSandbox, type Sandbox } from "../sandbox/index.js";
 import {
 	markSandboxFailed,
 	markSandboxPreparing,
 	markSandboxReady,
+	markSandboxReadyAndLeased,
 	recordSandbox,
 	setSandboxProviderId,
-} from "../store/sandboxes.js";
+} from "../store/index.js";
 import { shellEscape } from "../shell/index.js";
 import { cloneWithReadToken } from "./credentials.js";
-
-const LOCKFILE_NAMES = [
-	"package-lock.json",
-	"pnpm-lock.yaml",
-	"yarn.lock",
-] as const;
-
-/**
- * Compute the SHA-256 of whichever lockfile exists in the checkout.
- * Returns an empty-string hash when none is found.
- */
-async function lockfileHash(sandbox: Sandbox, dir: string): Promise<string> {
-	for (const name of LOCKFILE_NAMES) {
-		const result = await sandbox.run(`cat ${shellEscape(`${dir}/${name}`)}`);
-		if (result.exitCode === 0 && result.output.length > 0) {
-			return createHash("sha256").update(result.output).digest("hex");
-		}
-	}
-	return createHash("sha256").update("").digest("hex");
-}
+import { lockfileHashInSandbox } from "./hash.js";
 
 export interface PrepareResult {
 	sandbox: Sandbox;
@@ -39,14 +21,25 @@ export interface PrepareResult {
 	lockfileHash: string;
 }
 
+export interface PrepareOpts {
+	/** When set, mark the row leased to this run instead of warm. */
+	leaseTo?: string;
+}
+
 /**
  * Create a sandbox, clone the base branch, run setup.install, and
  * optionally install Playwright browsers. Records the sandbox in
  * Postgres before calling the platform, filling in the provider ID
  * once created. On any failure the sandbox is terminated and the
  * row is marked failed.
+ *
+ * When `leaseTo` is set the row transitions directly from preparing
+ * to leased, preventing a concurrent claimWarmSandbox from stealing
+ * the sandbox.
  */
-export async function prepareSandbox(): Promise<PrepareResult> {
+export async function prepareSandbox(
+	opts?: PrepareOpts,
+): Promise<PrepareResult> {
 	const repo = target();
 	const pool = factoryConfig.pool;
 	const recordId = randomUUID();
@@ -54,20 +47,14 @@ export async function prepareSandbox(): Promise<PrepareResult> {
 	await recordSandbox({
 		id: recordId,
 		status: "creating",
+		runId: opts?.leaseTo ?? undefined,
 	});
 
 	let sandbox: Sandbox;
 	try {
-		const networkPolicy =
-			pool.network && Object.keys(pool.network).length > 0
-				? (pool.network as {
-						default: "allow-all" | "deny-all" | "allow-list";
-						allowedDomains?: string[];
-					})
-				: undefined;
 		sandbox = await createSandbox({
 			timeoutSeconds: pool.sandboxTimeoutSeconds,
-			...(networkPolicy ? { networkPolicy } : {}),
+			...(pool.network ? { networkPolicy: pool.network } : {}),
 		});
 
 		await setSandboxProviderId(recordId, sandbox.id);
@@ -107,10 +94,21 @@ export async function prepareSandbox(): Promise<PrepareResult> {
 			throw new Error("Failed to determine base SHA");
 		}
 		const baseSha = baseShaResult.output.trim();
-		const hash = await lockfileHash(sandbox, repo.repoDir);
+		const hash = await lockfileHashInSandbox(sandbox, repo.repoDir);
 
 		const expiresAt = new Date(Date.now() + pool.sandboxTimeoutSeconds * 1000);
-		await markSandboxReady(recordId, baseSha, hash, expiresAt);
+
+		if (opts?.leaseTo) {
+			await markSandboxReadyAndLeased(
+				recordId,
+				opts.leaseTo,
+				baseSha,
+				hash,
+				expiresAt,
+			);
+		} else {
+			await markSandboxReady(recordId, baseSha, hash, expiresAt);
+		}
 
 		return { sandbox, sandboxRecordId: recordId, baseSha, lockfileHash: hash };
 	} catch (err) {
