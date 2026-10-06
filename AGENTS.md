@@ -25,7 +25,7 @@ Five processes deploy independently:
 - `app/src/server.ts` — Hono gateway web service.
 - `app/src/dispatcher.ts` — Background Worker polling queued runs.
 - `app/src/workflows.ts` — Render Workflows host and task registration.
-- `app/src/maintenance.ts` — Cron job for pool, dispatch, and artifact maintenance.
+- `app/src/maintenance.ts` — Cron job for workspace snapshots, sandbox reaping, dispatch, and artifact maintenance.
 - `app/sql/` — Schema, applied by the gateway's pre-deploy command.
 
 The gateway runs no models, holds no Render API key, and holds no
@@ -88,7 +88,7 @@ A barrel exports what other modules actually use. If a symbol is only used
 inside its own module, keep it out of `index.ts`.
 
 ```text
-factory.config.ts       Repository targets, labels, models, pool, limits, pricing
+factory.config.ts       Repository targets, labels, models, sandbox settings, limits, pricing
 app/
   config/               Environment parsing, per-process assertions, config validation
   gateway/              Signature, body cap, filters, webhook routing, health, read API, trace UI, artifacts
@@ -111,7 +111,10 @@ app/
     browser/            Browser tools for UX testing in sandboxes
   policy/               checkToolCall (PreToolUse), path rules, secret redaction, browser origin allowlist
   sandbox/              Render Sandbox adapter (create, exec, upload, download, terminate)
-  workspaces/           Warm pool: lease, release, prepare, credentials, pool maintenance
+  workspaces/           Per-run sandboxes: create from snapshot, verify, close; maintenance
+    snapshot.ts         ensureSnapshot() — advisory-locked builder→snapshot→record flow
+    workspace.ts        openWorkspace(runId, ref), closeWorkspace(runId)
+    reap.ts             Reap stale sandboxes (terminal runs, expired, stuck, stale builders)
   publish/              Git Data API publishing: collect changes, transfer, create objects, verify tree
   preview/              Preview environment locator (Render API)
   shell/                shellEscape — quoting for every command we build
@@ -168,7 +171,7 @@ Do not weaken these without an explicit security-model change:
 10. Spec-to-PR implements exactly the spec version that was current when the
     approval label was applied.
 11. At most one non-terminal run exists per subject.
-12. Sandboxes are released in `finally`. Maintenance only terminates sandboxes
+12. Sandboxes are terminated in `finally`. Maintenance only terminates sandboxes
     recorded in `sandboxes`.
 13. Cross-process state lives in Postgres. Render filesystems are ephemeral.
 

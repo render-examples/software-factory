@@ -15,7 +15,7 @@ human remains in control.
 
 | Workflow | Triggered by | What it does | Ends with |
 |---|---|---|---|
-| **Triage** | `factory:triage` or `factory:full-run` on an issue, or a human reply while the conversation is open | Leases a sandbox, reads the repository, and decides: ask clarifying questions, draft/revise a specification, or decline. | Questions or a spec version posted on the issue |
+| **Triage** | `factory:triage` or `factory:full-run` on an issue, or a human reply while the conversation is open | Opens a sandbox, reads the repository, and decides: ask clarifying questions, draft/revise a specification, or decline. | Questions or a spec version posted on the issue |
 | **Spec-to-PR** | `factory:spec-approved` on an issue | Implements the approved spec version, verifies with configured commands, self-reviews, publishes through the Git Data API, and opens a draft PR. | A draft PR whose tree SHA matches the sandbox |
 | **PR Reviewer** | `factory:pr-review` on a PR, or automatically after a full run | Runs verification, parallel specialist reviewers (security, correctness, performance, tests), UX testing against local dev and the preview environment, and posts one COMMENT review. | A COMMENT review on the PR |
 
@@ -42,11 +42,16 @@ Five Render resources, plus sandboxes and preview environments:
 | `factory-gateway` | Web Service | `app/src/server.ts` | Verifies webhooks, records deliveries, creates queued runs; serves the read API, trace UI, and artifact links |
 | `factory-dispatcher` | Background Worker | `app/src/dispatcher.ts` | Polls queued runs and starts Workflow tasks |
 | `factory-workflows` | Workflows | `app/src/workflows.ts` | Runs the three workflows and all agent tasks; owns GitHub writes and publishing |
-| `factory-maintenance` | Cron Job | `app/src/maintenance.ts` | Re-queues stuck dispatches, fails lost executions, maintains the warm pool, expires artifacts |
+| `factory-maintenance` | Cron Job | `app/src/maintenance.ts` | Re-queues stuck dispatches, fails lost executions, reaps sandboxes, refreshes the repository snapshot, expires artifacts |
 | `factory-db` | Postgres | — | All state: runs, deliveries, events, specs, sandboxes, artifacts |
 
-Sandboxes are Render Sandboxes managed through a warm pool. Preview
-environments come from the target repository's own Blueprint.
+Sandboxes are Render Sandboxes created per run from a repository snapshot.
+Each run creates its own sandbox from the current snapshot, uses it, and
+terminates it when the run finishes. The maintenance cron keeps the snapshot
+current by rebuilding when the base branch moves or the build key changes.
+The builder always gets `allow-all` for egress; run sandboxes inherit the
+configured `sandbox.network` policy.
+Preview environments come from the target repository's own Blueprint.
 
 ### Credential placement
 
@@ -76,7 +81,7 @@ credential. Model keys never enter a sandbox.
 - Reviews are COMMENT-only. The factory never approves, never requests changes, never marks a PR ready, and never merges.
 - Secret-shaped strings are redacted from anything posted to GitHub.
 - At most one non-terminal run exists per subject (enforced by a partial unique index).
-- Sandboxes are released in `finally`. Maintenance only terminates sandboxes recorded in the `sandboxes` table.
+- Sandboxes are terminated in `finally`. Maintenance only terminates sandboxes recorded in the `sandboxes` table.
 
 ## Get started
 
@@ -151,8 +156,8 @@ npm run doctor          # diagnose the deployment; read-only, safe in CI
 | `repos[0].name` | string | Repository name |
 | `repos[0].baseBranch` | string | Branch to clone and target PRs against (default `main`) |
 | `repos[0].repoDir` | string | Checkout path inside sandboxes |
-| `repos[0].setup.install` | string | Install command run in warm sandboxes |
-| `repos[0].setup.browsers` | boolean | Install Playwright browsers in warm sandboxes |
+| `repos[0].setup.install` | string | Install command run in sandboxes |
+| `repos[0].setup.browsers` | boolean | Install Playwright browsers in sandboxes |
 | `repos[0].verify` | string[] | Commands run to verify implementations (build, test) |
 | `repos[0].dev.start` | string | Command to start the dev server for local UX testing |
 | `repos[0].dev.port` | number | Port the dev server listens on |
@@ -170,10 +175,9 @@ npm run doctor          # diagnose the deployment; read-only, safe in CI
 | `agents.runner` | string | Default runner: `claude` or `openai` |
 | `agents.models` | object | Model IDs per runner and tier (`small`, `medium`, `large`) |
 | `review.specialists` | string[] | Specialist reviewers to run (default: security, correctness, performance, tests) |
-| `pool.size` | number | Number of warm sandboxes to maintain (default 3) |
-| `pool.refreshAfterMinutes` | number | Recycle warm sandboxes after this many minutes (default 60) |
-| `pool.sandboxTimeoutSeconds` | number | Sandbox lifetime limit (default 7200) |
-| `pool.network` | object | Render native sandbox network policy, passed through unchanged |
+| `sandbox.timeoutSeconds` | number | Sandbox lifetime limit (default 7200) |
+| `sandbox.builderTimeoutSeconds` | number | Builder sandbox timeout (default 7200) |
+| `sandbox.network` | object | Render native sandbox network policy, passed through unchanged |
 | `limits.repairRounds` | number | Max verification repair rounds (default 2) |
 | `limits.perRunUsd` | number | Per-run cost cap in USD (default 20) |
 | `limits.toolOutputChars` | number | Max tool output before truncation (default 40000) |
