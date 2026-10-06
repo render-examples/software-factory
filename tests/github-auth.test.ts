@@ -80,7 +80,7 @@ describe("GitHub App", () => {
 
 		const [, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
 		const body = JSON.parse((init as RequestInit).body as string);
-		expect(body.repositories).toContain("render-factory-sample");
+		expect(body.repositories).toContain("render-factory-example-target");
 	});
 
 	it("caches the token instead of exchanging on every call", async () => {

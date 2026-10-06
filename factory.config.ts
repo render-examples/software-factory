@@ -81,8 +81,8 @@ export function defineFactoryConfig(config: FactoryConfig): FactoryConfig {
 export const factoryConfig = defineFactoryConfig({
 	repos: [
 		{
-			owner: "jacobprall",
-			name: "render-factory-sample",
+			owner: "render-examples",
+			name: "render-factory-example-target",
 			baseBranch: "main",
 			repoDir: "/home/user/repo",
 			setup: { install: "npm ci", browsers: true },

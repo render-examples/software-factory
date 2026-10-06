@@ -80,7 +80,7 @@ vi.mock("../app/git/index.js", () => ({
 function makeRun(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "run-t1",
-		repo: "jacobprall/render-factory-sample",
+		repo: "render-examples/render-factory-example-target",
 		subjectKind: "issue",
 		subjectNumber: 42,
 		workflow: "triage",
@@ -386,7 +386,7 @@ describe("triage workflow", () => {
 		it("edits the same comment on round 2", async () => {
 			mocks.getCurrentSpec.mockResolvedValue({
 				id: "spec-1",
-				repo: "jacobprall/render-factory-sample",
+				repo: "render-examples/render-factory-example-target",
 				issueNumber: 42,
 				status: "draft",
 				currentVersion: 1,
@@ -730,7 +730,7 @@ describe("triage workflow", () => {
 		it("supersedes the approved spec and starts a new one", async () => {
 			mocks.getCurrentSpec.mockResolvedValue({
 				id: "spec-old",
-				repo: "jacobprall/render-factory-sample",
+				repo: "render-examples/render-factory-example-target",
 				issueNumber: 42,
 				status: "approved",
 				currentVersion: 1,

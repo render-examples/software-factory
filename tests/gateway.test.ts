@@ -39,7 +39,7 @@ function issuePayload(overrides: Record<string, unknown> = {}) {
 		},
 		label: { name: "factory:full-run" },
 		repository: {
-			full_name: "jacobprall/render-factory-sample",
+			full_name: "render-examples/render-factory-example-target",
 		},
 		sender: { login: "Maintainer", id: 1, type: "User" },
 		...overrides,
@@ -60,7 +60,7 @@ function commentPayload(overrides: Record<string, unknown> = {}) {
 			user: { login: "Maintainer", id: 1, type: "User" },
 		},
 		repository: {
-			full_name: "jacobprall/render-factory-sample",
+			full_name: "render-examples/render-factory-example-target",
 		},
 		sender: { login: "Maintainer", id: 1, type: "User" },
 		...overrides,
@@ -76,7 +76,7 @@ function prPayload(overrides: Record<string, unknown> = {}) {
 		},
 		label: { name: "factory:pr-review" },
 		repository: {
-			full_name: "jacobprall/render-factory-sample",
+			full_name: "render-examples/render-factory-example-target",
 		},
 		sender: { login: "Maintainer", id: 1, type: "User" },
 		...overrides,
