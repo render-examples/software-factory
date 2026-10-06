@@ -1,7 +1,6 @@
 import type { Sandbox } from "../sandbox/index.js";
 import { shellEscape } from "../shell/index.js";
-import { execGitWithToken, githubRemoteUrl } from "./auth.js";
-import { git, REPO_DIR } from "./run.js";
+import { git } from "./run.js";
 import type { Checkout } from "./types.js";
 
 export function branchName(issueNumber: number, runId: string): string {
@@ -9,59 +8,33 @@ export function branchName(issueNumber: number, runId: string): string {
 	return `factory/issue-${issueNumber}-${suffix}`;
 }
 
-/** Clone the repository and create the run's working branch. */
-export async function setupCheckout(
+/** Create a new branch at the given SHA using hardened git. */
+export async function createBranch(
 	sandbox: Sandbox,
-	token: string,
-	repo: { owner: string; repo: string },
 	branch: string,
-): Promise<Checkout> {
-	const remoteUrl = githubRemoteUrl(repo.owner, repo.repo);
-	const clone = await execGitWithToken(sandbox, token, [
-		"git",
-		"clone",
-		"--depth=50",
-		remoteUrl,
-		REPO_DIR,
-	]);
-	if (clone.exitCode !== 0) {
-		throw new Error(`Clone failed: ${clone.output.slice(0, 500)}`);
-	}
-
-	const remoteHead = (
-		await git(
-			sandbox,
-			"symbolic-ref --short refs/remotes/origin/HEAD",
-			"Default branch discovery",
-		)
-	).trim();
-	if (!remoteHead.startsWith("origin/")) {
-		throw new Error(`Unexpected default branch ref: ${remoteHead}`);
-	}
-
-	const baseSha = (
-		await git(sandbox, `rev-parse ${shellEscape(remoteHead)}`, "Base revision")
-	).trim();
-
+	startSha: string,
+): Promise<void> {
 	await git(
 		sandbox,
-		`checkout -b ${shellEscape(branch)} ${shellEscape(remoteHead)}`,
+		`checkout -b ${shellEscape(branch)} ${shellEscape(startSha)}`,
 		"Create working branch",
 	);
-	await git(
-		sandbox,
-		'config user.name "render-factory[bot]"',
-		"Set commit name",
-	);
-	await git(
-		sandbox,
-		'config user.email "bot@render-factory.dev"',
-		"Set commit email",
-	);
+}
 
+/**
+ * Set up the checkout state after a workspace lease. The lease already
+ * has the repo cloned; this creates the working branch.
+ */
+export async function setupBranch(
+	sandbox: Sandbox,
+	branch: string,
+	baseSha: string,
+	baseBranch: string,
+): Promise<Checkout> {
+	await createBranch(sandbox, branch, baseSha);
 	return {
-		remoteUrl,
-		base: remoteHead.slice("origin/".length),
+		remoteUrl: "",
+		base: baseBranch,
 		baseSha,
 		branch,
 	};
