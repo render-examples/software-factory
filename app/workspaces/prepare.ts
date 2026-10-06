@@ -11,6 +11,7 @@ import {
 	setSandboxProviderId,
 } from "../store/index.js";
 import { shellEscape } from "../shell/index.js";
+import { BROWSER_DIR, PLAYWRIGHT_VERSION } from "../tools/index.js";
 import { cloneWithReadToken } from "./credentials.js";
 import { lockfileHashInSandbox } from "./hash.js";
 
@@ -81,12 +82,13 @@ export async function prepareSandbox(
 		);
 
 		if (repo.setup.browsers) {
+			const dir = shellEscape(BROWSER_DIR);
 			await sandbox.mustRun(
-				`mkdir -p /opt/factory-browser && cd /opt/factory-browser && npm init -y --silent && npm install playwright-core@latest --silent`,
-				"Install playwright-core into /opt/factory-browser",
+				`mkdir -p ${dir} && cd ${dir} && npm init -y --silent && npm install ${shellEscape(`playwright-core@${PLAYWRIGHT_VERSION}`)} --silent`,
+				"Install playwright-core for the browser driver",
 			);
 			await sandbox.mustRun(
-				"cd /opt/factory-browser && npx playwright install chromium",
+				`cd ${dir} && ./node_modules/.bin/playwright-core install chromium`,
 				"Install Playwright Chromium",
 			);
 		}

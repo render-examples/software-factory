@@ -51,7 +51,7 @@ describe("browser driver lifecycle (fake sandbox)", () => {
 		expect(firstCheck.output.trim()).toBe("fail");
 
 		await sandbox.run(
-			`nohup node /opt/factory-browser/driver.js > ${DRIVER_LOG} 2>&1 &`,
+			`nohup node /home/user/.factory-browser/driver.js > ${DRIVER_LOG} 2>&1 &`,
 		);
 		expect(state.started).toBe(true);
 
@@ -74,7 +74,7 @@ describe("browser driver lifecycle (fake sandbox)", () => {
 
 		// Start it
 		await sandbox.run(
-			`nohup node /opt/factory-browser/driver.js > ${DRIVER_LOG} 2>&1 &`,
+			`nohup node /home/user/.factory-browser/driver.js > ${DRIVER_LOG} 2>&1 &`,
 		);
 		expect(state.started).toBe(true);
 
