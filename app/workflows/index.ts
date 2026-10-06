@@ -7,3 +7,4 @@ export {
 	type LifecycleResult,
 } from "./lifecycle.js";
 export { specToPr } from "./spec-to-pr/index.js";
+export { triageWorkflow } from "./triage/index.js";
