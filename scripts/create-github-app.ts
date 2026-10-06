@@ -51,7 +51,7 @@ const manifest = {
 	hook_attributes: { url: `${gatewayUrl}/webhooks/github`, active: true },
 	redirect_url: REDIRECT,
 	public: false,
-	default_events: ["issues"],
+	default_events: ["issues", "issue_comment", "pull_request"],
 	default_permissions: {
 		metadata: "read",
 		contents: "write",
