@@ -8,6 +8,7 @@ import type { Agent } from "../app/agents/index.js";
 
 const all: Agent[] = [
 	agents.triage,
+	agents.specWriter,
 	agents.analyst,
 	agents.implementer,
 	agents.selfReview,
@@ -21,8 +22,8 @@ const toolNames = (agent: Agent) =>
 	(agent.tools ?? []).map((tool) => tool.name);
 
 describe("agent definitions", () => {
-	it("registers eight agents with unique ids", () => {
-		expect(new Set(all.map((agent) => agent.id)).size).toBe(8);
+	it("registers nine agents with unique ids", () => {
+		expect(new Set(all.map((agent) => agent.id)).size).toBe(9);
 	});
 
 	it("gives every agent a prompt and a known model tier", () => {
@@ -34,6 +35,16 @@ describe("agent definitions", () => {
 });
 
 describe("tool access", () => {
+	it("gives triage and spec-writer read tools", () => {
+		for (const agent of [agents.triage, agents.specWriter]) {
+			expect(toolNames(agent).sort()).toEqual([
+				"sandbox__list_dir",
+				"sandbox__read_file",
+				"sandbox__search",
+			]);
+		}
+	});
+
 	it("gives the analyst only read tools", () => {
 		expect(toolNames(agents.analyst).sort()).toEqual([
 			"sandbox__list_dir",
@@ -65,7 +76,6 @@ describe("tool access", () => {
 
 	it("gives reasoning-only agents no tools", () => {
 		for (const id of [
-			"triage",
 			"self-review",
 			"security",
 			"correctness",
@@ -90,7 +100,11 @@ describe("tool access", () => {
 
 describe("pinned tool-name lists", () => {
 	it.each([
-		["triage", []],
+		["triage", ["sandbox__list_dir", "sandbox__read_file", "sandbox__search"]],
+		[
+			"spec-writer",
+			["sandbox__list_dir", "sandbox__read_file", "sandbox__search"],
+		],
 		["analyst", ["sandbox__list_dir", "sandbox__read_file", "sandbox__search"]],
 		[
 			"implementer",
