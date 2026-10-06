@@ -6,9 +6,8 @@ import {
 	type UxTestOutput,
 } from "../../contracts/index.js";
 import type { VerificationResult } from "../../git/index.js";
-import { synthesizer } from "../../agents/index.js";
-import { agentTask } from "../../tasks/index.js";
-import { parseModelJson } from "../../runners/index.js";
+import { synthesizerTask } from "../../tasks/index.js";
+import { agentJson } from "../agent-json.js";
 import { validateCommentPositions } from "./diff-positions.js";
 import type { SpecialistResult } from "./specialists.js";
 
@@ -33,20 +32,25 @@ export async function synthesize(
 		uxResults: UxTestOutput | null;
 	},
 ): Promise<SynthesisResult> {
-	const task = agentTask(synthesizer);
 	const message = buildSynthesisMessage(
 		opts.specialistResults,
 		opts.verificationResult,
 		opts.uxResults,
 	);
 
-	const raw = await ctx.run(task, { runId: opts.runId, message });
-	const parsed = parseModelJson(synthesisSchema, raw);
-	const result: Synthesis = parsed ?? {
-		summary: raw.slice(0, 2000),
+	// The review body already lists every specialist finding, so a failed
+	// synthesis degrades to that list instead of failing the review.
+	const result: Synthesis = await agentJson(
+		(input) => ctx.run(synthesizerTask, { runId: opts.runId, message: input }),
+		synthesisSchema,
+		message,
+		"synthesizer",
+	).catch(() => ({
+		summary:
+			"The synthesizer did not return a valid summary. Specialist findings are listed below.",
 		riskTier: "medium",
 		comments: [],
-	};
+	}));
 
 	const { valid, invalid } = validateCommentPositions(
 		result.comments,

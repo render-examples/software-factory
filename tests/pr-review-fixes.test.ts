@@ -121,19 +121,36 @@ describe("navigation blocking (pure function)", () => {
 });
 
 describe("agent browser gating", () => {
+	const input = {
+		runId: "run-test",
+		message: "test",
+		browser: { origins: ["http://localhost:3000"] },
+	};
+
 	it("rejects browser input for agents without browser: true", async () => {
-		const { agentTaskInputSchema } = await import("../app/tasks/agent-task.js");
-		const { security } = await import("../app/agents/index.js");
+		const { bindAgentTools } = await import("../app/tasks/agent-task.js");
+		const { securityReviewer } = await import("../app/agents/index.js");
 
-		expect(security.browser).toBeUndefined();
+		expect(() => bindAgentTools(securityReviewer, input)).toThrow(
+			/does not declare browser/,
+		);
+	});
 
-		// The input schema accepts browser but agentTask gates on agent.browser
-		const input = agentTaskInputSchema.parse({
-			runId: "run-test",
-			message: "test",
-			browser: { origins: ["http://localhost:3000"] },
-		});
-		expect(input.browser?.origins).toEqual(["http://localhost:3000"]);
+	it("binds browser tools for the ux-tester", async () => {
+		const { bindAgentTools } = await import("../app/tasks/agent-task.js");
+		const { uxTester } = await import("../app/agents/index.js");
+
+		const names = bindAgentTools(uxTester, input).map((tool) => tool.name);
+		expect(names).toContain("browser_open");
+	});
+
+	it("adds nothing when no origins are supplied", async () => {
+		const { bindAgentTools } = await import("../app/tasks/agent-task.js");
+		const { securityReviewer } = await import("../app/agents/index.js");
+
+		expect(
+			bindAgentTools(securityReviewer, { runId: "r", message: "m" }),
+		).toEqual([...(securityReviewer.tools ?? [])]);
 	});
 });
 

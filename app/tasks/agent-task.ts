@@ -26,6 +26,27 @@ export const agentTaskInputSchema = z.object({
 export type AgentTaskInput = z.infer<typeof agentTaskInputSchema>;
 
 /**
+ * The agent's declared tools, plus browser tools bound to the given origins.
+ * Browser tools are granted only to agents that declare `browser: true`.
+ */
+export function bindAgentTools(agent: Agent, input: AgentTaskInput): Tool[] {
+	const tools: Tool[] = [...(agent.tools ?? [])];
+	if (!input.browser?.origins?.length) return tools;
+	if (!agent.browser) {
+		throw new Error(
+			`Agent "${agent.id}" does not declare browser: true but received browser input`,
+		);
+	}
+	tools.push(
+		...createBrowserTools({
+			allowedOrigins: input.browser.origins,
+			runId: input.runId,
+		}),
+	);
+	return tools;
+}
+
+/**
  * Fallback pricing when a model has no entry in `factoryConfig.pricing`.
  * Conservatively set near Claude Sonnet 4 rates so unknown models are
  * overestimated rather than underestimated. Cache rates follow the
@@ -61,23 +82,7 @@ export function agentTask(agent: Agent) {
 			const runner = resolveRunner(agent);
 			const runnerName = agent.runner ?? factoryConfig.agents.runner;
 			const model = modelFor(agent.model, runnerName);
-			const agentTools: Tool[] = [...(agent.tools ?? [])];
-
-			if (input.browser?.origins?.length) {
-				if (!agent.browser) {
-					throw new Error(
-						`Agent "${agent.id}" does not declare browser: true but received browser input`,
-					);
-				}
-				agentTools.push(
-					...createBrowserTools({
-						allowedOrigins: input.browser.origins,
-						runId,
-					}),
-				);
-			}
-
-			const tools = agentTools;
+			const tools = bindAgentTools(agent, input);
 
 			const span = await startSpan(runId, "agent.run", {
 				payload: {

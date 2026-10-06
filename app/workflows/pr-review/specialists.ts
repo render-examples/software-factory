@@ -3,9 +3,9 @@ import { factoryConfig } from "../../../factory.config.js";
 import { resolveSpecialists } from "../../agents/index.js";
 import type { SpecialistFinding } from "../../contracts/index.js";
 import { specialistOutputSchema } from "../../contracts/index.js";
-import { agentTask } from "../../tasks/index.js";
-import { parseModelJson } from "../../runners/index.js";
+import { specialistTasks } from "../../tasks/index.js";
 import { point } from "../../telemetry/index.js";
+import { agentJson } from "../agent-json.js";
 
 export interface SpecialistResult {
 	name: string;
@@ -36,24 +36,30 @@ export async function runSpecialists(
 		opts.verificationEvidence,
 	);
 
-	const tasks = agents.map((agent) => {
-		const task = agentTask(agent);
-		return ctx
-			.run(task, {
-				runId: opts.runId,
-				message,
-				sandboxId: opts.sandboxId,
-			})
-			.then((raw) => {
-				const parsed = parseModelJson(specialistOutputSchema, raw);
-				const configName = names[agents.indexOf(agent)] ?? agent.id;
-				return {
+	const tasks = agents.map((agent, index) => {
+		const configName = names[index] ?? agent.id;
+		const task = specialistTasks[agent.id];
+		if (!task) {
+			throw new Error(`Specialist task ${agent.id} is not registered`);
+		}
+		return agentJson(
+			(input) =>
+				ctx.run(task, {
+					runId: opts.runId,
+					message: input,
+					sandboxId: opts.sandboxId,
+				}),
+			specialistOutputSchema,
+			message,
+			agent.id,
+		)
+			.then(
+				(output): SpecialistResult => ({
 					name: configName,
-					findings: parsed?.findings ?? [],
-				} as SpecialistResult;
-			})
-			.catch(async (err) => {
-				const configName = names[agents.indexOf(agent)] ?? agent.id;
+					findings: output.findings,
+				}),
+			)
+			.catch(async (err): Promise<SpecialistResult> => {
 				const msg = err instanceof Error ? err.message : String(err);
 				await point(opts.runId, "specialist.error", {
 					specialist: configName,
@@ -63,7 +69,7 @@ export async function runSpecialists(
 					name: configName,
 					findings: [],
 					error: msg.slice(0, 500),
-				} as SpecialistResult;
+				};
 			});
 	});
 

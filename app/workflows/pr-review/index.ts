@@ -132,6 +132,9 @@ export const prReview = runWorkflow(
 					sandboxId: workspace.sandbox.id,
 					baseUrl: `http://localhost:${devResult.port}${repoTarget.dev.healthPath}`,
 					criteria,
+				}).catch((err: unknown) => {
+					localDevSkipped = `UX tester failed: ${errorMessage(err)}`;
+					return null;
 				});
 			} else {
 				localDevSkipped = devResult.skippedReason;
@@ -162,6 +165,9 @@ export const prReview = runWorkflow(
 					sandboxId: workspace.sandbox.id,
 					baseUrl: previewStatus.url,
 					criteria,
+				}).catch((err: unknown) => {
+					previewSkipped = `UX tester failed: ${errorMessage(err)}`;
+					return null;
 				});
 			} else {
 				previewSkipped =
@@ -244,6 +250,10 @@ export const prReview = runWorkflow(
 		};
 	},
 );
+
+function errorMessage(err: unknown): string {
+	return (err instanceof Error ? err.message : String(err)).slice(0, 300);
+}
 
 function extractUxCriteria(intakeData: IntakeResult): string {
 	return (

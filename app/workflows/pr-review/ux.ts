@@ -3,9 +3,8 @@ import {
 	uxTestOutputSchema,
 	type UxTestOutput,
 } from "../../contracts/index.js";
-import { uxTester } from "../../agents/index.js";
-import { agentTask } from "../../tasks/index.js";
-import { parseModelJson } from "../../runners/index.js";
+import { uxTesterTask } from "../../tasks/index.js";
+import { agentJson } from "../agent-json.js";
 
 /**
  * Run the UX tester agent against a base URL.
@@ -21,7 +20,6 @@ export async function runUxTests(
 	},
 ): Promise<UxTestOutput> {
 	const origin = new URL(opts.baseUrl).origin;
-	const task = agentTask(uxTester);
 
 	const message = [
 		`## Base URL\n\n${opts.baseUrl}`,
@@ -29,13 +27,16 @@ export async function runUxTests(
 		"Navigate to the base URL and test each criterion.",
 	].join("\n\n");
 
-	const raw = await ctx.run(task, {
-		runId: opts.runId,
+	return agentJson(
+		(input) =>
+			ctx.run(uxTesterTask, {
+				runId: opts.runId,
+				message: input,
+				sandboxId: opts.sandboxId,
+				browser: { origins: [origin] },
+			}),
+		uxTestOutputSchema,
 		message,
-		sandboxId: opts.sandboxId,
-		browser: { origins: [origin] },
-	});
-
-	const parsed = parseModelJson(uxTestOutputSchema, raw);
-	return parsed ?? { results: [] };
+		"ux-tester",
+	);
 }
