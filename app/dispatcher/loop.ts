@@ -1,6 +1,7 @@
 import {
 	claimForDispatch,
 	finishRun,
+	getRun,
 	requeueForDispatch,
 } from "../store/index.js";
 import { point } from "../telemetry/index.js";
@@ -87,7 +88,6 @@ async function dispatchOne(
 		const status = extractHttpStatus(err);
 		const terminal = status !== null && isTerminalError(status);
 
-		const { getRun } = await import("../store/runs.js");
 		const current = await getRun(run.id);
 		const attempts = current?.dispatchAttempts ?? 1;
 

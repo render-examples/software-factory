@@ -1,10 +1,12 @@
 databases:
   - name: factory-db
+    region: oregon
     plan: basic-256mb
 
 services:
   - type: web
     name: factory-gateway
+    region: oregon
     runtime: docker
     plan: starter
     preDeployCommand: npm run db:migrate
@@ -21,6 +23,7 @@ services:
 
   - type: worker
     name: factory-dispatcher
+    region: oregon
     runtime: docker
     plan: starter
     dockerCommand: node --import tsx app/src/dispatcher.ts
@@ -39,8 +42,8 @@ services:
 
   - type: workflow
     name: factory-workflows
-    runtime: node
     region: oregon
+    runtime: node
     repo: https://github.com/render-examples/code-factory-demo.git
     buildCommand: npm ci
     startCommand: npm run start:workflows
@@ -49,9 +52,26 @@ services:
         fromDatabase:
           name: factory-db
           property: connectionString
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKSPACE_ID
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_APP_INSTALLATION_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FACTORY_PUBLIC_URL
+        sync: false
 
   - type: cron
     name: factory-maintenance
+    region: oregon
     runtime: docker
     schedule: "* * * * *"
     dockerCommand: node --import tsx app/src/maintenance.ts

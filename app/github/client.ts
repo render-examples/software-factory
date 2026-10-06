@@ -179,13 +179,21 @@ export class GitHub {
 	/**
 	 * Get a user's repository permission level.
 	 * Returns one of: admin, maintain, write, triage, read, none.
+	 * GitHub returns 404 for non-collaborators; that maps to "none".
 	 */
 	async getPermission(ref: RepoRef, login: string): Promise<string> {
-		const result = await this.http.send<{ permission: string }>(
-			"GET",
-			`/repos/${ref.owner}/${ref.repo}/collaborators/${encodeURIComponent(login)}/permission`,
-		);
-		return result.permission;
+		try {
+			const result = await this.http.send<{ permission: string }>(
+				"GET",
+				`/repos/${ref.owner}/${ref.repo}/collaborators/${encodeURIComponent(login)}/permission`,
+			);
+			return result.permission;
+		} catch (error) {
+			if (error instanceof GitHubError && error.status === 404) {
+				return "none";
+			}
+			throw error;
+		}
 	}
 
 	/** Reuse the open PR for this head, or open a new draft. */
