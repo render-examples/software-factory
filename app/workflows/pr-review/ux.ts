@@ -1,6 +1,9 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
-import { uxTestOutputSchema, type UxTestOutput } from "../../contracts/ux.js";
-import { uxTester } from "../../agents/reviewers/ux-tester.js";
+import {
+	uxTestOutputSchema,
+	type UxTestOutput,
+} from "../../contracts/index.js";
+import { uxTester } from "../../agents/index.js";
 import { agentTask } from "../../tasks/index.js";
 import { parseModelJson } from "../../runners/index.js";
 

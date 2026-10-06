@@ -64,6 +64,11 @@ export function agentTask(agent: Agent) {
 			const agentTools: Tool[] = [...(agent.tools ?? [])];
 
 			if (input.browser?.origins?.length) {
+				if (!agent.browser) {
+					throw new Error(
+						`Agent "${agent.id}" does not declare browser: true but received browser input`,
+					);
+				}
 				agentTools.push(
 					...createBrowserTools({
 						allowedOrigins: input.browser.origins,

@@ -12,6 +12,7 @@ export const uxTester: Agent = {
 		"Tests acceptance criteria against a running application using browser tools",
 	model: "medium",
 	tools: readTools,
+	browser: true,
 	prompt: md`
 		You test a running web application against acceptance criteria.
 		You have read tools to inspect the source code and browser tools

@@ -13,4 +13,6 @@ export interface Agent {
 	readonly plan?: string;
 	/** Overrides `factoryConfig.agents.runner` for this agent. */
 	readonly runner?: RunnerName;
+	/** When true, browser tools may be injected at runtime via agentTask. */
+	readonly browser?: true;
 }

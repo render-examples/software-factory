@@ -1,6 +1,5 @@
-import type { GitHubHttp } from "../../github/request.js";
-import type { RepoRef } from "../../github/types.js";
-import { ensureReview, type ReviewComment } from "../../github/pulls.js";
+import type { GitHubHttp, RepoRef } from "../../github/index.js";
+import { ensureReview, type ReviewComment } from "../../github/index.js";
 
 /**
  * Submit the COMMENT review via ensureReview.
