@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import * as agents from "../app/agents/index.js";
-import type { Agent } from "../app/agents/types.js";
+import type { Agent } from "../app/agents/index.js";
 
 const all: Agent[] = [
 	agents.triage,

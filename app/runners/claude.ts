@@ -9,6 +9,7 @@ import { checkToolCall } from "../policy/index.js";
 import type { ToolResult } from "../tools/index.js";
 import { failureReason, isRecord, usageTotals } from "./messages.js";
 import type { AgentRunner, RunnerResult } from "./types.js";
+import { RunnerError } from "./types.js";
 
 const MCP_SERVER = "factory";
 
@@ -48,6 +49,7 @@ export const claudeRunner: AgentRunner = {
 			tools: [],
 			allowedTools: allowed.length > 0 ? allowed : undefined,
 			permissionMode: "dontAsk",
+			settings: { autoCompactEnabled: true },
 			env: Object.fromEntries(
 				ENV_ALLOWLIST.map((name) => [name, process.env[name]]),
 			),
@@ -90,8 +92,19 @@ export const claudeRunner: AgentRunner = {
 			if (message.type === "assistant") turns++;
 			if (message.type !== "result") continue;
 			if (message.subtype !== "success" || message.is_error) {
-				throw new Error(
+				const usage = usageTotals(message);
+				const partial =
+					usage.inputTokens > 0 || usage.outputTokens > 0
+						? {
+								inputTokens: usage.inputTokens,
+								outputTokens: usage.outputTokens,
+								cacheReadTokens: usage.cacheReadTokens || undefined,
+								cacheWriteTokens: usage.cacheWriteTokens || undefined,
+							}
+						: undefined;
+				throw new RunnerError(
 					`Agent "${agent.id}" failed: ${failureReason(message)}`,
+					partial,
 				);
 			}
 			const usage = usageTotals(message);
