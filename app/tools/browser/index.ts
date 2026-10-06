@@ -1,5 +1,8 @@
+export { createBrowserTools, type BrowserToolOptions } from "./tools.js";
 export {
-	createBrowserTools,
-	type BrowserToolOptions,
-} from "./tools.js";
-export { browserDriverScript } from "./driver.js";
+	browserDriverScript,
+	BROWSER_DIR,
+	DRIVER_PATH,
+	DRIVER_PORT,
+	DRIVER_LOG,
+} from "./driver.js";

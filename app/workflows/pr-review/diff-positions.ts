@@ -12,13 +12,21 @@ interface DiffHunk {
 export function parseDiffHunks(diff: string): DiffHunk[] {
 	const hunks: DiffHunk[] = [];
 	let currentPath = "";
+	let isDeletedFile = false;
 
 	for (const line of diff.split("\n")) {
-		if (line.startsWith("+++ b/")) {
+		if (line.startsWith("diff --git ")) {
+			currentPath = "";
+			isDeletedFile = false;
+		} else if (line.startsWith("+++ /dev/null")) {
+			isDeletedFile = true;
+		} else if (line.startsWith("+++ b/")) {
 			currentPath = line.slice(6);
+			isDeletedFile = false;
 		} else if (line.startsWith("@@ ")) {
+			if (isDeletedFile || !currentPath) continue;
 			const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-			if (match && currentPath) {
+			if (match) {
 				hunks.push({
 					path: currentPath,
 					newStart: Number(match[1]),

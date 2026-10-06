@@ -82,7 +82,11 @@ export async function prepareSandbox(
 
 		if (repo.setup.browsers) {
 			await sandbox.mustRun(
-				"npx playwright install chromium",
+				`mkdir -p /opt/factory-browser && cd /opt/factory-browser && npm init -y --silent && npm install playwright-core@latest --silent`,
+				"Install playwright-core into /opt/factory-browser",
+			);
+			await sandbox.mustRun(
+				"cd /opt/factory-browser && npx playwright install chromium",
 				"Install Playwright Chromium",
 			);
 		}

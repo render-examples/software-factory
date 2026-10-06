@@ -65,7 +65,7 @@ export interface ReviewComment {
 
 interface RawReview {
 	id: number;
-	body: string;
+	body: string | null;
 	state: string;
 }
 
@@ -88,7 +88,7 @@ export async function ensureReview(
 		"GET",
 		`/repos/${ref.owner}/${ref.repo}/pulls/${prNumber}/reviews?per_page=100`,
 	);
-	const found = existing.find((r) => r.body.includes(opts.marker));
+	const found = existing.find((r) => (r.body ?? "").includes(opts.marker));
 	if (found) return { id: found.id, alreadyExisted: true };
 
 	const body = redactSecrets(opts.body);

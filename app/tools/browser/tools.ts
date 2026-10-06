@@ -4,10 +4,13 @@ import { checkBrowserNavigation } from "../../policy/browser.js";
 import { shellEscape } from "../../shell/index.js";
 import { putArtifact } from "../../store/index.js";
 import type { Tool, ToolResult } from "../types.js";
-import { browserDriverScript } from "./driver.js";
-
-const DRIVER_PATH = "/tmp/factory-browser.js";
-const DRIVER_READY_PATH = "/tmp/factory-browser-ready";
+import {
+	browserDriverScript,
+	BROWSER_DIR,
+	DRIVER_PATH,
+	DRIVER_PORT,
+	DRIVER_LOG,
+} from "./driver.js";
 
 export interface BrowserToolOptions {
 	allowedOrigins: readonly string[];
@@ -27,10 +30,12 @@ export function createBrowserTools(opts: BrowserToolOptions): Tool[] {
 	];
 }
 
+const HEALTH_URL = `http://127.0.0.1:${DRIVER_PORT}/health`;
+const COMMAND_URL = `http://127.0.0.1:${DRIVER_PORT}/`;
+
 /**
- * Ensure the browser driver process is running inside the sandbox.
- * Uploads the driver script and starts it with nohup on first call.
- * Subsequent tool invocations just send commands via exec.
+ * Ensure the browser driver HTTP server is running inside the sandbox.
+ * Starts it lazily on the first call; restarts if the health check fails.
  */
 async function ensureDriver(
 	ctx: {
@@ -39,24 +44,37 @@ async function ensureDriver(
 	},
 	origins: readonly string[],
 ): Promise<void> {
-	const check = await ctx.sandbox.run(
-		`test -f ${shellEscape(DRIVER_READY_PATH)} && echo yes || echo no`,
+	const health = await ctx.sandbox.run(
+		`curl -sf ${shellEscape(HEALTH_URL)} 2>/dev/null && echo ok || echo fail`,
 	);
-	if (check.output.trim() === "yes") return;
+	if (health.output.trim() === "ok") return;
 
 	const script = browserDriverScript(origins);
+	await ctx.sandbox.mustRun(
+		`mkdir -p ${shellEscape(BROWSER_DIR)}`,
+		"Create browser directory",
+	);
 	await ctx.sandbox.writeFile(DRIVER_PATH, script);
 	await ctx.sandbox.mustRun(
 		`chmod +x ${shellEscape(DRIVER_PATH)}`,
 		"Make driver executable",
 	);
-	await ctx.sandbox.mustRun(
-		`touch ${shellEscape(DRIVER_READY_PATH)}`,
-		"Mark driver ready",
+	await ctx.sandbox.run(
+		`nohup node ${shellEscape(DRIVER_PATH)} > ${shellEscape(DRIVER_LOG)} 2>&1 &`,
 	);
+
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, 500));
+		const check = await ctx.sandbox.run(
+			`curl -sf ${shellEscape(HEALTH_URL)} 2>/dev/null && echo ok || echo fail`,
+		);
+		if (check.output.trim() === "ok") return;
+	}
+	throw new Error("Browser driver did not start within 30 seconds");
 }
 
-/** Send a JSON command to the driver via a single exec call. */
+/** Send a JSON command to the driver HTTP server. */
 async function driverCommand(
 	ctx: {
 		sandbox: import("../../sandbox/index.js").Sandbox;
@@ -67,8 +85,10 @@ async function driverCommand(
 ): Promise<Record<string, unknown>> {
 	await ensureDriver(ctx, origins);
 	const json = JSON.stringify(command);
+	const tmpFile = `/tmp/browser-cmd-${randomBytes(4).toString("hex")}.json`;
+	await ctx.sandbox.writeFile(tmpFile, json);
 	const { output, exitCode } = await ctx.sandbox.run(
-		`echo ${shellEscape(json)} | node ${shellEscape(DRIVER_PATH)}`,
+		`curl -sf --data-binary @${shellEscape(tmpFile)} ${shellEscape(COMMAND_URL)} && rm -f ${shellEscape(tmpFile)}`,
 		{ signal: ctx.signal },
 	);
 	if (exitCode !== 0) {
@@ -76,13 +96,11 @@ async function driverCommand(
 			`Browser driver error (exit ${exitCode}): ${output.slice(0, 500)}`,
 		);
 	}
-	const lines = output.trim().split("\n");
-	const lastLine = lines[lines.length - 1];
 	try {
-		return JSON.parse(lastLine) as Record<string, unknown>;
+		return JSON.parse(output.trim()) as Record<string, unknown>;
 	} catch {
 		throw new Error(
-			`Browser driver returned invalid JSON: ${lastLine.slice(0, 200)}`,
+			`Browser driver returned invalid JSON: ${output.slice(0, 200)}`,
 		);
 	}
 }
@@ -179,9 +197,11 @@ function browserSnapshot(opts: BrowserToolOptions): Tool {
 				action: "snapshot",
 			});
 			if (result.error) return { content: String(result.error), isError: true };
-			return {
-				content: JSON.stringify(result.snapshot, null, 2).slice(0, 40_000),
-			};
+			const snap =
+				typeof result.snapshot === "string"
+					? result.snapshot
+					: JSON.stringify(result.snapshot, null, 2);
+			return { content: snap.slice(0, 40_000) };
 		},
 	};
 }
@@ -229,7 +249,7 @@ function browserScreenshot(opts: BrowserToolOptions): Tool {
 function browserConsole(opts: BrowserToolOptions): Tool {
 	return {
 		name: "browser_console",
-		description: "Read browser console messages.",
+		description: "Read buffered browser console messages.",
 		inputSchema: {},
 		async invoke(_input: Record<string, unknown>, ctx): Promise<ToolResult> {
 			const result = await driverCommand(ctx, opts.allowedOrigins, {

@@ -13,6 +13,15 @@ const all: Agent[] = [
 	agents.selfReview,
 ];
 
+const reviewerAgents: Agent[] = [
+	agents.securityReviewer,
+	agents.correctnessReviewer,
+	agents.performanceReviewer,
+	agents.testsReviewer,
+	agents.synthesizer,
+	agents.uxTester,
+];
+
 const toolNames = (agent: Agent) =>
 	(agent.tools ?? []).map((tool) => tool.name);
 
@@ -22,7 +31,7 @@ describe("agent definitions", () => {
 	});
 
 	it("gives every agent a prompt and a known model tier", () => {
-		for (const agent of all) {
+		for (const agent of [...all, ...reviewerAgents]) {
 			expect(agent.prompt.length).toBeGreaterThan(0);
 			expect(["small", "medium", "large"]).toContain(agent.model);
 		}
@@ -100,6 +109,47 @@ describe("pinned tool-name lists", () => {
 		const agent = all.find((a) => a.id === id);
 		expect(agent).toBeDefined();
 		expect(toolNames(agent as Agent).sort()).toEqual(expected);
+	});
+});
+
+describe("reviewer agents", () => {
+	it("specialist reviewers have read tools", () => {
+		for (const agent of [
+			agents.securityReviewer,
+			agents.correctnessReviewer,
+			agents.performanceReviewer,
+			agents.testsReviewer,
+		]) {
+			expect(toolNames(agent).sort()).toEqual([
+				"sandbox__list_dir",
+				"sandbox__read_file",
+				"sandbox__search",
+			]);
+		}
+	});
+
+	it("synthesizer has no tools", () => {
+		expect(toolNames(agents.synthesizer)).toEqual([]);
+	});
+
+	it("ux-tester has read tools (browser tools injected at runtime)", () => {
+		expect(toolNames(agents.uxTester).sort()).toEqual([
+			"sandbox__list_dir",
+			"sandbox__read_file",
+			"sandbox__search",
+		]);
+	});
+
+	it("ux-tester declares browser: true", () => {
+		expect(agents.uxTester.browser).toBe(true);
+	});
+
+	it("no other agent declares browser: true", () => {
+		for (const agent of [...all, ...reviewerAgents]) {
+			if (agent.id !== "ux-tester") {
+				expect(agent.browser).toBeUndefined();
+			}
+		}
 	});
 });
 

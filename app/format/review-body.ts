@@ -1,7 +1,6 @@
-import type { SpecialistFinding } from "../contracts/index.js";
-import type { UxResult } from "../contracts/ux.js";
-import type { CommandResult } from "../git/types.js";
-import type { PreviewStatus } from "../preview/types.js";
+import type { SpecialistFinding, UxResult } from "../contracts/index.js";
+import type { CommandResult } from "../git/index.js";
+import type { PreviewStatus } from "../preview/index.js";
 import { redactSecrets } from "../policy/index.js";
 
 interface ReviewBodyInput {

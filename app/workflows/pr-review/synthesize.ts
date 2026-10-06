@@ -3,10 +3,10 @@ import {
 	synthesisSchema,
 	type Synthesis,
 	type SynthesisComment,
+	type UxTestOutput,
 } from "../../contracts/index.js";
-import type { UxTestOutput } from "../../contracts/ux.js";
-import type { VerificationResult } from "../../git/types.js";
-import { synthesizer } from "../../agents/reviewers/synthesizer.js";
+import type { VerificationResult } from "../../git/index.js";
+import { synthesizer } from "../../agents/index.js";
 import { agentTask } from "../../tasks/index.js";
 import { parseModelJson } from "../../runners/index.js";
 import { validateCommentPositions } from "./diff-positions.js";

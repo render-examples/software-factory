@@ -1,13 +1,10 @@
 /** pr-review — COMMENT review on a pull request. */
 import { repository, target } from "../../config/index.js";
-import { reviewBody } from "../../format/review-body.js";
-import { runVerification } from "../../git/verify.js";
-import type { CommandResult } from "../../git/types.js";
-import type { RepoRef } from "../../github/index.js";
-import { GitHubHttp } from "../../github/request.js";
-import { githubToken } from "../../github/auth.js";
+import { reviewBody } from "../../format/index.js";
+import { runVerification, type CommandResult } from "../../git/index.js";
+import { githubToken, GitHubHttp, type RepoRef } from "../../github/index.js";
 import type { SpecialistFinding } from "../../contracts/index.js";
-import type { UxTestOutput } from "../../contracts/ux.js";
+import type { UxTestOutput } from "../../contracts/index.js";
 import type { PreviewStatus } from "../../preview/index.js";
 import { lease, release } from "../../workspaces/index.js";
 import { point } from "../../telemetry/index.js";

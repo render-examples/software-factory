@@ -1,6 +1,5 @@
-import type { GitHub, RepoRef } from "../../github/index.js";
+import type { GitHub, RepoRef, GitHubHttp } from "../../github/index.js";
 import { getPull, getPullDiff, type PullDetail } from "../../github/index.js";
-import type { GitHubHttp } from "../../github/request.js";
 
 export interface IntakeResult {
 	pull: PullDetail;
