@@ -1,75 +1,82 @@
 import { describe, expect, it } from "vitest";
-import { parseModelJson } from "../app/runners/index.js";
 import {
-	judgeSchema,
-	reviewerOutputSchema,
-	triageSchema,
-	workflowInputSchema,
+	specialistOutputSchema,
+	synthesisSchema,
+	triageDecisionSchema,
 } from "../app/contracts/index.js";
+import { parseModelJson } from "../app/runners/index.js";
+
+const decision = {
+	decision: "draft",
+	questions: [],
+	rationale: "Clear enough",
+	findings: "The list lives in src/App.tsx",
+	relevantPaths: ["src/App.tsx"],
+};
 
 describe("parseModelJson", () => {
 	it("parses a bare JSON object", () => {
 		expect(
-			parseModelJson(
-				triageSchema,
-				'{"hasEnoughDetail":true,"questions":[],"rationale":"ok"}',
-			),
-		).toEqual({ hasEnoughDetail: true, questions: [], rationale: "ok" });
+			parseModelJson(triageDecisionSchema, JSON.stringify(decision)),
+		).toEqual(decision);
 	});
 
 	it("parses JSON inside a fenced code block", () => {
-		const raw =
-			'Here you go:\n```json\n{"hasEnoughDetail":false,"questions":["what?"],"rationale":"thin"}\n```';
-		expect(parseModelJson(triageSchema, raw)?.questions).toEqual(["what?"]);
+		const raw = `Here you go:\n\`\`\`json\n${JSON.stringify({ ...decision, decision: "ask", questions: ["what?"] })}\n\`\`\``;
+		expect(parseModelJson(triageDecisionSchema, raw)?.questions).toEqual([
+			"what?",
+		]);
 	});
 
 	it("parses JSON surrounded by prose", () => {
-		const raw =
-			'Sure. {"hasEnoughDetail":true,"questions":[],"rationale":"fine"} Hope that helps.';
-		expect(parseModelJson(triageSchema, raw)?.hasEnoughDetail).toBe(true);
+		const raw = `Sure. ${JSON.stringify(decision)} Hope that helps.`;
+		expect(parseModelJson(triageDecisionSchema, raw)?.decision).toBe("draft");
 	});
 
 	it("returns null rather than throwing on unparseable output", () => {
-		expect(parseModelJson(triageSchema, "I could not decide.")).toBeNull();
+		expect(
+			parseModelJson(triageDecisionSchema, "I could not decide."),
+		).toBeNull();
 	});
 
 	it("returns null when JSON is valid but violates the schema", () => {
 		expect(
-			parseModelJson(triageSchema, '{"hasEnoughDetail":"yes"}'),
+			parseModelJson(
+				triageDecisionSchema,
+				JSON.stringify({ ...decision, decision: "maybe" }),
+			),
 		).toBeNull();
 	});
 });
 
 describe("schemas", () => {
-	it("requires a positive issue number", () => {
-		expect(
-			workflowInputSchema.safeParse({ issueNumber: 0, runId: "r" }).success,
-		).toBe(false);
-		expect(
-			workflowInputSchema.safeParse({ issueNumber: 7, runId: "r" }).success,
-		).toBe(true);
-	});
+	const finding = {
+		path: "a.ts",
+		line: 3,
+		severity: "high",
+		title: "t",
+		body: "b",
+		evidence: "e",
+	};
 
-	it("bounds reviewer confidence to 0-100", () => {
-		const finding = { severity: "high", file: "a.ts", description: "d" };
+	it("bounds specialist confidence to 0-100", () => {
 		expect(
-			reviewerOutputSchema.safeParse({
+			specialistOutputSchema.safeParse({
 				findings: [{ ...finding, confidence: 101 }],
 			}).success,
 		).toBe(false);
 		expect(
-			reviewerOutputSchema.safeParse({
+			specialistOutputSchema.safeParse({
 				findings: [{ ...finding, confidence: 80 }],
 			}).success,
 		).toBe(true);
 	});
 
-	it("rejects a judge decision outside the allowed set", () => {
+	it("gives the synthesizer no way to approve or request changes", () => {
+		const synthesis = { summary: "s", riskTier: "low", comments: [] };
+		expect(synthesisSchema.safeParse(synthesis).success).toBe(true);
 		expect(
-			judgeSchema.safeParse({ decision: "lgtm", summary: "s" }).success,
-		).toBe(false);
-		expect(
-			judgeSchema.safeParse({ decision: "approve", summary: "s" }).success,
-		).toBe(true);
+			Object.keys(synthesisSchema.parse({ ...synthesis, decision: "approve" })),
+		).not.toContain("decision");
 	});
 });
