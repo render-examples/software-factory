@@ -63,6 +63,15 @@ export {
 	type SpecVersionRecord,
 } from "./specs.js";
 export { getRunCost, addRunCost } from "./costs.js";
+export {
+	listRuns,
+	listConversation,
+	listArtifactsByRun,
+	listDeliveries,
+	listSpecVersions,
+	getArtifactForServing,
+	type ListRunsFilter,
+} from "./queries.js";
 export type {
 	ArtifactRecord,
 	DeliveryOutcome,
