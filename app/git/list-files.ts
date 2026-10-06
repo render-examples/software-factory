@@ -1,17 +1,14 @@
 import type { Sandbox } from "../sandbox/index.js";
-import { shellEscape } from "../shell/index.js";
+import { gitRun } from "./run.js";
 
 /**
- * List tracked files in the checkout via `git ls-files`.
- * Returns a Set for O(1) membership checks in path validation.
+ * Tracked files in the checkout, for path validation. Returns an empty set
+ * when git fails so a listing problem only loses warnings, never a run.
  */
 export async function listTrackedFiles(
 	sandbox: Sandbox,
-	repoDir: string,
 ): Promise<ReadonlySet<string>> {
-	const result = await sandbox.run(
-		`git -c core.hooksPath=/dev/null -C ${shellEscape(repoDir)} ls-files`,
-	);
+	const result = await gitRun(sandbox, "ls-files");
 	if (result.exitCode !== 0) {
 		return new Set();
 	}

@@ -122,10 +122,7 @@ export const triageWorkflow = runWorkflow(
 		await lc.throwIfCancelled();
 
 		// List tracked files for path validation.
-		const existingPaths = await listTrackedFiles(
-			workspace.sandbox,
-			workspace.repoDir,
-		);
+		const existingPaths = await listTrackedFiles(workspace.sandbox);
 
 		// ── act on the decision ─────────────────────────────────
 		let result: LifecycleResult;
