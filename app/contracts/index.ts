@@ -25,4 +25,9 @@ export {
 	type SpecNotes,
 	type SpecValidation,
 } from "./spec.js";
-export { triageSchema, type Triage } from "./triage.js";
+export {
+	triageDecisionSchema,
+	triageSchema,
+	type Triage,
+	type TriageDecision,
+} from "./triage.js";

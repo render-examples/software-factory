@@ -1,7 +1,8 @@
 export type { Agent } from "./types.js";
 
-/** The eight agents, in pipeline order. */
+/** Agents, grouped by workflow. */
 export { triage } from "./triage.js";
+export { specWriter } from "./spec-writer.js";
 export { analyst } from "./analyst.js";
 export { implementer } from "./implementer.js";
 export { selfReview } from "./self-review.js";

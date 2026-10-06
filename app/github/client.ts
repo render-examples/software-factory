@@ -196,6 +196,37 @@ export class GitHub {
 		}
 	}
 
+	/**
+	 * Find a comment by its hidden marker and update it, or create a new one.
+	 * Returns the comment ID (as a string) so the caller can cache it.
+	 */
+	async upsertMarkedComment(
+		ref: RepoRef,
+		number: number,
+		marker: string,
+		body: string,
+	): Promise<{ id: string }> {
+		const fullBody = `${redactSecrets(body)}\n\n${marker}`;
+		const comments = await this.listIssueComments(ref, number);
+		const existing = comments.find((c) => c.body.includes(marker));
+
+		if (existing) {
+			await this.http.send(
+				"PATCH",
+				`/repos/${ref.owner}/${ref.repo}/issues/comments/${existing.id}`,
+				{ body: { body: fullBody } },
+			);
+			return { id: String(existing.id) };
+		}
+
+		const created = await this.http.send<{ id: number }>(
+			"POST",
+			`/repos/${ref.owner}/${ref.repo}/issues/${number}/comments`,
+			{ body: { body: fullBody } },
+		);
+		return { id: String(created.id) };
+	}
+
 	/** The tip SHA of a branch. */
 	async getBranchTipSha(ref: RepoRef, branch: string): Promise<string> {
 		const data = await this.http.send<{ object: { sha: string } }>(

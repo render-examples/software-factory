@@ -5,6 +5,7 @@ import {
 	judge,
 	security,
 	selfReview,
+	specWriter,
 	tests,
 	triage,
 } from "../agents/index.js";
@@ -18,6 +19,7 @@ export {
 export { BudgetExceededError, isBudgetExceeded } from "./errors.js";
 
 export const triageTask = agentTask(triage);
+export const specWriterTask = agentTask(specWriter);
 export const analysisTask = agentTask(analyst);
 export const implementTask = agentTask(implementer);
 export const selfReviewTask = agentTask(selfReview);
