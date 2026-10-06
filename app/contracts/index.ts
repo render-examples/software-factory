@@ -15,4 +15,14 @@ export {
 	type Review,
 	type ReviewerOutput,
 } from "./review.js";
+export {
+	acceptanceCriterionSchema,
+	specNotesSchema,
+	specSchema,
+	validateSpec,
+	type AcceptanceCriterion,
+	type Spec,
+	type SpecNotes,
+	type SpecValidation,
+} from "./spec.js";
 export { triageSchema, type Triage } from "./triage.js";

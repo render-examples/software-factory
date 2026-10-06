@@ -8,7 +8,15 @@ export interface Checkout {
 	branch: string;
 }
 
+export interface CommandResult {
+	command: string;
+	exitCode: number;
+	durationMs: number;
+	outputTail: string;
+}
+
 export interface VerificationResult {
 	passed: boolean;
 	failures: string;
+	results: CommandResult[];
 }
