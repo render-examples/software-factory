@@ -2,7 +2,7 @@
  * Publish the sandbox state to GitHub through the Git Data API.
  *
  * The publish path is: collect changes → transfer files → create blobs →
- * create tree → create commit → create ref → verify tree hash.
+ * create tree → **verify tree hash** → create commit → create ref → verify ref.
  * No write-capable credential ever enters the sandbox.
  */
 import { target } from "../config/index.js";
@@ -30,7 +30,7 @@ export type {
 	RefusalReason,
 } from "./changes.js";
 export { parseDiffRaw, collectChanges, checkTotalSize } from "./changes.js";
-export { parseTar, type TarEntry } from "./tar.js";
+export { parseTar, parsePaxData, type TarEntry } from "./tar.js";
 
 const IDENTITY_NAME = "render-factory[bot]";
 const IDENTITY_EMAIL = "bot@render-factory.dev";
@@ -72,7 +72,7 @@ export async function publish(
 	if (changes.entries.length === 0) {
 		return {
 			ok: false,
-			reasons: [{ kind: "too_many_files", detail: "No changes to publish" }],
+			reasons: [{ kind: "empty", detail: "No changes to publish" }],
 		};
 	}
 
@@ -119,7 +119,18 @@ export async function publish(
 
 	const treeSha = await gitData.createTree(baseTreeSha, treeEntries);
 
-	// ── 5. Create commit ────────────────────────────────────────────
+	// ── 5. Verify tree hash BEFORE creating commit or ref ───────────
+	const localTreeSha = (
+		await git(sandbox, "rev-parse HEAD^{tree}", "Local tree SHA")
+	).trim();
+
+	if (treeSha !== localTreeSha) {
+		throw new Error(
+			`Tree hash mismatch: GitHub returned ${treeSha}, sandbox has ${localTreeSha}. Failing closed — no commit or ref created.`,
+		);
+	}
+
+	// ── 6. Create commit ────────────────────────────────────────────
 	const identity: CommitIdentity = {
 		name: IDENTITY_NAME,
 		email: IDENTITY_EMAIL,
@@ -134,20 +145,10 @@ export async function publish(
 		committer: identity,
 	});
 
-	// ── 6. Create ref ───────────────────────────────────────────────
+	// ── 7. Create ref ───────────────────────────────────────────────
 	await ensureRef(gitData, `heads/${branch}`, commitSha);
 
-	// ── 7. Verify tree hash ─────────────────────────────────────────
-	const localTreeSha = (
-		await git(sandbox, "rev-parse HEAD^{tree}", "Local tree SHA")
-	).trim();
-
-	if (treeSha !== localTreeSha) {
-		throw new Error(
-			`Tree hash mismatch: GitHub returned ${treeSha}, sandbox has ${localTreeSha}. Failing closed.`,
-		);
-	}
-
+	// ── 8. Verify ref points at the new commit ──────────────────────
 	const remoteRef = await gitData.getRef(`heads/${branch}`);
 	if (remoteRef !== commitSha) {
 		throw new Error(

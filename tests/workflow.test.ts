@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	commitChanges: vi.fn(),
 	completeDiff: vi.fn(),
 	runVerification: vi.fn(),
+	git: vi.fn(),
 	finishRun: vi.fn(),
 	mergeRunResult: vi.fn(),
 	setRunStage: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock("../app/git/index.js", () => ({
 	completeDiff: mocks.completeDiff,
 	runVerification: mocks.runVerification,
 	createBranch: vi.fn(),
+	git: mocks.git,
 }));
 vi.mock("../app/workspaces/index.js", () => ({
 	lease: mocks.lease,
@@ -127,6 +129,8 @@ const SPEC_DOC = {
 	openQuestions: [],
 };
 
+const NOW = "2026-10-05T17:30:00.000Z";
+
 function makeRunRecord(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "run-0001",
@@ -153,11 +157,11 @@ function makeRunRecord(overrides: Record<string, unknown> = {}) {
 		dispatchAfter: null,
 		dispatchedAt: null,
 		heartbeatAt: null,
-		startedAt: new Date().toISOString(),
+		startedAt: NOW,
 		completedAt: null,
 		costUsd: 0,
-		createdAt: new Date().toISOString(),
-		updatedAt: new Date().toISOString(),
+		createdAt: NOW,
+		updatedAt: NOW,
 		...overrides,
 	};
 }
@@ -207,7 +211,7 @@ beforeEach(() => {
 		notes: null,
 		lastCommentId: null,
 		runId: null,
-		createdAt: new Date().toISOString(),
+		createdAt: NOW,
 	});
 	mocks.approveVersion.mockResolvedValue(true);
 	mocks.getSpec.mockResolvedValue({
@@ -218,17 +222,22 @@ beforeEach(() => {
 		currentVersion: 1,
 		approvedVersion: 1,
 		approvedBy: "Maintainer",
-		approvedAt: new Date().toISOString(),
+		approvedAt: NOW,
 		commentId: "12345",
-		createdAt: new Date().toISOString(),
-		updatedAt: new Date().toISOString(),
+		createdAt: NOW,
+		updatedAt: NOW,
 	});
 
 	mocks.implementTask.mockResolvedValue('{"summary":"Added retries"}');
 	mocks.selfReviewTask.mockResolvedValue('{"needsRevision":false,"issues":[]}');
 
 	mocks.lease.mockResolvedValue({
-		sandbox: { id: "sbx-1", run: vi.fn(), mustRun: vi.fn(), download: vi.fn() },
+		sandbox: {
+			id: "sbx-1",
+			run: vi.fn(),
+			mustRun: vi.fn(),
+			download: vi.fn(),
+		},
 		sandboxRecordId: "sr-1",
 		repoDir: "/home/user/repo",
 		baseBranch: "main",
@@ -246,6 +255,7 @@ beforeEach(() => {
 			{ command: "npm test", exitCode: 0, durationMs: 1000, outputTail: "" },
 		],
 	});
+	mocks.git.mockResolvedValue("");
 	mocks.publish.mockResolvedValue({
 		ok: true,
 		result: {
@@ -315,6 +325,14 @@ describe("happy path", () => {
 			name: "main",
 		});
 		expect(mocks.release).toHaveBeenCalledWith("run-0001");
+	});
+
+	it("uses run.startedAt as the deterministic author date", async () => {
+		await run(INPUT);
+
+		expect(mocks.publish).toHaveBeenCalledWith(
+			expect.objectContaining({ authorDate: NOW }),
+		);
 	});
 });
 
@@ -435,6 +453,64 @@ describe("verification", () => {
 	});
 });
 
+describe("self-review re-verification failure", () => {
+	it("resets to the verified commit when self-review fix fails re-verify", async () => {
+		// First verify pass → self-review finds issues → fix committed →
+		// re-verify fails → should reset to original verified sha
+		mocks.selfReviewTask.mockResolvedValue(
+			'{"needsRevision":true,"issues":["debug console.log"]}',
+		);
+		mocks.commitChanges
+			.mockResolvedValueOnce("sha-impl") // initial impl
+			.mockResolvedValueOnce("sha-fix"); // self-review fix
+
+		let verifyCall = 0;
+		mocks.runVerification.mockImplementation(async () => {
+			verifyCall++;
+			if (verifyCall <= 1) {
+				// First verification (on sha-impl) passes
+				return {
+					passed: true,
+					failures: "",
+					results: [
+						{
+							command: "npm test",
+							exitCode: 0,
+							durationMs: 1000,
+							outputTail: "",
+						},
+					],
+				};
+			}
+			// Re-verification after self-review fix fails
+			return {
+				passed: false,
+				failures: "broken by fix",
+				results: [
+					{
+						command: "npm test",
+						exitCode: 1,
+						durationMs: 500,
+						outputTail: "broken",
+					},
+				],
+			};
+		});
+
+		await run(INPUT);
+
+		// Should have called git reset --hard to roll back
+		expect(mocks.git).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.stringContaining("reset --hard"),
+			expect.any(String),
+		);
+
+		// Should still publish (not fail)
+		expect(mocks.publish).toHaveBeenCalled();
+	});
+});
+
 describe("publish refusal", () => {
 	it("stops with publish_refused when publish returns reasons", async () => {
 		mocks.publish.mockResolvedValue({
@@ -480,6 +556,26 @@ describe("auto-advance", () => {
 				}),
 			}),
 		);
+	});
+
+	it("gives the follow-up a follow_up trigger with no label", async () => {
+		mocks.getRun.mockResolvedValue(
+			makeRunRecord({
+				input: { specId: "spec-001", specVersion: 1, autoAdvance: true },
+			}),
+		);
+
+		await run(INPUT);
+
+		const finishCall = mocks.finishRun.mock.calls[0];
+		const details = finishCall?.[2] as Record<string, unknown>;
+		const followUp = details?.followUp as Record<string, unknown>;
+		const followTrigger = followUp?.trigger as Record<string, unknown>;
+
+		expect(followTrigger.event).toBe("follow_up");
+		expect(followTrigger.label).toBeUndefined();
+		expect(followTrigger.actor).toEqual({ login: "Maintainer", id: 1 });
+		expect(followTrigger.previousRunId).toBe("run-0001");
 	});
 
 	it("does not queue a follow-up when autoAdvance is false", async () => {
