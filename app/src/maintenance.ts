@@ -8,6 +8,7 @@ import {
 	findLostExecutions,
 	finishRun,
 } from "../store/index.js";
+import { runWorkspaceMaintenance } from "../workspaces/index.js";
 
 assertMaintenanceEnv();
 
@@ -56,6 +57,8 @@ const coreSteps: MaintenanceStep[] = [
 			}
 		},
 	},
+	// Runs after lost executions are failed so their leased sandboxes are reaped.
+	{ name: "workspaces", run: runWorkspaceMaintenance },
 ];
 
 try {
