@@ -11,9 +11,8 @@ export const readTools: readonly Tool[] = [
 ];
 
 export const writeTools: readonly Tool[] = [
-	sandboxExec,
 	sandboxWriteFile,
 	sandboxApplyPatch,
 ];
 
-export const allTools: readonly Tool[] = [...readTools, ...writeTools];
+export const execTools: readonly Tool[] = [sandboxExec];

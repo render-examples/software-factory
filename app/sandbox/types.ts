@@ -11,6 +11,13 @@ export interface ExecResult {
 	exitCode: number;
 }
 
+export type SandboxNetworkPolicy =
+	| { default: "allow-all" }
+	| { default: "deny-all" }
+	| { default: "allow-list"; allowedDomains: string[] };
+
 export interface CreateSandboxOptions {
 	timeoutSeconds?: number;
+	networkPolicy?: SandboxNetworkPolicy;
+	snapshotId?: string;
 }

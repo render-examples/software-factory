@@ -1,7 +1,10 @@
-export { execGitWithToken, githubRemoteUrl } from "./auth.js";
-export { branchName, setupCheckout } from "./checkout.js";
+export { branchName, createBranch, setupBranch } from "./checkout.js";
 export { commitChanges, completeDiff } from "./commit.js";
-export { verifyPush } from "./push.js";
-export { REPO_DIR } from "./run.js";
-export type { Checkout, VerificationResult } from "./types.js";
+export { listTrackedFiles } from "./list-files.js";
+export { REPO_DIR, git, gitRun } from "./run.js";
+export type {
+	Checkout,
+	CommandResult,
+	VerificationResult,
+} from "./types.js";
 export { runVerification } from "./verify.js";

@@ -30,14 +30,14 @@ export class GitHubHttp {
 	async send<T>(
 		method: string,
 		path: string,
-		opts: { body?: unknown } = {},
+		opts: { body?: unknown; accept?: string } = {},
 	): Promise<T> {
 		const token = await this.token();
 		this.lastToken = token;
 
 		const headers: Record<string, string> = {
 			Authorization: `Bearer ${token}`,
-			Accept: "application/vnd.github+json",
+			Accept: opts.accept ?? "application/vnd.github+json",
 			"X-GitHub-Api-Version": "2022-11-28",
 			"User-Agent": "render-factory",
 		};
@@ -90,9 +90,11 @@ export class GitHubHttp {
 			);
 		}
 		if (response.status === 204) return undefined as T;
-		return JSON.parse(
-			await readResponseText(response, MAX_RESPONSE_BYTES),
-		) as T;
+		const text = await readResponseText(response, MAX_RESPONSE_BYTES);
+		if (opts.accept && opts.accept !== "application/vnd.github+json") {
+			return text as T;
+		}
+		return JSON.parse(text) as T;
 	}
 }
 

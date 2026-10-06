@@ -2,10 +2,13 @@
  * Diagnose a deployment without changing anything.
  *
  * Every check reports what is wrong and how to fix it. Read-only by design:
- * it never creates or edits a resource.
+ * it never creates or edits a resource. Safe to run in CI — network checks
+ * are skipped cleanly when credentials are absent.
  */
-import { allowedActors, repository, triggerLabel } from "../app/config/index.js";
-import { githubToken, usingGitHubApp } from "../app/github/index.js";
+import { factoryConfig } from "../factory.config.js";
+import { repository } from "../app/config/index.js";
+import { validateConfig } from "../app/config/index.js";
+import { githubToken } from "../app/github/index.js";
 import { db } from "../app/store/index.js";
 import { type Finding, exitWith, heading, print } from "./support.js";
 
@@ -47,31 +50,32 @@ async function github<T>(
 	}
 }
 
+// ── Config validation ────────────────────────────────────────────────
 function checkConfiguration(): void {
 	heading("Configuration");
 
 	try {
-		const repo = repository();
-		record({ level: "ok", message: `FACTORY_REPO is ${repo.fullName}` });
+		validateConfig();
+		record({ level: "ok", message: "factory.config.ts is valid" });
 	} catch (error) {
 		record({
 			level: "fail",
-			message: "FACTORY_REPO is missing or malformed",
-			fix: error instanceof Error ? error.message : "Use owner/repo format.",
+			message: "factory.config.ts is invalid",
+			fix: error instanceof Error ? error.message : "Check factory.config.ts",
 		});
 	}
 
 	try {
-		const actors = allowedActors();
-		record({
-			level: "ok",
-			message: `${actors.size} allowed actor${actors.size === 1 ? "" : "s"}`,
-		});
-	} catch {
+		const repo = repository();
+		record({ level: "ok", message: `Target repository is ${repo.fullName}` });
+	} catch (error) {
 		record({
 			level: "fail",
-			message: "No allowed actors",
-			fix: "Set FACTORY_GITHUB_ACTORS or add actors to factory.config.ts.",
+			message: "Target repository is not configured",
+			fix:
+				error instanceof Error
+					? error.message
+					: "Set repos[0] in factory.config.ts",
 		});
 	}
 
@@ -92,30 +96,129 @@ function checkConfiguration(): void {
 		record({ level: "ok", message: "GITHUB_WEBHOOK_SECRET looks strong" });
 	}
 
-	// The gateway needs this to dispatch, not just the workflows host.
-	present("RENDER_API_KEY", "Required by both processes; the gateway uses it to dispatch tasks.");
-	present("RENDER_WORKFLOW_SLUG", "Set it to the Workflows service slug, without a task name.");
-	present("DATABASE_URL", "Both processes must point at the same database.");
+	present("DATABASE_URL", "All processes must point at the same database.");
 	present("ANTHROPIC_API_KEY", "Required by the workflows host.");
 	present("RENDER_WORKSPACE_ID", "Required to create sandboxes.");
 
-	if (usingGitHubApp()) {
-		record({ level: "ok", message: "GitHub App credentials configured" });
-	} else if (process.env.GITHUB_TOKEN?.trim()) {
+	const hasApp =
+		process.env.GITHUB_APP_ID?.trim() &&
+		process.env.GITHUB_APP_PRIVATE_KEY?.trim() &&
+		process.env.GITHUB_APP_INSTALLATION_ID?.trim();
+	if (hasApp) {
 		record({
-			level: "warn",
-			message: "Using a personal access token",
-			fix: "Comments and pull requests will be attributed to the token's owner. Run npm run setup:app for a GitHub App.",
+			level: "ok",
+			message: "GitHub App credentials configured",
 		});
 	} else {
 		record({
 			level: "fail",
-			message: "No GitHub credentials",
-			fix: "Set GITHUB_TOKEN, or the GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_APP_INSTALLATION_ID trio.",
+			message: "No GitHub App credentials",
+			fix: "Set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID. Run npm run setup:app to create one.",
 		});
 	}
 }
 
+// ── Per-process env ──────────────────────────────────────────────────
+function checkGatewayEnv(): void {
+	heading("Gateway environment");
+
+	present(
+		"GITHUB_WEBHOOK_SECRET",
+		"Required by the gateway to verify webhook signatures.",
+	);
+	present("FACTORY_ADMIN_TOKEN", "Required for the read API and trace UI.");
+	present("DATABASE_URL", "Gateway needs Postgres for run state.");
+}
+
+function checkDispatcherEnv(): void {
+	heading("Dispatcher environment");
+
+	present(
+		"RENDER_API_KEY",
+		"Required by the dispatcher to start workflow tasks.",
+	);
+	present(
+		"RENDER_WORKFLOW_SLUG",
+		"The slug of the factory-workflows service. Set it or use fromService in render.yaml.",
+	);
+}
+
+function checkWorkflowsEnv(): void {
+	heading("Workflows environment");
+
+	present("ANTHROPIC_API_KEY", "Required to run Claude agents.");
+	present("RENDER_API_KEY", "Required for sandbox operations.");
+	present("RENDER_WORKSPACE_ID", "Required to create sandboxes.");
+	present("DATABASE_URL", "Workflows host needs Postgres for run state.");
+
+	const hasApp =
+		process.env.GITHUB_APP_ID?.trim() &&
+		process.env.GITHUB_APP_PRIVATE_KEY?.trim() &&
+		process.env.GITHUB_APP_INSTALLATION_ID?.trim();
+	if (hasApp) {
+		record({ level: "ok", message: "GitHub App credentials set" });
+	} else {
+		record({
+			level: "fail",
+			message: "Missing GitHub App credentials for workflows",
+			fix: "Set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID.",
+		});
+	}
+}
+
+function checkMaintenanceEnv(): void {
+	heading("Maintenance environment");
+
+	present("RENDER_API_KEY", "Required for sandbox lifecycle.");
+	present(
+		"RENDER_WORKSPACE_ID",
+		"Required to build snapshots and create sandboxes.",
+	);
+}
+
+// ── GitHub App installation and permissions ──────────────────────────
+async function checkGitHubApp(base: string, token: string): Promise<void> {
+	heading("GitHub App installation");
+
+	const installation = await github<{
+		permissions?: Record<string, string>;
+		events?: string[];
+	}>(`${base}/installation`, token);
+
+	if (!installation.ok) {
+		record({
+			level: "fail",
+			message: `Cannot read App installation (HTTP ${installation.status || "network error"})`,
+			fix: "Ensure the App is installed on this repository. Run npm run setup:app.",
+		});
+		return;
+	}
+
+	record({ level: "ok", message: "GitHub App is installed" });
+
+	const perms = installation.body?.permissions ?? {};
+	const requiredPerms: Record<string, string> = {
+		contents: "write",
+		issues: "write",
+		pull_requests: "write",
+		metadata: "read",
+	};
+
+	for (const [perm, level] of Object.entries(requiredPerms)) {
+		const has = perms[perm];
+		if (has === level || has === "write" || has === "admin") {
+			record({ level: "ok", message: `App has ${perm}: ${has}` });
+		} else {
+			record({
+				level: "fail",
+				message: `App missing ${perm}: ${level} (has: ${has ?? "none"})`,
+				fix: `Update the App permissions to include ${perm}: ${level}.`,
+			});
+		}
+	}
+}
+
+// ── GitHub: labels, webhook, permissions ─────────────────────────────
 async function checkGitHub(): Promise<void> {
 	heading("GitHub");
 
@@ -124,8 +227,8 @@ async function checkGitHub(): Promise<void> {
 		token = await githubToken();
 	} catch (error) {
 		record({
-			level: "fail",
-			message: "Could not obtain a GitHub token",
+			level: "warn",
+			message: "Skipped — could not obtain a GitHub token",
 			fix: error instanceof Error ? error.message : undefined,
 		});
 		return;
@@ -137,19 +240,22 @@ async function checkGitHub(): Promise<void> {
 	} catch {
 		record({
 			level: "warn",
-			message: "Skipped — FACTORY_REPO is not usable",
-			fix: "Fix FACTORY_REPO above, then run this again.",
+			message: "Skipped — target repository is not configured",
+			fix: "Set repos[0] in factory.config.ts, then run this again.",
 		});
 		return;
 	}
 
 	const base = `/repos/${repo.owner}/${repo.repo}`;
-	const info = await github<{ permissions?: Record<string, boolean> }>(base, token);
+	const info = await github<{ permissions?: Record<string, boolean> }>(
+		base,
+		token,
+	);
 	if (!info.ok) {
 		record({
 			level: "fail",
 			message: `Cannot read ${repo.fullName} (HTTP ${info.status || "network error"})`,
-			fix: "Check the credential is scoped to this repository.",
+			fix: "Check the App is installed on this repository.",
 		});
 		return;
 	}
@@ -166,25 +272,32 @@ async function checkGitHub(): Promise<void> {
 		record({ level: "ok", message: "Credential can push" });
 	}
 
-	const label = triggerLabel();
-	const labelCheck = await github(
-		`${base}/labels/${encodeURIComponent(label)}`,
-		token,
-	);
-	record(
-		labelCheck.ok
-			? { level: "ok", message: `Trigger label "${label}" exists` }
-			: {
-					level: "fail",
-					message: `Trigger label "${label}" does not exist`,
-					fix: "Run npm run setup:github, or create it by hand.",
-				},
-	);
+	// Check all four trigger labels exist.
+	const labels = factoryConfig.labels;
+	for (const [key, labelName] of Object.entries(labels)) {
+		const labelCheck = await github(
+			`${base}/labels/${encodeURIComponent(labelName)}`,
+			token,
+		);
+		record(
+			labelCheck.ok
+				? { level: "ok", message: `Label "${labelName}" (${key}) exists` }
+				: {
+						level: "fail",
+						message: `Label "${labelName}" (${key}) does not exist`,
+						fix: "Run npm run setup:github, or create it by hand.",
+					},
+		);
+	}
 
 	await checkWebhook(base, token);
+	await checkGitHubApp(base, token);
+	await checkPreviewConfig(base, token);
 }
 
 async function checkWebhook(base: string, token: string): Promise<void> {
+	heading("Webhook");
+
 	const hooks = await github<
 		Array<{ active: boolean; events: string[]; config: { url?: string } }>
 	>(`${base}/hooks`, token);
@@ -193,13 +306,15 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 		record({
 			level: "warn",
 			message: `Cannot list webhooks (HTTP ${hooks.status})`,
-			fix: "A PAT needs admin:repo_hook to read this. Skipping the webhook check.",
+			fix: "The App may not have admin:repo_hook. Skipping the webhook check.",
 		});
 		return;
 	}
 
 	const all = hooks.body ?? [];
-	const ours = all.filter((hook) => hook.config.url?.includes("/webhooks/github"));
+	const ours = all.filter((hook) =>
+		hook.config.url?.includes("/webhooks/github"),
+	);
 
 	if (ours.length === 0) {
 		const others = all.map((hook) => hook.config.url).filter(Boolean);
@@ -220,20 +335,66 @@ async function checkWebhook(base: string, token: string): Promise<void> {
 	record(
 		hook.active
 			? { level: "ok", message: "Webhook is active" }
-			: { level: "fail", message: "Webhook is inactive", fix: "Enable it in repository settings." },
-	);
-
-	record(
-		hook.events.includes("issues")
-			? { level: "ok", message: "Webhook subscribes to issues" }
 			: {
 					level: "fail",
-					message: `Webhook subscribes to ${hook.events.join(", ") || "nothing"}`,
-					fix: "It must include the issues event.",
+					message: "Webhook is inactive",
+					fix: "Enable it in repository settings.",
 				},
 	);
+
+	const requiredEvents = ["issues", "issue_comment", "pull_request"];
+	for (const event of requiredEvents) {
+		record(
+			hook.events.includes(event)
+				? { level: "ok", message: `Webhook subscribes to ${event}` }
+				: {
+						level: "fail",
+						message: `Webhook does not subscribe to ${event}`,
+						fix: `Add ${event} to the webhook events.`,
+					},
+		);
+	}
 }
 
+// ── Preview configuration ────────────────────────────────────────────
+async function checkPreviewConfig(base: string, token: string): Promise<void> {
+	const target = factoryConfig.repos[0];
+	if (!target.preview) {
+		record({
+			level: "ok",
+			message: "No preview environment configured (optional)",
+		});
+		return;
+	}
+
+	heading("Preview configuration");
+
+	record({
+		level: "ok",
+		message: `Preview service name: ${target.preview.serviceName}`,
+	});
+
+	// Check that the target repo has a render.yaml with the service name.
+	const renderYaml = await github<{ content?: string }>(
+		`${base}/contents/render.yaml`,
+		token,
+	);
+
+	if (!renderYaml.ok) {
+		record({
+			level: "warn",
+			message: "Could not read render.yaml from the target repository",
+			fix: "The target repository needs a render.yaml with preview environments enabled.",
+		});
+	} else {
+		record({
+			level: "ok",
+			message: "Target repository has a render.yaml",
+		});
+	}
+}
+
+// ── Postgres ─────────────────────────────────────────────────────────
 async function checkPostgres(): Promise<void> {
 	heading("Postgres");
 
@@ -262,7 +423,7 @@ async function checkPostgres(): Promise<void> {
 		record({ level: "ok", message: "Connected, runs table present" });
 
 		const columns = new Set(rows.map((row) => row.column_name));
-		const missing = ["id", "delivery_id", "issue_number", "status"].filter(
+		const missing = ["id", "status", "repo", "workflow"].filter(
 			(name) => !columns.has(name),
 		);
 		record(
@@ -271,7 +432,7 @@ async function checkPostgres(): Promise<void> {
 				: {
 						level: "fail",
 						message: `runs is missing: ${missing.join(", ")}`,
-						fix: "This database predates the current schema. Drop the old tables or use a fresh database.",
+						fix: "This database predates the current schema. Run npm run db:migrate.",
 					},
 		);
 
@@ -280,18 +441,72 @@ async function checkPostgres(): Promise<void> {
 		);
 		const names = new Set(indexes.map((row) => row.indexname));
 		record(
-			names.has("runs_one_active_per_issue")
-				? { level: "ok", message: "Per-issue uniqueness index present" }
+			names.has("runs_one_active_per_subject")
+				? { level: "ok", message: "Per-subject uniqueness index present" }
 				: {
 						level: "fail",
-						message: "runs_one_active_per_issue is missing",
-						fix: "Without it, one issue can start concurrent runs. Re-run npm run db:migrate.",
+						message: "runs_one_active_per_subject is missing",
+						fix: "Without it, one subject can start concurrent runs. Re-run npm run db:migrate.",
 					},
 		);
+
+		// Check migration version.
+		try {
+			const { rows: migrationRows } = await db().query<{ version: string }>(
+				"SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+			);
+			if (migrationRows.length > 0) {
+				record({
+					level: "ok",
+					message: `Latest migration: ${migrationRows[0].version}`,
+				});
+			}
+		} catch {
+			// schema_migrations may not exist in older setups.
+			record({
+				level: "warn",
+				message: "Could not read schema_migrations table",
+				fix: "Run npm run db:migrate to apply all migrations.",
+			});
+		}
+
+		try {
+			const { rows: snapshotRows } = await db().query<{
+				id: string;
+				base_sha: string;
+				expires_at: Date | null;
+			}>(
+				`SELECT id, base_sha, expires_at FROM snapshots
+				 WHERE status = 'available' ORDER BY created_at DESC LIMIT 1`,
+			);
+			const current = snapshotRows[0];
+			if (!current) {
+				record({
+					level: "warn",
+					message: "No repository snapshot yet",
+					fix: "The maintenance cron builds one on its next run; the first run builds one inline if needed.",
+				});
+			} else if (current.expires_at && current.expires_at < new Date()) {
+				record({
+					level: "warn",
+					message: `Snapshot ${current.id} has expired`,
+					fix: "Check the factory-maintenance cron logs; it should rebuild the snapshot before expiry.",
+				});
+			} else {
+				record({
+					level: "ok",
+					message: `Snapshot ${current.id} at ${current.base_sha.slice(0, 8)}${current.expires_at ? `, expires ${current.expires_at.toISOString()}` : ""}`,
+				});
+			}
+		} catch {
+			record({
+				level: "warn",
+				message: "Could not query the snapshots table",
+				fix: "Run npm run db:migrate.",
+			});
+		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		// Render's external connection string omits sslmode; the internal one
-		// the deployed services use does not need it.
 		const fix = /ssl/i.test(message)
 			? `${message}. Append ?sslmode=require when connecting to a Render database from outside Render.`
 			: message;
@@ -299,6 +514,7 @@ async function checkPostgres(): Promise<void> {
 	}
 }
 
+// ── Task registration ────────────────────────────────────────────────
 async function checkTasks(): Promise<void> {
 	heading("Task registration");
 
@@ -310,14 +526,17 @@ async function checkTasks(): Promise<void> {
 		const registered = new Set(TaskRegistry.getInstance().getAllTaskNames());
 		const expected = [
 			"triage",
-			"analyst",
+			"spec-writer",
 			"implementer",
 			"self-review",
-			"security",
-			"correctness",
-			"tests",
-			"judge",
+			"security-reviewer",
+			"correctness-reviewer",
+			"performance-reviewer",
+			"tests-reviewer",
+			"synthesizer",
+			"ux-tester",
 			"spec-to-pr",
+			"pr-review",
 		];
 		const missing = expected.filter((name) => !registered.has(name));
 
@@ -339,12 +558,16 @@ async function checkTasks(): Promise<void> {
 	}
 }
 
+// ── Run all checks ──────────────────────────────────────────────────
 checkConfiguration();
+checkGatewayEnv();
+checkDispatcherEnv();
+checkWorkflowsEnv();
+checkMaintenanceEnv();
 await checkGitHub();
 await checkPostgres();
 await checkTasks();
 
-// Only close a pool that was actually opened.
 if (process.env.DATABASE_URL?.trim()) {
 	await db()
 		.end()

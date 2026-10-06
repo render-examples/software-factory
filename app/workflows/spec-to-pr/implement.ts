@@ -1,10 +1,16 @@
+import type { TaskContext } from "@renderinc/sdk/workflows";
 import { factoryConfig } from "../../../factory.config.js";
+import { target } from "../../config/index.js";
 import { implementationSchema } from "../../contracts/index.js";
-import { type Checkout, commitChanges, runVerification } from "../../git/index.js";
+import {
+	type Checkout,
+	commitChanges,
+	runVerification,
+} from "../../git/index.js";
+import type { CommandResult } from "../../git/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 import { implementTask } from "../../tasks/index.js";
 import { agentJson } from "../agent-json.js";
-import { MAX_VERIFY_ROUNDS } from "./constants.js";
 
 export interface ImplementationState {
 	summary: string;
@@ -12,6 +18,7 @@ export interface ImplementationState {
 }
 
 export interface ImplementOptions {
+	runId: string;
 	sandbox: Sandbox;
 	checkout: Checkout;
 	prompt: string;
@@ -21,10 +28,16 @@ export interface ImplementOptions {
 }
 
 export async function implementAndCommit(
+	ctx: TaskContext,
 	opts: ImplementOptions,
 ): Promise<{ summary: string; sha: string | null }> {
 	const { summary } = await agentJson(
-		(message) => implementTask({ message, sandboxId: opts.sandbox.id }),
+		(message) =>
+			ctx.run(implementTask, {
+				runId: opts.runId,
+				message,
+				sandboxId: opts.sandbox.id,
+			}),
 		implementationSchema,
 		opts.prompt,
 		opts.stage,
@@ -38,32 +51,51 @@ export async function implementAndCommit(
 	return { summary, sha };
 }
 
-export type VerificationOutcome =
-	| { passed: true; state: ImplementationState }
-	| { passed: false; failures: string };
-
-/** Run verify commands, feeding failures back for up to MAX_VERIFY_ROUNDS. */
-export async function verifyWithFixes(opts: {
-	sandbox: Sandbox;
-	checkout: Checkout;
-	issueNumber: number;
-	workItem: string;
+export interface VerificationOutcome {
+	passed: boolean;
 	state: ImplementationState;
-}): Promise<VerificationOutcome> {
-	let state = opts.state;
-	if (factoryConfig.verify.length === 0) return { passed: true, state };
+	failures: string;
+	results: CommandResult[];
+}
 
-	for (let round = 0; round <= MAX_VERIFY_ROUNDS; round++) {
-		const verification = await runVerification(
-			opts.sandbox,
-			factoryConfig.verify,
-		);
-		if (verification.passed) return { passed: true, state };
-		if (round === MAX_VERIFY_ROUNDS) {
-			return { passed: false, failures: verification.failures };
+/** Run verify commands, feeding failures back for up to repairRounds. */
+export async function verifyWithFixes(
+	ctx: TaskContext,
+	opts: {
+		runId: string;
+		sandbox: Sandbox;
+		checkout: Checkout;
+		issueNumber: number;
+		workItem: string;
+		state: ImplementationState;
+	},
+): Promise<VerificationOutcome> {
+	const repo = target();
+	if (repo.verify.length === 0) {
+		return { passed: true, state: opts.state, failures: "", results: [] };
+	}
+
+	const maxRounds = factoryConfig.limits.repairRounds;
+	let state = opts.state;
+	let lastResults: CommandResult[] = [];
+
+	for (let round = 0; round <= maxRounds; round++) {
+		const verification = await runVerification(opts.sandbox, repo.verify);
+		lastResults = verification.results;
+		if (verification.passed) {
+			return { passed: true, state, failures: "", results: lastResults };
+		}
+		if (round === maxRounds) {
+			return {
+				passed: false,
+				state,
+				failures: verification.failures,
+				results: lastResults,
+			};
 		}
 
-		const fix = await implementAndCommit({
+		const fix = await implementAndCommit(ctx, {
+			runId: opts.runId,
 			sandbox: opts.sandbox,
 			checkout: opts.checkout,
 			previousSha: state.sha,
@@ -73,8 +105,11 @@ export async function verifyWithFixes(opts: {
 				"The following verification commands failed. Fix the issues so all commands pass.\n\n" +
 				`Work item:\n${opts.workItem}\n\nFailures:\n${verification.failures}`,
 		});
-		state = { summary: fix.summary, sha: fix.sha ?? state.sha };
+		state = {
+			summary: fix.summary,
+			sha: fix.sha ?? state.sha,
+		};
 	}
 
-	return { passed: true, state };
+	return { passed: true, state, failures: "", results: lastResults };
 }

@@ -5,7 +5,10 @@ import type { Tool, ToolResult } from "./types.js";
 
 const applyPatchSchema = {
 	diff: z.string().describe("A unified diff in `git apply` format."),
-	cwd: z.string().optional().describe("Working directory for the patch. Optional."),
+	cwd: z
+		.string()
+		.optional()
+		.describe("Working directory for the patch. Optional."),
 };
 
 let patchCounter = 0;

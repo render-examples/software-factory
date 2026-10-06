@@ -1,0 +1,28 @@
+{
+  "id": "clear-request-due-dates",
+  "workflow": "triage",
+  "category": "clear-request",
+  "description": "A well-specified feature request should produce a spec without asking questions.",
+  "fixture": {
+    "issueTitle": "Add due dates to todos",
+    "issueBody": "Add an optional due date field to each todo item. The API should accept an ISO-8601 date string in the `dueDate` field when creating or updating a todo. The UI should show the due date next to each item and highlight overdue items in red. Items with no due date should display normally.",
+    "labels": ["factory:full-run"]
+  },
+  "rubric": [
+    {
+      "id": "RC-1",
+      "description": "Triage returns 'draft' rather than 'ask' for a clear request",
+      "severity": "must"
+    },
+    {
+      "id": "RC-2",
+      "description": "The spec contains at least one acceptance criterion",
+      "severity": "must"
+    },
+    {
+      "id": "RC-3",
+      "description": "The spec mentions the dueDate API field",
+      "severity": "should"
+    }
+  ]
+}

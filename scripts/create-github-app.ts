@@ -51,7 +51,7 @@ const manifest = {
 	hook_attributes: { url: `${gatewayUrl}/webhooks/github`, active: true },
 	redirect_url: REDIRECT,
 	public: false,
-	default_events: ["issues"],
+	default_events: ["issues", "issue_comment", "pull_request"],
 	default_permissions: {
 		metadata: "read",
 		contents: "write",
@@ -160,7 +160,9 @@ console.log(`  ${green("✓")} ${credentials.slug} (id ${credentials.id})`);
 console.log(`\n${bold("Install it, then find the installation ID:")}`);
 console.log(`  ${credentials.html_url}/installations/new`);
 console.log(
-	dim("\nAfter installing, the URL ends in /installations/<id> — that is the ID."),
+	dim(
+		"\nAfter installing, the URL ends in /installations/<id> — that is the ID.",
+	),
 );
 
 const installationId = await ask("\nInstallation ID");
@@ -171,11 +173,13 @@ GITHUB_APP_ID=${credentials.id}
 GITHUB_APP_INSTALLATION_ID=${installationId}
 GITHUB_APP_PRIVATE_KEY=${Buffer.from(credentials.pem).toString("base64")}
 `);
-console.log(dim("The private key is base64-encoded so it survives as a single-line variable."));
+console.log(
+	dim(
+		"The private key is base64-encoded so it survives as a single-line variable.",
+	),
+);
 
 heading("Set this on the gateway");
 console.log(`\nGITHUB_WEBHOOK_SECRET=${credentials.webhook_secret}\n`);
-console.log(
-	yellow("Remove GITHUB_TOKEN once the App works — otherwise nothing changes, since the App takes precedence."),
-);
+console.log(yellow("GitHub App authentication is required — no PAT fallback."));
 console.log(dim("\nVerify with: npm run doctor"));

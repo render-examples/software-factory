@@ -4,15 +4,32 @@ export {
 	type Implementation,
 	type SelfReview,
 } from "./implementation.js";
-export { workflowInputSchema, type WorkflowInput } from "./input.js";
-export type { WorkflowResult } from "./result.js";
 export {
-	findingSchema,
-	judgeSchema,
-	reviewerOutputSchema,
-	type Finding,
-	type JudgeVerdict,
-	type Review,
-	type ReviewerOutput,
+	specialistFindingSchema,
+	specialistOutputSchema,
+	synthesisCommentSchema,
+	synthesisSchema,
+	type SpecialistFinding,
+	type SpecialistOutput,
+	type Synthesis,
+	type SynthesisComment,
 } from "./review.js";
-export { triageSchema, type Triage } from "./triage.js";
+export {
+	acceptanceCriterionSchema,
+	specNotesSchema,
+	specSchema,
+	validateSpec,
+	type AcceptanceCriterion,
+	type Spec,
+	type SpecNotes,
+	type SpecValidation,
+} from "./spec.js";
+export { triageDecisionSchema, type TriageDecision } from "./triage.js";
+export {
+	uxResultSchema,
+	uxTestOutputSchema,
+	uxVerdictSchema,
+	type UxResult,
+	type UxTestOutput,
+	type UxVerdict,
+} from "./ux.js";

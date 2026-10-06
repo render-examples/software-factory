@@ -1,13 +1,5 @@
 import { createSign } from "node:crypto";
-
-/**
- * Two ways to authenticate, chosen by which variables are set.
- *
- * A GitHub App is preferred: work is attributed to the app rather than to a
- * maintainer, and installation tokens expire after an hour. A fine-grained PAT
- * in GITHUB_TOKEN is the fallback, which is quicker to set up but makes every
- * comment and pull request look like it came from the token's owner.
- */
+import { repository } from "../config/index.js";
 
 const API = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -18,19 +10,35 @@ interface AppCredentials {
 	installationId: string;
 }
 
-let cached: { token: string; expiresAt: number } | undefined;
+export type PermissionSet = Record<string, string>;
 
-function appCredentials(): AppCredentials | null {
+export interface GitHubTokenOptions {
+	permissions?: PermissionSet;
+	fetch?: typeof fetch;
+}
+
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function appCredentials(): AppCredentials {
 	const appId = process.env.GITHUB_APP_ID?.trim();
 	const privateKey = process.env.GITHUB_APP_PRIVATE_KEY?.trim();
 	const installationId = process.env.GITHUB_APP_INSTALLATION_ID?.trim();
-	if (!appId || !privateKey || !installationId) return null;
-	return { appId, privateKey: normalizePrivateKey(privateKey), installationId };
+	if (!appId || !privateKey || !installationId) {
+		throw new Error(
+			"GitHub App credentials required. Set GITHUB_APP_ID, " +
+				"GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID.",
+		);
+	}
+	return {
+		appId,
+		privateKey: normalizePrivateKey(privateKey),
+		installationId,
+	};
 }
 
 /**
- * Accept the PEM as-is, with escaped newlines, or base64-encoded — env vars
- * make real newlines awkward and every deployment tool escapes them
+ * Accept the PEM as-is, with escaped newlines, or base64-encoded — env
+ * vars make real newlines awkward and every deployment tool escapes them
  * differently.
  */
 function normalizePrivateKey(value: string): string {
@@ -42,11 +50,9 @@ function base64url(value: string | Buffer): string {
 	return Buffer.from(value).toString("base64url");
 }
 
-/** Short-lived JWT proving we hold the app's private key. */
 function appJwt({ appId, privateKey }: AppCredentials): string {
 	const now = Math.floor(Date.now() / 1000);
 	const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-	// Backdated for clock skew; GitHub rejects an exp more than 10 minutes out.
 	const payload = base64url(
 		JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }),
 	);
@@ -59,7 +65,16 @@ function appJwt({ appId, privateKey }: AppCredentials): string {
 async function installationToken(
 	credentials: AppCredentials,
 	fetchImpl: typeof fetch,
+	options?: { permissions?: PermissionSet },
 ): Promise<{ token: string; expiresAt: number }> {
+	const repo = repository();
+	const body: Record<string, unknown> = {
+		repositories: [repo.repo],
+	};
+	if (options?.permissions) {
+		body.permissions = options.permissions;
+	}
+
 	const response = await fetchImpl(
 		`${API}/app/installations/${credentials.installationId}/access_tokens`,
 		{
@@ -69,55 +84,64 @@ async function installationToken(
 				Accept: "application/vnd.github+json",
 				"X-GitHub-Api-Version": "2022-11-28",
 				"User-Agent": "render-factory",
+				"Content-Type": "application/json",
 			},
+			body: JSON.stringify(body),
 			signal: AbortSignal.timeout(15_000),
 		},
 	);
 
 	if (!response.ok) {
-		const body = await response.text().catch(() => "");
+		const text = await response.text().catch(() => "");
 		throw new Error(
-			`GitHub App token exchange failed (${response.status}): ${body.slice(0, 300)}`,
+			`GitHub App token exchange failed (${response.status}): ${text.slice(0, 300)}`,
 		);
 	}
 
-	const body = (await response.json()) as { token: string; expires_at: string };
-	return { token: body.token, expiresAt: Date.parse(body.expires_at) };
+	const result = (await response.json()) as {
+		token: string;
+		expires_at: string;
+	};
+	return {
+		token: result.token,
+		expiresAt: Date.parse(result.expires_at),
+	};
+}
+
+function cacheKey(permissions?: PermissionSet): string {
+	if (!permissions) return "__default__";
+	return Object.entries(permissions)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([k, v]) => `${k}:${v}`)
+		.join(",");
 }
 
 /**
- * The token to authenticate with. Installation tokens are cached and renewed
- * before they expire, because a run can outlive the one-hour lifetime.
+ * Mint a GitHub installation token scoped to the target repository.
+ * Tokens are cached per permission set and renewed before expiry.
  */
 export async function githubToken(
-	fetchImpl: typeof fetch = fetch,
+	opts: GitHubTokenOptions = {},
 ): Promise<string> {
-	const credentials = appCredentials();
+	const fetchImpl = opts.fetch ?? fetch;
+	const { permissions } = opts;
 
-	if (!credentials) {
-		const pat = process.env.GITHUB_TOKEN?.trim();
-		if (!pat) {
-			throw new Error(
-				"No GitHub credentials. Set GITHUB_TOKEN, or GITHUB_APP_ID, " +
-					"GITHUB_APP_PRIVATE_KEY, and GITHUB_APP_INSTALLATION_ID.",
-			);
-		}
-		return pat;
-	}
+	const credentials = appCredentials();
+	const key = cacheKey(permissions);
+	const cached = tokenCache.get(key);
 
 	if (cached && cached.expiresAt - REFRESH_MARGIN_MS > Date.now()) {
 		return cached.token;
 	}
-	cached = await installationToken(credentials, fetchImpl);
-	return cached.token;
-}
 
-/** True when the factory acts as a GitHub App rather than a user. */
-export function usingGitHubApp(): boolean {
-	return appCredentials() !== null;
+	const result = await installationToken(credentials, fetchImpl, {
+		permissions,
+	});
+	tokenCache.set(key, result);
+	return result.token;
 }
 
 /** Test seam. */
 export function resetTokenCache(): void {
-	cached = undefined;
+	tokenCache.clear();
 }

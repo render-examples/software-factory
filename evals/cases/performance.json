@@ -1,0 +1,24 @@
+{
+  "id": "performance-count-endpoint",
+  "workflow": "pr-review",
+  "category": "performance",
+  "description": "The performance specialist should flag if a count endpoint serializes the full list instead of returning a count.",
+  "fixture": {
+    "issueTitle": "Speed up todo loading",
+    "issueBody": "Add a `count` query parameter to GET /api/todos that returns only the total number of todos as `{ \"count\": N }` instead of the full list.",
+    "labels": ["factory:pr-review"],
+    "prDiff": "diff --git a/server.js b/server.js\n--- a/server.js\n+++ b/server.js\n@@ -30,6 +30,12 @@ async function handler(req, res) {\n \tif (url.pathname === \"/api/todos\" && req.method === \"GET\") {\n+\t\tif (url.searchParams.get(\"count\") !== null) {\n+\t\t\tconst serialized = JSON.stringify(todos);\n+\t\t\tconst parsed = JSON.parse(serialized);\n+\t\t\tjsonResponse(res, 200, { count: parsed.length });\n+\t\t\treturn;\n+\t\t}\n \t\tjsonResponse(res, 200, todos);\n \t\treturn;\n \t}"
+  },
+  "rubric": [
+    {
+      "id": "PR-1",
+      "description": "The performance specialist flags the unnecessary serialize-then-parse round trip",
+      "severity": "must"
+    },
+    {
+      "id": "PR-2",
+      "description": "The review suggests using todos.length directly",
+      "severity": "should"
+    }
+  ]
+}
