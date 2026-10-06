@@ -15,6 +15,8 @@ export interface ToolContext {
 export interface ToolResult {
 	readonly content: string;
 	readonly isError?: boolean;
+	/** Optional images returned alongside text (e.g. screenshots). */
+	readonly images?: ReadonlyArray<{ png: Buffer }>;
 }
 
 export interface Tool<Schema extends ZodShape = ZodShape> {
