@@ -461,7 +461,7 @@ This is the demo's `dispatch.ts` logic, moved out of the request path.
 
 ### 6.13 `app/sandbox/` and `app/workspaces/` (new)
 
-- `app/sandbox/` remains the thin adapter, updated for SDK 1.x, with `download` added. `createSandbox` passes `pool.network` to the platform when it creates a sandbox (D-13, O-12).
+- `app/sandbox/` remains the thin adapter, updated for SDK 1.x, with `download` added. `createSandbox` passes `sandbox.network` to the platform when it creates a sandbox (D-13, O-12).
 - `app/workspaces/` replaces direct use of `createSandbox` with per-run sandboxes restored from snapshots (§9). Its parts:
   - `workspace.ts`: `openWorkspace(runId, ref)` and `closeWorkspace(runId)`;
   - `snapshot.ts`: `ensureSnapshot()` under an advisory lock;
@@ -511,7 +511,7 @@ This is the demo's `dispatch.ts` logic, moved out of the request path.
 |---|---|
 | `app/src/workflows.ts` | Register all agent tasks, the specialists, and the three workflows |
 | `app/src/dispatcher.ts`, `app/src/maintenance.ts` | New |
-| `scripts/doctor.ts` | **Keep:** `checkGitHub`, `checkWebhook`, `checkPostgres`, `checkTasks`. **Add:** config validation; the App's installation and permissions (§13.2); webhook events for issues, issue comments, and pull requests; all labels; dispatcher environment; pool health; migration version; preview configuration for the target repository. |
+| `scripts/doctor.ts` | **Keep:** `checkGitHub`, `checkWebhook`, `checkPostgres`, `checkTasks`. **Add:** config validation; the App's installation and permissions (§13.2); webhook events for issues, issue comments, and pull requests; all labels; dispatcher environment; the current snapshot and its expiry; migration version; preview configuration for the target repository. |
 | `scripts/setup-github.ts` | Subscribe the webhook to three events. Create all trigger labels. |
 | `scripts/create-github-app.ts` | Request the permissions and events in §13.2 |
 | `scripts/eval.ts` | New (§15.4) |
@@ -799,7 +799,7 @@ A test fails if code reads a variable that is not listed in `.env.example`.
 | Level | Includes |
 |---|---|
 | Trusted | Factory code and config, Render, the GitHub API |
-| Semi-trusted | The target repository's base branch. Its install scripts run during pool preparation, at the same trust level as CI. |
+| Semi-trusted | The target repository's base branch. Its install scripts run in the snapshot builder, at the same trust level as CI. |
 | Untrusted | Issue, PR, and comment text; PR head code, including from forks; agent output; agent-written code; preview app content |
 
 ### 13.2 GitHub App permissions
@@ -832,7 +832,7 @@ Webhook events: Issues, Issue comment, and Pull request.
 
 ### 13.4 Accepted risks
 
-- **Egress follows the configured native policy (D-13).** If the policy allows wide outbound access, a prompt-injected agent with `exec` could send repository source to an outside server. The sandbox holds no credentials to steal, and only users with write permission can start runs, but issue text and PR code are untrusted inputs. Restricting `pool.network` to the destinations in §9 limits this.
+- **Egress follows the configured native policy (D-13).** If the policy allows wide outbound access, a prompt-injected agent with `exec` could send repository source to an outside server. The sandbox holds no credentials to steal, and only users with write permission can start runs, but issue text and PR code are untrusted inputs. Restricting `sandbox.network` to the destinations in §9 limits this.
 - **PR head code runs**, including from forks, inside credential-free sandboxes.
 - **Public artifact links** expose that one artifact to anyone who has the link.
 - **One database role (D-23).** A compromised service can read and write every table.
@@ -944,7 +944,7 @@ Add `npm run test:integration`, which CI already calls, against the CI Postgres 
 - the one-active-run-per-subject index;
 - dispatcher claiming under concurrency;
 - `finishRun` with a follow-up in one transaction;
-- pool claims with `SKIP LOCKED`;
+- concurrent snapshot builds taking the advisory lock once;
 - artifact caps.
 
 ### 15.3 Fakes
@@ -1018,8 +1018,8 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 | D-10 | Claude and OpenAI runners behind `AgentRunner` | 10.1 |
 | D-11 | The gateway only persists; a small dispatcher polls `runs` and starts tasks | 6.6 |
 | D-12 | Each run creates its sandbox from the current repository snapshot; the maintenance cron keeps the snapshot current | 9 |
-| D-13 | Sandbox egress is set by Render's native network policy, configured in `pool.network`; the factory adds no isolation machinery | 9, 13.4 |
-| D-14 | Triage researches in a pool sandbox | 4.2 |
+| D-13 | Sandbox egress is set by Render's native network policy, configured in `sandbox.network`; the factory adds no isolation machinery | 9, 13.4 |
+| D-14 | Triage researches in its own sandbox created from the snapshot | 4.2 |
 | D-15 | Specs are versioned in Postgres and shown as one issue comment, edited in place | 5 |
 | D-16 | Spec-to-PR has a single implementer, config-driven verification with 2 repair rounds, and a light self-review | 4.3 |
 | D-17 | Publishing uses the Git Data API from the Workflows service, with tree verification and a draft PR | 8 |
@@ -1077,6 +1077,6 @@ These are deliberately not part of 0.1.0. None of them is needed to implement th
 | O-7 | Which App permission does the collaborator-permission endpoint require? | 4.1, 13.2 |
 | O-8 | Do background processes (the dev server, the Playwright driver) survive between sandbox exec calls? | 4.4, 10.3 |
 | O-9 | What are the Blueprint fields for `workflow` services, and the `fromService` slug property? | 14.1 |
-| O-10 | How does a Render cron behave when runs overlap, and what is its maximum run time? Pool preparation runs inside it. | 14.1 |
+| O-10 | How does a Render cron behave when runs overlap, and what is its maximum run time? Snapshot builds run inside it. | 14.1 |
 | O-11 | What are the Workflows limits on concurrent child tasks? Specialists run in parallel. | 4.4 |
 | O-12 | SDK 1.x returns `networkPolicy` on both `create` and `get`; `openWorkspace` checks it after creation and refuses wider policies. `sandbox.network` in config passes the value through unchanged. | 9, 12.1 |
