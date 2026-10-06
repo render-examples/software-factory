@@ -14,7 +14,7 @@ import {
 	type CreateRunInput,
 	type RunRecord,
 } from "../store/index.js";
-import { point, startSpan } from "../telemetry/index.js";
+import { point, startSpan, type SpanHandle } from "../telemetry/index.js";
 import { STATUS, statusLabeler, type FactoryStatus } from "./labels.js";
 
 const runIdSchema = z.object({ runId: z.string().min(1).max(300) });
@@ -102,40 +102,68 @@ export function runWorkflow(
 			const gh = githubFromEnv();
 			const setStatus = statusLabeler(gh, repo, run.subjectNumber);
 
+			// Track the open stage span so it can be closed when the next
+			// stage starts or when the handler finishes.
+			let activeStageSpan: SpanHandle | undefined;
+
+			async function endActiveStageSpan(): Promise<void> {
+				if (activeStageSpan) {
+					const span = activeStageSpan;
+					activeStageSpan = undefined;
+					await span.end();
+				}
+			}
+
 			try {
 				const trigger = run.trigger as Record<string, unknown> | null;
+				const triggerLabel = trigger?.label as string | undefined;
 				const actorLogin = (trigger?.actor as { login?: string })?.login;
-				if (actorLogin) {
-					const permission = await gh.getPermission(repo, actorLogin);
-					const required = factoryConfig.minimumPermission;
-					if (
-						(PERMISSION_RANK[permission] ?? 0) <
-						(PERMISSION_RANK[required] ?? 0)
-					) {
-						const commentBody = `This run was rejected because @${actorLogin} does not have the required \`${required}\` permission on this repository (current: \`${permission}\`).`;
-						await ensureComment(
-							gh,
-							repo,
-							run,
-							`${runId.slice(0, 64)}-rejected`,
-							commentBody,
-						);
-						await finishRun(runId, "completed", {
-							outcome: "rejected",
-							summary: `Insufficient permission: ${permission} < ${required}`,
-						});
-						await point(runId, "run.rejected", {
-							actor: actorLogin,
-							permission,
-							required,
-						});
-						return { status: "rejected" };
+
+				// Fail closed: no actor → rejected.
+				if (!actorLogin) {
+					await finishRun(runId, "completed", {
+						outcome: "rejected",
+						summary: "No actor login in the trigger",
+					});
+					if (triggerLabel) {
+						await removeLabelQuietly(gh, repo, run, triggerLabel);
 					}
+					await setStatus(STATUS.failed);
+					await point(runId, "run.rejected", { reason: "no_actor" });
+					return { status: "rejected" };
 				}
 
-				if (trigger?.label && trigger.event !== "issue_comment") {
+				const permission = await gh.getPermission(repo, actorLogin);
+				const required = factoryConfig.minimumPermission;
+				if (
+					(PERMISSION_RANK[permission] ?? 0) < (PERMISSION_RANK[required] ?? 0)
+				) {
+					const commentBody = `This run was rejected because @${actorLogin} does not have the required \`${required}\` permission on this repository (current: \`${permission}\`).`;
+					await ensureComment(
+						gh,
+						repo,
+						run,
+						`${runId.slice(0, 64)}-rejected`,
+						commentBody,
+					);
+					await finishRun(runId, "completed", {
+						outcome: "rejected",
+						summary: `Insufficient permission: ${permission} < ${required}`,
+					});
+					if (triggerLabel) {
+						await removeLabelQuietly(gh, repo, run, triggerLabel);
+					}
+					await setStatus(STATUS.failed);
+					await point(runId, "run.rejected", {
+						actor: actorLogin,
+						permission,
+						required,
+					});
+					return { status: "rejected" };
+				}
+
+				if (triggerLabel && trigger?.event !== "issue_comment") {
 					const issue = await gh.getIssue(repo, run.subjectNumber);
-					const triggerLabel = trigger.label as string;
 					if (!issue.labels.includes(triggerLabel)) {
 						await finishRun(runId, "completed", {
 							outcome: "trigger_removed",
@@ -150,11 +178,11 @@ export function runWorkflow(
 					run,
 					gh,
 					async stage(stageName: string): Promise<void> {
+						await endActiveStageSpan();
 						await setRunStage(runId, stageName);
-						const span = await startSpan(runId, "stage", {
+						activeStageSpan = await startSpan(runId, "stage", {
 							stage: stageName,
 						});
-						deferred.push(() => span.end());
 					},
 					setStatus,
 					async throwIfCancelled(): Promise<void> {
@@ -170,10 +198,20 @@ export function runWorkflow(
 
 				const result = await handler(lc);
 
+				// End the last stage span before terminal events.
+				await endActiveStageSpan();
+
+				// If the handler provided a follow-up without an actor,
+				// copy the current trigger's actor so the permission check
+				// applies to the human who started the chain.
+				const followUp = result.followUp
+					? ensureFollowUpActor(result.followUp, trigger)
+					: undefined;
+
 				await finishRun(runId, result.status, {
 					outcome: result.outcome,
 					result: result.result,
-					followUp: result.followUp,
+					followUp,
 				});
 
 				if (result.comment) {
@@ -187,14 +225,9 @@ export function runWorkflow(
 				}
 
 				const labelsToRemove =
-					result.removeLabels ??
-					(trigger?.label ? [trigger.label as string] : []);
+					result.removeLabels ?? (triggerLabel ? [triggerLabel] : []);
 				for (const label of labelsToRemove) {
-					await gh
-						.removeLabel(repo, run.subjectNumber, label)
-						.catch((err) =>
-							console.error(`lifecycle: failed to remove label ${label}:`, err),
-						);
+					await removeLabelQuietly(gh, repo, run, label);
 				}
 
 				const terminalLabel = mapOutcomeToStatus(result.outcome);
@@ -208,13 +241,17 @@ export function runWorkflow(
 
 				return result.result ?? { status: result.outcome };
 			} catch (err) {
+				// End the last stage span before error handling.
+				await endActiveStageSpan();
+
+				const trigger = run.trigger as Record<string, unknown> | null;
+				const triggerLabel = trigger?.label as string | undefined;
+
 				if (err instanceof RunCancelled) {
 					await finishRun(runId, "cancelled", {
 						outcome: "cancelled",
 						summary: "Run was cancelled by user",
 					});
-					const trigger = run.trigger as Record<string, unknown> | null;
-					const triggerLabel = trigger?.label as string | undefined;
 					await ensureComment(
 						gh,
 						repo,
@@ -223,11 +260,7 @@ export function runWorkflow(
 						"This run was cancelled.",
 					);
 					if (triggerLabel) {
-						await gh
-							.removeLabel(repo, run.subjectNumber, triggerLabel)
-							.catch((e) =>
-								console.error("lifecycle: failed to remove trigger label:", e),
-							);
+						await removeLabelQuietly(gh, repo, run, triggerLabel);
 					}
 					await setStatus(STATUS.failed);
 					await point(runId, "run.cancelled");
@@ -257,6 +290,11 @@ export function runWorkflow(
 					console.error("lifecycle: failed to post error comment:", commentErr),
 				);
 
+				// Remove the trigger label on failure (§3.4).
+				if (triggerLabel) {
+					await removeLabelQuietly(gh, repo, run, triggerLabel);
+				}
+
 				await setStatus(STATUS.failed);
 				await point(runId, "run.failed", {
 					outcome: "error",
@@ -277,6 +315,19 @@ export function runWorkflow(
 	);
 }
 
+async function removeLabelQuietly(
+	gh: GitHub,
+	repo: { owner: string; repo: string },
+	run: RunRecord,
+	label: string,
+): Promise<void> {
+	await gh
+		.removeLabel(repo, run.subjectNumber, label)
+		.catch((err) =>
+			console.error(`lifecycle: failed to remove label ${label}:`, err),
+		);
+}
+
 async function ensureComment(
 	gh: GitHub,
 	repo: { owner: string; repo: string },
@@ -289,6 +340,24 @@ async function ensureComment(
 	} catch (err) {
 		console.error("lifecycle: failed to post comment:", err);
 	}
+}
+
+/**
+ * If the follow-up run's trigger has no actor, copy the actor from the
+ * current run's trigger so the permission check in the next lifecycle
+ * applies to the human who started the chain.
+ */
+function ensureFollowUpActor(
+	followUp: CreateRunInput,
+	currentTrigger: Record<string, unknown> | null,
+): CreateRunInput {
+	if (!followUp.trigger || !currentTrigger?.actor) return followUp;
+	const followUpTrigger = followUp.trigger as Record<string, unknown>;
+	if (followUpTrigger.actor) return followUp;
+	return {
+		...followUp,
+		trigger: { ...followUpTrigger, actor: currentTrigger.actor },
+	};
 }
 
 function mapOutcomeToStatus(outcome: string): FactoryStatus | undefined {

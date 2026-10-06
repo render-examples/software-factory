@@ -422,6 +422,53 @@ describe("issue comment triggers", () => {
 		});
 		expect(mocks.requestCancel).not.toHaveBeenCalled();
 	});
+
+	it("/factory cancelled is not treated as cancel", async () => {
+		const body = commentPayload({
+			comment: {
+				id: 105,
+				body: "/factory cancelled",
+				author_association: "OWNER",
+				user: { login: "Maintainer", id: 1, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(mocks.requestCancel).not.toHaveBeenCalled();
+		expect(mocks.acceptDelivery).toHaveBeenCalled();
+	});
+
+	it("cancel on a PR comment works", async () => {
+		mocks.findActiveRunForSubject.mockResolvedValue({
+			id: "run-pr-1",
+			status: "running",
+		});
+		const body = commentPayload({
+			issue: {
+				number: 10,
+				labels: [],
+				pull_request: { url: "https://..." },
+			},
+			comment: {
+				id: 106,
+				body: "/factory cancel",
+				author_association: "MEMBER",
+				user: { login: "Maintainer", id: 1, type: "User" },
+			},
+		});
+		const response = await post(body, { event: "issue_comment" });
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			cancel: true,
+			runId: "run-pr-1",
+		});
+		expect(mocks.requestCancel).toHaveBeenCalledWith("run-pr-1");
+		expect(mocks.findActiveRunForSubject).toHaveBeenCalledWith(
+			expect.any(String),
+			"pull_request",
+			10,
+		);
+	});
 });
 
 describe("pull request labeled triggers", () => {

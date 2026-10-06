@@ -5,10 +5,11 @@ import { repository } from "../config/index.js";
 import {
 	acceptDelivery,
 	getCurrentSpec,
+	findActiveRunForSubject,
 	recordDelivery,
 	requestCancel,
-	findActiveRunForSubject,
 } from "../store/index.js";
+import type { SubjectKind } from "../store/index.js";
 import { point } from "../telemetry/index.js";
 import { readBody } from "./body.js";
 import {
@@ -25,10 +26,19 @@ const ALLOWED_AUTHOR_ASSOCIATIONS = new Set([
 	"COLLABORATOR",
 ]);
 
+/**
+ * Build a multiline regex that matches a cancel command on its own line.
+ * The prefix is regex-escaped so `/factory` is matched literally.
+ */
+function buildCancelPattern(prefix: string): RegExp {
+	const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`^\\s*${escaped}\\s+cancel\\s*$`, "m");
+}
+
 export function githubWebhook(): Hono {
 	const repo = repository();
 	const labels = factoryConfig.labels;
-	const commandPrefix = factoryConfig.commandPrefix;
+	const cancelPattern = buildCancelPattern(factoryConfig.commandPrefix);
 	const app = new Hono();
 
 	app.post("/webhooks/github", async (c) => {
@@ -57,7 +67,7 @@ export function githubWebhook(): Hono {
 				deliveryId,
 				repo,
 				labels,
-				commandPrefix,
+				cancelPattern,
 			);
 		}
 		if (event === "pull_request") {
@@ -179,7 +189,7 @@ async function handleIssueCommentEvent(
 	deliveryId: string,
 	repo: ReturnType<typeof repository>,
 	labels: typeof factoryConfig.labels,
-	commandPrefix: string,
+	cancelPattern: RegExp,
 ): Promise<Response> {
 	let parsed: unknown;
 	try {
@@ -194,12 +204,12 @@ async function handleIssueCommentEvent(
 
 	const payload = result.data;
 
+	// Basic filters: must be "created", correct repo, not a bot.
 	if (
 		payload.action !== "created" ||
 		payload.repository.full_name.toLowerCase() !==
 			`${repo.owner}/${repo.repo}`.toLowerCase() ||
-		payload.sender.type === "Bot" ||
-		payload.issue.pull_request !== undefined
+		payload.sender.type === "Bot"
 	) {
 		await recordDelivery({
 			deliveryId,
@@ -207,6 +217,63 @@ async function handleIssueCommentEvent(
 			action: payload.action,
 			outcome: "ignored",
 			detail: { reason: "filter_mismatch" },
+		});
+		return c.json({ ok: true, ignored: true }, 202);
+	}
+
+	const isPr = payload.issue.pull_request !== undefined;
+	const subjectKind: SubjectKind = isPr ? "pull_request" : "issue";
+
+	// Check for cancel command before other filters. This allows
+	// cancel on both issue and PR comments.
+	if (cancelPattern.test(payload.comment.body)) {
+		if (ALLOWED_AUTHOR_ASSOCIATIONS.has(payload.comment.author_association)) {
+			const fullName = `${repo.owner}/${repo.repo}`;
+			const activeRun = await findActiveRunForSubject(
+				fullName,
+				subjectKind,
+				payload.issue.number,
+			);
+			if (activeRun) {
+				await requestCancel(activeRun.id);
+			}
+			await recordDelivery({
+				deliveryId,
+				event: "issue_comment",
+				action: "created",
+				outcome: "accepted",
+				detail: {
+					reason: "cancel_command",
+					runId: activeRun?.id ?? null,
+				},
+			});
+			return c.json(
+				{ ok: true, cancel: true, runId: activeRun?.id ?? null },
+				202,
+			);
+		}
+		// Non-collaborator cancel → ignored.
+		await recordDelivery({
+			deliveryId,
+			event: "issue_comment",
+			action: "created",
+			outcome: "ignored",
+			detail: {
+				reason: "author_association",
+				association: payload.comment.author_association,
+			},
+		});
+		return c.json({ ok: true, ignored: true }, 202);
+	}
+
+	// Only issue comments (not PR comments) proceed to reply routing.
+	if (isPr) {
+		await recordDelivery({
+			deliveryId,
+			event: "issue_comment",
+			action: "created",
+			outcome: "ignored",
+			detail: { reason: "pr_comment_not_cancel" },
 		});
 		return c.json({ ok: true, ignored: true }, 202);
 	}
@@ -234,34 +301,6 @@ async function handleIssueCommentEvent(
 			},
 		});
 		return c.json({ ok: true, ignored: true }, 202);
-	}
-
-	const commentBody = payload.comment.body.trim();
-	const cancelLine = `${commandPrefix} cancel`;
-	if (commentBody.startsWith(cancelLine)) {
-		const fullName = `${repo.owner}/${repo.repo}`;
-		const activeRun = await findActiveRunForSubject(
-			fullName,
-			"issue",
-			payload.issue.number,
-		);
-		if (activeRun) {
-			await requestCancel(activeRun.id);
-		}
-		await recordDelivery({
-			deliveryId,
-			event: "issue_comment",
-			action: "created",
-			outcome: "accepted",
-			detail: {
-				reason: "cancel_command",
-				runId: activeRun?.id ?? null,
-			},
-		});
-		return c.json(
-			{ ok: true, cancel: true, runId: activeRun?.id ?? null },
-			202,
-		);
 	}
 
 	const issueLabels = payload.issue.labels.map((l) => l.name);

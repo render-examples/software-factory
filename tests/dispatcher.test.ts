@@ -12,9 +12,6 @@ vi.mock("../app/store/index.js", () => ({
 	claimForDispatch: mocks.claimForDispatch,
 	finishRun: mocks.finishRun,
 	requeueForDispatch: mocks.requeueForDispatch,
-}));
-
-vi.mock("../app/store/runs.js", () => ({
 	getRun: mocks.getRun,
 }));
 

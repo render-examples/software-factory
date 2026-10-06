@@ -27,9 +27,6 @@ vi.mock("../app/store/index.js", () => ({
 	heartbeat: mocks.heartbeat,
 	finishRun: mocks.finishRun,
 	setRunStage: mocks.setRunStage,
-}));
-
-vi.mock("../app/store/events.js", () => ({
 	appendEvent: mocks.appendEvent,
 }));
 
@@ -156,6 +153,79 @@ describe("lifecycle", () => {
 		});
 	});
 
+	it("removes the trigger label on rejection", async () => {
+		mocks.getPermission.mockResolvedValue("read");
+
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const workflow = runWorkflow(
+			"test-wf",
+			{},
+			vi.fn(),
+		) as unknown as TaskShape;
+
+		await workflow.handler({}, { runId: "run-1" });
+
+		expect(mocks.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:spec-approved",
+		);
+	});
+
+	it("rejects when trigger has no actor (fail closed)", async () => {
+		mocks.getRun.mockResolvedValue(
+			makeRun({
+				trigger: {
+					deliveryId: "del-1",
+					event: "issues",
+					action: "labeled",
+					label: "factory:spec-approved",
+				},
+			}),
+		);
+
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const handler = vi.fn();
+		const workflow = runWorkflow(
+			"test-wf",
+			{},
+			handler,
+		) as unknown as TaskShape;
+
+		await workflow.handler({}, { runId: "run-1" });
+
+		expect(handler).not.toHaveBeenCalled();
+		expect(mocks.finishRun).toHaveBeenCalledWith("run-1", "completed", {
+			outcome: "rejected",
+			summary: "No actor login in the trigger",
+		});
+		expect(mocks.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:spec-approved",
+		);
+	});
+
+	it("maps GitHub 404 on permission check to rejected", async () => {
+		mocks.getPermission.mockResolvedValue("none");
+
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const handler = vi.fn();
+		const workflow = runWorkflow(
+			"test-wf",
+			{},
+			handler,
+		) as unknown as TaskShape;
+
+		await workflow.handler({}, { runId: "run-1" });
+
+		expect(handler).not.toHaveBeenCalled();
+		expect(mocks.finishRun).toHaveBeenCalledWith("run-1", "completed", {
+			outcome: "rejected",
+			summary: expect.stringContaining("none"),
+		});
+	});
+
 	it("checks trigger label is still present", async () => {
 		mocks.getIssue.mockResolvedValue({
 			number: 42,
@@ -247,6 +317,21 @@ describe("lifecycle", () => {
 		});
 	});
 
+	it("removes the trigger label on error (failed)", async () => {
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const workflow = runWorkflow("test-wf", {}, async () => {
+			throw new Error("boom");
+		}) as unknown as TaskShape;
+
+		await expect(workflow.handler({}, { runId: "run-1" })).rejects.toThrow();
+
+		expect(mocks.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:spec-approved",
+		);
+	});
+
 	it("creates a follow-up run when specified", async () => {
 		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
 		const workflow = runWorkflow("test-wf", {}, async () => ({
@@ -271,5 +356,69 @@ describe("lifecycle", () => {
 				workflow: "triage",
 			}),
 		});
+	});
+
+	it("follow-up inherits actor from the current trigger", async () => {
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const workflow = runWorkflow("test-wf", {}, async () => ({
+			status: "completed" as const,
+			outcome: "asked",
+			followUp: {
+				id: "follow-up-2",
+				repo: "jacobprall/render-factory-sample",
+				subjectKind: "issue" as const,
+				subjectNumber: 42,
+				workflow: "triage",
+				trigger: {
+					deliveryId: "del-2",
+					event: "issue_comment",
+					action: "created",
+				},
+			},
+		})) as unknown as TaskShape;
+
+		await workflow.handler({}, { runId: "run-1" });
+
+		const finishCall = mocks.finishRun.mock.calls[0];
+		const followUpTrigger = finishCall[2].followUp.trigger;
+		expect(followUpTrigger.actor).toEqual({ login: "Maintainer", id: 1 });
+	});
+
+	it("ends stage spans when the next stage starts", async () => {
+		const spanEvents: Array<{
+			type: string;
+			phase: string;
+			stage?: string;
+		}> = [];
+		mocks.appendEvent.mockImplementation(
+			(input: { type: string; phase: string; stage?: string }) => {
+				spanEvents.push({
+					type: input.type,
+					phase: input.phase,
+					stage: input.stage,
+				});
+				return Promise.resolve("1");
+			},
+		);
+
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const workflow = runWorkflow("test-wf", {}, async (lc) => {
+			await lc.stage("intake");
+			await lc.stage("implement");
+			await lc.stage("verify");
+			return { status: "completed" as const, outcome: "done" };
+		}) as unknown as TaskShape;
+
+		await workflow.handler({}, { runId: "run-1" });
+
+		const stageSpans = spanEvents.filter((e) => e.type === "stage");
+		expect(stageSpans).toEqual([
+			{ type: "stage", phase: "start", stage: "intake" },
+			{ type: "stage", phase: "end", stage: "intake" },
+			{ type: "stage", phase: "start", stage: "implement" },
+			{ type: "stage", phase: "end", stage: "implement" },
+			{ type: "stage", phase: "start", stage: "verify" },
+			{ type: "stage", phase: "end", stage: "verify" },
+		]);
 	});
 });
