@@ -1,7 +1,7 @@
-import type { Issue, IssueComment, RepoSnapshot } from "../github/index.js";
+import type { Issue, IssueComment } from "../github/index.js";
+import type { Spec } from "../contracts/index.js";
 
 const MAX_ISSUE_CHARS = 12_000;
-const MAX_BRIEF_CHARS = 8_000;
 
 /** Flatten an issue and its comments into one bounded work item string. */
 export function workItem(issue: Issue, comments: IssueComment[]): string {
@@ -15,27 +15,53 @@ export function workItem(issue: Issue, comments: IssueComment[]): string {
 	return sections.join("\n").slice(0, MAX_ISSUE_CHARS);
 }
 
-/**
- * The repository, described for an agent that has no checkout.
- *
- * Triage gates the run before a sandbox exists, and without this it treats
- * every fact about the codebase as a missing requirement and asks the
- * maintainer about it.
- */
-export function repoBrief(fullName: string, snapshot: RepoSnapshot): string {
-	const sections = [
-		`# Repository: ${fullName}`,
-		`Default branch: ${snapshot.defaultBranch}`,
-		"",
-		snapshot.truncated
-			? `## Files (first ${snapshot.paths.length}, truncated)`
-			: `## Files (${snapshot.paths.length})`,
-		...snapshot.paths,
-	];
+/** Render a spec as the work item for the implementer. */
+export function specWorkItem(spec: Spec): string {
+	const sections: string[] = [];
 
-	for (const file of snapshot.files) {
-		sections.push("", `## ${file.path}`, file.content);
+	sections.push(`# ${spec.title}`);
+	sections.push("");
+	sections.push(spec.summary);
+	sections.push("");
+	sections.push("## Problem");
+	sections.push(spec.problem);
+	sections.push("");
+	sections.push("## Goals");
+	for (const goal of spec.goals) {
+		sections.push(`- ${goal}`);
+	}
+	if (spec.nonGoals.length > 0) {
+		sections.push("");
+		sections.push("## Non-goals");
+		for (const ng of spec.nonGoals) {
+			sections.push(`- ${ng}`);
+		}
+	}
+	sections.push("");
+	sections.push("## Acceptance criteria");
+	for (const ac of spec.acceptanceCriteria) {
+		sections.push(`- **${ac.id}**: ${ac.text} (${ac.verification})`);
+	}
+	sections.push("");
+	sections.push("## Approach");
+	sections.push(spec.approach);
+	if (spec.affectedAreas.length > 0) {
+		sections.push("");
+		sections.push("## Affected areas");
+		for (const area of spec.affectedAreas) {
+			sections.push(`- \`${area.path}\`: ${area.change}`);
+		}
+	}
+	sections.push("");
+	sections.push("## Test plan");
+	sections.push(spec.testPlan);
+	if (spec.risks.length > 0) {
+		sections.push("");
+		sections.push("## Risks");
+		for (const risk of spec.risks) {
+			sections.push(`- ${risk}`);
+		}
 	}
 
-	return sections.join("\n").slice(0, MAX_BRIEF_CHARS);
+	return sections.join("\n");
 }

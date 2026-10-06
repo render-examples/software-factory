@@ -29,20 +29,6 @@ export interface RawPull {
 	head: { ref: string; sha: string };
 }
 
-export interface RawRepo {
-	default_branch: string;
-}
-
-export interface RawTree {
-	truncated?: boolean;
-	tree?: { path: string; type: string }[];
-}
-
-export interface RawContent {
-	content?: string;
-	encoding?: string;
-}
-
 export function toIssue(raw: RawIssue): Issue {
 	return {
 		number: raw.number,
