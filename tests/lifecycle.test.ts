@@ -384,6 +384,36 @@ describe("lifecycle", () => {
 		expect(followUpTrigger.actor).toEqual({ login: "Maintainer", id: 1 });
 	});
 
+	it("handles budget exceeded as completed with budget_exceeded outcome", async () => {
+		const { runWorkflow } = await import("../app/workflows/lifecycle.js");
+		const workflow = runWorkflow("test-wf", {}, async () => {
+			throw new Error(
+				"[BUDGET_EXCEEDED] Run run-1 has spent $20.0500, which meets or exceeds the $20.00 per-run limit",
+			);
+		}) as unknown as TaskShape;
+
+		const result = await workflow.handler({}, { runId: "run-1" });
+		expect(result).toEqual({ status: "budget_exceeded" });
+
+		expect(mocks.finishRun).toHaveBeenCalledWith("run-1", "completed", {
+			outcome: "budget_exceeded",
+			summary: expect.stringContaining("BUDGET_EXCEEDED"),
+		});
+
+		expect(mocks.ensureIssueComment).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			expect.stringContaining("budget"),
+			expect.stringContaining("per-run cost budget"),
+		);
+
+		expect(mocks.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:spec-approved",
+		);
+	});
+
 	it("ends stage spans when the next stage starts", async () => {
 		const spanEvents: Array<{
 			type: string;

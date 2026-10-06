@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { type TaskContext, task } from "@renderinc/sdk/workflows";
 import { factoryConfig } from "../../factory.config.js";
 import { modelFor } from "../config/index.js";
@@ -10,8 +9,9 @@ import {
 	type RunnerUsage,
 } from "../runners/index.js";
 import { connectSandbox } from "../sandbox/index.js";
-import { putArtifact, appendEvent } from "../store/index.js";
+import { putArtifact } from "../store/index.js";
 import { addRunCost, getRunCost } from "../store/index.js";
+import { startSpan, point } from "../telemetry/index.js";
 import { z } from "zod";
 import { BudgetExceededError } from "./errors.js";
 
@@ -60,13 +60,8 @@ export function agentTask(agent: Agent) {
 			const runnerName = agent.runner ?? factoryConfig.agents.runner;
 			const model = modelFor(agent.model, runnerName);
 			const tools = agent.tools ?? [];
-			const spanId = randomUUID();
 
-			await emitEvent({
-				runId,
-				type: "agent.run",
-				spanId,
-				phase: "start",
+			const span = await startSpan(runId, "agent.run", {
 				payload: {
 					agentId: agent.id,
 					runner: runner.name,
@@ -89,19 +84,13 @@ export function agentTask(agent: Agent) {
 
 				await safeAddCost(runId, usd.amount);
 
-				await emitEvent({
-					runId,
-					type: "agent.run",
-					spanId,
-					phase: "end",
-					payload: {
-						agentId: agent.id,
-						runner: runner.name,
-						model,
-						turns: result.turns,
-					},
+				await span.end({
+					agentId: agent.id,
+					runner: runner.name,
+					model,
+					turns: result.turns,
 				});
-				await emitCostEvent(runId, agent.id, result.usage, usd);
+				await emitCostPoint(runId, agent.id, result.usage, usd);
 
 				await storeTranscript(runId, result.transcript);
 
@@ -123,20 +112,14 @@ export function agentTask(agent: Agent) {
 				if (usage) {
 					const usd = computeCost(model, usage);
 					await safeAddCost(runId, usd.amount);
-					await emitCostEvent(runId, agent.id, usage, usd);
+					await emitCostPoint(runId, agent.id, usage, usd);
 				}
 
-				await emitEvent({
-					runId,
-					type: "agent.run",
-					spanId,
-					phase: "end",
-					payload: {
-						agentId: agent.id,
-						runner: runner.name,
-						model,
-						error: true,
-					},
+				await span.end({
+					agentId: agent.id,
+					runner: runner.name,
+					model,
+					error: true,
 				});
 
 				throw err;
@@ -180,39 +163,20 @@ async function safeAddCost(runId: string, usd: number): Promise<void> {
 	}
 }
 
-async function emitEvent(input: {
-	runId: string;
-	type: string;
-	spanId?: string;
-	phase?: "start" | "end" | "point";
-	payload?: Record<string, unknown>;
-}): Promise<void> {
-	try {
-		await appendEvent(input);
-	} catch (err) {
-		console.error(`Failed to emit ${input.type} event:`, err);
-	}
-}
-
-async function emitCostEvent(
+async function emitCostPoint(
 	runId: string,
 	agentId: string,
 	usage: RunnerUsage,
 	usd: CostResult,
 ): Promise<void> {
-	await emitEvent({
-		runId,
-		type: "agent.cost",
-		phase: "point",
-		payload: {
-			agentId,
-			inputTokens: usage.inputTokens,
-			outputTokens: usage.outputTokens,
-			cacheReadTokens: usage.cacheReadTokens,
-			cacheWriteTokens: usage.cacheWriteTokens,
-			usd: usd.amount,
-			estimated: usd.estimated,
-		},
+	await point(runId, "agent.cost", {
+		agentId,
+		inputTokens: usage.inputTokens,
+		outputTokens: usage.outputTokens,
+		cacheReadTokens: usage.cacheReadTokens,
+		cacheWriteTokens: usage.cacheWriteTokens,
+		usd: usd.amount,
+		estimated: usd.estimated,
 	});
 }
 

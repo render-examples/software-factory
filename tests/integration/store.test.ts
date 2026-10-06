@@ -723,17 +723,13 @@ describe("addRunCost atomicity", () => {
 			[runId],
 		);
 
-		const { addRunCost, getRunCost } = await import(
-			"../../app/store/costs.js"
-		);
+		const { addRunCost, getRunCost } = await import("../../app/store/costs.js");
 
 		const increment = 0.005;
 		const concurrency = 20;
 
 		await Promise.all(
-			Array.from({ length: concurrency }, () =>
-				addRunCost(runId, increment),
-			),
+			Array.from({ length: concurrency }, () => addRunCost(runId, increment)),
 		);
 
 		const total = await getRunCost(runId);
