@@ -1,36 +1,92 @@
-# The gateway and its database.
-#
-# The Workflows service is not created here — Render Workflows services are
-# created separately with `npm run start:workflows`. Give it the same
-# DATABASE_URL (the database's internal connection string) as the gateway.
-
 databases:
-  - name: render-factory-db
+  - name: factory-db
+    region: oregon
     plan: basic-256mb
 
 services:
   - type: web
-    name: render-factory-gateway
+    name: factory-gateway
+    region: oregon
     runtime: docker
     plan: starter
-    # Applies app/sql before any new instance serves traffic.
     preDeployCommand: npm run db:migrate
     healthCheckPath: /ready
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: render-factory-db
+          name: factory-db
           property: connectionString
-      - key: FACTORY_REPO
-        sync: false
-      - key: FACTORY_LABEL
-        value: factory
-      - key: FACTORY_GITHUB_ACTORS
-        sync: false
-      - key: RENDER_WORKFLOW_SLUG
-        sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-      # Used by the Render SDK to start the workflow task.
+      - key: FACTORY_ADMIN_TOKEN
+        generateValue: true
+
+  - type: worker
+    name: factory-dispatcher
+    region: oregon
+    runtime: docker
+    plan: starter
+    dockerCommand: node --import tsx app/src/dispatcher.ts
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: factory-db
+          property: connectionString
       - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKFLOW_SLUG
+        fromService:
+          name: factory-workflows
+          type: workflow
+          property: slug
+
+  - type: workflow
+    name: factory-workflows
+    region: oregon
+    runtime: node
+    repo: https://github.com/render-examples/render-factory.git
+    buildCommand: npm ci
+    startCommand: npm run start:workflows
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: factory-db
+          property: connectionString
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKSPACE_ID
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_APP_INSTALLATION_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FACTORY_PUBLIC_URL
+        sync: false
+
+  - type: cron
+    name: factory-maintenance
+    region: oregon
+    runtime: docker
+    schedule: "* * * * *"
+    dockerCommand: node --import tsx app/src/maintenance.ts
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: factory-db
+          property: connectionString
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKSPACE_ID
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_APP_INSTALLATION_ID
         sync: false

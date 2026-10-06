@@ -1,55 +1,94 @@
-import type { Finding, Review, ReviewerOutput } from "../contracts/index.js";
+import { repository } from "../config/index.js";
+import type { Spec } from "../contracts/index.js";
+import type { CommandResult } from "../git/index.js";
 
-const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+/** Build the PR body per §4.3 / §8. */
+export function pullRequestBody(opts: {
+	issueNumber: number;
+	spec: Spec;
+	summary: string;
+	selfReviewNotes: string[];
+	verificationResults: CommandResult[];
+	runId: string;
+	specId: string | null;
+	specVersion: number;
+	specCommentId: string | null;
+	baseSha: string;
+	currentBaseTip?: string;
+}): string {
+	const {
+		issueNumber,
+		spec,
+		summary,
+		selfReviewNotes,
+		verificationResults,
+		runId,
+		specId,
+		specVersion,
+		specCommentId,
+		baseSha,
+		currentBaseTip,
+	} = opts;
 
-export function reviewerSection(
-	title: string,
-	parsed: ReviewerOutput | null,
-	raw: string,
-): string {
-	if (!parsed || parsed.findings.length === 0) return `## ${title}\n${raw}`;
+	const repo = repository();
+	const sections: string[] = [];
 
-	const findings = [...parsed.findings].sort(
-		(a: Finding, b: Finding) =>
-			SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
-			b.confidence - a.confidence,
+	sections.push(`Closes #${issueNumber}.`);
+	sections.push("");
+	sections.push(`## Summary\n\n${summary}`);
+
+	// Acceptance criteria checklist
+	if (spec.acceptanceCriteria.length > 0) {
+		sections.push("");
+		sections.push("## Acceptance criteria");
+		for (const ac of spec.acceptanceCriteria) {
+			sections.push(`- [ ] **${ac.id}**: ${ac.text} _(${ac.verification})_`);
+		}
+	}
+
+	// Verification table
+	if (verificationResults.length > 0) {
+		sections.push("");
+		sections.push("## Verification");
+		sections.push("| Command | Exit | Duration |");
+		sections.push("| --- | --- | --- |");
+		for (const r of verificationResults) {
+			const dur = `${(r.durationMs / 1000).toFixed(1)}s`;
+			const icon = r.exitCode === 0 ? "✅" : "❌";
+			sections.push(`| \`${r.command}\` | ${icon} ${r.exitCode} | ${dur} |`);
+		}
+	}
+
+	// Self-review notes
+	if (selfReviewNotes.length > 0) {
+		sections.push("");
+		sections.push("## Self-review notes");
+		for (const note of selfReviewNotes) {
+			sections.push(`- ${note}`);
+		}
+	}
+
+	// Spec link
+	if (specCommentId) {
+		sections.push("");
+		sections.push(
+			`📋 [Specification](https://github.com/${repo.fullName}/issues/${issueNumber}#issuecomment-${specCommentId})`,
+		);
+	}
+
+	// Base drift warning
+	if (currentBaseTip && currentBaseTip !== baseSha) {
+		sections.push("");
+		sections.push(
+			`> ⚠️ The base branch has moved since this PR was based on \`${baseSha.slice(0, 8)}\`. Conflicts, if any, will appear in this PR.`,
+		);
+	}
+
+	// Marker for idempotent lookup
+	sections.push("");
+	sections.push(
+		`<!-- render-factory:pr run=${runId} spec=${specId ?? "none"} v=${specVersion} -->`,
 	);
-	const lines = findings.map(
-		(f) =>
-			`- **${f.severity.toUpperCase()}** (confidence: ${f.confidence}) \`${f.file}\`: ${f.description}`,
-	);
-	return `## ${title}\n${lines.join("\n")}`;
-}
 
-export function reviewSummary(review: Review): string {
-	const verdict =
-		review.decision === "approve" ? "approved" : "changes requested";
-	const header =
-		`## Internal review: ${verdict}\n\n` +
-		`**Risk tier:** ${review.riskTier ?? "unknown"}\n\n${review.summary}`;
-
-	const findings = review.topFindings;
-	if (!findings || findings.length === 0) return header;
-
-	const rows = findings.map(
-		(f) =>
-			`| ${f.severity} | ${f.confidence} | ${f.source} | \`${f.file}\` | ${f.description} |`,
-	);
-	return (
-		`${header}\n\n### Top findings\n\n` +
-		"| Severity | Confidence | Source | File | Description |\n| --- | --- | --- | --- | --- |\n" +
-		rows.join("\n")
-	);
-}
-
-export function pullRequestBody(
-	issueNumber: number,
-	review: Review,
-	implementationSummary: string,
-): string {
-	return (
-		`Automated implementation for #${issueNumber}.\n\n` +
-		`${reviewSummary(review)}\n\n` +
-		`## Implementation report\n\n${implementationSummary}\n\nCloses #${issueNumber}.`
-	);
+	return sections.join("\n");
 }

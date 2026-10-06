@@ -1,6 +1,6 @@
 {
   "name": "render-factory",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,8 +9,11 @@
   "scripts": {
     "start:gateway": "tsx app/src/server.ts",
     "start:workflows": "tsx app/src/workflows.ts",
+    "start:dispatcher": "tsx app/src/dispatcher.ts",
+    "start:maintenance": "tsx app/src/maintenance.ts",
     "dev:gateway": "RENDER_USE_LOCAL_DEV=true node --env-file=.env node_modules/.bin/tsx watch app/src/server.ts",
     "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/src/workflows.ts",
+    "dev:dispatcher": "node --env-file=.env node_modules/.bin/tsx watch app/src/dispatcher.ts",
     "dev:postgres": "docker compose up postgres",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts",
@@ -19,12 +22,15 @@
     "lint": "biome lint --error-on-warnings app scripts tests factory.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "eval": "node --env-file-if-exists=.env --import tsx scripts/eval.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
     "@hono/node-server": "^2.0.0",
-    "@renderinc/sdk": "^0.7.0",
+    "@openai/agents": "^0.18.0",
+    "@renderinc/sdk": "^1.2.0",
     "hono": "^4.0.0",
     "pg": "^8.23.0",
     "tsx": "^4.19.0",

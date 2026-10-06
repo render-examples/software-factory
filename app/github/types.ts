@@ -17,6 +17,8 @@ export interface IssueComment {
 	id: number;
 	body: string;
 	user: string;
+	/** "User", "Bot", "Organization", etc. — from `user.type` in the API. */
+	authorType: string;
 	createdAt: string;
 }
 

@@ -9,9 +9,19 @@
  */
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
-import { repository, triggerLabel } from "../app/config/index.js";
+import { factoryConfig } from "../factory.config.js";
+import { repository } from "../app/config/index.js";
 import { githubToken } from "../app/github/index.js";
-import { ask, bold, confirm, dim, exitWith, heading, print, type Finding } from "./support.js";
+import {
+	ask,
+	bold,
+	confirm,
+	dim,
+	exitWith,
+	heading,
+	print,
+	type Finding,
+} from "./support.js";
 
 const API = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const LABEL_COLOR = "5a78f0";
@@ -33,7 +43,6 @@ function record(finding: Finding): void {
 }
 
 const repo = repository();
-const label = triggerLabel();
 const token = await githubToken();
 const base = `${API}/repos/${repo.owner}/${repo.repo}`;
 
@@ -60,17 +69,23 @@ async function call<T>(
 
 async function resolveGatewayUrl(): Promise<string> {
 	const provided = values["gateway-url"]?.trim();
-	const url = provided || (await ask("Gateway URL", "https://render-factory-gateway.onrender.com"));
+	const url =
+		provided ||
+		(await ask("Gateway URL", "https://render-factory-gateway.onrender.com"));
 	return url.replace(/\/+$/, "");
 }
 
-async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> {
+async function ensureWebhook(
+	gatewayUrl: string,
+	secret: string,
+): Promise<void> {
 	heading("Webhook");
 	const target = `${gatewayUrl}/webhooks/github`;
 
-	const existing = await call<
-		Array<{ id: number; config: { url?: string } }>
-	>("GET", `${base}/hooks`);
+	const existing = await call<Array<{ id: number; config: { url?: string } }>>(
+		"GET",
+		`${base}/hooks`,
+	);
 	if (!existing.ok) {
 		record({
 			level: "fail",
@@ -97,13 +112,16 @@ async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> 
 	if (mine) {
 		const updated = await call("PATCH", `${base}/hooks/${mine.id}`, {
 			config,
-			events: ["issues"],
+			events: ["issues", "issue_comment", "pull_request"],
 			active: true,
 		});
 		record(
 			updated.ok
 				? { level: "ok", message: `Updated webhook ${mine.id} to ${target}` }
-				: { level: "fail", message: `Could not update webhook (HTTP ${updated.status})` },
+				: {
+						level: "fail",
+						message: `Could not update webhook (HTTP ${updated.status})`,
+					},
 		);
 		return;
 	}
@@ -111,47 +129,72 @@ async function ensureWebhook(gatewayUrl: string, secret: string): Promise<void> 
 	const created = await call("POST", `${base}/hooks`, {
 		name: "web",
 		active: true,
-		events: ["issues"],
+		events: ["issues", "issue_comment", "pull_request"],
 		config,
 	});
 	record(
 		created.ok
 			? { level: "ok", message: `Created webhook pointing at ${target}` }
-			: { level: "fail", message: `Could not create webhook (HTTP ${created.status})` },
+			: {
+					level: "fail",
+					message: `Could not create webhook (HTTP ${created.status})`,
+				},
 	);
 }
 
-async function ensureLabel(): Promise<void> {
-	heading("Trigger label");
+const LABEL_DESCRIPTIONS: Record<string, string> = {
+	triage: "Start a triage round for this issue",
+	fullRun: "Full run: triage through PR review",
+	specApproved: "Approve the spec and start implementation",
+	prReview: "Run the PR reviewer on this pull request",
+};
 
-	const found = await call("GET", `${base}/labels/${encodeURIComponent(label)}`);
-	if (found.ok) {
-		record({ level: "ok", message: `Label "${label}" already exists` });
-		return;
+async function ensureLabels(): Promise<void> {
+	heading("Trigger labels");
+
+	const labels = factoryConfig.labels;
+	for (const [key, labelName] of Object.entries(labels)) {
+		const found = await call(
+			"GET",
+			`${base}/labels/${encodeURIComponent(labelName)}`,
+		);
+		if (found.ok) {
+			record({ level: "ok", message: `Label "${labelName}" already exists` });
+			continue;
+		}
+
+		const created = await call("POST", `${base}/labels`, {
+			name: labelName,
+			color: LABEL_COLOR,
+			description: LABEL_DESCRIPTIONS[key] ?? "Factory label",
+		});
+		record(
+			created.ok
+				? { level: "ok", message: `Created label "${labelName}"` }
+				: {
+						level: "fail",
+						message: `Could not create label "${labelName}" (HTTP ${created.status})`,
+					},
+		);
 	}
-
-	const created = await call("POST", `${base}/labels`, {
-		name: label,
-		color: LABEL_COLOR,
-		description: "Hand this issue to the factory",
-	});
-	record(
-		created.ok
-			? { level: "ok", message: `Created label "${label}"` }
-			: { level: "fail", message: `Could not create label (HTTP ${created.status})` },
-	);
 }
 
 console.log(`\nConfiguring ${bold(repo.fullName)}`);
 
 const gatewayUrl = await resolveGatewayUrl();
-const secret = values.secret?.trim() || process.env.GITHUB_WEBHOOK_SECRET?.trim() || randomBytes(32).toString("hex");
+const secret =
+	values.secret?.trim() ||
+	process.env.GITHUB_WEBHOOK_SECRET?.trim() ||
+	randomBytes(32).toString("hex");
 const generated = !values.secret && !process.env.GITHUB_WEBHOOK_SECRET;
 
 if (!values.yes) {
 	console.log(`\n  webhook  ${gatewayUrl}/webhooks/github`);
-	console.log(`  label    ${label}`);
-	console.log(`  secret   ${generated ? "newly generated" : "from --secret or the environment"}`);
+	const allLabels = Object.values(factoryConfig.labels);
+	console.log(`  labels   ${allLabels.join(", ")}`);
+	console.log(
+		`  secret   ${generated ? "newly generated" : "from --secret or the environment"}`,
+	);
 	if (!(await confirm("\nApply this?"))) {
 		console.log("Nothing changed.");
 		process.exit(0);
@@ -159,12 +202,16 @@ if (!values.yes) {
 }
 
 await ensureWebhook(gatewayUrl, secret);
-await ensureLabel();
+await ensureLabels();
 
 if (generated) {
 	console.log(`\n${bold("Set this on the gateway as GITHUB_WEBHOOK_SECRET:")}`);
 	console.log(`\n  ${secret}\n`);
-	console.log(dim("The webhook already has it. Deliveries fail until the gateway does too."));
+	console.log(
+		dim(
+			"The webhook already has it. Deliveries fail until the gateway does too.",
+		),
+	);
 }
 
 exitWith(findings);

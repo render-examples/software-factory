@@ -2,31 +2,34 @@ import { z } from "zod";
 
 const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 
-export const findingSchema = z.object({
+export const specialistFindingSchema = z.object({
+	path: z.string(),
+	line: z.number().int().min(1),
 	severity: severitySchema,
 	confidence: z.number().int().min(0).max(100),
-	file: z.string(),
-	description: z.string(),
+	title: z.string(),
+	body: z.string(),
+	evidence: z.string(),
 });
 
-export const reviewerOutputSchema = z.object({
-	findings: z.array(findingSchema),
+export const specialistOutputSchema = z.object({
+	findings: z.array(specialistFindingSchema),
 });
 
-export const judgeSchema = z.object({
-	decision: z.enum(["approve", "request_changes"]),
-	riskTier: z.enum(["trivial", "low", "medium", "high"]).optional(),
+export const synthesisCommentSchema = z.object({
+	path: z.string(),
+	line: z.number().int().min(1),
+	body: z.string(),
+});
+
+/** The synthesizer summarizes; it never approves or requests changes. */
+export const synthesisSchema = z.object({
 	summary: z.string(),
-	topFindings: z
-		.array(
-			findingSchema.extend({
-				source: z.enum(["security", "correctness", "tests"]),
-			}),
-		)
-		.optional(),
+	riskTier: z.enum(["trivial", "low", "medium", "high"]),
+	comments: z.array(synthesisCommentSchema),
 });
 
-export type Finding = z.infer<typeof findingSchema>;
-export type ReviewerOutput = z.infer<typeof reviewerOutputSchema>;
-export type JudgeVerdict = z.infer<typeof judgeSchema>;
-export type Review = JudgeVerdict & { details: string };
+export type SpecialistFinding = z.infer<typeof specialistFindingSchema>;
+export type SpecialistOutput = z.infer<typeof specialistOutputSchema>;
+export type SynthesisComment = z.infer<typeof synthesisCommentSchema>;
+export type Synthesis = z.infer<typeof synthesisSchema>;

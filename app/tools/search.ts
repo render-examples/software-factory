@@ -5,8 +5,14 @@ import type { Tool, ToolResult } from "./types.js";
 
 const searchSchema = {
 	pattern: z.string().describe("Regex pattern to search for."),
-	path: z.string().optional().describe("Directory or file to search. Defaults to '.'."),
-	include: z.string().optional().describe("Glob to filter files (e.g. '*.ts'). Optional."),
+	path: z
+		.string()
+		.optional()
+		.describe("Directory or file to search. Defaults to '.'."),
+	include: z
+		.string()
+		.optional()
+		.describe("Glob to filter files (e.g. '*.ts'). Optional."),
 };
 
 export const sandboxSearch: Tool<typeof searchSchema> = {

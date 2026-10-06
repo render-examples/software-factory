@@ -3,6 +3,7 @@ import type { Issue, IssueComment, PullRequest } from "./types.js";
 
 interface RawUser {
 	login: string;
+	type?: string;
 }
 
 export interface RawIssue {
@@ -28,20 +29,6 @@ export interface RawPull {
 	head: { ref: string; sha: string };
 }
 
-export interface RawRepo {
-	default_branch: string;
-}
-
-export interface RawTree {
-	truncated?: boolean;
-	tree?: { path: string; type: string }[];
-}
-
-export interface RawContent {
-	content?: string;
-	encoding?: string;
-}
-
 export function toIssue(raw: RawIssue): Issue {
 	return {
 		number: raw.number,
@@ -61,6 +48,7 @@ export function toComment(raw: RawComment): IssueComment {
 		id: raw.id,
 		body: raw.body ?? "",
 		user: raw.user?.login ?? "unknown",
+		authorType: raw.user?.type ?? "User",
 		createdAt: raw.created_at,
 	};
 }

@@ -1,0 +1,28 @@
+{
+  "id": "underspecified-search",
+  "workflow": "triage",
+  "category": "underspecified",
+  "description": "A vague request ('search') should trigger clarifying questions, not a spec.",
+  "fixture": {
+    "issueTitle": "Search",
+    "issueBody": "It would be nice to be able to search.",
+    "labels": ["factory:triage"]
+  },
+  "rubric": [
+    {
+      "id": "US-1",
+      "description": "Triage returns 'ask' rather than 'draft' or 'decline'",
+      "severity": "must"
+    },
+    {
+      "id": "US-2",
+      "description": "Questions ask what should be searchable (todos, text, etc.)",
+      "severity": "should"
+    },
+    {
+      "id": "US-3",
+      "description": "No spec is created on the first round",
+      "severity": "must"
+    }
+  ]
+}

@@ -2,11 +2,8 @@ import { redactSecrets } from "../policy/index.js";
 import { githubToken } from "./auth.js";
 import {
 	type RawComment,
-	type RawContent,
 	type RawIssue,
 	type RawPull,
-	type RawRepo,
-	type RawTree,
 	toComment,
 	toIssue,
 	toPull,
@@ -18,21 +15,7 @@ import {
 	type IssueComment,
 	type PullRequest,
 	type RepoRef,
-	type RepoSnapshot,
 } from "./types.js";
-
-/** Paths that describe the project rather than implement it. */
-const CONTEXT_FILES = ["README.md", "package.json"] as const;
-const MAX_PATHS = 300;
-const MAX_FILE_CHARS = 2_000;
-const IGNORED_SEGMENTS = new Set([
-	"node_modules",
-	"dist",
-	"build",
-	"vendor",
-	"coverage",
-	"__snapshots__",
-]);
 
 /** Workflow-owned GitHub operations. Agents never touch this. */
 export class GitHub {
@@ -70,59 +53,6 @@ export class GitHub {
 			if (page === 10) throw new Error("Issue has more than 1,000 comments");
 		}
 		return raw.map(toComment);
-	}
-
-	/**
-	 * The repository's shape and its self-describing files.
-	 *
-	 * Triage runs before any sandbox exists, so this is how it learns what the
-	 * project is without a checkout. Three API calls, no clone.
-	 */
-	async getRepoSnapshot(ref: RepoRef): Promise<RepoSnapshot> {
-		const repo = await this.http.send<RawRepo>(
-			"GET",
-			`/repos/${ref.owner}/${ref.repo}`,
-		);
-		const defaultBranch = repo.default_branch;
-
-		const tree = await this.http.send<RawTree>(
-			"GET",
-			`/repos/${ref.owner}/${ref.repo}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`,
-		);
-		const all = (tree.tree ?? [])
-			.filter((entry) => entry.type === "blob" && interesting(entry.path))
-			.map((entry) => entry.path)
-			.sort();
-
-		const files: RepoSnapshot["files"] = [];
-		for (const path of CONTEXT_FILES) {
-			const content = await this.getTextFile(ref, path);
-			if (content) files.push({ path, content });
-		}
-
-		return {
-			defaultBranch,
-			paths: all.slice(0, MAX_PATHS),
-			truncated: tree.truncated === true || all.length > MAX_PATHS,
-			files,
-		};
-	}
-
-	/** A UTF-8 file's contents, or null when it does not exist. */
-	async getTextFile(ref: RepoRef, path: string): Promise<string | null> {
-		try {
-			const raw = await this.http.send<RawContent>(
-				"GET",
-				`/repos/${ref.owner}/${ref.repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}`,
-			);
-			if (raw.encoding !== "base64" || !raw.content) return null;
-			return Buffer.from(raw.content, "base64")
-				.toString("utf8")
-				.slice(0, MAX_FILE_CHARS);
-		} catch (error) {
-			if (error instanceof GitHubError && error.status === 404) return null;
-			throw error;
-		}
 	}
 
 	/** Post a comment at most once, identified by a hidden marker. */
@@ -176,6 +106,66 @@ export class GitHub {
 		}
 	}
 
+	/**
+	 * Get a user's repository permission level.
+	 * Returns one of: admin, maintain, write, triage, read, none.
+	 * GitHub returns 404 for non-collaborators; that maps to "none".
+	 */
+	async getPermission(ref: RepoRef, login: string): Promise<string> {
+		try {
+			const result = await this.http.send<{ permission: string }>(
+				"GET",
+				`/repos/${ref.owner}/${ref.repo}/collaborators/${encodeURIComponent(login)}/permission`,
+			);
+			return result.permission;
+		} catch (error) {
+			if (error instanceof GitHubError && error.status === 404) {
+				return "none";
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * Find a comment by its hidden marker and update it, or create a new one.
+	 * Returns the comment ID (as a string) so the caller can cache it.
+	 */
+	async upsertMarkedComment(
+		ref: RepoRef,
+		number: number,
+		marker: string,
+		body: string,
+	): Promise<{ id: string }> {
+		const fullBody = `${redactSecrets(body)}\n\n${marker}`;
+		const comments = await this.listIssueComments(ref, number);
+		const existing = comments.find((c) => c.body.includes(marker));
+
+		if (existing) {
+			await this.http.send(
+				"PATCH",
+				`/repos/${ref.owner}/${ref.repo}/issues/comments/${existing.id}`,
+				{ body: { body: fullBody } },
+			);
+			return { id: String(existing.id) };
+		}
+
+		const created = await this.http.send<{ id: number }>(
+			"POST",
+			`/repos/${ref.owner}/${ref.repo}/issues/${number}/comments`,
+			{ body: { body: fullBody } },
+		);
+		return { id: String(created.id) };
+	}
+
+	/** The tip SHA of a branch. */
+	async getBranchTipSha(ref: RepoRef, branch: string): Promise<string> {
+		const data = await this.http.send<{ object: { sha: string } }>(
+			"GET",
+			`/repos/${ref.owner}/${ref.repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+		);
+		return data.object.sha;
+	}
+
 	/** Reuse the open PR for this head, or open a new draft. */
 	async ensurePull(
 		ref: RepoRef,
@@ -219,13 +209,6 @@ export class GitHub {
 	}
 }
 
-function interesting(path: string): boolean {
-	return !path
-		.split("/")
-		.some((segment) => segment.startsWith(".") || IGNORED_SEGMENTS.has(segment));
-}
-
-/** App installation token when configured, otherwise the PAT. */
 export function githubFromEnv(fetchImpl: typeof fetch = fetch): GitHub {
-	return new GitHub(() => githubToken(fetchImpl), fetchImpl);
+	return new GitHub(() => githubToken({ fetch: fetchImpl }), fetchImpl);
 }

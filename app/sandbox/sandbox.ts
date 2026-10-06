@@ -1,6 +1,7 @@
 import { shellEscape } from "../shell/index.js";
 import { collectExecOutput, mapExecEvents } from "./exec.js";
 import { api } from "./client.js";
+import { paced } from "./pacer.js";
 import type { ExecEvent, ExecResult, UploadData } from "./types.js";
 
 export class Sandbox {
@@ -12,7 +13,9 @@ export class Sandbox {
 	): Promise<AsyncGenerator<ExecEvent>> {
 		const { client, ownerId } = api();
 		return mapExecEvents(
-			await client.exec(this.id, command, ownerId, opts?.signal),
+			await paced(() => client.exec(this.id, command, ownerId, opts?.signal), {
+				retryOn: [429, 503],
+			}),
 		);
 	}
 
@@ -58,11 +61,23 @@ export class Sandbox {
 
 	async upload(path: string, data: UploadData): Promise<void> {
 		const { client, ownerId } = api();
-		await client.upload(this.id, path, data, ownerId);
+		await paced(() => client.upload(this.id, path, data, ownerId), {
+			retryOn: [429, 503],
+		});
+	}
+
+	async download(path: string): Promise<Buffer> {
+		const { client, ownerId } = api();
+		const result = await paced(() => client.download(this.id, path, ownerId), {
+			retryOn: [429, 503],
+		});
+		return result.data;
 	}
 
 	async terminate(): Promise<void> {
 		const { client, ownerId } = api();
-		await client.terminate(this.id, ownerId);
+		await paced(() => client.terminate(this.id, ownerId), {
+			retryOn: [429, 503],
+		});
 	}
 }
