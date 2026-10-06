@@ -15,11 +15,13 @@ import {
 import {
 	branchName,
 	completeDiff,
+	git,
 	setupBranch,
 	type CommandResult,
 } from "../../git/index.js";
 import { gitDataClient, type RepoRef } from "../../github/index.js";
 import { publish } from "../../publish/index.js";
+import { shellEscape } from "../../shell/index.js";
 import { mergeRunResult } from "../../store/index.js";
 import { lease, release } from "../../workspaces/index.js";
 import { type LifecycleResult, runWorkflow } from "../lifecycle.js";
@@ -178,7 +180,9 @@ export const specToPr = runWorkflow(
 			};
 		}
 		state = verified.state;
-		const verificationResults: CommandResult[] = verified.results;
+
+		// The verification results of the commit we will actually publish.
+		let publishedVerificationResults: CommandResult[] = verified.results;
 
 		await throwIfCancelled();
 
@@ -191,7 +195,10 @@ export const specToPr = runWorkflow(
 			runId,
 		);
 
+		// Track the last verified SHA so we can roll back if re-verify fails.
+		const verifiedSha = state.sha;
 		let selfReviewNotes: string[] = [];
+
 		if (selfReview.needsRevision && selfReview.issues.length > 0) {
 			const issues = selfReview.issues
 				.map((text, i) => `${i + 1}. ${text}`)
@@ -219,9 +226,18 @@ export const specToPr = runWorkflow(
 				state,
 			});
 			if (!reVerify.passed) {
+				// Reset to the last verified commit — do not publish the broken fix
+				await git(
+					workspace.sandbox,
+					`reset --hard ${shellEscape(verifiedSha)}`,
+					"Reset to last verified commit",
+				);
+				state = { summary: verified.state.summary, sha: verifiedSha };
 				selfReviewNotes = selfReview.issues;
+				// Keep the verification results from the verified commit
 			} else {
 				state = reVerify.state;
+				publishedVerificationResults = reVerify.results;
 			}
 		} else if (selfReview.issues.length > 0) {
 			selfReviewNotes = selfReview.issues;
@@ -231,7 +247,7 @@ export const specToPr = runWorkflow(
 
 		// ── Publish ─────────────────────────────────────────────────────
 		await stage("publish");
-		const authorDate = new Date().toISOString();
+		const authorDate = run.startedAt ?? run.createdAt;
 
 		const published = await publish({
 			sandbox: workspace.sandbox,
@@ -273,7 +289,7 @@ export const specToPr = runWorkflow(
 			spec,
 			summary: state.summary,
 			selfReviewNotes,
-			verificationResults,
+			verificationResults: publishedVerificationResults,
 			runId,
 			specId,
 			specVersion: specVer.version,
@@ -299,6 +315,10 @@ export const specToPr = runWorkflow(
 		};
 
 		// ── Complete ────────────────────────────────────────────────────
+		// The follow-up gets its own trigger with event: "follow_up" and
+		// no label, so the lifecycle's trigger-still-valid check does not
+		// look for the spec-approved label on the PR.
+		const actor = trigger?.actor as { login: string; id: number } | undefined;
 		const followUp = autoAdvance
 			? {
 					id: randomUUID(),
@@ -306,7 +326,11 @@ export const specToPr = runWorkflow(
 					subjectKind: "pull_request" as const,
 					subjectNumber: pull.number,
 					workflow: "pr-review",
-					trigger: run.trigger ?? undefined,
+					trigger: {
+						event: "follow_up",
+						actor,
+						previousRunId: runId,
+					},
 					input: {
 						prNumber: pull.number,
 						headSha: published.result.commitSha,

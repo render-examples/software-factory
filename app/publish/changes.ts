@@ -31,7 +31,8 @@ export interface RefusalReason {
 		| "submodule"
 		| "workflow_file"
 		| "too_many_files"
-		| "too_large";
+		| "too_large"
+		| "empty";
 	detail: string;
 }
 
