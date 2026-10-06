@@ -115,16 +115,58 @@ export async function getCurrentSpec(
 	return mapSpecRow(rows[0]);
 }
 
+/**
+ * Approve one existing version of a live spec. Returns false when the spec is
+ * superseded or the version was never written, so a stale approval cannot bind.
+ */
 export async function approveVersion(
 	specId: string,
 	version: number,
 	approvedBy: string,
-): Promise<void> {
-	await db().query(
+): Promise<boolean> {
+	const result = await db().query(
 		`UPDATE specs SET status = 'approved', approved_version = $2, approved_by = $3,
 		        approved_at = now(), updated_at = now()
-		 WHERE id = $1`,
+		 WHERE id = $1 AND status != 'superseded'
+		   AND EXISTS (
+		     SELECT 1 FROM spec_versions WHERE spec_id = $1 AND version = $2
+		   )`,
 		[specId, version, approvedBy],
+	);
+	return (result.rowCount ?? 0) === 1;
+}
+
+export async function getSpecVersion(
+	specId: string,
+	version: number,
+): Promise<SpecVersionRecord | null> {
+	const { rows } = await db().query(
+		`SELECT spec_id, version, document, markdown, notes, last_comment_id,
+		        run_id, created_at
+		 FROM spec_versions WHERE spec_id = $1 AND version = $2`,
+		[specId, version],
+	);
+	if (rows.length === 0) return null;
+	const row = rows[0];
+	return {
+		specId: row.spec_id,
+		version: row.version,
+		document: row.document,
+		markdown: row.markdown,
+		notes: row.notes ?? null,
+		lastCommentId: row.last_comment_id ?? null,
+		runId: row.run_id ?? null,
+		createdAt: (row.created_at as Date).toISOString(),
+	};
+}
+
+export async function setSpecCommentId(
+	specId: string,
+	commentId: string,
+): Promise<void> {
+	await db().query(
+		"UPDATE specs SET comment_id = $2, updated_at = now() WHERE id = $1",
+		[specId, commentId],
 	);
 }
 

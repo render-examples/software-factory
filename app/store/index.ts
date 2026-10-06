@@ -56,6 +56,8 @@ export {
 	getSpec,
 	getCurrentSpec,
 	approveVersion,
+	getSpecVersion,
+	setSpecCommentId,
 	supersedeSpec,
 	type SpecRecord,
 	type SpecVersionRecord,
