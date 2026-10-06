@@ -71,8 +71,7 @@ export interface SandboxRecord {
 	createdAt: string;
 	readyAt: string | null;
 	expiresAt: string | null;
-	leasedAt: string | null;
-	releasedAt: string | null;
+	terminatedAt: string | null;
 }
 
 export interface ArtifactRecord {

@@ -1,18 +1,20 @@
 export {
 	cloneWithReadToken,
 	fetchWithReadToken,
+	verifyNoCredentialLeak,
 } from "./credentials.js";
 export { lockfileHashInSandbox } from "./hash.js";
 export {
-	prepareSandbox,
-	type PrepareResult,
-	type PrepareOpts,
-} from "./prepare.js";
+	ensureSnapshot,
+	pruneAllRetiredSnapshots,
+	SandboxSnapshotNotFoundError,
+	type EnsureSnapshotResult,
+} from "./snapshot.js";
 export {
-	lease,
-	release,
-	type LeaseResult,
+	openWorkspace,
+	closeWorkspace,
+	type Workspace,
 	type WorkspaceRef,
-} from "./lease.js";
-export { maintainPool, reapSandboxes } from "./pool.js";
+} from "./workspace.js";
+export { reapSandboxes } from "./reap.js";
 export { runWorkspaceMaintenance } from "./maintenance.js";

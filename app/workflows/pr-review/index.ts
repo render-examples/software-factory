@@ -6,7 +6,7 @@ import { githubToken, GitHubHttp, type RepoRef } from "../../github/index.js";
 import type { SpecialistFinding } from "../../contracts/index.js";
 import type { UxTestOutput } from "../../contracts/index.js";
 import type { PreviewStatus } from "../../preview/index.js";
-import { lease, release } from "../../workspaces/index.js";
+import { openWorkspace, closeWorkspace } from "../../workspaces/index.js";
 import { point } from "../../telemetry/index.js";
 import { type LifecycleResult, runWorkflow } from "../lifecycle.js";
 import { STATUS } from "../labels.js";
@@ -72,12 +72,12 @@ export const prReview = runWorkflow(
 
 		// ── Workspace ───────────────────────────────────────────────────
 		await stage("workspace");
-		const workspace = await lease(runId, {
+		const workspace = await openWorkspace(runId, {
 			kind: "pull",
 			number: prNumber,
 			headSha,
 		});
-		defer(() => release(runId));
+		defer(() => closeWorkspace(runId));
 
 		await throwIfCancelled();
 

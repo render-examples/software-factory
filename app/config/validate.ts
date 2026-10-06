@@ -62,6 +62,27 @@ export function validateConfig(): void {
 		}
 	}
 
+	const sandbox = factoryConfig.sandbox;
+	if (sandbox.timeoutSeconds > 86_400) {
+		throw new Error("sandbox.timeoutSeconds must be at most 86400 (24 hours)");
+	}
+	if (sandbox.builderTimeoutSeconds !== undefined) {
+		if (sandbox.builderTimeoutSeconds > 86_400) {
+			throw new Error(
+				"sandbox.builderTimeoutSeconds must be at most 86400 (24 hours)",
+			);
+		}
+	}
+	if (sandbox.network && sandbox.network.default === "allow-list") {
+		const domains = (sandbox.network as { allowedDomains: string[] })
+			.allowedDomains;
+		if (!domains || domains.length === 0) {
+			throw new Error(
+				"sandbox.network: allow-list requires at least one domain in allowedDomains",
+			);
+		}
+	}
+
 	const known = knownSpecialistNames();
 	for (const name of factoryConfig.review.specialists) {
 		if (!known.includes(name)) {

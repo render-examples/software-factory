@@ -32,8 +32,8 @@ const mocks = vi.hoisted(() => ({
 	getSpecVersion: vi.fn(),
 	approveVersion: vi.fn(),
 	getSpec: vi.fn(),
-	lease: vi.fn(),
-	release: vi.fn(),
+	openWorkspace: vi.fn(),
+	closeWorkspace: vi.fn(),
 	publish: vi.fn(),
 	gitDataClient: vi.fn(),
 }));
@@ -91,8 +91,8 @@ vi.mock("../app/git/index.js", () => ({
 	git: mocks.git,
 }));
 vi.mock("../app/workspaces/index.js", () => ({
-	lease: mocks.lease,
-	release: mocks.release,
+	openWorkspace: mocks.openWorkspace,
+	closeWorkspace: mocks.closeWorkspace,
 }));
 vi.mock("../app/publish/index.js", () => ({
 	publish: mocks.publish,
@@ -231,7 +231,7 @@ beforeEach(() => {
 	mocks.implementTask.mockResolvedValue('{"summary":"Added retries"}');
 	mocks.selfReviewTask.mockResolvedValue('{"needsRevision":false,"issues":[]}');
 
-	mocks.lease.mockResolvedValue({
+	mocks.openWorkspace.mockResolvedValue({
 		sandbox: {
 			id: "sbx-1",
 			run: vi.fn(),
@@ -244,7 +244,7 @@ beforeEach(() => {
 		baseSha: "sha-base",
 		headSha: "sha-base",
 	});
-	mocks.release.mockResolvedValue(undefined);
+	mocks.closeWorkspace.mockResolvedValue(undefined);
 
 	mocks.commitChanges.mockResolvedValue("sha-impl");
 	mocks.completeDiff.mockResolvedValue("diff --git a/x b/x");
@@ -318,13 +318,13 @@ describe("happy path", () => {
 		);
 	});
 
-	it("leases a workspace and releases it in cleanup", async () => {
+	it("opens a workspace and closes it in cleanup", async () => {
 		await run(INPUT);
-		expect(mocks.lease).toHaveBeenCalledWith("run-0001", {
+		expect(mocks.openWorkspace).toHaveBeenCalledWith("run-0001", {
 			kind: "branch",
 			name: "main",
 		});
-		expect(mocks.release).toHaveBeenCalledWith("run-0001");
+		expect(mocks.closeWorkspace).toHaveBeenCalledWith("run-0001");
 	});
 
 	it("uses run.startedAt as the deterministic author date", async () => {
@@ -349,7 +349,7 @@ describe("early exits", () => {
 				detail: expect.stringContaining("No specification"),
 			}),
 		);
-		expect(mocks.lease).not.toHaveBeenCalled();
+		expect(mocks.openWorkspace).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
 	});
 
@@ -363,7 +363,7 @@ describe("early exits", () => {
 				detail: expect.stringContaining("does not exist"),
 			}),
 		);
-		expect(mocks.lease).not.toHaveBeenCalled();
+		expect(mocks.openWorkspace).not.toHaveBeenCalled();
 	});
 
 	it("finishes no_spec when approval returns false", async () => {
@@ -385,7 +385,7 @@ describe("early exits", () => {
 
 		expect(result).toEqual(expect.objectContaining({ status: "no_changes" }));
 		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
-		expect(mocks.release).toHaveBeenCalledOnce();
+		expect(mocks.closeWorkspace).toHaveBeenCalledOnce();
 	});
 });
 
@@ -588,11 +588,11 @@ describe("auto-advance", () => {
 });
 
 describe("failure handling", () => {
-	it("releases the workspace when a stage throws", async () => {
+	it("closes the workspace when a stage throws", async () => {
 		mocks.implementTask.mockRejectedValue(new Error("model unavailable"));
 
 		await expect(run(INPUT)).rejects.toThrow("model unavailable");
-		expect(mocks.release).toHaveBeenCalledOnce();
+		expect(mocks.closeWorkspace).toHaveBeenCalledOnce();
 	});
 
 	it("marks the issue factory-status:failed when a stage throws", async () => {

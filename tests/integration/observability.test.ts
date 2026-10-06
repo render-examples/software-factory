@@ -277,9 +277,7 @@ describe("getArtifactForServing", () => {
 			[artId, runId, Buffer.from("hello world")],
 		);
 
-		const { getArtifactForServing } = await import(
-			"../../app/store/index.js"
-		);
+		const { getArtifactForServing } = await import("../../app/store/index.js");
 		const result = await getArtifactForServing(artId);
 		expect(result).not.toBeNull();
 		expect(result?.contentType).toBe("text/plain");
@@ -304,9 +302,7 @@ describe("getArtifactForServing", () => {
 			[artId, runId, Buffer.from("stale")],
 		);
 
-		const { getArtifactForServing } = await import(
-			"../../app/store/index.js"
-		);
+		const { getArtifactForServing } = await import("../../app/store/index.js");
 		const result = await getArtifactForServing(artId);
 		expect(result).toBeNull();
 

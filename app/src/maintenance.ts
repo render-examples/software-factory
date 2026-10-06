@@ -57,7 +57,7 @@ const coreSteps: MaintenanceStep[] = [
 			}
 		},
 	},
-	// Runs after lost executions are failed so their leased sandboxes are reaped.
+	// Runs after lost executions are failed so their run sandboxes are reaped.
 	{ name: "workspaces", run: runWorkspaceMaintenance },
 ];
 

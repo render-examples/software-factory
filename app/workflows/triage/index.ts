@@ -18,7 +18,7 @@ import {
 	type SpecRecord,
 	type SpecVersionRecord,
 } from "../../store/index.js";
-import { lease, release } from "../../workspaces/index.js";
+import { openWorkspace, closeWorkspace } from "../../workspaces/index.js";
 import { runWorkflow, type LifecycleResult } from "../lifecycle.js";
 import { assess } from "./assess.js";
 import { draft } from "./draft.js";
@@ -99,11 +99,11 @@ export const triageWorkflow = runWorkflow(
 		await lc.stage("workspace");
 
 		const target = factoryConfig.repos[0];
-		const workspace = await lease(lc.run.id, {
+		const workspace = await openWorkspace(lc.run.id, {
 			kind: "branch",
 			name: target.baseBranch,
 		});
-		lc.defer(() => release(lc.run.id));
+		lc.defer(() => closeWorkspace(lc.run.id));
 
 		await lc.throwIfCancelled();
 
