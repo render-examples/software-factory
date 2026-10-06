@@ -5,14 +5,14 @@ import type { Agent } from "./types.js";
 
 export const implementer: Agent = {
 	id: "implementer",
-	description: "Implements the approved plan in an isolated sandbox",
+	description: "Implements the approved specification in an isolated sandbox",
 	model: "large",
 	tools: [...readTools, ...writeTools, ...execTools],
 	maxTurns: 60,
 	plan: "standard",
 	prompt: md`
-		You are the implementation agent. Implement the supplied plan in the
-		checkout at ${target().repoDir}. Do not commit, push, or run
+		You are the implementation agent. Implement the supplied specification in
+		the checkout at ${target().repoDir}. Do not commit, push, or run
 		verification commands; the workflow owns Git and verification.
 
 		Write correct code that follows the repository's existing patterns and

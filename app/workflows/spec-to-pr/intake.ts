@@ -1,46 +1,66 @@
-import type { TaskContext } from "@renderinc/sdk/workflows";
-import { type Triage, triageSchema } from "../../contracts/index.js";
-import { repoBrief, workItem as buildWorkItem } from "../../format/index.js";
-import type { GitHub, Issue, RepoRef } from "../../github/index.js";
-import { triageTask } from "../../tasks/index.js";
-import { agentJson } from "../agent-json.js";
+/**
+ * Intake stage: load and approve the spec version from run input.
+ * If no spec or approval fails, finish the run early.
+ */
+import { approveVersion, getSpecVersion, getSpec } from "../../store/index.js";
+import type { Spec } from "../../contracts/index.js";
+import type { SpecVersionRecord, SpecRecord } from "../../store/index.js";
 
-export interface Intake {
-	issue: Issue;
-	workItem: string;
-	triage: Triage;
+export interface IntakeResult {
+	spec: Spec;
+	specVersion: SpecVersionRecord;
+	specRecord: SpecRecord;
 }
 
-export async function loadIntake(
-	ctx: TaskContext,
-	gh: GitHub,
-	repo: RepoRef,
-	issueNumber: number,
-	label: string,
-	runId: string,
-): Promise<Intake> {
-	const issue = await gh.getIssue(repo, issueNumber);
-	if (!issue.labels.includes(label)) {
-		throw new Error(`Issue no longer has the "${label}" label`);
+export async function loadSpecIntake(
+	specId: string | null,
+	specVersion: number | null | undefined,
+	triggerActorLogin: string,
+): Promise<
+	| { ok: true; intake: IntakeResult }
+	| { ok: false; outcome: string; detail: string }
+> {
+	if (!specId || specVersion == null) {
+		return {
+			ok: false,
+			outcome: "no_spec",
+			detail: "No specification ID or version found in the run input.",
+		};
 	}
 
-	const comments = await gh.listIssueComments(repo, issueNumber);
-	const workItem = buildWorkItem(issue, comments);
+	const version = await getSpecVersion(specId, specVersion);
+	if (!version) {
+		return {
+			ok: false,
+			outcome: "no_spec",
+			detail: `Spec version ${specVersion} of spec ${specId} does not exist.`,
+		};
+	}
 
-	const brief = await gh
-		.getRepoSnapshot(repo)
-		.then((snapshot) => repoBrief(`${repo.owner}/${repo.repo}`, snapshot))
-		.catch((error) => {
-			console.error("Failed to build the repository brief:", error);
-			return "# Repository: not available\n";
-		});
+	const approved = await approveVersion(specId, specVersion, triggerActorLogin);
+	if (!approved) {
+		return {
+			ok: false,
+			outcome: "no_spec",
+			detail: `Could not approve spec version ${specVersion}: the spec may be superseded or the version may not exist.`,
+		};
+	}
 
-	const triage = await agentJson(
-		(message) => ctx.run(triageTask, { runId, message }),
-		triageSchema,
-		`${brief}\n\n---\n\n# Work item\n\n${workItem}`,
-		"triage",
-	);
+	const specRecord = await getSpec(specId);
+	if (!specRecord) {
+		return {
+			ok: false,
+			outcome: "no_spec",
+			detail: `Spec ${specId} not found after approval.`,
+		};
+	}
 
-	return { issue, workItem, triage };
+	return {
+		ok: true,
+		intake: {
+			spec: version.document as unknown as Spec,
+			specVersion: version,
+			specRecord,
+		},
+	};
 }
