@@ -1,36 +1,26 @@
 /**
- * The pipeline with every external boundary mocked: no models, no sandbox,
- * no GitHub, no Postgres. What is under test is the control flow.
+ * The spec-to-pr pipeline with every external boundary mocked: no models,
+ * no sandbox, no GitHub, no Postgres. What is under test is the control flow.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskContext } from "@renderinc/sdk/workflows";
 
 const mocks = vi.hoisted(() => ({
-	triageTask: vi.fn(),
-	analysisTask: vi.fn(),
 	implementTask: vi.fn(),
 	selfReviewTask: vi.fn(),
-	securityTask: vi.fn(),
-	correctnessTask: vi.fn(),
-	testsTask: vi.fn(),
-	judgeTask: vi.fn(),
 	gh: {
 		getIssue: vi.fn(),
-		getRepoSnapshot: vi.fn(),
 		getPermission: vi.fn(),
 		listIssueComments: vi.fn(),
 		addLabels: vi.fn(),
 		removeLabel: vi.fn(),
 		ensureIssueComment: vi.fn(),
 		ensurePull: vi.fn(),
+		getBranchTipSha: vi.fn(),
 	},
-	terminate: vi.fn(),
-	createSandbox: vi.fn(),
-	setupCheckout: vi.fn(),
 	commitChanges: vi.fn(),
 	completeDiff: vi.fn(),
 	runVerification: vi.fn(),
-	verifyPush: vi.fn(),
 	finishRun: vi.fn(),
 	mergeRunResult: vi.fn(),
 	setRunStage: vi.fn(),
@@ -38,6 +28,13 @@ const mocks = vi.hoisted(() => ({
 	getRun: vi.fn(),
 	heartbeat: vi.fn(),
 	appendEvent: vi.fn(),
+	getSpecVersion: vi.fn(),
+	approveVersion: vi.fn(),
+	getSpec: vi.fn(),
+	lease: vi.fn(),
+	release: vi.fn(),
+	publish: vi.fn(),
+	gitDataClient: vi.fn(),
 }));
 
 vi.mock("@renderinc/sdk/workflows", () => ({
@@ -48,14 +45,8 @@ vi.mock("@renderinc/sdk/workflows", () => ({
 }));
 
 vi.mock("../app/tasks/index.js", () => ({
-	triageTask: { name: "triage", func: mocks.triageTask },
-	analysisTask: { name: "analyst", func: mocks.analysisTask },
 	implementTask: { name: "implementer", func: mocks.implementTask },
 	selfReviewTask: { name: "self-review", func: mocks.selfReviewTask },
-	securityTask: { name: "security", func: mocks.securityTask },
-	correctnessTask: { name: "correctness", func: mocks.correctnessTask },
-	testsTask: { name: "tests", func: mocks.testsTask },
-	judgeTask: { name: "judge", func: mocks.judgeTask },
 	isBudgetExceeded: (err: unknown) =>
 		err instanceof Error && err.message.includes("[BUDGET_EXCEEDED]"),
 }));
@@ -63,9 +54,10 @@ vi.mock("../app/tasks/index.js", () => ({
 vi.mock("../app/github/index.js", () => ({
 	githubFromEnv: () => mocks.gh,
 	githubToken: async () => "ghs_installation_token",
+	gitDataClient: () => mocks.gitDataClient(),
 }));
 vi.mock("../app/sandbox/index.js", () => ({
-	createSandbox: mocks.createSandbox,
+	createSandbox: vi.fn(),
 	connectSandbox: (id: string) => ({ id }),
 }));
 vi.mock("../app/store/index.js", () => ({
@@ -76,17 +68,32 @@ vi.mock("../app/store/index.js", () => ({
 	getRun: mocks.getRun,
 	heartbeat: mocks.heartbeat,
 	appendEvent: mocks.appendEvent,
+	getSpecVersion: mocks.getSpecVersion,
+	approveVersion: mocks.approveVersion,
+	getSpec: mocks.getSpec,
 }));
 vi.mock("../app/store/events.js", () => ({
 	appendEvent: mocks.appendEvent,
 }));
 vi.mock("../app/git/index.js", () => ({
 	branchName: () => "factory/issue-42-abcdef",
-	setupCheckout: mocks.setupCheckout,
+	setupBranch: vi.fn().mockResolvedValue({
+		remoteUrl: "",
+		base: "main",
+		baseSha: "sha-base",
+		branch: "factory/issue-42-abcdef",
+	}),
 	commitChanges: mocks.commitChanges,
 	completeDiff: mocks.completeDiff,
 	runVerification: mocks.runVerification,
-	verifyPush: mocks.verifyPush,
+	createBranch: vi.fn(),
+}));
+vi.mock("../app/workspaces/index.js", () => ({
+	lease: mocks.lease,
+	release: mocks.release,
+}));
+vi.mock("../app/publish/index.js", () => ({
+	publish: mocks.publish,
 }));
 
 const { specToPr } = await import("../app/workflows/index.js");
@@ -101,6 +108,23 @@ const mockCtx: TaskContext = {
 				...args: unknown[]
 			) => taskDef.func(mockCtx, ...args),
 		),
+};
+
+const SPEC_DOC = {
+	title: "Add retries",
+	summary: "Add retry logic to the HTTP client",
+	problem: "Requests fail without retries",
+	goals: ["Add retries"],
+	nonGoals: [],
+	acceptanceCriteria: [
+		{ id: "AC-1", text: "Client retries on 5xx", verification: "automated" },
+	],
+	approach: "Wrap fetch calls",
+	affectedAreas: [{ path: "src/client.ts", change: "Add retry logic" }],
+	testPlan: "Unit tests for retry logic",
+	risks: [],
+	assumptions: [],
+	openQuestions: [],
 };
 
 function makeRunRecord(overrides: Record<string, unknown> = {}) {
@@ -119,10 +143,10 @@ function makeRunRecord(overrides: Record<string, unknown> = {}) {
 			deliveryId: "del-1",
 			event: "issues",
 			action: "labeled",
-			label: "factory:full-run",
+			label: "factory:spec-approved",
 			actor: { login: "Maintainer", id: 1 },
 		},
-		input: {},
+		input: { specId: "spec-001", specVersion: 1, autoAdvance: false },
 		previousRunId: null,
 		cancelRequestedAt: null,
 		dispatchAttempts: 1,
@@ -160,54 +184,77 @@ beforeEach(() => {
 		number: 42,
 		title: "Add retries",
 		body: "Please add retries to the client.",
-		labels: ["factory:full-run"],
+		labels: ["factory:spec-approved"],
 		user: "Maintainer",
 		htmlUrl: "https://github.com/test/test/issues/42",
 	});
 	mocks.gh.listIssueComments.mockResolvedValue([]);
-	mocks.gh.getRepoSnapshot.mockResolvedValue({
-		defaultBranch: "main",
-		paths: ["src/client.ts"],
-		truncated: false,
-		files: [],
-	});
 	mocks.gh.addLabels.mockResolvedValue(undefined);
 	mocks.gh.removeLabel.mockResolvedValue(undefined);
 	mocks.gh.ensureIssueComment.mockResolvedValue(undefined);
+	mocks.gh.getBranchTipSha.mockResolvedValue("sha-base");
 	mocks.gh.ensurePull.mockResolvedValue({
 		number: 7,
 		htmlUrl: "https://github.com/acme/widgets/pull/7",
-		headSha: "sha-impl",
+		headSha: "sha-commit",
 	});
 
-	mocks.triageTask.mockResolvedValue(
-		'{"hasEnoughDetail":true,"questions":[],"rationale":"clear"}',
-	);
-	mocks.analysisTask.mockResolvedValue("Step 1. Step 2.");
+	mocks.getSpecVersion.mockResolvedValue({
+		specId: "spec-001",
+		version: 1,
+		document: SPEC_DOC,
+		markdown: "",
+		notes: null,
+		lastCommentId: null,
+		runId: null,
+		createdAt: new Date().toISOString(),
+	});
+	mocks.approveVersion.mockResolvedValue(true);
+	mocks.getSpec.mockResolvedValue({
+		id: "spec-001",
+		repo: "jacobprall/render-factory-sample",
+		issueNumber: 42,
+		status: "approved",
+		currentVersion: 1,
+		approvedVersion: 1,
+		approvedBy: "Maintainer",
+		approvedAt: new Date().toISOString(),
+		commentId: "12345",
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+	});
+
 	mocks.implementTask.mockResolvedValue('{"summary":"Added retries"}');
 	mocks.selfReviewTask.mockResolvedValue('{"needsRevision":false,"issues":[]}');
-	mocks.securityTask.mockResolvedValue('{"findings":[]}');
-	mocks.correctnessTask.mockResolvedValue('{"findings":[]}');
-	mocks.testsTask.mockResolvedValue('{"findings":[]}');
-	mocks.judgeTask.mockResolvedValue(
-		'{"decision":"approve","riskTier":"trivial","summary":"Clean.","topFindings":[]}',
-	);
 
-	mocks.createSandbox.mockResolvedValue({
-		id: "sbx-1",
-		terminate: mocks.terminate,
-	});
-	mocks.terminate.mockResolvedValue(undefined);
-	mocks.setupCheckout.mockResolvedValue({
-		remoteUrl: "https://github.com/acme/widgets.git",
-		base: "main",
+	mocks.lease.mockResolvedValue({
+		sandbox: { id: "sbx-1", run: vi.fn(), mustRun: vi.fn(), download: vi.fn() },
+		sandboxRecordId: "sr-1",
+		repoDir: "/home/user/repo",
+		baseBranch: "main",
 		baseSha: "sha-base",
-		branch: "factory/issue-42-abcdef",
+		headSha: "sha-base",
 	});
+	mocks.release.mockResolvedValue(undefined);
+
 	mocks.commitChanges.mockResolvedValue("sha-impl");
 	mocks.completeDiff.mockResolvedValue("diff --git a/x b/x");
-	mocks.runVerification.mockResolvedValue({ passed: true, failures: "" });
-	mocks.verifyPush.mockResolvedValue(undefined);
+	mocks.runVerification.mockResolvedValue({
+		passed: true,
+		failures: "",
+		results: [
+			{ command: "npm test", exitCode: 0, durationMs: 1000, outputTail: "" },
+		],
+	});
+	mocks.publish.mockResolvedValue({
+		ok: true,
+		result: {
+			commitSha: "sha-commit",
+			treeSha: "sha-tree",
+			branch: "factory/issue-42-abcdef",
+		},
+	});
+
 	mocks.finishRun.mockResolvedValue({
 		finished: true,
 		followUpCreated: false,
@@ -217,37 +264,43 @@ beforeEach(() => {
 });
 
 describe("happy path", () => {
-	it("opens a draft pull request against the reviewed commit", async () => {
+	it("opens a draft pull request after publishing", async () => {
 		const result = await run(INPUT);
 
-		expect(result).toEqual({
-			pullRequest: "https://github.com/acme/widgets/pull/7",
-			branch: "factory/issue-42-abcdef",
-		});
-		expect(mocks.verifyPush).toHaveBeenCalledWith(
-			expect.anything(),
-			"ghs_installation_token",
-			expect.anything(),
-			"sha-impl",
+		expect(result).toEqual(
+			expect.objectContaining({
+				prNumber: 7,
+				prUrl: "https://github.com/acme/widgets/pull/7",
+				headSha: "sha-commit",
+			}),
 		);
+		expect(mocks.publish).toHaveBeenCalled();
 		expect(mocks.gh.ensurePull).toHaveBeenCalledWith(
 			expect.anything(),
-			expect.objectContaining({ expectedHeadSha: "sha-impl", base: "main" }),
+			expect.objectContaining({
+				expectedHeadSha: "sha-commit",
+				base: "main",
+			}),
 		);
 		expect(mocks.finishRun).toHaveBeenCalledWith(
 			"run-0001",
 			"completed",
-			expect.objectContaining({
-				outcome: "draft_pr_opened",
-				result: expect.objectContaining({
-					pullRequest: expect.stringContaining("/pull/7"),
-				}),
-			}),
+			expect.objectContaining({ outcome: "pr_opened" }),
 		);
 	});
 
-	it("removes the trigger label once the run is over", async () => {
+	it("removes the trigger label and conversation labels", async () => {
 		await run(INPUT);
+		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:spec-approved",
+		);
+		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
+			expect.anything(),
+			42,
+			"factory:triage",
+		);
 		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
 			expect.anything(),
 			42,
@@ -255,94 +308,56 @@ describe("happy path", () => {
 		);
 	});
 
-	it("advances the status label through each phase, then to pr-open", async () => {
+	it("leases a workspace and releases it in cleanup", async () => {
 		await run(INPUT);
-
-		const applied = mocks.gh.addLabels.mock.calls.map(
-			(call: unknown[]) => (call[2] as string[])[0],
-		);
-		expect(applied).toEqual([
-			"factory-status:analyzing",
-			"factory-status:implementing",
-			"factory-status:reviewing",
-			"factory-status:pr-open",
-		]);
-	});
-
-	it("adds the next status label before removing the previous one", async () => {
-		await run(INPUT);
-
-		const order = [
-			...mocks.gh.addLabels.mock.calls.map((c: unknown[]) => ({
-				op: "add",
-				label: (c[2] as string[])[0],
-			})),
-			...mocks.gh.removeLabel.mock.calls.map((c: unknown[]) => ({
-				op: "remove",
-				label: c[2] as string,
-			})),
-		];
-		const addAnalyzing = order.findIndex(
-			(e) => e.op === "add" && e.label === "factory-status:implementing",
-		);
-		const removeAnalyzing = order.findIndex(
-			(e) => e.op === "remove" && e.label === "factory-status:analyzing",
-		);
-		expect(addAnalyzing).toBeGreaterThanOrEqual(0);
-		expect(removeAnalyzing).toBeGreaterThanOrEqual(0);
-	});
-
-	it("clears status labels left by an earlier run", async () => {
-		mocks.gh.getIssue.mockResolvedValue({
-			number: 42,
-			title: "Add retries",
-			body: "Please add retries.",
-			labels: ["factory:full-run", "factory-status:failed", "bug"],
-			user: "Maintainer",
-			htmlUrl: "https://github.com/test/test/issues/42",
+		expect(mocks.lease).toHaveBeenCalledWith("run-0001", {
+			kind: "branch",
+			name: "main",
 		});
-
-		await run(INPUT);
-
-		expect(mocks.gh.removeLabel).toHaveBeenCalledWith(
-			expect.anything(),
-			42,
-			"factory-status:failed",
-		);
-		expect(mocks.gh.removeLabel).not.toHaveBeenCalledWith(
-			expect.anything(),
-			42,
-			"bug",
-		);
-	});
-
-	it("fans the diff out to three reviewers in parallel", async () => {
-		await run(INPUT);
-		expect(mocks.securityTask).toHaveBeenCalledOnce();
-		expect(mocks.correctnessTask).toHaveBeenCalledOnce();
-		expect(mocks.testsTask).toHaveBeenCalledOnce();
-	});
-
-	it("terminates the sandbox", async () => {
-		await run(INPUT);
-		expect(mocks.terminate).toHaveBeenCalledOnce();
+		expect(mocks.release).toHaveBeenCalledWith("run-0001");
 	});
 });
 
 describe("early exits", () => {
-	it("asks for clarification without creating a sandbox", async () => {
-		mocks.triageTask.mockResolvedValue(
-			'{"hasEnoughDetail":false,"questions":["Which client?"],"rationale":"vague"}',
+	it("finishes no_spec when specId is null", async () => {
+		mocks.getRun.mockResolvedValue(
+			makeRunRecord({ input: { specId: null, specVersion: null } }),
 		);
 
 		const result = await run(INPUT);
 
-		expect(result).toEqual({ questions: ["Which client?"] });
-		expect(mocks.createSandbox).not.toHaveBeenCalled();
+		expect(result).toEqual(
+			expect.objectContaining({
+				detail: expect.stringContaining("No specification"),
+			}),
+		);
+		expect(mocks.lease).not.toHaveBeenCalled();
 		expect(mocks.gh.ensureIssueComment).toHaveBeenCalled();
-		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
-			"factory-status:needs-detail",
-		]);
+	});
+
+	it("finishes no_spec when spec version does not exist", async () => {
+		mocks.getSpecVersion.mockResolvedValue(null);
+
+		const result = await run(INPUT);
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				detail: expect.stringContaining("does not exist"),
+			}),
+		);
+		expect(mocks.lease).not.toHaveBeenCalled();
+	});
+
+	it("finishes no_spec when approval returns false", async () => {
+		mocks.approveVersion.mockResolvedValue(false);
+
+		const result = await run(INPUT);
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				detail: expect.stringContaining("Could not approve"),
+			}),
+		);
 	});
 
 	it("stops when the implementer changed nothing", async () => {
@@ -350,52 +365,43 @@ describe("early exits", () => {
 
 		const result = await run(INPUT);
 
-		expect(result).toEqual({ status: "no_changes" });
+		expect(result).toEqual(expect.objectContaining({ status: "no_changes" }));
 		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
-		expect(mocks.terminate).toHaveBeenCalledOnce();
-	});
-
-	it("refuses to run when the label was removed before the workflow started", async () => {
-		mocks.gh.getIssue.mockResolvedValue({
-			number: 42,
-			title: "t",
-			body: "b",
-			labels: [],
-			user: "Maintainer",
-			htmlUrl: "https://github.com/test/test/issues/42",
-		});
-
-		const result = await run(INPUT);
-		expect(result).toEqual({ status: "trigger_removed" });
+		expect(mocks.release).toHaveBeenCalledOnce();
 	});
 });
 
-describe("review outcomes", () => {
-	it("revises once, then reports if the judge still objects", async () => {
-		mocks.judgeTask.mockResolvedValue(
-			'{"decision":"request_changes","riskTier":"high","summary":"Unsafe.","topFindings":[]}',
-		);
-		mocks.commitChanges
-			.mockResolvedValueOnce("sha-impl")
-			.mockResolvedValueOnce("sha-revised");
-
-		const result = await run(INPUT);
-
-		expect(result).toMatchObject({ summary: "Unsafe." });
-		expect(mocks.judgeTask).toHaveBeenCalledTimes(2);
-		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
-	});
-
+describe("verification", () => {
 	it("feeds verification failures back to the implementer", async () => {
 		mocks.runVerification
-			.mockResolvedValueOnce({ passed: false, failures: "tsc: type error" })
-			.mockResolvedValue({ passed: true, failures: "" });
+			.mockResolvedValueOnce({
+				passed: false,
+				failures: "tsc: type error",
+				results: [
+					{
+						command: "npm test",
+						exitCode: 1,
+						durationMs: 500,
+						outputTail: "tsc: type error",
+					},
+				],
+			})
+			.mockResolvedValue({
+				passed: true,
+				failures: "",
+				results: [
+					{
+						command: "npm test",
+						exitCode: 0,
+						durationMs: 1000,
+						outputTail: "",
+					},
+				],
+			});
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({
-			pullRequest: expect.stringContaining("/pull/7"),
-		});
+		expect(result).toEqual(expect.objectContaining({ prNumber: 7 }));
 		const messages = mocks.implementTask.mock.calls.map(
 			(call: unknown[]) => (call[1] as { message: string }).message,
 		);
@@ -408,48 +414,97 @@ describe("review outcomes", () => {
 		mocks.runVerification.mockResolvedValue({
 			passed: false,
 			failures: "still failing",
+			results: [
+				{
+					command: "npm test",
+					exitCode: 1,
+					durationMs: 500,
+					outputTail: "still failing",
+				},
+			],
 		});
 
 		const result = await run(INPUT);
 
-		expect(result).toMatchObject({
-			summary: expect.stringContaining("Verification failed"),
-		});
+		expect(result).toEqual(
+			expect.objectContaining({
+				summary: expect.stringContaining("Verification failed"),
+			}),
+		);
 		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
 	});
 });
 
+describe("publish refusal", () => {
+	it("stops with publish_refused when publish returns reasons", async () => {
+		mocks.publish.mockResolvedValue({
+			ok: false,
+			reasons: [{ kind: "symlink", detail: "Symlink: src/link" }],
+		});
+
+		await run(INPUT);
+
+		expect(mocks.finishRun).toHaveBeenCalledWith(
+			"run-0001",
+			"completed",
+			expect.objectContaining({ outcome: "publish_refused" }),
+		);
+		expect(mocks.gh.ensurePull).not.toHaveBeenCalled();
+	});
+});
+
+describe("auto-advance", () => {
+	it("queues a pr-review follow-up when autoAdvance is set", async () => {
+		mocks.getRun.mockResolvedValue(
+			makeRunRecord({
+				input: { specId: "spec-001", specVersion: 1, autoAdvance: true },
+			}),
+		);
+
+		await run(INPUT);
+
+		expect(mocks.finishRun).toHaveBeenCalledWith(
+			"run-0001",
+			"completed",
+			expect.objectContaining({
+				outcome: "pr_opened",
+				followUp: expect.objectContaining({
+					workflow: "pr-review",
+					subjectKind: "pull_request",
+					subjectNumber: 7,
+					input: expect.objectContaining({
+						prNumber: 7,
+						headSha: "sha-commit",
+					}),
+					previousRunId: "run-0001",
+				}),
+			}),
+		);
+	});
+
+	it("does not queue a follow-up when autoAdvance is false", async () => {
+		await run(INPUT);
+
+		const call = mocks.finishRun.mock.calls[0];
+		const details = call?.[2] as Record<string, unknown>;
+		expect(details?.followUp).toBeUndefined();
+	});
+});
+
 describe("failure handling", () => {
-	it("terminates the sandbox when a stage throws", async () => {
-		mocks.analysisTask.mockRejectedValue(new Error("model unavailable"));
+	it("releases the workspace when a stage throws", async () => {
+		mocks.implementTask.mockRejectedValue(new Error("model unavailable"));
 
 		await expect(run(INPUT)).rejects.toThrow("model unavailable");
-		expect(mocks.terminate).toHaveBeenCalledOnce();
+		expect(mocks.release).toHaveBeenCalledOnce();
 	});
 
 	it("marks the issue factory-status:failed when a stage throws", async () => {
-		mocks.analysisTask.mockRejectedValue(new Error("model unavailable"));
+		mocks.implementTask.mockRejectedValue(new Error("model unavailable"));
 
 		await expect(run(INPUT)).rejects.toThrow("model unavailable");
 		expect(mocks.gh.addLabels).toHaveBeenCalledWith(expect.anything(), 42, [
 			"factory-status:failed",
 		]);
-	});
-
-	it("still opens the pull request when labelling fails", async () => {
-		mocks.gh.addLabels.mockRejectedValue(new Error("labels API down"));
-
-		const result = await run(INPUT);
-
-		expect(result).toMatchObject({
-			pullRequest: expect.stringContaining("/pull/7"),
-		});
-	});
-
-	it("fails closed when an agent cannot produce valid JSON twice", async () => {
-		mocks.triageTask.mockResolvedValue("I am not sure.");
-
-		await expect(run(INPUT)).rejects.toThrow(/invalid structured output/);
-		expect(mocks.triageTask).toHaveBeenCalledTimes(2);
 	});
 });

@@ -9,21 +9,16 @@ import type { Agent } from "../app/agents/index.js";
 const all: Agent[] = [
 	agents.triage,
 	agents.specWriter,
-	agents.analyst,
 	agents.implementer,
 	agents.selfReview,
-	agents.security,
-	agents.correctness,
-	agents.tests,
-	agents.judge,
 ];
 
 const toolNames = (agent: Agent) =>
 	(agent.tools ?? []).map((tool) => tool.name);
 
 describe("agent definitions", () => {
-	it("registers nine agents with unique ids", () => {
-		expect(new Set(all.map((agent) => agent.id)).size).toBe(9);
+	it("registers agents with unique ids", () => {
+		expect(new Set(all.map((agent) => agent.id)).size).toBe(all.length);
 	});
 
 	it("gives every agent a prompt and a known model tier", () => {
@@ -45,14 +40,6 @@ describe("tool access", () => {
 		}
 	});
 
-	it("gives the analyst only read tools", () => {
-		expect(toolNames(agents.analyst).sort()).toEqual([
-			"sandbox__list_dir",
-			"sandbox__read_file",
-			"sandbox__search",
-		]);
-	});
-
 	it("gives the implementer read + write + exec tools", () => {
 		expect(toolNames(agents.implementer).sort()).toEqual([
 			"sandbox__apply_patch",
@@ -65,9 +52,7 @@ describe("tool access", () => {
 	});
 
 	it("gives no other agent write or exec tools", () => {
-		for (const agent of all.filter(
-			(a) => a.id !== "implementer" && a.id !== "analyst",
-		)) {
+		for (const agent of all.filter((a) => a.id !== "implementer")) {
 			expect(toolNames(agent)).not.toContain("sandbox__exec");
 			expect(toolNames(agent)).not.toContain("sandbox__write_file");
 			expect(toolNames(agent)).not.toContain("sandbox__apply_patch");
@@ -75,13 +60,7 @@ describe("tool access", () => {
 	});
 
 	it("gives reasoning-only agents no tools", () => {
-		for (const id of [
-			"self-review",
-			"security",
-			"correctness",
-			"tests",
-			"judge",
-		]) {
+		for (const id of ["self-review"]) {
 			const agent = all.find((candidate) => candidate.id === id);
 			expect(toolNames(agent as Agent)).toEqual([]);
 		}
@@ -105,7 +84,6 @@ describe("pinned tool-name lists", () => {
 			"spec-writer",
 			["sandbox__list_dir", "sandbox__read_file", "sandbox__search"],
 		],
-		["analyst", ["sandbox__list_dir", "sandbox__read_file", "sandbox__search"]],
 		[
 			"implementer",
 			[
@@ -118,10 +96,6 @@ describe("pinned tool-name lists", () => {
 			],
 		],
 		["self-review", []],
-		["security", []],
-		["correctness", []],
-		["tests", []],
-		["judge", []],
 	])("agent %s has exactly %j", (id, expected) => {
 		const agent = all.find((a) => a.id === id);
 		expect(agent).toBeDefined();
