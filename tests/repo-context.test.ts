@@ -79,7 +79,9 @@ describe("getRepoSnapshot", () => {
 
 		expect(result.defaultBranch).toBe("trunk");
 		expect(result.paths).toEqual(["README.md", "src/todo.js"]);
-		expect(result.files).toEqual([{ path: "README.md", content: "# Todo app" }]);
+		expect(result.files).toEqual([
+			{ path: "README.md", content: "# Todo app" },
+		]);
 	});
 
 	// Build output and dependencies describe nothing about the project.

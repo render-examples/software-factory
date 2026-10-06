@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import * as agents from "../app/agents/index.js";
-import type { Agent } from "../app/claude/index.js";
+import type { Agent } from "../app/agents/types.js";
 
 const all: Agent[] = [
 	agents.triage,
@@ -17,7 +17,8 @@ const all: Agent[] = [
 	agents.judge,
 ];
 
-const toolNames = (agent: Agent) => (agent.tools ?? []).map((tool) => tool.name);
+const toolNames = (agent: Agent) =>
+	(agent.tools ?? []).map((tool) => tool.name);
 
 describe("agent definitions", () => {
 	it("registers eight agents with unique ids", () => {
@@ -41,14 +42,21 @@ describe("tool access", () => {
 		]);
 	});
 
-	it("gives the implementer read + write tools", () => {
-		expect(toolNames(agents.implementer)).toContain("sandbox__exec");
-		expect(toolNames(agents.implementer)).toContain("sandbox__write_file");
-		expect(toolNames(agents.implementer)).toContain("sandbox__read_file");
+	it("gives the implementer read + write + exec tools", () => {
+		expect(toolNames(agents.implementer).sort()).toEqual([
+			"sandbox__apply_patch",
+			"sandbox__exec",
+			"sandbox__list_dir",
+			"sandbox__read_file",
+			"sandbox__search",
+			"sandbox__write_file",
+		]);
 	});
 
 	it("gives no other agent write or exec tools", () => {
-		for (const agent of all.filter((a) => a.id !== "implementer" && a.id !== "analyst")) {
+		for (const agent of all.filter(
+			(a) => a.id !== "implementer" && a.id !== "analyst",
+		)) {
 			expect(toolNames(agent)).not.toContain("sandbox__exec");
 			expect(toolNames(agent)).not.toContain("sandbox__write_file");
 			expect(toolNames(agent)).not.toContain("sandbox__apply_patch");
@@ -56,13 +64,19 @@ describe("tool access", () => {
 	});
 
 	it("gives reasoning-only agents no tools", () => {
-		for (const id of ["triage", "self-review", "security", "correctness", "tests", "judge"]) {
+		for (const id of [
+			"triage",
+			"self-review",
+			"security",
+			"correctness",
+			"tests",
+			"judge",
+		]) {
 			const agent = all.find((candidate) => candidate.id === id);
 			expect(toolNames(agent as Agent)).toEqual([]);
 		}
 	});
 
-	// Claude's own Bash/Read/Write/Edit would bypass the workflow-owned sandbox.
 	it("never grants a Claude built-in tool", () => {
 		const builtIns = ["Bash", "Read", "Write", "Edit", "NotebookEdit"];
 		for (const agent of all) {
@@ -70,6 +84,41 @@ describe("tool access", () => {
 				expect(builtIns).not.toContain(name);
 				expect(name.startsWith("sandbox__")).toBe(true);
 			}
+		}
+	});
+});
+
+describe("pinned tool-name lists", () => {
+	it.each([
+		["triage", []],
+		["analyst", ["sandbox__list_dir", "sandbox__read_file", "sandbox__search"]],
+		[
+			"implementer",
+			[
+				"sandbox__apply_patch",
+				"sandbox__exec",
+				"sandbox__list_dir",
+				"sandbox__read_file",
+				"sandbox__search",
+				"sandbox__write_file",
+			],
+		],
+		["self-review", []],
+		["security", []],
+		["correctness", []],
+		["tests", []],
+		["judge", []],
+	])("agent %s has exactly %j", (id, expected) => {
+		const agent = all.find((a) => a.id === id);
+		expect(agent).toBeDefined();
+		expect(toolNames(agent as Agent).sort()).toEqual(expected);
+	});
+});
+
+describe("runner override", () => {
+	it("defaults to no per-agent runner override", () => {
+		for (const agent of all) {
+			expect(agent.runner).toBeUndefined();
 		}
 	});
 });

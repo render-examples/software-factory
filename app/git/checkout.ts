@@ -48,8 +48,16 @@ export async function setupCheckout(
 		`checkout -b ${shellEscape(branch)} ${shellEscape(remoteHead)}`,
 		"Create working branch",
 	);
-	await git(sandbox, 'config user.name "render-factory[bot]"', "Set commit name");
-	await git(sandbox, 'config user.email "bot@render-factory.dev"', "Set commit email");
+	await git(
+		sandbox,
+		'config user.name "render-factory[bot]"',
+		"Set commit name",
+	);
+	await git(
+		sandbox,
+		'config user.email "bot@render-factory.dev"',
+		"Set commit email",
+	);
 
 	return {
 		remoteUrl,
