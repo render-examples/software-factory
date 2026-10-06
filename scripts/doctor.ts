@@ -170,7 +170,10 @@ function checkMaintenanceEnv(): void {
 	heading("Maintenance environment");
 
 	present("RENDER_API_KEY", "Required for sandbox lifecycle.");
-	present("RENDER_WORKSPACE_ID", "Required to manage the warm pool.");
+	present(
+		"RENDER_WORKSPACE_ID",
+		"Required to build snapshots and create sandboxes.",
+	);
 }
 
 // ── GitHub App installation and permissions ──────────────────────────
@@ -467,28 +470,39 @@ async function checkPostgres(): Promise<void> {
 			});
 		}
 
-		// Check warm pool health.
 		try {
-			const { rows: poolRows } = await db().query<{
-				status: string;
-				count: string;
-			}>("SELECT status, count(*)::text FROM sandboxes GROUP BY status");
-			if (poolRows.length > 0) {
-				const counts = poolRows
-					.map((r) => `${r.status}: ${r.count}`)
-					.join(", ");
-				record({ level: "ok", message: `Sandbox pool: ${counts}` });
+			const { rows: snapshotRows } = await db().query<{
+				id: string;
+				base_sha: string;
+				expires_at: Date | null;
+			}>(
+				`SELECT id, base_sha, expires_at FROM snapshots
+				 WHERE status = 'available' ORDER BY created_at DESC LIMIT 1`,
+			);
+			const current = snapshotRows[0];
+			if (!current) {
+				record({
+					level: "warn",
+					message: "No repository snapshot yet",
+					fix: "The maintenance cron builds one on its next run; the first run builds one inline if needed.",
+				});
+			} else if (current.expires_at && current.expires_at < new Date()) {
+				record({
+					level: "warn",
+					message: `Snapshot ${current.id} has expired`,
+					fix: "Check the factory-maintenance cron logs; it should rebuild the snapshot before expiry.",
+				});
 			} else {
 				record({
 					level: "ok",
-					message: "Sandbox pool is empty (normal before first run)",
+					message: `Snapshot ${current.id} at ${current.base_sha.slice(0, 8)}${current.expires_at ? `, expires ${current.expires_at.toISOString()}` : ""}`,
 				});
 			}
 		} catch {
 			record({
 				level: "warn",
-				message: "Could not query sandboxes table",
-				fix: "The sandboxes table may not exist. Run npm run db:migrate.",
+				message: "Could not query the snapshots table",
+				fix: "Run npm run db:migrate.",
 			});
 		}
 	} catch (error) {
