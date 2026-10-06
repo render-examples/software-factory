@@ -1,203 +1,95 @@
 # render-factory
 
-A reference for building a self-hosted software factory on
-Render. It turns a labeled GitHub issue into a reviewed draft pull request
-using Workflows, Sandboxes, Postgres, and Web Services.
-
-[Patterns](#production-patterns-demonstrated) · [Run lifecycle](#run-lifecycle) ·
-[Get started](#get-started) · [Deploy](#deploy-to-render) ·
-[Adapt](#adaptation-seams) · [Safety](#safety-boundaries)
+A reference for building a self-hosted software factory on Render. It turns
+a labeled GitHub issue into a reviewed draft pull request using three
+chained workflows — Triage, Spec-to-PR, and PR Reviewer — backed by
+Workflows, Sandboxes, Postgres, and Web Services.
 
 This repository is meant to be read, demonstrated, forked, and adapted.
-It is not a general-purpose coding agent product or a claim that every factory needs eight agents.
-The useful parts are the production boundaries: where state lives, which component holds
-authority, how untrusted model actions are constrained, and where a human
-remains in control.
+It is not a general-purpose coding agent product. The useful parts are
+the production boundaries: where state lives, which component holds
+authority, how untrusted model actions are constrained, and where a
+human remains in control.
 
-## Use this reference when
+## The three workflows
 
-- You want to run coding agents inside infrastructure you control.
-- You need to show how Render Workflows, Sandboxes, and Web Services divide
-  control-plane, execution, and ingress responsibilities.
-- The design needs auditable Git changes, deterministic checks, scoped
-  credentials, and a human approval boundary.
+| Workflow | Triggered by | What it does | Ends with |
+|---|---|---|---|
+| **Triage** | `factory:triage` or `factory:full-run` on an issue, or a human reply while the conversation is open | Leases a sandbox, reads the repository, and decides: ask clarifying questions, draft/revise a specification, or decline. | Questions or a spec version posted on the issue |
+| **Spec-to-PR** | `factory:spec-approved` on an issue | Implements the approved spec version, verifies with configured commands, self-reviews, publishes through the Git Data API, and opens a draft PR. | A draft PR whose tree SHA matches the sandbox |
+| **PR Reviewer** | `factory:pr-review` on a PR, or automatically after a full run | Runs verification, parallel specialist reviewers (security, correctness, performance, tests), UX testing against local dev and the preview environment, and posts one COMMENT review. | A COMMENT review on the PR |
 
-Use it as a pattern library, not a drop-in service. It is intentionally bound
-to one repository and one issue-label trigger; multi-tenant authorization,
-policy administration, billing, and fleet operations are outside its scope.
+Phases chain through GitHub. A run never waits for a human — it finishes
+its phase, posts the result, and ends. The human's response starts the
+next run. A full run (`factory:full-run`) chains all three automatically.
 
-## Production patterns demonstrated
-
-- **Thin ingress, privileged workflow.** The public gateway authenticates and
-  dispatches; it runs no models and has no repository credential. This reduces
-  the blast radius of an internet-facing service, at the cost of deploying and
-  configuring the gateway and Workflows host separately.
-- **Capabilities, not prompt promises.** Analysts receive read tools,
-  implementers receive scoped write tools, and reviewers receive only diff
-  text. Claude's built-in machine tools stay disabled. This makes access
-  reviewable in code, but every new capability requires an explicit tool and
-  policy decision.
-- **Workflow-owned authority.** Models can propose and edit, but workflow code
-  owns sandbox lifecycle, commits, verification, pushes, and PR creation. This
-  makes safety properties deterministic; the tradeoff is more orchestration
-  code and less agent autonomy.
-- **Ephemeral execution, durable coordination.** Each accepted run gets one
-  isolated sandbox while Postgres stores run state and idempotency records.
-  Isolation and retries are easier to reason about, but sandbox startup adds
-  latency and work must not depend on its filesystem surviving termination.
-- **Layered quality gates.** Deterministic build and test commands run before
-  parallel specialist review, a judge, remote-SHA verification, and a human
-  draft-PR decision. More gates improve evidence, but add model cost and
-  latency; smaller workflows may need fewer reviewers.
-- **Short-lived, scoped source-control credentials.** A GitHub App mints
-  installation tokens scoped to the target repository. They reach Git through
-  a temporary askpass script and never enter prompts or remotes.
-
-## Run lifecycle
-
-1. The gateway validates a GitHub label event, claims an idempotent run in
-   Postgres, and dispatches only an issue number and run ID.
-2. Triage uses authoritative GitHub data before any sandbox is created. An
-   unclear request returns questions without paying the isolation cost.
-3. The workflow creates one sandbox, clones the configured repository, and
-   creates a deterministic working branch.
-4. A read-only analyst plans; an implementer edits; workflow code commits and
-   runs configured verification commands, feeding failures back for repair.
-5. Review agents inspect the complete diff without sandbox access. One
-   requested revision may return to the implementer.
-6. An approval allows workflow code to push, verify the remote SHA, and open a
-   draft PR. Automation never marks it ready or merges it.
-7. A `finally` block terminates the sandbox. The trigger label remains during
-   the run so platform retries can re-read authoritative input; reapplying it
-   after a terminal result starts a fresh run.
+```text
+factory:triage ──► Triage ──► questions or spec
+                                   │
+                         human replies / approves
+                                   │
+factory:spec-approved ──► Spec-to-PR ──► draft PR
+                                            │
+              factory:pr-review or auto ──► PR Reviewer ──► COMMENT review
+```
 
 ## Architecture
 
-The detailed wiring below is included because it demonstrates a production
-boundary: Workflow tasks share an ephemeral execution environment by ID
-without giving the model authority to select or manage that environment.
-That indirection improves isolation and observability, but couples the workflow
-to sandbox availability and requires explicit cleanup.
+Five Render resources, plus sandboxes and preview environments:
 
-<details>
-<summary>Sandbox and task wiring</summary>
+| Resource | Render type | Entry point | Job |
+|---|---|---|---|
+| `factory-gateway` | Web Service | `app/src/server.ts` | Verifies webhooks, records deliveries, creates queued runs; serves the read API, trace UI, and artifact links |
+| `factory-dispatcher` | Background Worker | `app/src/dispatcher.ts` | Polls queued runs and starts Workflow tasks |
+| `factory-workflows` | Workflows | `app/src/workflows.ts` | Runs the three workflows and all agent tasks; owns GitHub writes and publishing |
+| `factory-maintenance` | Cron Job | `app/src/maintenance.ts` | Re-queues stuck dispatches, fails lost executions, maintains the warm pool, expires artifacts |
+| `factory-db` | Postgres | — | All state: runs, deliveries, events, specs, sandboxes, artifacts |
 
-```mermaid
-flowchart LR
-  GitHub["GitHub<br/>issue + repository"]
-  Anthropic["Anthropic API"]
-  RenderAPI["Render API<br/>experimental.sandboxes"]
-  Postgres["Render Postgres<br/>run status + branch + PR<br/>no sandbox ID"]
+Sandboxes are Render Sandboxes managed through a warm pool. Preview
+environments come from the target repository's own Blueprint.
 
-  subgraph Workflow["Render Workflows"]
-    Pipeline["spec-to-pr pipeline<br/>app/workflows/spec-to-pr/index.ts"]
-    Triage["Triage<br/>runs before sandbox creation"]
-    GitOps["Workflow-owned Git<br/>clone · commit · diff · push"]
-    Verify["Deterministic verification<br/>factoryConfig.verify"]
-    AgentTask["Agent task boundary<br/>app/tasks/agent-task.ts"]
-    Review["Diff-only agents<br/>self-review · security · correctness<br/>tests · judge"]
-    Cleanup["finally<br/>terminate on every post-create exit"]
-  end
+### Credential placement
 
-  subgraph Adapter["Sandbox adapter — app/sandbox"]
-    Lifecycle["createSandbox(timeout=24h)<br/>poll up to 120s until running"]
-    Connect["connectSandbox(id)<br/>rebuild lightweight handle"]
-    Sandbox["Sandbox<br/>exec · run · upload · files · terminate"]
-    Client["SDK client<br/>app/sandbox/client.ts"]
-  end
+| Credential | Gateway | Dispatcher | Workflows | Maintenance | Sandboxes |
+|---|---|---|---|---|---|
+| `DATABASE_URL` | yes | yes | yes | yes | — |
+| `GITHUB_WEBHOOK_SECRET` | yes | — | — | — | — |
+| `FACTORY_ADMIN_TOKEN` | yes | — | — | — | — |
+| `RENDER_API_KEY` | — | yes | yes | yes | — |
+| GitHub App credentials | — | — | yes | yes | Read-only token, present only during clone/fetch |
+| Model provider keys | — | — | yes | — | — |
 
-  subgraph AgentRuntime["Claude runtime"]
-    Claude["runClaude()<br/>built-in machine tools disabled"]
-    Policy["PreToolUse policy<br/>path + destructive-operation checks"]
-    Tools["Role-scoped MCP tools<br/>read tools or all tools"]
-  end
+The gateway holds no model key, no Render API key, and no repository
+credential. Model keys never enter a sandbox.
 
-  subgraph RemoteSandbox["One isolated Render Sandbox per accepted run"]
-    Checkout["/home/user/repo<br/>working branch + commits"]
-    Askpass["/tmp askpass script<br/>ephemeral GitHub token"]
-  end
+## Safety boundaries
 
-  GitHub -->|"authoritative intake"| Triage
-  Triage -->|"enough detail"| Pipeline
-  Triage -->|"needs clarification; no sandbox"| GitHub
-  Pipeline -->|"persist status / branch / PR"| Postgres
-  Pipeline -->|"createSandbox(timeout)"| Lifecycle
-  Lifecycle -->|"create / get"| Client
-  Client <--> RenderAPI
-  RenderAPI <--> RemoteSandbox
-
-  Pipeline -->|"Sandbox object"| GitOps
-  Pipeline -->|"Sandbox object"| Verify
-  GitOps -->|"run / upload"| Sandbox
-  Verify -->|"run configured commands"| Sandbox
-
-  Pipeline -->|"sandboxId only"| AgentTask
-  AgentTask --> Connect
-  Connect --> Sandbox
-  AgentTask --> Claude
-  Claude <--> Anthropic
-  Claude -->|"in-process MCP call"| Policy
-  Policy -->|"allow"| Tools
-  Tools -->|"ToolContext.sandbox"| Sandbox
-
-  Pipeline -->|"all exits after creation"| Cleanup
-  Cleanup -->|"terminate"| Sandbox
-  Sandbox -->|"exec / upload / terminate"| Client
-  Sandbox --> Checkout
-  GitOps --> Askpass
-  Askpass -.->|"supplies credentials"| Checkout
-  Checkout <-->|"clone; approved push only"| GitHub
-
-  GitOps -->|"complete diff text"| Review
-  Review <--> Anthropic
-  Review -->|"approval gates push"| GitOps
-
-  Analyst["Analyst agent<br/>readTools"] -.-> Tools
-  Implementer["Implementer agent<br/>allTools"] -.-> Tools
-```
-
-The sandbox is shared by ID across separate Workflow tasks. The top-level
-workflow creates and always terminates it; agent code cannot select a sandbox
-or use Claude's built-in filesystem and shell tools. Git commits, verification,
-diff extraction, and the final push are handled in code
-through the workflow-owned `Sandbox` handle.
-
-</details>
-
-Two processes deploy independently: the Hono gateway at `app/src/server.ts` and
-the task-registration host at `app/src/workflows.ts`. The gateway runs no
-models and holds no repository credential. Workflow code owns GitHub writes,
-Git pushes, and sandbox lifecycle; agents receive only the sandbox operations
-their role requires.
-
-`GET /health` reports liveness. `GET /ready` checks Postgres and is the
-deployed gateway health check.
-
-## Where to look
-
-- Start with `app/workflows/spec-to-pr/index.ts` for the control flow and
-  `factory.config.ts` for configurable choices.
-- Read `app/claude/run.ts`, `app/tools/`, and `app/policy/` together to inspect
-  the model-to-machine trust boundary.
-- Read `app/gateway/`, `app/store/`, and `app/git/` for ingress, idempotency,
-  credential handling, and publishing.
-- Use [AGENTS.md](AGENTS.md) as the implementation guide for adding agents,
-  tasks, tools, and workflows.
+- The webhook signature is verified before the body is parsed.
+- One deployment is bound to one validated target repository from `factory.config.ts`.
+- Every run checks the triggering actor's live repository permission (configurable minimum, default `write`) before doing work.
+- The gateway holds only the database URL, webhook secret, and admin token.
+- Agents receive only the tool sets they compose. Claude's built-in `Bash`, `Read`, `Write`, and `Edit` tools are never granted. Each agent's tool list is pinned by a test.
+- Model credentials never enter a sandbox. A GitHub token is present in a sandbox only during clone or fetch; it is read-only and scrubbed before any agent or PR code runs.
+- Models never choose sandbox IDs, paths outside the checkout, branches, GitHub targets, or task names.
+- Publishing uses the Git Data API from the Workflows service. A PR opens only after GitHub's tree SHA equals the verified local tree SHA. Symlinks (mode `120000`) and submodules (`160000`) are refused. Changes under `.github/workflows/` are refused unless `allowWorkflowChanges` is set.
+- `checkToolCall` runs as a `PreToolUse` hook and vetoes destructive commands (`git push`, `git remote`, `git config --global`, `git credential`, recursive forced deletion, destructive SQL, and more) and secret exfiltration patterns.
+- Reviews are COMMENT-only. The factory never approves, never requests changes, never marks a PR ready, and never merges.
+- Secret-shaped strings are redacted from anything posted to GitHub.
+- At most one non-terminal run exists per subject (enforced by a partial unique index).
+- Sandboxes are released in `finally`. Maintenance only terminates sandboxes recorded in the `sandboxes` table.
 
 ## Get started
 
 ### Prerequisites
 
-For a full end-to-end run you need:
-
-- Node.js 22 or newer and npm
+- Node.js 22+ and npm
 - Docker for the local Postgres service
-- The Render CLI, installed and authenticated
+- The [Render CLI](https://render.com/docs/cli), installed and authenticated
 - A Render workspace with access to Workflows and Sandboxes
-- An Anthropic API key
-- A GitHub repository and a fine-grained token
+- An Anthropic API key (OpenAI optional, for the alternative runner)
+- A GitHub repository to use as the target (see the [sample repository](#sample-repository))
 
-### Install and configure
+### Install
 
 ```bash
 git clone https://github.com/<you>/render-factory.git
@@ -206,184 +98,214 @@ npm ci
 cp .env.example .env
 ```
 
-Fill in `.env` using the [configuration reference](#configuration). Start and
-migrate Postgres first:
+Fill in `.env` using the [configuration reference](#configuration-reference).
 
-```bash
-npm run dev:postgres
-npm run db:migrate
+### Configure `factory.config.ts`
+
+Point `repos[0]` at your fork of the sample repository:
+
+```ts
+repos: [{
+  owner: "your-org",
+  name: "render-factory-sample",
+  baseBranch: "main",
+  repoDir: "/home/user/repo",
+  setup: { install: "npm ci", browsers: true },
+  verify: ["npm run build", "npm test"],
+  dev: {
+    start: "npm run dev -- --port 3000",
+    port: 3000,
+    healthPath: "/",
+  },
+  preview: { serviceName: "sample-web" },
+}]
 ```
 
-Then run each process in a separate terminal:
+### Deploy
 
-- Gateway on `http://localhost:3000`: `npm run dev:gateway`
-- Render Workflows host: `npm run dev:workflows`
-
-`dev:workflows` requires the authenticated Render CLI. Local workflow runs
-still create real Render Sandboxes; they do not execute repository code on your
-development machine.
+1. Fork this repository and the sample repository.
+2. Update `repos[0]` in `factory.config.ts` and `repo` on the `factory-workflows` service in `render.yaml`.
+3. Create a Blueprint from `render.yaml`. It provisions the gateway, dispatcher, maintenance cron, workflows service, and database.
+4. Set the `sync: false` values in the Render Dashboard (see [configuration reference](#configuration-reference)).
+5. Deploy the Blueprint once so the gateway's pre-deploy command migrates the database.
+6. Run `npm run setup:app` to create the GitHub App through the manifest flow, then install it on the sample repository.
+7. Run `npm run setup:github` to create the webhook and the four trigger labels.
+8. Run `npm run doctor` to verify the setup.
+9. Apply `factory:full-run` to a seeded issue on the sample repository.
 
 ### Setup commands
 
 ```bash
-npm run setup:app     # create a GitHub App via GitHub's manifest flow
-npm run setup:github  # create the webhook and trigger label
-npm run doctor        # diagnose the result; changes nothing
+npm run setup:app       # create a GitHub App via GitHub's manifest flow
+npm run setup:github    # create/update the webhook and four trigger labels
+npm run doctor          # diagnose the deployment; read-only, safe in CI
 ```
 
-The setup scripts automate GitHub App creation and idempotent webhook/label
-configuration. `doctor` is the operational contract: it checks credentials,
-cross-service configuration, GitHub wiring, database schema, and task
-registration, prints a fix for each failure, and is safe to run in CI.
+## Configuration reference
 
-Running `doctor` against a Render database from your laptop needs the external
-connection string with `?sslmode=require` appended. The deployed services use
-the internal string, which does not.
+### `factory.config.ts`
 
-### Connect GitHub and run the factory
+| Field | Type | Purpose |
+|---|---|---|
+| `repos[0].owner` | string | GitHub owner of the target repository |
+| `repos[0].name` | string | Repository name |
+| `repos[0].baseBranch` | string | Branch to clone and target PRs against (default `main`) |
+| `repos[0].repoDir` | string | Checkout path inside sandboxes |
+| `repos[0].setup.install` | string | Install command run in warm sandboxes |
+| `repos[0].setup.browsers` | boolean | Install Playwright browsers in warm sandboxes |
+| `repos[0].verify` | string[] | Commands run to verify implementations (build, test) |
+| `repos[0].dev.start` | string | Command to start the dev server for local UX testing |
+| `repos[0].dev.port` | number | Port the dev server listens on |
+| `repos[0].dev.healthPath` | string | Path to poll for dev server readiness |
+| `repos[0].dev.readyTimeoutSeconds` | number | How long to wait for the dev server (default 120) |
+| `repos[0].dev.env` | Record | Extra env vars for the dev server |
+| `repos[0].preview.serviceName` | string | Render service name for preview environments |
+| `repos[0].allowWorkflowChanges` | boolean | Allow changes to `.github/workflows/` (default false) |
+| `labels.triage` | string | Label to start triage (default `factory:triage`) |
+| `labels.fullRun` | string | Label for a full run (default `factory:full-run`) |
+| `labels.specApproved` | string | Label to approve a spec (default `factory:spec-approved`) |
+| `labels.prReview` | string | Label to start PR review (default `factory:pr-review`) |
+| `commandPrefix` | string | Prefix for commands like cancel (default `/factory`) |
+| `minimumPermission` | string | Minimum GitHub permission to trigger runs (default `write`) |
+| `agents.runner` | string | Default runner: `claude` or `openai` |
+| `agents.models` | object | Model IDs per runner and tier (`small`, `medium`, `large`) |
+| `review.specialists` | string[] | Specialist reviewers to run (default: security, correctness, performance, tests) |
+| `pool.size` | number | Number of warm sandboxes to maintain (default 3) |
+| `pool.refreshAfterMinutes` | number | Recycle warm sandboxes after this many minutes (default 60) |
+| `pool.sandboxTimeoutSeconds` | number | Sandbox lifetime limit (default 7200) |
+| `pool.network` | object | Render native sandbox network policy, passed through unchanged |
+| `limits.repairRounds` | number | Max verification repair rounds (default 2) |
+| `limits.perRunUsd` | number | Per-run cost cap in USD (default 20) |
+| `limits.toolOutputChars` | number | Max tool output before truncation (default 40000) |
+| `limits.artifactBytes` | number | Max size per artifact (default 5 MB) |
+| `limits.runArtifactBytes` | number | Max total artifacts per run (default 50 MB) |
+| `pricing` | object | Model ID to per-token pricing for cost tracking |
 
-The webhook takes `issues` events at:
-
-```text
-https://<gateway-host>/webhooks/github
-```
-
-Use the same secret as `GITHUB_WEBHOOK_SECRET`. A gateway running only on
-localhost needs a publicly reachable HTTPS tunnel before GitHub can deliver to
-it.
-
-Apply the trigger label (`factory:full-run` by default) to an issue, as a
-login on the actor allowlist. Applying that label is the only way to start
-work in this milestone.
-
-Scope the GitHub App to the target repository, grant Contents, Issues, and
-Pull Requests write permissions, and protect the default branch.
-
-### Who the factory appears as
-
-Comments and pull requests are attributed to the GitHub App
-(`your-app[bot]`). The factory authenticates with installation tokens that
-expire after an hour. Create an App with Contents, Issues, and Pull Requests
-write permissions, install it on the target repository, then set
-`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_APP_INSTALLATION_ID`.
-Commits are authored as `render-factory[bot]`.
-
-## Configuration
+### Environment variables
 
 | Variable | Service | Purpose |
 |---|---|---|
-| `FACTORY_GITHUB_ACTORS` | Gateway | Comma-separated GitHub logins allowed to apply the label; overrides `factory.config.ts` |
-| `GITHUB_WEBHOOK_SECRET` | Gateway | HMAC secret; use at least 32 random characters |
-| `RENDER_WORKFLOW_SLUG` | Gateway | Deployed Workflows service slug, without a task name |
-| `DATABASE_URL` | Both | Postgres connection string |
-| `ANTHROPIC_API_KEY` | Workflows | Claude Agent SDK credential |
-| `GITHUB_APP_ID` | Workflows | GitHub App ID (required) |
-| `GITHUB_APP_PRIVATE_KEY` | Workflows | App private key: PEM, escaped PEM, or base64 |
-| `GITHUB_APP_INSTALLATION_ID` | Workflows | Installation on the target repository |
-| `RENDER_API_KEY` | Both | Task dispatch on the gateway; Sandboxes on Workflows |
-| `RENDER_WORKSPACE_ID` | Workflows | Workspace in which sandboxes are created |
-| `GITHUB_API_URL` | Workflows | Optional GitHub API base URL override |
-| `PORT` | Gateway | Optional HTTP port; defaults to `3000` |
+| `DATABASE_URL` | All four | Postgres connection string |
+| `GITHUB_WEBHOOK_SECRET` | Gateway | HMAC secret for webhook verification |
+| `FACTORY_ADMIN_TOKEN` | Gateway | Bearer token for the read API and trace UI |
+| `PORT` | Gateway | HTTP port (default 3000) |
+| `RENDER_API_KEY` | Dispatcher, Workflows, Maintenance | Render API key for task dispatch and sandbox operations |
+| `RENDER_WORKFLOW_SLUG` | Dispatcher | Slug of the `factory-workflows` service |
+| `RENDER_WORKSPACE_ID` | Workflows, Maintenance | Workspace for sandbox creation |
+| `GITHUB_APP_ID` | Workflows, Maintenance | GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | Workflows, Maintenance | PEM private key (raw, escaped, or base64) |
+| `GITHUB_APP_INSTALLATION_ID` | Workflows, Maintenance | Installation on the target repository |
+| `ANTHROPIC_API_KEY` | Workflows | Claude API key |
+| `OPENAI_API_KEY` | Workflows | OpenAI API key (when using the openai runner) |
+| `GITHUB_API_URL` | Workflows, Maintenance | Optional GitHub API base URL override |
+| `FACTORY_PUBLIC_URL` | Workflows | Public URL for linking to runs in error comments |
 
-The target repository is configured in `factory.config.ts` (not an env var).
-Both processes must use the same Postgres database. `DATABASE_URL` points to
-local Docker in `.env.example`; the gateway Blueprint wires its production
-value automatically.
+Development scripts load `.env`. Production commands (`npm run start:*`) do
+not; supply their environment through Render.
 
-Development scripts load `.env`. The production commands `npm run start:gateway`
-and `npm run start:workflows` do not; supply their environment through Render.
+## Observability
 
-## Deploy to Render
+### Read API
 
-1. Fork this repository.
-2. Create a Blueprint from `render.yaml`. It provisions
-   `render-factory-gateway` and `render-factory-db`.
-3. Set the unsynced gateway variables listed in
-   [Configuration](#configuration).
-4. Deploy the Blueprint gateway once so its pre-deploy command migrates the
-   database.
-5. Create a Render Workflows service from the same repository, using:
+JSON endpoints behind `Authorization: Bearer <FACTORY_ADMIN_TOKEN>`:
 
-   ```bash
-   npm run start:workflows
-   ```
+| Endpoint | Description |
+|---|---|
+| `GET /api/runs` | List runs with status, workflow, subject, stage, cost |
+| `GET /api/runs/:id` | Single run detail |
+| `GET /api/runs/:id/events` | Span timeline for a run |
+| `GET /api/runs/:id/artifacts` | Artifacts (screenshots, transcripts, logs) |
+| `GET /api/specs/:id` | Specification with versions |
+| `GET /api/deliveries` | Recent webhook deliveries and their outcomes |
 
-6. Set the Workflows variables before it starts, using the Postgres **internal**
-   connection string for `DATABASE_URL`.
-7. Set the gateway's `RENDER_WORKFLOW_SLUG` to the Workflows service slug.
-8. Point the GitHub `issues` webhook at `/webhooks/github`.
+### Trace UI
 
-Render Workflows cannot currently be provisioned by Blueprints, and the
-`Dockerfile` starts only the gateway — keep the Workflows host as a separate
-service. The gateway runs `npm run db:migrate` as its pre-deploy command, so
-the schema is applied before any new instance serves traffic.
+Server-rendered pages at `/ui` behind the admin token. Shows runs,
+the span timeline, conversation history, cost by agent, spec versions,
+artifacts with inline screenshots, and links to GitHub.
 
-## Adaptation seams
+### Artifact links
 
-- **Repository policy:** start in `factory.config.ts` with the target
-  repository, labels, model tiers, checkout path, and verification commands.
-  Verification runs in workflow code—not by model assertion—and empty commands
-  deliberately remove that evidence.
-- **Agent roles:** add an agent when a separate context, model tier, or
-  capability boundary is useful. Tools are runtime allowlists; giving an agent
-  write access is a security decision, not prompt wording.
-- **Workflow stages:** keep external input schema-validated, task payloads
-  small, results serializable, and sandbox ownership inside `try/finally`.
-  Additional stages improve specialization and observability but add latency,
-  model cost, and more retry behavior to reason about.
-- **Review depth:** reduce or expand the specialist fan-out to match your risk
-  tolerance. Deterministic checks should remain independent of model review,
-  and the human draft-PR boundary should remain explicit.
+`GET /a/:token` serves one artifact publicly, so reviews can embed
+screenshots. Tokens are 32 random bytes; only their SHA-256 hash is stored.
+Only images are served inline; everything else is an attachment.
 
-See [AGENTS.md](AGENTS.md) for file-level registration steps, extension
-conventions, security invariants, and test ownership.
+## Local development
 
-## Safety boundaries
+```bash
+npm run dev:postgres        # start local Postgres via docker compose
+npm run db:migrate          # apply schema migrations
+npm run dev:gateway         # gateway with auto-reload on localhost:3000
+npm run dev:workflows       # Render Workflows host (requires the Render CLI)
+npm run dev:dispatcher      # dispatcher with auto-reload
+```
 
-- The webhook signature is checked before the body is parsed or dispatched.
-- One deployment is bound to one validated target repository from `factory.config.ts`.
-- Only `issues.labeled`, from a human on the actor allowlist, starts a run.
-  Bots, pull requests, other repositories, and other events are skipped.
-- The gateway never receives the repository token.
-- Claude's built-in filesystem and shell tools are not exposed to app agents,
-  so every action an agent takes goes through a workflow-owned sandbox.
-- `checkToolCall` runs as a Claude `PreToolUse` hook and vetoes destructive
-  commands, secret exfiltration, and paths outside the checkout.
-- Malformed structured model output fails closed after one repair attempt.
-- The GitHub token never enters a prompt, a Git remote URL, or a command line;
-  it reaches Git through a temporary askpass script.
-- The factory signs a short JWT with the app's private key and exchanges it
-  for an installation token that expires within the hour.
-- The reviewed local commit must match the remote SHA before a PR is created.
-- Secret-shaped strings are redacted from anything posted to GitHub.
-- Automation ends at a draft PR; readiness and merge remain human decisions.
+Local workflow runs create real Render Sandboxes; they do not execute
+repository code on your machine. Running `doctor` against a Render
+database from your laptop needs `?sslmode=require` appended to the
+external connection string.
+
+The gateway serves health at `GET /health` and readiness at `GET /ready`
+(checks Postgres). Webhooks arrive at `POST /webhooks/github`.
+
+## Sample repository
+
+The [render-factory-sample](https://github.com/render-examples/render-factory-sample)
+is a small Node todo-list app with:
+
+- A `render.yaml` with preview environments enabled (`previews: generation: automatic`)
+- `build` and `test` scripts that pass
+- A dev server started with `npm run dev -- --port 3000`
+- Five seeded issues in `seed-issues/`:
+  1. A clear, well-specified request (add due dates)
+  2. An underspecified request that triggers questions (search)
+  3. A UX change that browser testing can verify (dark mode)
+  4. A performance change the specialist should examine (count endpoint)
+  5. A prompt injection attempt (secrets, git hooks, symlinks)
+
+## Evals
+
+```bash
+npm run eval          # validate cases and print the run plan
+npm run eval -- --live   # check env and explain what live mode would do
+```
+
+Eval cases live in `evals/cases/*.json`. Each case specifies a workflow,
+a fixture (issue title, body, labels, optional comments or PR diff), and
+a rubric of checks with severity levels. In 0.1.0, the eval runner
+validates cases and prints the plan without calling live services.
 
 ## Current limitations
 
-- Every accepted issue, including one run from local development, creates a
-  real sandbox and invokes multiple model tasks.
+- Every accepted run creates a real sandbox and calls model APIs.
 - One deployment is bound to one GitHub repository.
-- Intake is limited to a maintainer applying one issue label.
-- There is no public chat API, PR review trigger, or automatic PR follow-up.
-- Only one implementation/review revision is attempted; unresolved findings
-  stop without a PR.
-- A failed task run is not resumed, and retrying repeats task model calls.
-- Issue context, repository snapshots, tool output, and review diffs are
-  bounded. Large specifications or monorepos may need different limits and
-  retrieval strategies.
-- Diffs over 200,000 characters and binary diffs fail closed.
-- Render Workflows must be created separately from the Blueprint, and Workflows
-  and Sandboxes product access is required.
-- Render service filesystems are ephemeral; anything that must outlive a
-  process belongs in Postgres.
+- Only one implementation attempt per spec; unresolved verification failures stop without a PR.
+- A failed run is not resumed; retrying repeats model calls.
+- Large diffs (over 200 KB) and binary diffs are bounded or fail closed.
+- One database role serves all services.
+- A lost execution posts no GitHub comment (maintenance marks it failed; it shows in the trace UI).
+- Public artifact links expose that artifact to anyone with the link.
+- Live eval execution is not implemented; the runner validates and prints a plan.
 
-## Development and verification
+## Where to look
+
+| Area | Start here |
+|---|---|
+| Control flow | `app/workflows/spec-to-pr/index.ts`, `app/workflows/triage/index.ts`, `app/workflows/pr-review/index.ts` |
+| Configuration | `factory.config.ts` |
+| Model trust boundary | `app/runners/`, `app/tools/`, `app/policy/` |
+| Ingress and dispatch | `app/gateway/`, `app/dispatcher/` |
+| Publishing | `app/publish/` |
+| Workspaces | `app/workspaces/` |
+| State and persistence | `app/store/`, `app/sql/` |
+| Agent guide | [AGENTS.md](AGENTS.md) |
+
+## Verification
 
 ```bash
-npm run check                        # Biome lint, TypeScript, and Vitest
-npx vitest run tests/gateway.test.ts # one focused suite
-npm run doctor                       # diagnose a live deployment
-render blueprints validate           # when render.yaml changes
+npm run check           # Biome lint, TypeScript, Vitest
+npm run doctor          # diagnose a live deployment (read-only)
+npm run eval            # validate eval cases
 ```
 
 ## License
