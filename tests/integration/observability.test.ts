@@ -85,7 +85,7 @@ describe("listRuns", () => {
 			[id3],
 		);
 
-		const { listRuns } = await import("../../app/store/queries.js");
+		const { listRuns } = await import("../../app/store/index.js");
 
 		const all = await listRuns({});
 		expect(all.length).toBeGreaterThanOrEqual(3);
@@ -130,7 +130,7 @@ describe("listConversation", () => {
 			[r3, r2],
 		);
 
-		const { listConversation } = await import("../../app/store/queries.js");
+		const { listConversation } = await import("../../app/store/index.js");
 
 		const conv = await listConversation(r2);
 		const convIds = conv.map((r: { id: string }) => r.id);
@@ -163,7 +163,7 @@ describe("listArtifactsByRun", () => {
 			[artId, runId, Buffer.from("test"), tokenHash],
 		);
 
-		const { listArtifactsByRun } = await import("../../app/store/queries.js");
+		const { listArtifactsByRun } = await import("../../app/store/index.js");
 		const arts = await listArtifactsByRun(runId);
 
 		expect(arts).toHaveLength(1);
@@ -192,7 +192,7 @@ describe("listDeliveries", () => {
 			[d2],
 		);
 
-		const { listDeliveries } = await import("../../app/store/queries.js");
+		const { listDeliveries } = await import("../../app/store/index.js");
 		const result = await listDeliveries(10);
 		const ids = result.map((d: { deliveryId: string }) => d.deliveryId);
 		expect(ids.indexOf(d2)).toBeLessThan(ids.indexOf(d1));
@@ -220,7 +220,7 @@ describe("listSpecVersions", () => {
 			[specId],
 		);
 
-		const { listSpecVersions } = await import("../../app/store/queries.js");
+		const { listSpecVersions } = await import("../../app/store/index.js");
 		const versions = await listSpecVersions(specId);
 		expect(versions).toHaveLength(2);
 		expect(versions[0].version).toBe(1);
@@ -248,7 +248,7 @@ describe("listEventsByRun", () => {
 			[runId],
 		);
 
-		const { listEventsByRun } = await import("../../app/store/queries.js");
+		const { listEventsByRun } = await import("../../app/store/index.js");
 		const events = await listEventsByRun(runId);
 		expect(events.length).toBeGreaterThanOrEqual(3);
 		const ids = events.map((e: { id: string }) => Number(e.id));
@@ -278,7 +278,7 @@ describe("getArtifactForServing", () => {
 		);
 
 		const { getArtifactForServing } = await import(
-			"../../app/store/queries.js"
+			"../../app/store/index.js"
 		);
 		const result = await getArtifactForServing(artId);
 		expect(result).not.toBeNull();
@@ -305,7 +305,7 @@ describe("getArtifactForServing", () => {
 		);
 
 		const { getArtifactForServing } = await import(
-			"../../app/store/queries.js"
+			"../../app/store/index.js"
 		);
 		const result = await getArtifactForServing(artId);
 		expect(result).toBeNull();

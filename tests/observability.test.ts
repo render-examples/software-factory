@@ -4,6 +4,7 @@ import {
 	parseCookies,
 	sessionClearCookie,
 	sessionCookieName,
+	SESSION_MAX_AGE_SECONDS,
 	sessionSetCookie,
 	signSession,
 	verifySession,
@@ -53,8 +54,29 @@ describe("session cookie", () => {
 
 	it("rejects a tampered nonce", () => {
 		const value = signSession(adminToken);
-		const [, sig] = value.split(".");
-		expect(verifySession(`0000${sig}`, adminToken)).toBe(false);
+		const [issuedAt, , sig] = value.split(".");
+		expect(verifySession(`${issuedAt}.0000.${sig}`, adminToken)).toBe(false);
+	});
+
+	it("rejects a tampered issue time", () => {
+		const value = signSession(adminToken);
+		const [, nonce, sig] = value.split(".");
+		expect(verifySession(`${Date.now() + 1}.${nonce}.${sig}`, adminToken)).toBe(
+			false,
+		);
+	});
+
+	it("expires after the session lifetime", () => {
+		const issued = 1_000_000;
+		const value = signSession(adminToken, issued);
+		expect(verifySession(value, adminToken, issued + 60_000)).toBe(true);
+		expect(
+			verifySession(
+				value,
+				adminToken,
+				issued + SESSION_MAX_AGE_SECONDS * 1000 + 1,
+			),
+		).toBe(false);
 	});
 
 	it("rejects with a different admin token", () => {
@@ -67,11 +89,11 @@ describe("session cookie", () => {
 	});
 
 	it("rejects empty nonce", () => {
-		expect(verifySession(".sig", adminToken)).toBe(false);
+		expect(verifySession("1..sig", adminToken)).toBe(false);
 	});
 
 	it("rejects empty signature", () => {
-		expect(verifySession("nonce.", adminToken)).toBe(false);
+		expect(verifySession("1.nonce.", adminToken)).toBe(false);
 	});
 });
 
@@ -143,12 +165,12 @@ vi.mock("../app/store/index.js", () => ({
 
 vi.mock("../app/store/events.js", () => ({
 	appendEvent: storeMocks.appendEvent,
+	listEventsByRun: storeMocks.listEventsByRun,
 }));
 
 vi.mock("../app/store/queries.js", () => ({
 	listRuns: storeMocks.listRuns,
 	listConversation: storeMocks.listConversation,
-	listEventsByRun: storeMocks.listEventsByRun,
 	listArtifactsByRun: storeMocks.listArtifactsByRun,
 	listDeliveries: storeMocks.listDeliveries,
 	listSpecVersions: storeMocks.listSpecVersions,

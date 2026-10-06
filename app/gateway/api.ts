@@ -6,10 +6,10 @@ import {
 	listArtifactsByRun,
 	listConversation,
 	listDeliveries,
+	listEventsByRun,
 	listRuns,
 	listSpecVersions,
 } from "../store/index.js";
-import { listEventsByRun } from "../store/queries.js";
 import { constantTimeEqual } from "./auth.js";
 
 const listRunsQuery = z.object({

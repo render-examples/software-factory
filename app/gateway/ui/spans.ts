@@ -1,4 +1,4 @@
-import type { RunEventRecord } from "../../store/types.js";
+import type { RunEventRecord } from "../../store/index.js";
 
 export interface SpanNode {
 	spanId: string;
