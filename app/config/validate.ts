@@ -1,4 +1,5 @@
 import { factoryConfig } from "../../factory.config.js";
+import { knownSpecialistNames } from "../agents/reviewers/registry.js";
 
 /** Validate factoryConfig at startup. Throws on the first broken rule. */
 export function validateConfig(): void {
@@ -57,6 +58,15 @@ export function validateConfig(): void {
 		if (!repo.preview.serviceName) {
 			throw new Error(
 				"repos[0].preview.serviceName is required when preview is configured",
+			);
+		}
+	}
+
+	const known = knownSpecialistNames();
+	for (const name of factoryConfig.review.specialists) {
+		if (!known.includes(name)) {
+			throw new Error(
+				`Unknown specialist "${name}" in review.specialists. Known: ${known.join(", ")}`,
 			);
 		}
 	}
