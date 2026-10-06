@@ -1,22 +1,10 @@
 import { factoryConfig } from "../../factory.config.js";
 import type { Spec, SpecValidation } from "../contracts/index.js";
 
-/**
- * Render a spec as a GitHub comment body. The marker is prepended by the
- * caller (upsertMarkedComment), so this returns the visible content only.
- */
-export function renderSpecComment(opts: {
-	spec: Spec;
-	version: number;
-	validation: SpecValidation;
-	changeSummary?: string;
-	approvalRemoved?: boolean;
-}): string {
-	const { spec, version, validation, changeSummary, approvalRemoved } = opts;
+/** Render the spec sections as markdown (no header, no instructions). */
+export function renderSpecMarkdown(spec: Spec): string {
 	const lines: string[] = [];
 
-	lines.push(`## 📋 Specification v${version}`);
-	lines.push("");
 	lines.push(`**${spec.title}**`);
 	lines.push("");
 	lines.push(spec.summary);
@@ -85,6 +73,27 @@ export function renderSpecComment(opts: {
 		}
 		lines.push("");
 	}
+
+	return lines.join("\n");
+}
+
+/**
+ * Render a spec as a GitHub comment body. Wraps renderSpecMarkdown with
+ * version header, path warnings, change summary, and next-step instructions.
+ */
+export function renderSpecComment(opts: {
+	spec: Spec;
+	version: number;
+	validation: SpecValidation;
+	changeSummary?: string;
+	approvalRemoved?: boolean;
+}): string {
+	const { spec, version, validation, changeSummary, approvalRemoved } = opts;
+	const lines: string[] = [];
+
+	lines.push(`## 📋 Specification v${version}`);
+	lines.push("");
+	lines.push(renderSpecMarkdown(spec));
 
 	if (validation.warnings.length > 0) {
 		lines.push("### ⚠️ Path warnings");

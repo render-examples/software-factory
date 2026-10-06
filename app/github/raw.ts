@@ -3,6 +3,7 @@ import type { Issue, IssueComment, PullRequest } from "./types.js";
 
 interface RawUser {
 	login: string;
+	type?: string;
 }
 
 export interface RawIssue {
@@ -61,6 +62,7 @@ export function toComment(raw: RawComment): IssueComment {
 		id: raw.id,
 		body: raw.body ?? "",
 		user: raw.user?.login ?? "unknown",
+		authorType: raw.user?.type ?? "User",
 		createdAt: raw.created_at,
 	};
 }

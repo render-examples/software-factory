@@ -5,7 +5,10 @@ import type { Spec, SpecNotes } from "../../contracts/index.js";
 import {
 	triageQuestionsComment,
 	triageDeclineComment,
+	renderSpecMarkdown,
 } from "../../format/index.js";
+import type { IssueComment } from "../../github/index.js";
+import { listTrackedFiles } from "../../git/index.js";
 import {
 	createSpec,
 	addSpecVersion,
@@ -23,9 +26,28 @@ import { postSpecComment } from "./comment.js";
 
 const FACTORY_MARKER = "<!-- render-factory:";
 
+/** A human comment: not a bot author and no factory marker. */
+function isHumanComment(c: IssueComment): boolean {
+	return c.authorType !== "Bot" && !c.body.includes(FACTORY_MARKER);
+}
+
+/**
+ * Newest human comment ID in a list, or undefined.
+ * IDs are numeric so we compare as numbers.
+ */
+function newestHumanId(comments: IssueComment[]): number | undefined {
+	let max: number | undefined;
+	for (const c of comments) {
+		if (isHumanComment(c) && (max === undefined || c.id > max)) {
+			max = c.id;
+		}
+	}
+	return max;
+}
+
 export const triageWorkflow = runWorkflow(
 	"triage",
-	{ timeoutSeconds: 30 * 60 },
+	{ timeoutSeconds: 60 * 60 },
 	async (lc) => {
 		const repo = repository();
 		const fullName = `${repo.owner}/${repo.repo}`;
@@ -41,6 +63,10 @@ export const triageWorkflow = runWorkflow(
 
 		const issue = await lc.gh.getIssue(repo, issueNumber);
 		const comments = await lc.gh.listIssueComments(repo, issueNumber);
+
+		// The newest human comment ID THIS round read — used for
+		// both spec storage and the follow-up check.
+		const newestReadId = newestHumanId(comments);
 
 		let spec: SpecRecord | null = await getCurrentSpec(fullName, issueNumber);
 		let latestVersion: SpecVersionRecord | null = null;
@@ -95,6 +121,12 @@ export const triageWorkflow = runWorkflow(
 
 		await lc.throwIfCancelled();
 
+		// List tracked files for path validation.
+		const existingPaths = await listTrackedFiles(
+			workspace.sandbox,
+			workspace.repoDir,
+		);
+
 		// ── act on the decision ─────────────────────────────────
 		let result: LifecycleResult;
 
@@ -122,17 +154,11 @@ export const triageWorkflow = runWorkflow(
 				previousNotes: currentNotes ?? undefined,
 				sandboxId: workspace.sandbox.id,
 				runId: lc.run.id,
+				existingPaths,
 			});
 
-			// Find the newest human comment ID this round read.
-			const humanComments = comments.filter(
-				(c) =>
-					!c.body.includes(FACTORY_MARKER) && c.user !== "github-actions[bot]",
-			);
 			const lastCommentId =
-				humanComments.length > 0
-					? String(humanComments[humanComments.length - 1].id)
-					: undefined;
+				newestReadId !== undefined ? String(newestReadId) : undefined;
 
 			// Create or reuse the spec row.
 			let specId: string;
@@ -146,7 +172,7 @@ export const triageWorkflow = runWorkflow(
 			const version = await addSpecVersion({
 				specId,
 				document: draftResult.spec as unknown as Record<string, unknown>,
-				markdown: JSON.stringify(draftResult.spec),
+				markdown: renderSpecMarkdown(draftResult.spec),
 				notes: draftResult.notes as unknown as Record<string, unknown>,
 				lastCommentId,
 				runId: lc.run.id,
@@ -194,36 +220,18 @@ export const triageWorkflow = runWorkflow(
 		}
 
 		// ── follow-up round (spec B-03) ─────────────────────────
-		// Compare the newest human comment on the issue with what this round read.
-		const humanCommentsNow = comments.filter(
-			(c) =>
-				!c.body.includes(FACTORY_MARKER) && c.user !== "github-actions[bot]",
-		);
-		const newestRead =
-			latestVersion?.lastCommentId ??
-			(humanCommentsNow.length > 0
-				? String(humanCommentsNow[humanCommentsNow.length - 1].id)
-				: undefined);
-
 		// Re-fetch comments to catch anything posted during the run.
 		const freshComments = await lc.gh.listIssueComments(repo, issueNumber);
-		const freshHuman = freshComments.filter(
-			(c) =>
-				!c.body.includes(FACTORY_MARKER) && c.user !== "github-actions[bot]",
-		);
-		const newestOnIssue =
-			freshHuman.length > 0
-				? String(freshHuman[freshHuman.length - 1].id)
-				: undefined;
+		const newestOnIssueId = newestHumanId(freshComments);
 
 		const conversationOpen =
 			result.outcome === "asked" || result.outcome === "spec_drafted";
 
 		if (
 			conversationOpen &&
-			newestOnIssue &&
-			newestRead &&
-			newestOnIssue !== newestRead
+			newestOnIssueId !== undefined &&
+			newestReadId !== undefined &&
+			newestOnIssueId > newestReadId
 		) {
 			result.followUp = {
 				id: randomUUID(),

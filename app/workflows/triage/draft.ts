@@ -28,6 +28,7 @@ export interface DraftInput {
 	previousNotes?: SpecNotes;
 	sandboxId: string;
 	runId: string;
+	existingPaths?: ReadonlySet<string>;
 }
 
 export interface DraftResult {
@@ -79,7 +80,7 @@ export async function draft(
 		"draft",
 	);
 
-	const validation = validateSpec(output.spec);
+	const validation = validateSpec(output.spec, input.existingPaths);
 	if (validation.errors.length > 0) {
 		throw new Error(`Spec validation failed: ${validation.errors.join("; ")}`);
 	}
