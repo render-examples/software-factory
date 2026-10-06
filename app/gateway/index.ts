@@ -1,4 +1,15 @@
 export { createGateway } from "./app.js";
+export { apiRoutes } from "./api.js";
+export { publicArtifactRoutes, uiArtifactRoutes } from "./artifacts.js";
+export {
+	constantTimeEqual,
+	signSession,
+	verifySession,
+	sessionCookieName,
+	sessionSetCookie,
+	sessionClearCookie,
+	parseCookies,
+} from "./auth.js";
 export { readBody } from "./body.js";
 export {
 	issueEventSchema,
