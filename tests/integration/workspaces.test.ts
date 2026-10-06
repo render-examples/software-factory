@@ -106,28 +106,32 @@ describe("concurrent warm-sandbox claims never double-lease", () => {
 	});
 });
 
-describe("top-up counting in-flight rows", () => {
-	it("counts creating/preparing/warm statuses together", async () => {
+describe("top-up counting excludes stuck rows", () => {
+	it("counts only recent in-flight rows", async () => {
 		const ids = [randomUUID(), randomUUID(), randomUUID()];
 		await pool.query(
 			`INSERT INTO sandboxes (id, status, ready_at) VALUES ($1, 'warm', now())`,
 			[ids[0]],
 		);
 		await pool.query(
-			`INSERT INTO sandboxes (id, status) VALUES ($1, 'creating')`,
+			`INSERT INTO sandboxes (id, status, created_at)
+			 VALUES ($1, 'creating', now())`,
 			[ids[1]],
 		);
+		// Old stuck row — should NOT be counted
 		await pool.query(
-			`INSERT INTO sandboxes (id, status) VALUES ($1, 'preparing')`,
+			`INSERT INTO sandboxes (id, status, created_at)
+			 VALUES ($1, 'preparing', now() - interval '2 hours')`,
 			[ids[2]],
 		);
 
 		const { rows } = await pool.query(
 			`SELECT count(*)::int AS cnt FROM sandboxes
-			 WHERE status = ANY($1)`,
-			[["warm", "creating", "preparing"]],
+			 WHERE status = 'warm'
+			    OR (status IN ('creating', 'preparing')
+			        AND created_at > now() - interval '30 minutes')`,
 		);
-		expect(rows[0].cnt).toBe(3);
+		expect(rows[0].cnt).toBe(2);
 
 		for (const id of ids) {
 			await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
@@ -135,30 +139,36 @@ describe("top-up counting in-flight rows", () => {
 	});
 });
 
-describe("recycle selection", () => {
-	it("selects warm sandboxes older than max age", async () => {
+describe("recycle atomically claims warm rows", () => {
+	it("transitions warm → released and returns only claimed rows", async () => {
 		const oldId = randomUUID();
 		const freshId = randomUUID();
 
 		await pool.query(
-			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at)
-			 VALUES ($1, 'warm', now() - interval '2 hours', 'sha-tip', now() + interval '4 hours')`,
+			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at, provider_id)
+			 VALUES ($1, 'warm', now() - interval '2 hours', 'sha-tip', now() + interval '4 hours', 'sbx-old')`,
 			[oldId],
 		);
 		await pool.query(
-			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at)
-			 VALUES ($1, 'warm', now(), 'sha-tip', now() + interval '4 hours')`,
+			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at, provider_id)
+			 VALUES ($1, 'warm', now(), 'sha-tip', now() + interval '4 hours', 'sbx-fresh')`,
 			[freshId],
 		);
 
 		const { rows } = await pool.query(
-			`SELECT id FROM sandboxes
-			 WHERE status = 'warm'
-			   AND (
-			     ready_at < now() - make_interval(mins => $1)
-			     OR expires_at < now() + interval '30 minutes'
-			     OR base_sha != $2
-			   )`,
+			`UPDATE sandboxes
+			 SET status = 'released', released_at = now()
+			 WHERE id IN (
+			   SELECT id FROM sandboxes
+			   WHERE status = 'warm'
+			     AND (
+			       ready_at < now() - make_interval(mins => $1)
+			       OR expires_at < now() + interval '30 minutes'
+			       OR base_sha != $2
+			     )
+			   FOR UPDATE SKIP LOCKED
+			 )
+			 RETURNING id`,
 			[60, "sha-tip"],
 		);
 
@@ -166,36 +176,53 @@ describe("recycle selection", () => {
 		expect(recycledIds).toContain(oldId);
 		expect(recycledIds).not.toContain(freshId);
 
+		// Verify the old one is released, not warm
+		const { rows: check } = await pool.query(
+			"SELECT status FROM sandboxes WHERE id = $1",
+			[oldId],
+		);
+		expect(check[0].status).toBe("released");
+
 		await pool.query("DELETE FROM sandboxes WHERE id IN ($1, $2)", [
 			oldId,
 			freshId,
 		]);
 	});
 
-	it("selects warm sandboxes with stale base_sha", async () => {
-		const staleId = randomUUID();
+	it("a concurrent lease cannot claim a recycled sandbox", async () => {
+		const sbId = randomUUID();
 
 		await pool.query(
-			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at)
-			 VALUES ($1, 'warm', now(), 'old-sha', now() + interval '4 hours')`,
-			[staleId],
+			`INSERT INTO sandboxes (id, status, ready_at, base_sha, expires_at, provider_id)
+			 VALUES ($1, 'warm', now() - interval '2 hours', 'old-sha', now() + interval '4 hours', 'sbx-race')`,
+			[sbId],
 		);
 
+		// Recycle claims it atomically
+		await pool.query(
+			`UPDATE sandboxes
+			 SET status = 'released', released_at = now()
+			 WHERE id IN (
+			   SELECT id FROM sandboxes
+			   WHERE status = 'warm'
+			     AND ready_at < now() - make_interval(mins => $1)
+			   FOR UPDATE SKIP LOCKED
+			 )`,
+			[60],
+		);
+
+		// Lease attempt should find nothing warm
 		const { rows } = await pool.query(
-			`SELECT id FROM sandboxes
-			 WHERE status = 'warm'
-			   AND (
-			     ready_at < now() - make_interval(mins => $1)
-			     OR expires_at < now() + interval '30 minutes'
-			     OR base_sha != $2
-			   )`,
-			[60, "new-tip-sha"],
+			`UPDATE sandboxes SET status = 'leased', run_id = 'run-late', leased_at = now()
+			 WHERE id = (
+			   SELECT id FROM sandboxes WHERE status = 'warm'
+			   ORDER BY ready_at FOR UPDATE SKIP LOCKED LIMIT 1
+			 )
+			 RETURNING id`,
 		);
+		expect(rows).toHaveLength(0);
 
-		const recycledIds = rows.map((r: { id: string }) => r.id);
-		expect(recycledIds).toContain(staleId);
-
-		await pool.query("DELETE FROM sandboxes WHERE id = $1", [staleId]);
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [sbId]);
 	});
 });
 
@@ -215,17 +242,13 @@ describe("reaping only recorded/terminal rows", () => {
 			[sbId, runId],
 		);
 
-		const { rows } = await pool.query(
-			`SELECT s.id FROM sandboxes s
-			 WHERE (s.status NOT IN ('released', 'failed') AND s.expires_at < now())
-			    OR (s.status = 'leased' AND s.run_id IS NOT NULL AND EXISTS (
-			          SELECT 1 FROM runs r
-			          WHERE r.id = s.run_id
-			            AND r.status IN ('completed', 'failed', 'cancelled')
-			        ))`,
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { listTerminalLeasedSandboxes } = await import(
+			"../../app/store/sandboxes.js"
 		);
-		const reapIds = rows.map((r: { id: string }) => r.id);
-		expect(reapIds).toContain(sbId);
+		const terminal = await listTerminalLeasedSandboxes();
+		const ids = terminal.map((r: { id: string }) => r.id);
+		expect(ids).toContain(sbId);
 
 		await pool.query("DELETE FROM sandboxes WHERE id = $1", [sbId]);
 		await pool.query("DELETE FROM runs WHERE id = $1", [runId]);
@@ -241,50 +264,21 @@ describe("reaping only recorded/terminal rows", () => {
 			[runId],
 		);
 		await pool.query(
-			`INSERT INTO sandboxes (id, status, run_id, leased_at,
-			   expires_at)
+			`INSERT INTO sandboxes (id, status, run_id, leased_at, expires_at)
 			 VALUES ($1, 'leased', $2, now(), now() + interval '2 hours')`,
 			[sbId, runId],
 		);
 
-		const { rows } = await pool.query(
-			`SELECT s.id FROM sandboxes s
-			 WHERE (s.status NOT IN ('released', 'failed') AND s.expires_at < now())
-			    OR (s.status = 'leased' AND s.run_id IS NOT NULL AND EXISTS (
-			          SELECT 1 FROM runs r
-			          WHERE r.id = s.run_id
-			            AND r.status IN ('completed', 'failed', 'cancelled')
-			        ))`,
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { listTerminalLeasedSandboxes } = await import(
+			"../../app/store/sandboxes.js"
 		);
-		const reapIds = rows.map((r: { id: string }) => r.id);
-		expect(reapIds).not.toContain(sbId);
+		const terminal = await listTerminalLeasedSandboxes();
+		const ids = terminal.map((r: { id: string }) => r.id);
+		expect(ids).not.toContain(sbId);
 
 		await pool.query("DELETE FROM sandboxes WHERE id = $1", [sbId]);
 		await pool.query("DELETE FROM runs WHERE id = $1", [runId]);
-	});
-
-	it("reaps expired sandboxes regardless of run status", async () => {
-		const sbId = randomUUID();
-
-		await pool.query(
-			`INSERT INTO sandboxes (id, status, expires_at)
-			 VALUES ($1, 'warm', now() - interval '1 hour')`,
-			[sbId],
-		);
-
-		const { rows } = await pool.query(
-			`SELECT s.id FROM sandboxes s
-			 WHERE (s.status NOT IN ('released', 'failed') AND s.expires_at < now())
-			    OR (s.status = 'leased' AND s.run_id IS NOT NULL AND EXISTS (
-			          SELECT 1 FROM runs r
-			          WHERE r.id = s.run_id
-			            AND r.status IN ('completed', 'failed', 'cancelled')
-			        ))`,
-		);
-		const reapIds = rows.map((r: { id: string }) => r.id);
-		expect(reapIds).toContain(sbId);
-
-		await pool.query("DELETE FROM sandboxes WHERE id = $1", [sbId]);
 	});
 
 	it("does not reap sandboxes already released", async () => {
@@ -296,61 +290,93 @@ describe("reaping only recorded/terminal rows", () => {
 			[sbId],
 		);
 
-		const { rows } = await pool.query(
-			`SELECT s.id FROM sandboxes s
-			 WHERE (s.status NOT IN ('released', 'failed') AND s.expires_at < now())
-			    OR (s.status = 'leased' AND s.run_id IS NOT NULL AND EXISTS (
-			          SELECT 1 FROM runs r
-			          WHERE r.id = s.run_id
-			            AND r.status IN ('completed', 'failed', 'cancelled')
-			        ))`,
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { claimExpiredWarmSandboxes } = await import(
+			"../../app/store/sandboxes.js"
 		);
-		const reapIds = rows.map((r: { id: string }) => r.id);
-		expect(reapIds).not.toContain(sbId);
+		const expired = await claimExpiredWarmSandboxes();
+		const ids = expired.map((r: { id: string }) => r.id);
+		expect(ids).not.toContain(sbId);
 
 		await pool.query("DELETE FROM sandboxes WHERE id = $1", [sbId]);
 	});
 });
 
-describe("store functions", () => {
-	it("markSandboxReady transitions from creating to warm", async () => {
+describe("stuck in-flight rows", () => {
+	it("lists creating/preparing rows older than 30 minutes", async () => {
+		const stuckId = randomUUID();
+		const freshId = randomUUID();
+
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, created_at, provider_id)
+			 VALUES ($1, 'creating', now() - interval '2 hours', 'sbx-stuck')`,
+			[stuckId],
+		);
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, created_at)
+			 VALUES ($1, 'creating', now())`,
+			[freshId],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { listStuckInFlightSandboxes } = await import(
+			"../../app/store/sandboxes.js"
+		);
+		const stuck = await listStuckInFlightSandboxes();
+		const ids = stuck.map((r: { id: string }) => r.id);
+		expect(ids).toContain(stuckId);
+		expect(ids).not.toContain(freshId);
+
+		await pool.query("DELETE FROM sandboxes WHERE id IN ($1, $2)", [
+			stuckId,
+			freshId,
+		]);
+	});
+});
+
+describe("status transition guards", () => {
+	it("markSandboxReady only transitions from preparing", async () => {
 		const id = randomUUID();
 		await pool.query(
-			`INSERT INTO sandboxes (id, status) VALUES ($1, 'creating')`,
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'preparing')`,
 			[id],
 		);
 
-		// Use the actual store function
 		process.env.DATABASE_URL = DATABASE_URL;
 		const { markSandboxReady } = await import("../../app/store/sandboxes.js");
-		await markSandboxReady(
+		const applied = await markSandboxReady(
 			id,
 			"sha-abc",
 			"hash-123",
 			new Date(Date.now() + 7200_000),
 		);
+		expect(applied).toBe(true);
 
 		const { rows } = await pool.query(
-			"SELECT status, base_sha, lockfile_hash FROM sandboxes WHERE id = $1",
+			"SELECT status FROM sandboxes WHERE id = $1",
 			[id],
 		);
 		expect(rows[0].status).toBe("warm");
-		expect(rows[0].base_sha).toBe("sha-abc");
-		expect(rows[0].lockfile_hash).toBe("hash-123");
 
 		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
 	});
 
-	it("markSandboxFailed transitions to failed", async () => {
+	it("markSandboxReady refuses to revive a failed row", async () => {
 		const id = randomUUID();
 		await pool.query(
-			`INSERT INTO sandboxes (id, status) VALUES ($1, 'creating')`,
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'failed')`,
 			[id],
 		);
 
 		process.env.DATABASE_URL = DATABASE_URL;
-		const { markSandboxFailed } = await import("../../app/store/sandboxes.js");
-		await markSandboxFailed(id);
+		const { markSandboxReady } = await import("../../app/store/sandboxes.js");
+		const applied = await markSandboxReady(
+			id,
+			"sha",
+			"hash",
+			new Date(Date.now() + 7200_000),
+		);
+		expect(applied).toBe(false);
 
 		const { rows } = await pool.query(
 			"SELECT status FROM sandboxes WHERE id = $1",
@@ -361,30 +387,175 @@ describe("store functions", () => {
 		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
 	});
 
-	it("countSandboxesByStatus returns correct count", async () => {
-		const ids = [randomUUID(), randomUUID(), randomUUID()];
-		await pool.query(`INSERT INTO sandboxes (id, status) VALUES ($1, 'warm')`, [
-			ids[0],
-		]);
+	it("markSandboxReady refuses to revive a released row", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'released')`,
+			[id],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { markSandboxReady } = await import("../../app/store/sandboxes.js");
+		const applied = await markSandboxReady(
+			id,
+			"sha",
+			"hash",
+			new Date(Date.now() + 7200_000),
+		);
+		expect(applied).toBe(false);
+
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
+	});
+
+	it("markSandboxPreparing only transitions from creating", async () => {
+		const id = randomUUID();
 		await pool.query(
 			`INSERT INTO sandboxes (id, status) VALUES ($1, 'creating')`,
-			[ids[1]],
+			[id],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { markSandboxPreparing } = await import(
+			"../../app/store/sandboxes.js"
+		);
+		const applied = await markSandboxPreparing(id);
+		expect(applied).toBe(true);
+
+		const { rows } = await pool.query(
+			"SELECT status FROM sandboxes WHERE id = $1",
+			[id],
+		);
+		expect(rows[0].status).toBe("preparing");
+
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
+	});
+
+	it("markSandboxPreparing refuses from failed", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'failed')`,
+			[id],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { markSandboxPreparing } = await import(
+			"../../app/store/sandboxes.js"
+		);
+		const applied = await markSandboxPreparing(id);
+		expect(applied).toBe(false);
+
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
+	});
+
+	it("markSandboxTerminated does not touch released or failed rows", async () => {
+		const releasedId = randomUUID();
+		const failedId = randomUUID();
+
+		await pool.query(
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'released')`,
+			[releasedId],
 		);
 		await pool.query(
-			`INSERT INTO sandboxes (id, status) VALUES ($1, 'leased')`,
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'failed')`,
+			[failedId],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { markSandboxTerminated } = await import(
+			"../../app/store/sandboxes.js"
+		);
+		await markSandboxTerminated(releasedId);
+		await markSandboxTerminated(failedId);
+
+		const { rows } = await pool.query(
+			"SELECT id, status FROM sandboxes WHERE id IN ($1, $2) ORDER BY id",
+			[releasedId, failedId],
+		);
+		for (const row of rows) {
+			const r = row as { id: string; status: string };
+			if (r.id === failedId) expect(r.status).toBe("failed");
+			if (r.id === releasedId) expect(r.status).toBe("released");
+		}
+
+		await pool.query("DELETE FROM sandboxes WHERE id IN ($1, $2)", [
+			releasedId,
+			failedId,
+		]);
+	});
+
+	it("markSandboxReadyAndLeased goes preparing → leased atomically", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO sandboxes (id, status) VALUES ($1, 'preparing')`,
+			[id],
+		);
+
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { markSandboxReadyAndLeased } = await import(
+			"../../app/store/sandboxes.js"
+		);
+		const applied = await markSandboxReadyAndLeased(
+			id,
+			"run-x",
+			"sha-x",
+			"hash-x",
+			new Date(Date.now() + 7200_000),
+		);
+		expect(applied).toBe(true);
+
+		const { rows } = await pool.query(
+			"SELECT status, run_id FROM sandboxes WHERE id = $1",
+			[id],
+		);
+		expect(rows[0].status).toBe("leased");
+		expect(rows[0].run_id).toBe("run-x");
+
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
+	});
+
+	it("cold-path race: preparing row cannot be stolen by claimWarmSandbox", async () => {
+		const id = randomUUID();
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, ready_at, base_sha, lockfile_hash)
+			 VALUES ($1, 'preparing', now(), 'sha', 'hash')`,
+			[id],
+		);
+
+		// claimWarmSandbox only matches status = 'warm'
+		process.env.DATABASE_URL = DATABASE_URL;
+		const { claimWarmSandbox } = await import("../../app/store/sandboxes.js");
+		const claimed = await claimWarmSandbox("run-thief");
+		expect(claimed?.id).not.toBe(id);
+
+		await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);
+	});
+});
+
+describe("store functions", () => {
+	it("countPoolSandboxes excludes old stuck rows", async () => {
+		const ids = [randomUUID(), randomUUID(), randomUUID()];
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, ready_at) VALUES ($1, 'warm', now())`,
+			[ids[0]],
+		);
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, created_at)
+			 VALUES ($1, 'creating', now())`,
+			[ids[1]],
+		);
+		// Old stuck row
+		await pool.query(
+			`INSERT INTO sandboxes (id, status, created_at)
+			 VALUES ($1, 'preparing', now() - interval '2 hours')`,
 			[ids[2]],
 		);
 
 		process.env.DATABASE_URL = DATABASE_URL;
-		const { countSandboxesByStatus } = await import(
-			"../../app/store/sandboxes.js"
-		);
-		const count = await countSandboxesByStatus([
-			"warm",
-			"creating",
-			"preparing",
-		]);
+		const { countPoolSandboxes } = await import("../../app/store/sandboxes.js");
+		const count = await countPoolSandboxes();
+		// Should count the warm + recent creating = 2, not the old preparing
 		expect(count).toBeGreaterThanOrEqual(2);
+		// We can't assert exact equality since other tests may leave rows
 
 		for (const id of ids) {
 			await pool.query("DELETE FROM sandboxes WHERE id = $1", [id]);

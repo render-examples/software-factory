@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { githubToken } from "../github/auth.js";
+import { githubToken } from "../github/index.js";
 import type { Sandbox } from "../sandbox/index.js";
 import { shellEscape } from "../shell/index.js";
 
