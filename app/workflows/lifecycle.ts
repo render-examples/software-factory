@@ -14,6 +14,7 @@ import {
 	type CreateRunInput,
 	type RunRecord,
 } from "../store/index.js";
+import { isBudgetExceeded } from "../tasks/index.js";
 import { point, startSpan, type SpanHandle } from "../telemetry/index.js";
 import { STATUS, statusLabeler, type FactoryStatus } from "./labels.js";
 
@@ -247,6 +248,28 @@ export function runWorkflow(
 				const trigger = run.trigger as Record<string, unknown> | null;
 				const triggerLabel = trigger?.label as string | undefined;
 
+				if (isBudgetExceeded(err)) {
+					await finishRun(runId, "completed", {
+						outcome: "budget_exceeded",
+						summary: err instanceof Error ? err.message : "Budget exceeded",
+					});
+					await ensureComment(
+						gh,
+						repo,
+						run,
+						`${runId.slice(0, 64)}-budget`,
+						"This run was stopped because the per-run cost budget was reached.",
+					);
+					if (triggerLabel) {
+						await removeLabelQuietly(gh, repo, run, triggerLabel);
+					}
+					await setStatus(STATUS.failed);
+					await point(runId, "run.completed", {
+						outcome: "budget_exceeded",
+					});
+					return { status: "budget_exceeded" };
+				}
+
 				if (err instanceof RunCancelled) {
 					await finishRun(runId, "cancelled", {
 						outcome: "cancelled",
@@ -379,6 +402,7 @@ function mapOutcomeToStatus(outcome: string): FactoryStatus | undefined {
 		case "dispatch_failed":
 		case "execution_lost":
 		case "cancelled":
+		case "budget_exceeded":
 			return STATUS.failed;
 		default:
 			return undefined;

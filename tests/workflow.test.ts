@@ -56,6 +56,8 @@ vi.mock("../app/tasks/index.js", () => ({
 	correctnessTask: { name: "correctness", func: mocks.correctnessTask },
 	testsTask: { name: "tests", func: mocks.testsTask },
 	judgeTask: { name: "judge", func: mocks.judgeTask },
+	isBudgetExceeded: (err: unknown) =>
+		err instanceof Error && err.message.includes("[BUDGET_EXCEEDED]"),
 }));
 
 vi.mock("../app/github/index.js", () => ({
@@ -73,6 +75,7 @@ vi.mock("../app/store/index.js", () => ({
 	markStarted: mocks.markStarted,
 	getRun: mocks.getRun,
 	heartbeat: mocks.heartbeat,
+	appendEvent: mocks.appendEvent,
 }));
 vi.mock("../app/store/events.js", () => ({
 	appendEvent: mocks.appendEvent,
