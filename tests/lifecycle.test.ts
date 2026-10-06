@@ -47,7 +47,7 @@ vi.mock("../app/github/index.js", () => ({
 function makeRun(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "run-1",
-		repo: "jacobprall/render-factory-sample",
+		repo: "render-examples/render-factory-example-target",
 		subjectKind: "issue",
 		subjectNumber: 42,
 		workflow: "spec-to-pr",
@@ -339,7 +339,7 @@ describe("lifecycle", () => {
 			outcome: "spec_drafted",
 			followUp: {
 				id: "follow-up-1",
-				repo: "jacobprall/render-factory-sample",
+				repo: "render-examples/render-factory-example-target",
 				subjectKind: "issue" as const,
 				subjectNumber: 42,
 				workflow: "triage",
@@ -365,7 +365,7 @@ describe("lifecycle", () => {
 			outcome: "asked",
 			followUp: {
 				id: "follow-up-2",
-				repo: "jacobprall/render-factory-sample",
+				repo: "render-examples/render-factory-example-target",
 				subjectKind: "issue" as const,
 				subjectNumber: 42,
 				workflow: "triage",

@@ -327,17 +327,17 @@ describe("lockfileHashInSandbox", () => {
 function mockConfig() {
 	vi.doMock("../app/config/index.js", () => ({
 		target: () => ({
-			owner: "jacobprall",
-			name: "render-factory-sample",
+			owner: "render-examples",
+			name: "render-factory-example-target",
 			baseBranch: "main",
 			repoDir: "/home/user/repo",
 			setup: { install: "npm ci" },
 			verify: [],
 		}),
 		repository: () => ({
-			owner: "jacobprall",
-			repo: "render-factory-sample",
-			fullName: "jacobprall/render-factory-sample",
+			owner: "render-examples",
+			repo: "render-factory-example-target",
+			fullName: "render-examples/render-factory-example-target",
 		}),
 	}));
 }
@@ -377,7 +377,7 @@ describe("openWorkspace", () => {
 			id: "snp-1",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -405,14 +405,14 @@ describe("openWorkspace", () => {
 			{
 				match: ".git/config",
 				result: {
-					output: `[remote "origin"]\n\turl = https://github.com/jacobprall/render-factory-sample.git\n`,
+					output: `[remote "origin"]\n\turl = https://github.com/render-examples/render-factory-example-target.git\n`,
 					exitCode: 0,
 				},
 			},
 			{
 				match: "remote get-url",
 				result: {
-					output: "https://github.com/jacobprall/render-factory-sample.git\n",
+					output: "https://github.com/render-examples/render-factory-example-target.git\n",
 					exitCode: 0,
 				},
 			},
@@ -477,7 +477,7 @@ describe("openWorkspace", () => {
 			id: "snp-pr",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -502,14 +502,14 @@ describe("openWorkspace", () => {
 			{
 				match: ".git/config",
 				result: {
-					output: `[remote "origin"]\n\turl = https://github.com/jacobprall/render-factory-sample.git\n`,
+					output: `[remote "origin"]\n\turl = https://github.com/render-examples/render-factory-example-target.git\n`,
 					exitCode: 0,
 				},
 			},
 			{
 				match: "remote get-url",
 				result: {
-					output: "https://github.com/jacobprall/render-factory-sample.git\n",
+					output: "https://github.com/render-examples/render-factory-example-target.git\n",
 					exitCode: 0,
 				},
 			},
@@ -561,7 +561,7 @@ describe("openWorkspace", () => {
 			id: "snp-sha",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -586,14 +586,14 @@ describe("openWorkspace", () => {
 			{
 				match: ".git/config",
 				result: {
-					output: `[remote "origin"]\n\turl = https://github.com/jacobprall/render-factory-sample.git\n`,
+					output: `[remote "origin"]\n\turl = https://github.com/render-examples/render-factory-example-target.git\n`,
 					exitCode: 0,
 				},
 			},
 			{
 				match: "remote get-url",
 				result: {
-					output: "https://github.com/jacobprall/render-factory-sample.git\n",
+					output: "https://github.com/render-examples/render-factory-example-target.git\n",
 					exitCode: 0,
 				},
 			},
@@ -640,7 +640,7 @@ describe("openWorkspace", () => {
 			id: "snp-policy",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -687,8 +687,8 @@ describe("openWorkspace", () => {
 			factoryConfig: {
 				repos: [
 					{
-						owner: "jacobprall",
-						name: "render-factory-sample",
+						owner: "render-examples",
+						name: "render-factory-example-target",
 						baseBranch: "main",
 						repoDir: "/home/user/repo",
 						setup: { install: "npm ci" },
@@ -717,7 +717,7 @@ describe("openWorkspace", () => {
 			id: "snp-bad-manifest",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -784,7 +784,7 @@ describe("openWorkspace", () => {
 			id: "snp-gone",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "sha-1",
 			lockfileHash: FAKE_HASH,
 			buildKey: "key-1",
@@ -809,14 +809,14 @@ describe("openWorkspace", () => {
 			{
 				match: ".git/config",
 				result: {
-					output: `[remote "origin"]\n\turl = https://github.com/jacobprall/render-factory-sample.git\n`,
+					output: `[remote "origin"]\n\turl = https://github.com/render-examples/render-factory-example-target.git\n`,
 					exitCode: 0,
 				},
 			},
 			{
 				match: "remote get-url",
 				result: {
-					output: "https://github.com/jacobprall/render-factory-sample.git\n",
+					output: "https://github.com/render-examples/render-factory-example-target.git\n",
 					exitCode: 0,
 				},
 			},
@@ -885,7 +885,7 @@ describe("openWorkspace", () => {
 			id: "snp-lf",
 			sandboxGroupId: "sbg-1",
 			name: "test",
-			repo: "jacobprall/render-factory-sample",
+			repo: "render-examples/render-factory-example-target",
 			baseSha: "snap-sha",
 			lockfileHash: "old-hash",
 			buildKey: "key-1",
@@ -910,14 +910,14 @@ describe("openWorkspace", () => {
 			{
 				match: ".git/config",
 				result: {
-					output: `[remote "origin"]\n\turl = https://github.com/jacobprall/render-factory-sample.git\n`,
+					output: `[remote "origin"]\n\turl = https://github.com/render-examples/render-factory-example-target.git\n`,
 					exitCode: 0,
 				},
 			},
 			{
 				match: "remote get-url",
 				result: {
-					output: "https://github.com/jacobprall/render-factory-sample.git\n",
+					output: "https://github.com/render-examples/render-factory-example-target.git\n",
 					exitCode: 0,
 				},
 			},

@@ -134,7 +134,7 @@ const NOW = "2026-10-05T17:30:00.000Z";
 function makeRunRecord(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "run-0001",
-		repo: "jacobprall/render-factory-sample",
+		repo: "render-examples/render-factory-example-target",
 		subjectKind: "issue",
 		subjectNumber: 42,
 		workflow: "spec-to-pr",
@@ -216,7 +216,7 @@ beforeEach(() => {
 	mocks.approveVersion.mockResolvedValue(true);
 	mocks.getSpec.mockResolvedValue({
 		id: "spec-001",
-		repo: "jacobprall/render-factory-sample",
+		repo: "render-examples/render-factory-example-target",
 		issueNumber: 42,
 		status: "approved",
 		currentVersion: 1,
