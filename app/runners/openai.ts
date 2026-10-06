@@ -4,6 +4,7 @@ import { modelFor } from "../config/index.js";
 import { checkToolCall, redactSecrets } from "../policy/index.js";
 import type { Tool } from "../tools/index.js";
 import type { AgentRunner, RunnerResult, RunnerUsage } from "./types.js";
+import { RunnerError } from "./types.js";
 
 export const openaiRunner: AgentRunner = {
 	name: "openai",
@@ -42,24 +43,45 @@ export const openaiRunner: AgentRunner = {
 			tracingDisabled: true,
 		});
 
-		const result = await runner.run(oaiAgent, input.message, {
-			maxTurns: agent.maxTurns ?? 30,
-			signal: ctx.signal,
-		});
+		try {
+			const result = await runner.run(oaiAgent, input.message, {
+				maxTurns: agent.maxTurns ?? 30,
+				signal: ctx.signal,
+			});
 
-		const text = redactSecrets(String(result.finalOutput ?? "").trim());
-		if (!text) throw new Error(`Agent "${agent.id}" produced no result`);
+			const text = redactSecrets(String(result.finalOutput ?? "").trim());
+			if (!text) throw new Error(`Agent "${agent.id}" produced no result`);
 
-		const usage = normalizeUsage(result.state.usage);
+			const usage = normalizeUsage(result.state.usage);
 
-		return {
-			result: text,
-			usage,
-			turns: countTurns(result),
-			transcript: extractTranscript(result),
-		};
+			return {
+				result: text,
+				usage,
+				turns: countTurns(result),
+				transcript: extractTranscript(result),
+			};
+		} catch (error) {
+			const partial = usageFromErrorState(error);
+			if (partial) {
+				throw new RunnerError(
+					error instanceof Error ? error.message : String(error),
+					partial,
+					error,
+				);
+			}
+			throw error;
+		}
 	},
 };
+
+/** Strip null-valued keys that the OpenAI SDK sends for optional fields. */
+function stripNulls(input: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(input)) {
+		if (value !== null) out[key] = value;
+	}
+	return out;
+}
 
 function adaptTool(
 	tool: Tool,
@@ -71,9 +93,10 @@ function adaptTool(
 		description: tool.description,
 		parameters: z.object(tool.inputSchema),
 		execute: async (toolInput: Record<string, unknown>) => {
-			const reason = checkToolCall(tool.name, toolInput);
+			const args = stripNulls(toolInput);
+			const reason = checkToolCall(tool.name, args);
 			if (reason) throw new Error(reason);
-			const result = await tool.invoke(toolInput, { sandbox, signal });
+			const result = await tool.invoke(args, { sandbox, signal });
 			if (result.isError) throw new Error(result.content);
 			return result.content;
 		},
@@ -109,6 +132,22 @@ function detailTokens(
 			total + keys.reduce((sum, key) => sum + (Number(detail[key]) || 0), 0),
 		0,
 	);
+}
+
+/**
+ * The OpenAI Agents SDK attaches the run state to errors it raises.
+ * Extract usage when present so cost is recorded on failure.
+ */
+function usageFromErrorState(error: unknown): RunnerUsage | undefined {
+	const state = (error as { state?: unknown } | null)?.state;
+	if (!state || typeof state !== "object") return undefined;
+	const usage = (state as Record<string, unknown>).usage;
+	if (!usage || typeof usage !== "object") return undefined;
+	const u = usage as StateUsage;
+	if (typeof u.inputTokens !== "number" || typeof u.outputTokens !== "number") {
+		return undefined;
+	}
+	return normalizeUsage(usage);
 }
 
 /** Approximate turns from the number of raw model responses. */

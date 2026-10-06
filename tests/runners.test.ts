@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { factoryConfig } from "../factory.config.js";
-import { resolveRunner } from "../app/runners/index.js";
-import type { Agent } from "../app/agents/types.js";
-import { BudgetExceededError, isBudgetExceeded } from "../app/tasks/errors.js";
+import {
+	resolveRunner,
+	RunnerError,
+	type RunnerUsage,
+} from "../app/runners/index.js";
+import type { Agent } from "../app/agents/index.js";
+import { BudgetExceededError, isBudgetExceeded } from "../app/tasks/index.js";
 
 const baseAgent: Agent = {
 	id: "test-agent",
@@ -109,6 +113,32 @@ describe("openaiRunner", () => {
 	});
 });
 
+describe("RunnerError carries partial usage", () => {
+	it("holds usage from a failed run", () => {
+		const usage: RunnerUsage = {
+			inputTokens: 500,
+			outputTokens: 100,
+			cacheReadTokens: 50,
+		};
+		const err = new RunnerError("model exploded", usage);
+		expect(err).toBeInstanceOf(Error);
+		expect(err.name).toBe("RunnerError");
+		expect(err.usage).toEqual(usage);
+		expect(err.message).toBe("model exploded");
+	});
+
+	it("allows undefined usage", () => {
+		const err = new RunnerError("no usage available");
+		expect(err.usage).toBeUndefined();
+	});
+
+	it("preserves the cause", () => {
+		const cause = new Error("original");
+		const err = new RunnerError("wrapped", undefined, cause);
+		expect(err.cause).toBe(cause);
+	});
+});
+
 describe("cost calculation", () => {
 	it("computes cost from known pricing", () => {
 		const pricing = {
@@ -155,6 +185,32 @@ describe("cost calculation", () => {
 				usage.outputTokens * pricing.outputPerMTok) /
 			1_000_000;
 		expect(cost).toBeCloseTo(0.0105, 4);
+	});
+
+	it("fallback pricing charges cache tokens", () => {
+		const fallback = {
+			inputPerMTok: 3,
+			outputPerMTok: 15,
+			cacheReadPerMTok: 0.3,
+			cacheWritePerMTok: 3.75,
+		};
+		const usage: RunnerUsage = {
+			inputTokens: 1000,
+			outputTokens: 500,
+			cacheReadTokens: 2000,
+			cacheWriteTokens: 1000,
+		};
+
+		const cost =
+			(usage.inputTokens * fallback.inputPerMTok +
+				usage.outputTokens * fallback.outputPerMTok +
+				(usage.cacheReadTokens ?? 0) * fallback.cacheReadPerMTok +
+				(usage.cacheWriteTokens ?? 0) * fallback.cacheWritePerMTok) /
+			1_000_000;
+
+		expect(cost).toBeGreaterThan(0.0105);
+		const expectedCacheCost = (2000 * 0.3 + 1000 * 3.75) / 1_000_000;
+		expect(cost).toBeCloseTo(0.0105 + expectedCacheCost, 6);
 	});
 });
 
@@ -246,5 +302,96 @@ describe("policy enforcement in tool calls", () => {
 			command: "git push origin main",
 		});
 		expect(result).toContain("Blocked");
+	});
+});
+
+describe("transcript redaction safety", () => {
+	it("old approach would break JSON; new approach redacts without re-parsing", async () => {
+		const { redactSecrets } = await import("../app/policy/index.js");
+
+		const entry = {
+			text: "token is ghp_abcdefghijklmnopqrst and key sk-ant-api03-xxxxxxxxxxxx",
+			nested: { secret: "ghp_abcdefghijklmnopqrst" },
+		};
+		const line = JSON.stringify(entry);
+
+		const redactedLine = redactSecrets(line);
+		expect(redactedLine).not.toContain("ghp_abcdefghijklmnopqrst");
+
+		// The old storeTranscript did JSON.parse(redactSecrets(JSON.stringify(entry)))
+		// which would throw because greedy \S{10,} matches across JSON delimiters.
+		expect(() => JSON.parse(redactedLine)).toThrow();
+
+		// The new approach: stringify all entries, join as JSONL, redact once.
+		// No JSON.parse step, so the redacted string is safely stored as-is.
+		const jsonl = [entry, { another: "ok" }]
+			.map((e) => JSON.stringify(e))
+			.join("\n");
+		const redactedJsonl = redactSecrets(jsonl);
+		expect(redactedJsonl).not.toContain("ghp_abcdefghijklmnopqrst");
+		expect(typeof redactedJsonl).toBe("string");
+	});
+
+	it("redacts standalone tokens in simple JSON values", async () => {
+		const { redactSecrets } = await import("../app/policy/index.js");
+
+		const entry = { token: "ghp_abcdefghijklmnopqrst" };
+		const line = JSON.stringify(entry);
+		const redacted = redactSecrets(line);
+
+		expect(redacted).not.toContain("ghp_abcdefghijklmnopqrst");
+		expect(redacted).toContain("[REDACTED]");
+	});
+});
+
+describe("transcript truncation", () => {
+	it("caps large transcripts to limits.artifactBytes with a marker", () => {
+		const maxBytes = factoryConfig.limits.artifactBytes;
+		const bigEntry = { data: "x".repeat(1_000_000) };
+		const lines = Array.from({ length: 10 }, () => JSON.stringify(bigEntry));
+		const jsonl = lines.join("\n");
+		const buf = Buffer.from(jsonl, "utf-8");
+
+		expect(buf.length).toBeGreaterThan(maxBytes);
+
+		const half = Math.floor(
+			(maxBytes - Buffer.byteLength('\n{"__truncated__":true}\n')) / 2,
+		);
+		const head = buf.subarray(0, half);
+		const tail = buf.subarray(buf.length - half);
+		const marker = Buffer.from('\n{"__truncated__":true}\n');
+		const truncated = Buffer.concat([head, marker, tail]);
+
+		expect(truncated.length).toBeLessThanOrEqual(maxBytes);
+		expect(truncated.toString()).toContain("__truncated__");
+	});
+
+	it("does not truncate transcripts within the byte limit", () => {
+		const maxBytes = factoryConfig.limits.artifactBytes;
+		const small = Buffer.from('{"a":1}\n{"b":2}', "utf-8");
+		expect(small.length).toBeLessThanOrEqual(maxBytes);
+	});
+});
+
+describe("null stripping for OpenAI tool args", () => {
+	it("strips null values from tool arguments", async () => {
+		const { checkToolCall } = await import("../app/policy/index.js");
+
+		const argsWithNull = { command: "ls", cwd: null };
+		const stripped = Object.fromEntries(
+			Object.entries(argsWithNull).filter(([, v]) => v !== null),
+		);
+		expect(stripped).toEqual({ command: "ls" });
+
+		const result = checkToolCall("sandbox__exec", stripped);
+		expect(result).toBeNull();
+	});
+
+	it("passes through non-null values unchanged", () => {
+		const args = { command: "npm test", cwd: "/home/user/repo" };
+		const stripped = Object.fromEntries(
+			Object.entries(args).filter(([, v]) => v !== null),
+		);
+		expect(stripped).toEqual(args);
 	});
 });
