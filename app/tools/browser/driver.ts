@@ -7,7 +7,11 @@
  * Console messages are buffered and returned by the 'console' command.
  */
 
-export const BROWSER_DIR = "/opt/factory-browser";
+/** Under the sandbox user's home, which is writable without root. */
+export const BROWSER_DIR = "/home/user/.factory-browser";
+
+/** Chromium is installed by this exact version's CLI so the two always match. */
+export const PLAYWRIGHT_VERSION = "1.63.0";
 export const DRIVER_PATH = `${BROWSER_DIR}/driver.js`;
 export const DRIVER_PORT = 9222;
 export const DRIVER_LOG = "/tmp/factory-browser.log";
