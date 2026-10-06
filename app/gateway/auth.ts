@@ -18,24 +18,33 @@ export function constantTimeEqual(a: string, b: string): boolean {
 const SESSION_COOKIE = "rf_session";
 const HMAC_ALGO = "sha256";
 
-/** Sign a nonce with the admin token to produce a session cookie value. */
-export function signSession(adminToken: string): string {
-	const nonce = randomBytes(32).toString("hex");
-	const sig = createHmac(HMAC_ALGO, adminToken).update(nonce).digest("hex");
-	return `${nonce}.${sig}`;
+/** Sessions are stateless, so a fixed lifetime is the only way one ends. */
+export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+
+function sessionSignature(adminToken: string, payload: string): string {
+	return createHmac(HMAC_ALGO, adminToken).update(payload).digest("hex");
 }
 
-/** Verify a session cookie value. Returns true if valid. */
-export function verifySession(value: string, adminToken: string): boolean {
-	const dot = value.indexOf(".");
-	if (dot === -1) return false;
-	const nonce = value.slice(0, dot);
-	const sig = value.slice(dot + 1);
-	if (!nonce || !sig) return false;
-	const expected = createHmac(HMAC_ALGO, adminToken)
-		.update(nonce)
-		.digest("hex");
-	return constantTimeEqual(sig, expected);
+/** A session value is `<issuedAtMs>.<nonce>.<hmac>`, signed with the admin token. */
+export function signSession(adminToken: string, now = Date.now()): string {
+	const payload = `${now}.${randomBytes(32).toString("hex")}`;
+	return `${payload}.${sessionSignature(adminToken, payload)}`;
+}
+
+/** Valid when the signature matches and the session is younger than its lifetime. */
+export function verifySession(
+	value: string,
+	adminToken: string,
+	now = Date.now(),
+): boolean {
+	const parts = value.split(".");
+	if (parts.length !== 3) return false;
+	const [issuedAt, nonce, sig] = parts;
+	if (!/^\d+$/.test(issuedAt) || !nonce || !sig) return false;
+	const expected = sessionSignature(adminToken, `${issuedAt}.${nonce}`);
+	if (!constantTimeEqual(sig, expected)) return false;
+	const age = now - Number(issuedAt);
+	return age >= 0 && age <= SESSION_MAX_AGE_SECONDS * 1000;
 }
 
 export function sessionCookieName(): string {
@@ -44,7 +53,7 @@ export function sessionCookieName(): string {
 
 /** Build a Set-Cookie header for the session. */
 export function sessionSetCookie(value: string): string {
-	return `${SESSION_COOKIE}=${value}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+	return `${SESSION_COOKIE}=${value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
 }
 
 /** Build a Set-Cookie header that clears the session. */

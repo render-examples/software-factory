@@ -3,7 +3,6 @@ import type {
 	ArtifactRecord,
 	DeliveryOutcome,
 	DeliveryRecord,
-	RunEventRecord,
 	RunRecord,
 	RunStatus,
 	SubjectKind,
@@ -144,28 +143,6 @@ export async function listDeliveries(limit = 50): Promise<DeliveryRecord[]> {
 		outcome: row.outcome as DeliveryOutcome,
 		detail: (row.detail as Record<string, unknown>) ?? null,
 		receivedAt: (row.received_at as Date).toISOString(),
-	}));
-}
-
-/** List events for a run, ordered by id. */
-export async function listEventsByRun(
-	runId: string,
-): Promise<RunEventRecord[]> {
-	const { rows } = await db().query(
-		`SELECT id, run_id, type, stage, span_id, parent_span_id, phase, payload, created_at
-		 FROM run_events WHERE run_id = $1 ORDER BY id`,
-		[runId],
-	);
-	return rows.map((row: Record<string, unknown>) => ({
-		id: String(row.id),
-		runId: row.run_id as string,
-		type: row.type as string,
-		stage: (row.stage as string) ?? null,
-		spanId: (row.span_id as string) ?? null,
-		parentSpanId: (row.parent_span_id as string) ?? null,
-		phase: (row.phase as "start" | "end" | "point") ?? null,
-		payload: (row.payload as Record<string, unknown>) ?? null,
-		createdAt: (row.created_at as Date).toISOString(),
 	}));
 }
 

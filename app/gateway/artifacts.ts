@@ -1,22 +1,19 @@
 import { Hono } from "hono";
-import { getArtifactByLinkToken, getArtifactForServing } from "../store/index.js";
 import {
-	parseCookies,
-	sessionCookieName,
-	verifySession,
-} from "./auth.js";
+	getArtifactByLinkToken,
+	getArtifactForServing,
+} from "../store/index.js";
+import { parseCookies, sessionCookieName, verifySession } from "./auth.js";
 
+/** Raster formats only: SVG can carry script, so it is always a download. */
 const IMAGE_TYPES = new Set([
 	"image/png",
 	"image/jpeg",
 	"image/gif",
 	"image/webp",
-	"image/svg+xml",
 ]);
 
-function artifactHeaders(
-	contentType: string,
-): Record<string, string> {
+function artifactHeaders(contentType: string): Record<string, string> {
 	const headers: Record<string, string> = {
 		"Content-Type": contentType,
 		"X-Content-Type-Options": "nosniff",
