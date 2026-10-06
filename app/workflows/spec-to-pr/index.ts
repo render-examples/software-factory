@@ -23,7 +23,7 @@ import { gitDataClient, type RepoRef } from "../../github/index.js";
 import { publish } from "../../publish/index.js";
 import { shellEscape } from "../../shell/index.js";
 import { mergeRunResult } from "../../store/index.js";
-import { lease, release } from "../../workspaces/index.js";
+import { openWorkspace, closeWorkspace } from "../../workspaces/index.js";
 import { type LifecycleResult, runWorkflow } from "../lifecycle.js";
 import { STATUS } from "../labels.js";
 import { TASK_TIMEOUT_SECONDS } from "./constants.js";
@@ -94,12 +94,12 @@ export const specToPr = runWorkflow(
 
 		// ── Workspace ───────────────────────────────────────────────────
 		await stage("workspace");
-		const workspace = await lease(runId, {
+		const workspace = await openWorkspace(runId, {
 			kind: "branch",
 			name: target().baseBranch,
 		});
 		defer(async () => {
-			await release(runId);
+			await closeWorkspace(runId);
 		});
 
 		const branch = branchName(issueNumber, runId);

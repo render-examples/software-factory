@@ -62,7 +62,7 @@ function expectedRemoteUrl(owner: string, repo: string): string {
  * Verify .git/config contains no credential and the remote URL is
  * the plain HTTPS URL with no embedded token.
  */
-async function verifyNoCredentialLeak(
+export async function verifyNoCredentialLeak(
 	sandbox: Sandbox,
 	dir: string,
 	owner: string,

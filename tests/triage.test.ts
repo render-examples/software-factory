@@ -17,8 +17,8 @@ const mocks = vi.hoisted(() => ({
 		removeLabel: vi.fn(),
 		addLabels: vi.fn(),
 	},
-	lease: vi.fn(),
-	release: vi.fn(),
+	openWorkspace: vi.fn(),
+	closeWorkspace: vi.fn(),
 	listTrackedFiles: vi.fn(),
 	markStarted: vi.fn(),
 	getRun: vi.fn(),
@@ -69,8 +69,8 @@ vi.mock("../app/store/index.js", () => ({
 }));
 
 vi.mock("../app/workspaces/index.js", () => ({
-	lease: mocks.lease,
-	release: mocks.release,
+	openWorkspace: mocks.openWorkspace,
+	closeWorkspace: mocks.closeWorkspace,
 }));
 
 vi.mock("../app/git/index.js", () => ({
@@ -202,7 +202,7 @@ beforeEach(() => {
 	mocks.gh.removeLabel.mockResolvedValue(undefined);
 	mocks.gh.addLabels.mockResolvedValue(undefined);
 
-	mocks.lease.mockResolvedValue({
+	mocks.openWorkspace.mockResolvedValue({
 		sandbox: {
 			id: "sbx-1",
 			run: vi.fn(),
@@ -215,7 +215,7 @@ beforeEach(() => {
 		baseSha: "sha-base",
 		headSha: "sha-head",
 	});
-	mocks.release.mockResolvedValue(undefined);
+	mocks.closeWorkspace.mockResolvedValue(undefined);
 	mocks.listTrackedFiles.mockResolvedValue(new Set(["src/client.ts"]));
 
 	mocks.getCurrentSpec.mockResolvedValue(null);
@@ -811,7 +811,7 @@ describe("triage workflow", () => {
 	});
 
 	describe("workspace lifecycle", () => {
-		it("leases a sandbox and defers release", async () => {
+		it("opens a workspace and defers close", async () => {
 			mocks.triageTask.mockResolvedValue(
 				JSON.stringify({
 					decision: "ask",
@@ -828,11 +828,11 @@ describe("triage workflow", () => {
 			const wf = triageWorkflow as unknown as TaskShape;
 			await wf.handler(mockCtx, { runId: "run-t1" });
 
-			expect(mocks.lease).toHaveBeenCalledWith("run-t1", {
+			expect(mocks.openWorkspace).toHaveBeenCalledWith("run-t1", {
 				kind: "branch",
 				name: "main",
 			});
-			expect(mocks.release).toHaveBeenCalledWith("run-t1");
+			expect(mocks.closeWorkspace).toHaveBeenCalledWith("run-t1");
 		});
 	});
 

@@ -143,8 +143,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     created_at      timestamptz NOT NULL DEFAULT now(),
     ready_at        timestamptz,
     expires_at      timestamptz,
-    leased_at       timestamptz,
-    released_at     timestamptz
+    terminated_at   timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS sandboxes_status_idx ON sandboxes (status);

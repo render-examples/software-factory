@@ -28,10 +28,10 @@ export interface FactoryLabels {
 	prReview: string;
 }
 
-export interface SandboxNetworkPolicy {
-	default: "allow-all" | "deny-all" | "allow-list";
-	allowedDomains?: string[];
-}
+export type SandboxNetworkPolicy =
+	| { default: "allow-all" }
+	| { default: "deny-all" }
+	| { default: "allow-list"; allowedDomains: string[] };
 
 export interface FactoryConfig {
 	repos: [RepoTarget, ...RepoTarget[]];
@@ -43,10 +43,17 @@ export interface FactoryConfig {
 		models: Partial<Record<RunnerName, Record<ModelTier, string>>>;
 	};
 	review: { specialists: string[] };
-	pool: {
-		size: number;
-		refreshAfterMinutes: number;
-		sandboxTimeoutSeconds: number;
+	sandbox: {
+		timeoutSeconds: number;
+		/** Builder sandbox timeout in seconds. Default 7200. Max 86400. */
+		builderTimeoutSeconds?: number;
+		/**
+		 * Render native sandbox network policy for run sandboxes.
+		 * Omit to use the platform default.
+		 * Sandboxes need egress to github.com (fetch), the package registry
+		 * used by setup.install (lockfile-change reinstall), and the preview
+		 * domain (preview UX testing).
+		 */
 		network?: SandboxNetworkPolicy;
 	};
 	limits: {
@@ -107,10 +114,9 @@ export const factoryConfig = defineFactoryConfig({
 		},
 	},
 	review: { specialists: ["security", "correctness", "performance", "tests"] },
-	pool: {
-		size: 3,
-		refreshAfterMinutes: 60,
-		sandboxTimeoutSeconds: 7_200,
+	sandbox: {
+		timeoutSeconds: 7_200,
+		builderTimeoutSeconds: 7_200,
 		network: undefined,
 	},
 	limits: {

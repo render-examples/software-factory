@@ -1,4 +1,5 @@
 export { db, ping } from "./pool.js";
+export { withAdvisoryLock } from "./advisory-lock.js";
 export {
 	putArtifact,
 	getArtifact,
@@ -33,22 +34,13 @@ export {
 } from "./runs.js";
 export {
 	recordSandbox,
-	claimWarmSandbox,
-	leaseSandbox,
-	releaseSandbox,
-	listStaleLeases,
 	markSandboxReady,
-	markSandboxReadyAndLeased,
 	markSandboxFailed,
 	markSandboxTerminated,
 	setSandboxProviderId,
 	markSandboxPreparing,
-	countPoolSandboxes,
-	claimRecyclableSandboxes,
-	claimExpiredWarmSandboxes,
-	listTerminalLeasedSandboxes,
-	listStuckInFlightSandboxes,
 	listSandboxesForRun,
+	listReapableSandboxes,
 } from "./sandboxes.js";
 export {
 	createSpec,
@@ -72,6 +64,16 @@ export {
 	getArtifactForServing,
 	type ListRunsFilter,
 } from "./queries.js";
+export {
+	currentSnapshot,
+	recordSnapshot,
+	retireOtherSnapshots,
+	retireSnapshot,
+	listRetiredSnapshots,
+	deleteSnapshotRecord,
+	membersBySnapshot,
+	type SnapshotRecord,
+} from "./snapshots.js";
 export type {
 	ArtifactRecord,
 	DeliveryOutcome,

@@ -22,8 +22,8 @@ export async function createBranch(
 }
 
 /**
- * Set up the checkout state after a workspace lease. The lease already
- * has the repo cloned; this creates the working branch.
+ * Set up the checkout state after opening a workspace. The workspace
+ * already has the repo cloned; this creates the working branch.
  */
 export async function setupBranch(
 	sandbox: Sandbox,
