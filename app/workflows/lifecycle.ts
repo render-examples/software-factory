@@ -301,7 +301,7 @@ export function runWorkflow(
 
 				const publicUrl = process.env.FACTORY_PUBLIC_URL?.trim();
 				const runLink = publicUrl
-					? `\n\n[View run details](${publicUrl}/runs/${runId})`
+					? `\n\n[View run details](${publicUrl}/ui/runs/${runId})`
 					: "";
 				await ensureComment(
 					gh,
