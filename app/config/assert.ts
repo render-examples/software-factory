@@ -20,6 +20,10 @@ export function assertGatewayEnv(): void {
 	repository();
 	requireEnv("GITHUB_WEBHOOK_SECRET");
 	requireEnv("DATABASE_URL");
+	const adminToken = requireEnv("FACTORY_ADMIN_TOKEN");
+	if (adminToken.length < 32) {
+		throw new Error("FACTORY_ADMIN_TOKEN must be at least 32 characters");
+	}
 }
 
 /** Fail fast if the dispatcher is misconfigured. */
