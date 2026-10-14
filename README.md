@@ -1,4 +1,4 @@
-# render-factory
+# software-factory
 
 A self-hosted production-ready software factory. Built on Render Postgres, Workflows, Sandboxes, and Web services. 
 
@@ -10,7 +10,7 @@ Fork the repo, extend with your logic, and deploy full-stack coding agents with 
 3. pr-reviewer: an agent receives a PR, reviews code quality across multiple dimensions in parallel, consolidates the findings as comments, and optionally conducts user testing on a preview environment deployment.
 4. full-run: Run all three workflows in order.
 
-## Why render-factory?
+## Why software-factory?
 1. It's portable to other platforms. 
 2. You can bring your own harness and agents.
 3. It's secure by design.
