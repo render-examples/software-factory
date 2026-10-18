@@ -1,6 +1,6 @@
 # Redesign: less machinery, more platform
 
-Status: agreed direction, October 2026. Replaces the 0.1.0 architecture in [`0-1-0-spec.md`](0-1-0-spec.md).
+Status: implemented, October 2026. Replaces the 0.1.0 architecture in [`0-1-0-spec.md`](0-1-0-spec.md). The current behavior is documented in [architecture.md](architecture.md), [security.md](security.md), and [agents.md](agents.md); where this document and the code disagree, the code and those docs win.
 
 ## Why
 
@@ -53,7 +53,7 @@ The gateway verifies the signature, maps the event to one task and its input, an
 | `issue_comment.created` | `/factory cancel` | `cancel` | `{ repo, number, actor }` |
 | `push` | To a configured repo's base branch | `refresh-snapshot` | `{ repo, sha }` (idempotency key `repo@sha`) |
 
-`repo` and the GitHub App installation come from the webhook, so one App installed on several repositories serves all of them. Repositories missing from `factory.config.ts` are ignored.
+`repo` and the GitHub App installation (`installationId`, in every input) come from the webhook, so one App installed on several repositories serves all of them. Repositories missing from `factory.config.ts` are ignored.
 
 The routing table is a pure function from `(event, payload)` to `(task, input) | null`, so it can be tested without a server.
 
@@ -97,7 +97,7 @@ create index on events (trace_id, id);
 create index on events (repo, subject, created_at desc);
 ```
 
-`emit(type, payload)` writes one row and swallows errors: a database outage loses events, never runs. Large payloads (transcripts) go to object storage, and the event stores a reference.
+`emit(event)` writes one row and swallows errors: a database outage loses events, never runs. Transcripts aren't stored; agent events record the model, turns, usage, cost, and outcome.
 
 ## Repositories
 
@@ -132,10 +132,10 @@ Each repository has one named snapshot, `factory-<owner>-<name>`, holding the cl
 
 - **Building** happens in the `refresh-snapshot` task, triggered by a push to the base branch. The steps are ordered by trust, as in [codebase-researcher](https://github.com/render-examples/codebase-researcher/blob/main/docs/sandboxes.md):
   1. Upload the runner and scripts, install tools, and self-test the runner.
-  2. Upload a read-only GitHub token, clone at the pushed commit, and install dependencies.
-  3. Scrub the token and verify none remains.
-  4. Write a manifest (commit, lockfile hash), snapshot by name, and keep the newest two.
-- **Opening** (`openSandbox(repo, ref)`) restores the snapshot, fetches the ref, and reinstalls only if the lockfile hash differs from the manifest. If no snapshot exists, it builds one inline once. A stale snapshot is fine: the fetch brings it up to date.
+  2. Upload a read-only GitHub token, clone at the pushed commit, then scrub the token and verify none remains.
+  3. Install dependencies as the unprivileged runner user, with no secret present.
+  4. Write a manifest (commit, lockfile hash, install command), snapshot by name, and keep the newest two.
+- **Opening** (`openSandbox(repo, ref)`) restores the snapshot, fetches the ref, and reinstalls only if the lockfile hash or install command differs from the manifest. If no snapshot exists, it builds one inline once. A stale snapshot is fine: the fetch brings it up to date.
 - **Closing** happens in `finally`. Every sandbox is created with `timeoutSeconds`, so Render terminates any sandbox a crashed task leaves behind. Nothing reaps.
 - **Network** is `allow-all`, because installs and fetches need it. Early access supports only allow-all and deny-all, sent as `{ type }`.
 - **Credentials**: a read-only token enters a sandbox only to clone or fetch, and is scrubbed before any agent or repository code runs. No write credential ever enters a sandbox.
@@ -161,7 +161,7 @@ export const implementer = defineAgent({
   model: "large",
   tools: ["read", "ls", "bash", "edit", "write"],
   output: Implementation,
-  maxTurns: 80,
+  maxTurns: 150,
 });
 ```
 
@@ -173,22 +173,20 @@ An agent runs where you call it, and its tools act there:
 
 ```ts
 // In the task: no sandbox, so no tools.
-export const synthesize = task({ name: "synthesize" }, (_ctx, input) => runAgent(synthesizer, input));
+const review = await runAgent(synthesizer, { message, vars: { repo } }, { traceId, budgetUsd });
 
 // In the sandbox you pass: its tools act on that sandbox.
-export const implement = task({ name: "implement", timeoutSeconds: 3600 }, (_ctx, { sandboxId, spec, budget }) =>
-  runAgent(implementer, { spec }, { sandbox: sandboxId, budget }),
-);
+const implementation = await runAgent(implementer, { message, vars }, { sandbox, traceId, budgetUsd, timeoutMs });
 ```
 
 - An agent that declares tools requires `{ sandbox }`; that is a type error otherwise. A Workflows task holds the factory's secrets, so tools never run there.
-- `runAgent` is a function, not a task. Wrap it in `task()` when you want its own retry, timeout, and line in the Render Dashboard; call it inline when you don't. Tasks are named by hand, so names can't collide by accident.
-- It returns `{ result, usage }` and emits `agent.turn` and `cost` events.
-- **Budget is passed down, not looked up.** The workflow gives each call the budget remaining; the runner stops when it is spent, and the workflow subtracts the reported usage.
+- `runAgent` is a function, not a task. Wrap it in `task()` when you want its own retry, timeout, and line in the Render Dashboard; call it inline when you don't. Tasks are named by hand, so names can't collide by accident. Every agent call in the phases is inline today.
+- It returns `{ output, usage, costUsd, turns }` and emits `agent.started` and `agent.finished` events.
+- **Budget is passed down, not looked up.** The workflow gives each call the budget remaining (`Budget.track`); the runner stops when it is spent, and the workflow subtracts the reported cost.
 
 ### The runner
 
-In a sandbox, `runAgent` uploads `{ prompt, model, tools, outputSchema, maxTurns, input }` and a one-time model key file, runs the bundled runner, and downloads its events and result. The runner is codebase-researcher's pi runner with the prompt moved out of the bundle and into the input, so changing a prompt is a redeploy, never a snapshot rebuild. Its key handling carries over: the key file is deleted on read, tool processes get a scrubbed environment, and the runner process is non-dumpable. Use a spend-capped model key; credential brokering, when Sandboxes ships it, would keep the key out of the sandbox entirely.
+In a sandbox, `runAgent` uploads the runner input (the rendered prompt, model, tools, output schema, turn, time, and budget limits, and the message) and a one-time model key file, runs the bundled runner, and downloads its events and result. The runner is codebase-researcher's pi runner with the prompt moved out of the bundle and into the input, so changing a prompt is a redeploy, never a snapshot rebuild. Its key handling carries over: the key file is deleted on read, tool processes get a scrubbed environment, and the runner process is non-dumpable. Use a spend-capped model key; credential brokering, when Sandboxes ships it, would keep the key out of the sandbox entirely.
 
 In a task, `runAgent` runs the same agent loop with no tools.
 
@@ -280,11 +278,11 @@ From the October 7 review, the publish problems (`git archive`, `git replace` by
 5. **Triage.** The spec comment with its JSON marker and hash, questions, and revisions.
 6. **Spec-to-PR.** Approval check against the label timeline, implement, verify and repair, self-review, and the new publishing flow.
 7. **PR Reviewer.** Verify, parallel specialists in one sandbox, the synthesizer in the task, and the COMMENT review.
-8. **Ship.** Trace UI over events, live evals that replay cases and grade their events, `doctor` and the setup scripts (including the circular setup order), README, Deploy button, LICENSE, the rename to software-factory, and making the repo public. Then one end-to-end run on the example target repository.
+8. **Ship.** Trace UI over events, live evals that replay cases and grade what the agents produce, `doctor` and the setup scripts (including the circular setup order), README, Deploy button, LICENSE, the rename to software-factory, and making the repo public. Then one end-to-end run on the example target repository.
 
 ## Open questions
 
-- Whether each specialist reviewer runs as its own task (its own retry and Dashboard entry) or inline in `pr-review`.
-- Where transcripts are stored: Render object storage, or only in task results.
-- Whether `refresh-snapshot` also runs when `factory.config.ts` changes a repo's install command, and how a deploy triggers it.
-- Whether the runner keeps pi's multi-provider support at launch or ships Anthropic only.
+- Whether each specialist reviewer runs as its own task (its own retry and Dashboard entry) or inline in `pr-review`. Launch: inline.
+- Where transcripts are stored: Render object storage, or only in task results. Launch: not stored.
+- Whether `refresh-snapshot` also runs when `factory.config.ts` changes a repo's install command, and how a deploy triggers it. Launch: neither; a restored sandbox reinstalls when the install command differs from its manifest, and the next push rebuilds the snapshot.
+- Whether the runner keeps pi's multi-provider support at launch or ships Anthropic only. Launch: the runner keeps it; `render.yaml` declares only `ANTHROPIC_API_KEY`.

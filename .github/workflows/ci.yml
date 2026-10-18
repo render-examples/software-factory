@@ -9,32 +9,39 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: render_factory
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d render_factory"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm run test:integration
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/render_factory
-      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run eval -- --validate
+      - run: shellcheck sandbox-runtime/*.sh sandbox-runtime/build/*.sh
+      - run: npm audit --omit=dev --audit-level=high
+
+  # Validation checks plans, regions, and conflicts against a real workspace, so it needs an API key.
+  # Set the RENDER_API_KEY secret and the RENDER_WORKSPACE_ID variable to turn it on; forks without them skip it.
+  blueprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_WORKSPACE_ID: ${{ vars.RENDER_WORKSPACE_ID }}
+      RENDER_CLI_VERSION: 2.29.0
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Render CLI
+        if: env.RENDER_API_KEY != '' && env.RENDER_WORKSPACE_ID != ''
+        run: |
+          curl -fsSL -o render.zip "https://github.com/render-oss/cli/releases/download/v${RENDER_CLI_VERSION}/cli_${RENDER_CLI_VERSION}_linux_amd64.zip"
+          unzip -q render.zip "cli_v${RENDER_CLI_VERSION}"
+          sudo install -m 755 "cli_v${RENDER_CLI_VERSION}" /usr/local/bin/render
+      - name: Validate render.yaml
+        if: env.RENDER_API_KEY != '' && env.RENDER_WORKSPACE_ID != ''
+        run: render blueprints validate render.yaml --workspace "$RENDER_WORKSPACE_ID" -o text

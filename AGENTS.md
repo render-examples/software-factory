@@ -1,261 +1,111 @@
 # Repository guide for agents
 
-This file applies to the entire repository.
+This file applies to the whole repository. Read [docs/architecture.md](docs/architecture.md) for how the system works and [docs/redesign.md](docs/redesign.md) for why it's built this way.
 
 ## What this is
 
-`render-factory` turns a labeled GitHub issue into a reviewed draft pull
-request through three chained workflows — Triage, Spec-to-PR, and PR
-Reviewer. It is a reference architecture for Render Workflows, Sandboxes,
-Postgres, and Web Services — optimized to be read, not to be a framework.
+software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three phases (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table that no decision reads.
 
-Three phases chain through GitHub:
+Two processes deploy:
 
-1. A maintainer labels an issue. The gateway validates the webhook, records
-   a delivery, and creates a queued run.
-2. The dispatcher polls queued runs and starts Workflow tasks.
-3. The workflow claims the run, checks the actor's live permission, runs
-   its phase, and posts the result. Triage posts questions or a spec.
-   Spec-to-PR opens a draft PR. PR Reviewer posts a COMMENT review.
-4. The human's response (a reply, an approval label, a review label) starts
-   the next workflow. A full run chains all three automatically.
+- `app/src/server.ts`: the gateway web service. Verifies webhooks, routes each to one task, calls `startTask` with the delivery ID as the idempotency key, and serves the trace UI.
+- `app/src/workflows.ts`: the Workflows service. Importing `app/workflows/index.ts` registers every task.
 
-Five processes deploy independently:
-
-- `app/src/server.ts` — Hono gateway web service.
-- `app/src/dispatcher.ts` — Background Worker polling queued runs.
-- `app/src/workflows.ts` — Render Workflows host and task registration.
-- `app/src/maintenance.ts` — Cron job for workspace snapshots, sandbox reaping, dispatch, and artifact maintenance.
-- `app/sql/` — Schema, applied by the gateway's pre-deploy command.
-
-The gateway runs no models, holds no Render API key, and holds no
-repository token. Agents never write to GitHub. Repository execution
-happens in Render Sandboxes.
-
-## Quick start
-
-Requires Node 22+, Docker for local Postgres, the Render CLI for
-`dev:workflows`, and Render, GitHub, and Anthropic credentials.
-
-```bash
-npm ci
-cp .env.example .env   # then fill it in
-```
-
-Run each in its own terminal:
-
-```bash
-npm run dev:postgres
-npm run db:migrate
-npm run dev:gateway
-npm run dev:workflows
-npm run dev:dispatcher
-```
-
-The gateway listens on `0.0.0.0:${PORT:-3000}`. `GET /health` is liveness,
-`GET /ready` checks Postgres and is the Render health-check target, and
-webhooks arrive at `POST /webhooks/github`. Local workflow runs create real
-Render Sandboxes.
-
-Verify a change with `npm run check` (Biome, `tsc`, Vitest). For one file:
-`npx vitest run tests/gateway.test.ts`. Validate the Blueprint with
-`render blueprints validate` when `render.yaml` changes.
-
-`npm run doctor` diagnoses a live deployment and is read-only. When you add a
-required environment variable, a task name, or a schema object, add a check for
-it there — that script is where setup mistakes get caught.
+`app/sql/` holds the migrations, applied by `npm run db:migrate` as the gateway's pre-deploy command.
 
 ## Module map
 
-Each directory under `app/` is one module with an `index.ts` barrel. Import
-across modules through the barrel (`../git/index.js`), never by reaching into
-a sibling file. There is no SDK layer and no path aliases — imports are
-relative with `.js` extensions (NodeNext).
-
-The dependency direction is one-way:
-
 ```text
-sandbox → tools → runners → agents → tasks → workflows
-```
-
-`workspaces` and `publish` are used by `workflows`. `policy` is imported by
-`runners` and `github`. `shell`, `config`, `contracts`, and `format` are
-leaves — `shell` in particular is depended on by `sandbox`, `tools`, and
-`git`, which is why it is not inside any of them. Adding an edge that points
-backwards is a design smell.
-
-A barrel exports what other modules actually use. If a symbol is only used
-inside its own module, keep it out of `index.ts`.
-
-```text
-factory.config.ts       Repository targets, labels, models, sandbox settings, limits, pricing
+factory.config.ts   Repositories (base branch, install, verify), labels, permission, model tiers, limits, sandbox timeout
 app/
-  config/               Environment parsing, per-process assertions, config validation
-  gateway/              Signature, body cap, filters, webhook routing, health, read API, trace UI, artifacts
-  dispatcher/           Poll loop: claim queued runs, start workflow tasks
-  workflows/            One directory per workflow; lifecycle.ts handles claiming, heartbeat,
-                        permission checks, terminal comments, label removal
-    lifecycle.ts        runWorkflow() — the shared lifecycle every workflow uses
-    labels.ts           Status label helpers shared by all workflows
-    agent-json.ts       Structured output with fail-closed retry
-    triage/             Triage workflow: assess, draft spec, ask questions, decline
-    spec-to-pr/         Spec-to-PR: implement, verify, self-review, publish, open PR
-    pr-review/          PR Reviewer: verify, specialists, local dev, preview, synthesize, submit
-  contracts/            Zod schemas for workflow input, agent output, spec, UX results
-  agents/               One file per agent; types.ts defines the Agent interface
-    reviewers/          Specialist reviewers (security, correctness, performance, tests),
-                        synthesizer, ux-tester, and the registry
-  tasks/                agentTask() wraps agents as Workflow tasks; budget checks; cost events
-  runners/              AgentRunner interface, Claude runner, OpenAI runner
-  tools/                Sandbox tools: read, write, exec, search, patch, browser
-    browser/            Browser tools for UX testing in sandboxes
-  policy/               checkToolCall (PreToolUse), path rules, secret redaction, browser origin allowlist
-  sandbox/              Render Sandbox adapter (create, exec, upload, download, terminate)
-  workspaces/           Per-run sandboxes: create from snapshot, verify, close; maintenance
-    snapshot.ts         ensureSnapshot() — advisory-locked builder→snapshot→record flow
-    workspace.ts        openWorkspace(runId, ref), closeWorkspace(runId)
-    reap.ts             Reap stale sandboxes (terminal runs, expired, stuck, stale builders)
-  publish/              Git Data API publishing: collect changes, transfer, create objects, verify tree
-  preview/              Preview environment locator (Render API)
-  shell/                shellEscape — quoting for every command we build
-  git/                  Clone, branch, commit, diff, verify — all workflow-owned
-  github/               REST client, App auth, Git Data calls, pulls, reviews
-  format/               Issue to work item; results to GitHub markdown; spec rendering
-  store/                Postgres: runs, deliveries, events, specs, sandboxes, artifacts, costs
-  sql/                  Schema migrations, applied by scripts/migrate.ts
-  telemetry/            Event emission and span helpers over run_events
-  src/                  Process entry points
-scripts/                migrate, doctor, setup-github, create-github-app, eval
-evals/cases/            Eval case definitions (JSON)
-tests/                  Unit tests (no live services)
+  config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
+  contracts/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
+  events/           emit() and the readers behind the trace UI, over the events table
+  format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
+  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), admin auth, trace UI (ui/)
+  github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
+  runner/           The agent runner: one Pi agent loop, tools, submit, key handling. Bundled into the snapshot
+  sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
+  agents/           One prompt (.md) and defineAgent (.ts) per agent; runAgent runs one in a sandbox or in the task
+  publish/          Collects the sandbox's changes and publishes them through the Git Data API
+  phases/           withPhase lifecycle: permission check, latest-wins takeover, status comment, budget, events
+  workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
+  sql/              Migrations
+  src/              Process entry points
+sandbox-runtime/    Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
+scripts/            setup-app, setup-github, doctor, migrate, eval
+evals/cases/        Eval cases (JSON)
+tests/              Vitest unit tests; fakes in tests/helpers/
 ```
 
-Keep `index.ts` thin: re-exports, plus the few lines that wire a module
-together when that wiring is the module's whole point (`app/tasks/index.ts`
-instantiates the agent tasks). Everything else belongs in a sibling file
-so a reader can see the module's surface at a glance.
+Dependencies point one way, from entry points down to leaves:
+
+```text
+src → gateway, workflows
+workflows → phases, publish, agents, sandbox, github, format, events, contracts, config
+phases → agents, github, events, config
+agents → sandbox, runner, events, contracts, config
+publish → sandbox, github, config
+sandbox → runner (to bundle it), github (read tokens), config
+format → contracts, config
+gateway → contracts, events, config
+github → config
+runner, events, contracts, config → nothing in app/
+```
+
+Two edges must never appear:
+
+- **Nothing in `runner/` imports from the rest of `app/`.** esbuild bundles `runner/main.ts` into a self-contained file that runs in the sandbox with only Node.
+- **`gateway/` never imports `github/`, `sandbox/`, `agents/`, or `workflows/`.** The gateway holds no GitHub credential and runs no model.
+
+Import another module through its `index.ts` barrel where one exists. A barrel exports what other modules use; keep module-internal helpers out of it.
 
 ## Conventions
 
-- Strict TypeScript, ESM, NodeNext. Include `.js` in relative imports.
-- Validate external and workflow input with Zod before use.
-- Use `md` for dedented multi-line prompts.
-- Escape shell arguments with `shellEscape`; use credential helpers in
-  `workspaces/credentials.ts` for authenticated Git.
-- Keep dispatch payloads small and JSON-serializable.
-- Comments explain intent and constraints, not what the next line does.
-- Add or update tests with behavior changes. Never call live Render, GitHub,
-  Postgres, or model APIs from tests.
+- Strict TypeScript, ESM, NodeNext. Relative imports end in `.js`. No path aliases.
+- Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
+- Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
+- Task inputs and results stay small and JSON-serializable. Pass sandboxes between tasks by ID (`connectSandbox`).
+- Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox-runtime/`, which CI checks with shellcheck.
+- Model text that reaches GitHub goes through the helpers in `app/format/`.
+- Phases take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
+- Add or update tests with every behavior change.
+- Write comments only for constraints the code can't show (platform limits, security reasons, ordering requirements), not to narrate the next line.
 
 ## Invariants
 
-Do not weaken these without an explicit security-model change:
+Don't weaken these without an explicit change to the security model ([docs/security.md](docs/security.md) says where each is enforced):
 
-1. The gateway verifies the webhook signature before it parses the body. It
-   holds only the database URL, the webhook secret, and the admin token.
-2. Only the dispatcher starts workflow tasks. Workflow inputs are `{ runId }`.
-3. Every run checks the triggering actor's live repository permission before
-   doing any work.
-4. Only workflow code writes to GitHub, and every write looks up its marker
-   before creating anything.
-5. Model credentials never enter a sandbox. A GitHub token is present in a
-   sandbox only during clone or fetch; it is read-only and scrubbed before
-   any agent or PR code runs.
-6. Agents receive only the tool sets they compose. Built-in runner tools are
-   disabled, and each agent's tool list is pinned by a test.
-7. Models never choose sandbox IDs, paths outside the checkout, branches,
-   GitHub targets, or task names.
-8. A PR opens only after GitHub's tree SHA equals the verified local tree.
-9. Automation ends at a draft PR and a COMMENT review. It never approves,
-   never requests changes, never marks a PR ready, and never merges.
-10. Spec-to-PR implements exactly the spec version that was current when the
-    approval label was applied.
-11. At most one non-terminal run exists per subject.
-12. Sandboxes are terminated in `finally`. Maintenance only terminates sandboxes
-    recorded in `sandboxes`.
-13. Cross-process state lives in Postgres. Render filesystems are ephemeral.
+1. The gateway verifies the webhook signature before parsing the body.
+2. Every run checks the triggering actor's live repository permission before doing anything.
+3. Only workflow code writes to GitHub, and every write finds its marker before creating anything.
+4. No write credential enters a sandbox. A read-only token is present only to clone or fetch.
+5. Tools run only in sandboxes, never in a Workflows task.
+6. Models never choose sandbox IDs, branches, repositories, or GitHub targets.
+7. A PR opens only after GitHub's tree SHA equals the verified sandbox tree.
+8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
+9. Spec-to-PR implements the spec as it stood when the approval label was applied.
+10. Every sandbox is created with a timeout and terminated in `finally`.
+11. No workflow decision reads Postgres.
 
-## Recipes
+`tests/agents-catalog.test.ts` pins every agent's model, tools, and turn limit. Change it only on purpose.
 
-### Add a specialist reviewer
+## Common changes
 
-1. Create `app/agents/reviewers/<name>-reviewer.ts`. Export a function that
-   returns an `Agent` with `id: "<name>"`, `model: "medium"`, and
-   `tools: [...readTools]`. Its prompt should describe what to look for and
-   return findings with file, line, severity, confidence, and evidence.
-2. Export the agent from `app/agents/reviewers/index.ts`.
-3. Register it in `app/agents/reviewers/registry.ts` so `resolveSpecialists`
-   can find it by name.
-4. Add the name to `review.specialists` in `factory.config.ts`.
-5. Add the agent to the tool-access test in `tests/agents.test.ts`.
+- **An agent or a phase:** follow [docs/agents.md](docs/agents.md).
+- **A configuration key:** add it to `FactoryConfig` in `factory.config.ts` with a doc comment, and to [docs/configuration.md](docs/configuration.md).
+- **An environment variable:** add it to `render.yaml`, `.env.example`, `SERVICE_ENV` in `scripts/lib/requirements.ts` (so `doctor` checks it), and [docs/configuration.md](docs/configuration.md).
+- **A webhook event, label, or App permission:** update `scripts/lib/requirements.ts`, which `setup:app`, `setup:github`, and `doctor` all read.
+- **The runner or `sandbox-runtime/`:** these are baked into each snapshot, so they reach sandboxes only after a rebuild (the next push to each base branch, or a `refresh-snapshot` run).
 
-### Add an agent
+## Verify
 
-1. Create `app/agents/<name>.ts` and export it from `app/agents/index.ts`.
-   `id`, `model`, and `prompt` are required; `id` is also the registered task
-   name, so keep it unique and stable. Give it `tools` only if it needs the
-   sandbox.
-2. Wrap it in `app/tasks/index.ts` with `agentTask()`.
-3. Call it from the relevant stage in the workflow. Pass
-   `sandboxId: sandbox.id` only when it declares tools.
-4. If it emits JSON, add a schema under `app/contracts/` and call it through
-   `agentJson()`, which retries once and then fails closed.
-5. Update `tests/agents.test.ts` for tool access.
+```bash
+npm run check                    # Biome lint, tsc --noEmit, all Vitest tests
+npm run eval -- --validate       # eval case files
+shellcheck sandbox-runtime/*.sh sandbox-runtime/build/*.sh
+render blueprints validate render.yaml   # when render.yaml changes
+npm audit --omit=dev --audit-level=high
+```
 
-### Add a workflow
-
-1. Create `app/workflows/<name>/index.ts` using `runWorkflow(name, options, handler)`.
-   The lifecycle handles claiming, heartbeating, permission checks, deferred
-   cleanup, terminal comments, and label removal. Your handler receives a
-   `LifecycleContext` with `stage()`, `throwIfCancelled()`, `defer()`, and
-   the GitHub client.
-2. Put stages in sibling files. Keep the narrative in `index.ts` readable.
-3. Export the workflow from `app/workflows/index.ts`. That registers it —
-   `app/src/workflows.ts` imports the manifest, nothing else is needed.
-4. To trigger it from GitHub, route the label or event in `app/gateway/webhook.ts`.
-   The delivery creates a queued run with the workflow name matching the
-   `runWorkflow` registration. The dispatcher starts it as
-   `${RENDER_WORKFLOW_SLUG}/${name}`.
-5. Return a `LifecycleResult` with status, outcome, optional comment, optional
-   follow-up run, and labels to remove.
-6. A new route needs the same HMAC, body limit, repository, and bot filters.
-
-### Add a runner
-
-1. Implement the `AgentRunner` interface in `app/runners/<name>.ts`.
-   - Disable every built-in tool.
-   - Expose only the tools bound to the agent.
-   - Run `checkToolCall` before every tool call.
-   - Return token usage (including cache tokens) from the provider's response.
-2. Export from `app/runners/index.ts`.
-3. Add the runner name to `RunnerName` in `factory.config.ts` and configure
-   model IDs under `agents.models.<name>`.
-4. Update `tests/runners.test.ts`.
-
-### Add a tool or tool set
-
-1. Create the tool in `app/tools/<name>.ts` implementing the `Tool` interface.
-2. Export from `app/tools/index.ts`.
-3. Add it to the appropriate set in `app/tools/sets.ts` (`readTools`,
-   `writeTools`, `execTools`), or compose it into an agent's `tools` array
-   directly.
-4. If the tool needs policy enforcement, add patterns to `app/policy/rules.ts`
-   or path checks to `app/policy/paths.ts`.
-5. Update `tests/tools.test.ts` and `tests/agents.test.ts`.
-
-### Change verification commands
-
-Edit `repos[0].verify` in `factory.config.ts`. These run in the sandbox during
-Spec-to-PR (with repair rounds) and PR Reviewer (as evidence). An empty list
-removes verification — a warning is printed during config validation.
-
-## Checklist
-
-1. Trust boundaries between gateway, dispatcher, workflows, maintenance, and
-   agents are preserved.
-2. New agents and workflows are registered through the existing imports.
-3. Task names match between definition, dispatch, and tests.
-4. New external input is validated and task values stay JSON-serializable.
-5. Sandbox cleanup and repeated side effects are safe.
-6. `.env.example`, `render.yaml`, and `README.md` updated if config changed.
-7. `npm run check` passes.
+For one test file: `npx vitest run tests/gateway.test.ts`. `npm run doctor` checks a live deployment and is read-only.

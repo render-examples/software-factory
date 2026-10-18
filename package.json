@@ -2,6 +2,11 @@
   "name": "software-factory",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/render-examples/software-factory.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19"
