@@ -1,5 +1,7 @@
 # render-factory 0.1.0 specification
 
+> **Historical.** This is the 0.1.0 design, kept for reference. It is superseded by [redesign.md](redesign.md), and the system as built is described in [architecture.md](architecture.md) and the other current docs. Names, resources, and behavior below (the dispatcher, the maintenance cron, Postgres run state, and more) no longer exist.
+
 | | |
 |---|---|
 | Status | Draft |
