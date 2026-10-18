@@ -1,130 +1,71 @@
-/** The knobs you change when pointing this factory at a repository. */
-
 export type ModelTier = "small" | "medium" | "large";
-export type RunnerName = "claude" | "openai";
 
-export interface RepoTarget {
-	owner: string;
-	name: string;
+export interface RepoConfig {
+	/** Branch that specs are implemented against and snapshots are built from. */
 	baseBranch: string;
-	repoDir: string;
-	setup: { install: string; browsers?: boolean };
+	/** Installs dependencies in the sandbox. Runs after credentials are removed. */
+	install?: string;
+	/** Commands that must pass before a PR opens and that PR Reviewer runs. */
 	verify: string[];
-	dev?: {
-		start: string;
-		port: number;
-		healthPath: string;
-		readyTimeoutSeconds?: number;
-		env?: Record<string, string>;
-	};
-	preview?: { serviceName: string };
-	allowWorkflowChanges?: boolean;
 }
-
-export interface FactoryLabels {
-	triage: string;
-	fullRun: string;
-	specApproved: string;
-	prReview: string;
-}
-
-export type SandboxNetworkPolicy =
-	| { default: "allow-all" }
-	| { default: "deny-all" }
-	| { default: "allow-list"; allowedDomains: string[] };
 
 export interface FactoryConfig {
-	repos: [RepoTarget, ...RepoTarget[]];
-	labels: FactoryLabels;
+	/** Repositories the factory acts on, keyed by "owner/name". Webhooks from any other repository are ignored. */
+	repos: Record<string, RepoConfig>;
+	labels: { triage: string; specApproved: string; prReview: string };
+	/** Prefix for comment commands, such as `/factory cancel`. */
 	commandPrefix: string;
-	minimumPermission: string;
-	agents: {
-		runner: RunnerName;
-		models: Partial<Record<RunnerName, Record<ModelTier, string>>>;
-	};
-	review: { specialists: string[] };
-	sandbox: {
-		timeoutSeconds: number;
-		/** Builder sandbox timeout in seconds. Default 7200. Max 86400. */
-		builderTimeoutSeconds?: number;
-		/**
-		 * Render native sandbox network policy for run sandboxes.
-		 * Omit to use the platform default.
-		 * Sandboxes need egress to github.com (fetch), the package registry
-		 * used by setup.install (lockfile-change reinstall), and the preview
-		 * domain (preview UX testing).
-		 */
-		network?: SandboxNetworkPolicy;
-	};
+	/** GitHub permission the triggering actor needs on the repository. */
+	minimumPermission: "triage" | "write" | "maintain" | "admin";
+	/** "provider/model" per tier, from Pi's model registry. */
+	models: Record<ModelTier, string>;
 	limits: {
-		repairRounds: number;
+		/** Dollar budget for one run, across every agent it calls. */
 		perRunUsd: number;
-		toolOutputChars: number;
-		artifactBytes: number;
-		runArtifactBytes: number;
+		/** Fix rounds after a failed verify in Spec-to-PR. */
+		repairRounds: number;
+		/** Publishing refuses a change with more files than this. */
+		maxChangedFiles: number;
+		/** Publishing refuses any changed file larger than this. */
+		maxFileBytes: number;
 	};
-	pricing: Record<
-		string,
-		{
-			inputPerMTok: number;
-			outputPerMTok: number;
-			cacheReadPerMTok?: number;
-			cacheWritePerMTok?: number;
-		}
-	>;
+	sandbox: {
+		/** Render terminates a sandbox after this, even if the task that opened it crashed. */
+		timeoutSeconds: number;
+	};
 }
 
 export function defineFactoryConfig(config: FactoryConfig): FactoryConfig {
 	return config;
 }
 
-export const factoryConfig = defineFactoryConfig({
-	repos: [
-		{
-			owner: "render-examples",
-			name: "render-factory-example-target",
+export default defineFactoryConfig({
+	repos: {
+		"render-examples/render-factory-example-target": {
 			baseBranch: "main",
-			repoDir: "/home/user/repo",
-			setup: { install: "npm ci", browsers: true },
+			install: "npm ci",
 			verify: ["npm run build", "npm test"],
-			dev: {
-				start: "npm run dev -- --port 3000",
-				port: 3000,
-				healthPath: "/",
-			},
-			preview: { serviceName: "sample-web" },
 		},
-	],
+	},
 	labels: {
 		triage: "factory:triage",
-		fullRun: "factory:full-run",
 		specApproved: "factory:spec-approved",
 		prReview: "factory:pr-review",
 	},
 	commandPrefix: "/factory",
 	minimumPermission: "write",
-	agents: {
-		runner: "claude",
-		models: {
-			claude: {
-				small: "claude-haiku-4-5",
-				medium: "claude-sonnet-5",
-				large: "claude-opus-5",
-			},
-		},
-	},
-	review: { specialists: ["security", "correctness", "performance", "tests"] },
-	sandbox: {
-		timeoutSeconds: 7_200,
-		builderTimeoutSeconds: 7_200,
-		network: undefined,
+	models: {
+		small: "anthropic/claude-haiku-4-5",
+		medium: "anthropic/claude-sonnet-5",
+		large: "anthropic/claude-opus-5",
 	},
 	limits: {
-		repairRounds: 2,
 		perRunUsd: 20,
-		toolOutputChars: 40_000,
-		artifactBytes: 5_000_000,
-		runArtifactBytes: 50_000_000,
+		repairRounds: 2,
+		maxChangedFiles: 200,
+		maxFileBytes: 1_000_000,
 	},
-	pricing: {},
+	sandbox: {
+		timeoutSeconds: 4 * 60 * 60,
+	},
 });
