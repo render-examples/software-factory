@@ -1,3 +1,9 @@
+# Software Factory: three resources.
+# - factory-db: Postgres holding the append-only events table (observability, cost, evals). No workflow decision reads it.
+# - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task. Migrations run before each deploy.
+# - factory-workflows: runs every task (phases, agents, snapshot refresh, cancel). It has no `repo` field, so it
+#   deploys from the same repository as this Blueprint, including forks.
+
 databases:
   - name: factory-db
     region: oregon
@@ -7,8 +13,10 @@ services:
   - type: web
     name: factory-gateway
     region: oregon
-    runtime: docker
+    runtime: node
     plan: starter
+    buildCommand: npm ci
+    startCommand: npm run start:gateway
     preDeployCommand: npm run db:migrate
     healthCheckPath: /ready
     envVars:
@@ -20,31 +28,18 @@ services:
         sync: false
       - key: FACTORY_ADMIN_TOKEN
         generateValue: true
-
-  - type: worker
-    name: factory-dispatcher
-    region: oregon
-    runtime: docker
-    plan: starter
-    dockerCommand: node --import tsx app/src/dispatcher.ts
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: factory-db
-          property: connectionString
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_WORKFLOW_SLUG
         fromService:
-          name: factory-workflows
           type: workflow
+          name: factory-workflows
           property: slug
 
   - type: workflow
     name: factory-workflows
     region: oregon
     runtime: node
-    repo: https://github.com/render-examples/render-factory.git
     buildCommand: npm ci
     startCommand: npm run start:workflows
     envVars:
@@ -60,33 +55,5 @@ services:
         sync: false
       - key: GITHUB_APP_PRIVATE_KEY
         sync: false
-      - key: GITHUB_APP_INSTALLATION_ID
-        sync: false
       - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: FACTORY_PUBLIC_URL
-        sync: false
-
-  - type: cron
-    name: factory-maintenance
-    region: oregon
-    runtime: docker
-    schedule: "* * * * *"
-    dockerCommand: node --import tsx app/src/maintenance.ts
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: factory-db
-          property: connectionString
-      - key: RENDER_API_KEY
-        sync: false
-      - key: RENDER_WORKSPACE_ID
-        sync: false
-      - key: GITHUB_APP_ID
-        sync: false
-      - key: GITHUB_APP_PRIVATE_KEY
-        sync: false
-      - key: GITHUB_APP_INSTALLATION_ID
         sync: false
