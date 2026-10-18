@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: render_factory
+      POSTGRES_DB: software_factory
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
       - "55432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d render_factory"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d software_factory"]
       interval: 5s
       timeout: 3s
       retries: 10
