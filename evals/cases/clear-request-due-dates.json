@@ -1,0 +1,16 @@
+{
+	"id": "clear-request-due-dates",
+	"description": "A well-specified feature request gets a spec on the first round, with no questions, that names the API field it asked for.",
+	"phase": "triage",
+	"issue": {
+		"title": "Add due dates to todos",
+		"body": "Add an optional due date field to each todo item. The API should accept an ISO-8601 date string in the `dueDate` field when creating or updating a todo. The UI should show the due date next to each item and highlight overdue items in red. Items with no due date should display normally.",
+		"labels": ["factory:triage"]
+	},
+	"expect": {
+		"decision": "draft",
+		"questionsMax": 0,
+		"specMustMention": ["dueDate", "overdue"],
+		"maxCostUsd": 6
+	}
+}
