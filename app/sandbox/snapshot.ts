@@ -31,6 +31,7 @@ export const RUNTIME_SCRIPTS = [
 	"install-tools.sh",
 	"as-runner.sh",
 	"run-agent.sh",
+	"collect-changes.sh",
 	"lockfile-hash.sh",
 	"verify.sh",
 	"build/git-credential-staged.sh",
