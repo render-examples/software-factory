@@ -23,6 +23,8 @@ const SpecMarker = z.object({
 	/** sha256 of the spec's canonical JSON; a marker whose spec doesn't match it is ignored. */
 	hash: z.string().regex(/^[0-9a-f]{64}$/),
 	version: z.number().int().positive(),
+	/** The spec writer's notes, kept for later rounds. Not covered by `hash`. */
+	notes: z.unknown().optional(),
 });
 
 const OpenMarker = z.record(z.string(), z.unknown());

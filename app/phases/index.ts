@@ -1,3 +1,4 @@
+export { Budget } from "./budget.js";
 export { checkPermission, permissionAtLeast } from "./permission.js";
 export {
 	addWorkingLabel,

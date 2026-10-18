@@ -53,6 +53,16 @@ describe("markers", () => {
 		expect(parseMarker(`<!-- software-factory:spec ${encoded} -->`, "spec")).toBeNull();
 	});
 
+	it("carries optional spec notes outside the hash", () => {
+		const spec = { title: "Add dark mode" };
+		const notes = { findings: "Theme lives in src/theme.ts.", relevantPaths: ["src/theme.ts"] };
+		const parsed = parseMarker(renderMarker("spec", { spec, hash: contentHash(spec), version: 1, notes }), "spec");
+		expect(parsed).toEqual({ spec, hash: contentHash(spec), version: 1, notes });
+		const edited = { spec, hash: contentHash(spec), version: 1, notes: { findings: "Rewritten." } };
+		const encoded = Buffer.from(JSON.stringify(edited)).toString("base64url");
+		expect(parseMarker(`<!-- software-factory:spec ${encoded} -->`, "spec")?.notes).toEqual({ findings: "Rewritten." });
+	});
+
 	it("refuses to render a marker too large for a comment", () => {
 		expect(() => renderMarker("review", { blob: "x".repeat(60_000) })).toThrow("limit");
 	});

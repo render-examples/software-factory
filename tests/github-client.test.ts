@@ -231,13 +231,14 @@ describe("GitHubClient", () => {
 		html_url: "https://github.test/pull/9",
 	};
 
-	it("findOrCreatePull returns the open PR for the head", async () => {
-		const { fetch, calls } = fakeFetch(json([rawPull]));
-		const { pull, created } = await client(fetch).findOrCreatePull({ head: "factory/issue-3", base: "main", title: "t", body: "b" });
+	it("findOrCreatePull refreshes the title and body of the open PR for the head", async () => {
+		const { fetch, calls } = fakeFetch(json([rawPull]), json({ ...rawPull, title: "New title", body: "New body" }));
+		const { pull, created } = await client(fetch).findOrCreatePull({ head: "factory/issue-3", base: "main", title: "New title", body: "New body" });
 		expect(created).toBe(false);
-		expect(pull).toMatchObject({ number: 9, headRef: "factory/issue-3", baseRef: "main", draft: true, body: "" });
+		expect(pull).toMatchObject({ number: 9, headRef: "factory/issue-3", baseRef: "main", draft: true, title: "New title", body: "New body" });
 		expect(new URL(calls[0]?.url ?? "").searchParams.get("head")).toBe("acme:factory/issue-3");
-		expect(calls).toHaveLength(1);
+		expect(calls[1]).toMatchObject({ method: "PATCH", url: `${API}/repos/acme/web/pulls/9`, body: { title: "New title", body: "New body" } });
+		expect(calls).toHaveLength(2);
 	});
 
 	it("findOrCreatePull opens a draft, and recovers from losing a race", async () => {

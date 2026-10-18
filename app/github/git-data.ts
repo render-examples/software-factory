@@ -27,6 +27,9 @@ export interface GitCommit {
 	sha: string;
 	treeSha: string;
 	parents: string[];
+	/** As recorded in the commit. Anyone who can push can write any identity here, so it shows intent, not proof. */
+	author?: GitIdentity;
+	committer?: GitIdentity;
 }
 
 export interface CreateCommitInput {
@@ -127,12 +130,18 @@ export function gitData(repo: RepoContext, opts: GitDataOptions = {}): GitDataCl
 				sha?: string;
 				tree?: { sha?: string };
 				parents?: Array<{ sha?: string }>;
+				author?: RawIdentity;
+				committer?: RawIdentity;
 			}>("GET", `/commits/${requireSha(sha, "commit")}`);
 			const parents = (result.parents ?? []).map((p) => requireSha(p.sha, "parent"));
-			const commit = {
+			const author = toIdentity(result.author);
+			const committer = toIdentity(result.committer);
+			const commit: GitCommit = {
 				sha: requireSha(result.sha, "commit"),
 				treeSha: requireSha(result.tree?.sha, "tree"),
 				parents,
+				...(author ? { author } : {}),
+				...(committer ? { committer } : {}),
 			};
 			if (commit.sha !== sha) throw new Error(`GitHub returned commit ${commit.sha} for ${sha}`);
 			return commit;
@@ -196,6 +205,17 @@ export function gitData(repo: RepoContext, opts: GitDataOptions = {}): GitDataCl
 			});
 		},
 	};
+}
+
+interface RawIdentity {
+	name?: string;
+	email?: string;
+	date?: string;
+}
+
+function toIdentity(raw: RawIdentity | undefined): GitIdentity | undefined {
+	if (typeof raw?.name !== "string" || typeof raw.email !== "string") return undefined;
+	return { name: raw.name, email: raw.email, ...(typeof raw.date === "string" ? { date: raw.date } : {}) };
 }
 
 function requireSha(value: unknown, what: string): string {

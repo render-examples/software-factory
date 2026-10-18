@@ -8,12 +8,14 @@ vi.mock("../app/events/index.js", () => ({
 	},
 }));
 
-const { requireRepo } = await import("../app/config/index.js");
+const { AgentError } = await import("../app/agents/index.js");
+const { config, requireRepo } = await import("../app/config/index.js");
 const { renderMarker, parseMarker } = await import("../app/github/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
 const {
+	Budget,
 	checkPermission,
 	finishStatus,
 	PhaseError,
@@ -27,6 +29,7 @@ const {
 } = await import("../app/phases/index.js");
 
 const BOT = "software-factory[bot]";
+const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
 const REPO = requireRepo("render-examples/render-factory-example-target", 5);
 
 class FakeGitHub {
@@ -244,6 +247,7 @@ describe("withPhase", () => {
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.state).toBe("rejected");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"]);
+		expect(events.at(-1)?.payload).toMatchObject({ state: "rejected", costUsd: 0 });
 	});
 
 	it("runs the phase and records events with the trace id, outcome, and cost", async () => {
@@ -258,7 +262,9 @@ describe("withPhase", () => {
 				expect(run.runId).toBe("trn-run");
 				expect(gh.labels.has(WORKING_LABEL)).toBe(true);
 				await run.progress("reading the issue");
-				return { outcome: "asked-questions", summary: "asked 2 questions", costUsd: 0.42 };
+				expect(run.budget).toMatchObject({ limitUsd: config.limits.perRunUsd, spent: 0 });
+				await run.budget.track(async () => ({ costUsd: 0.42 }));
+				return { outcome: "asked-questions", summary: "asked 2 questions" };
 			},
 		);
 		expect(runs.cancelled).toEqual(["trn-prev"]);
@@ -275,10 +281,12 @@ describe("withPhase", () => {
 	it("records an expected PhaseError as failed without failing the task", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { w: "write" };
-		const outcome = await withPhase(ctx, { repo: REPO, subject, phase: "spec-to-pr", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
+		const outcome = await withPhase(ctx, { repo: REPO, subject, phase: "spec-to-pr", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async (run) => {
+			await run.budget.track(async () => ({ costUsd: 1.25 }));
 			throw new PhaseError("verify failed after 2 repair rounds.", "verify-failed");
 		});
 		expect(outcome).toMatchObject({ state: "failed", outcome: "verify-failed" });
+		expect(events.at(-1)?.payload).toMatchObject({ state: "failed", outcome: "verify-failed", costUsd: 1.25 });
 		expect(gh.comments[0]?.body).toContain("**Spec-to-PR** failed: verify failed after 2 repair rounds.");
 	});
 
@@ -287,7 +295,10 @@ describe("withPhase", () => {
 		gh.permissions = { w: "write" };
 		const boom = new Error("connect ECONNREFUSED token=ghs_secret");
 		await expect(
-			withPhase(ctx, { repo: REPO, subject, phase: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
+			withPhase(ctx, { repo: REPO, subject, phase: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async (run) => {
+				await run.budget.track(async () => {
+					throw new AgentError("agent_error", "model error", USAGE, 0.3, 1);
+				}).catch(() => undefined);
 				throw boom;
 			}),
 		).rejects.toBe(boom);
@@ -297,6 +308,50 @@ describe("withPhase", () => {
 		expect(body).not.toContain("ECONNREFUSED");
 		expect(parseMarker(body, "status")?.state).toBe("failed");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
-		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "failed", outcome: "error" } });
+		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "failed", outcome: "error", costUsd: 0.3 } });
+	});
+});
+
+describe("Budget", () => {
+	it("passes down what's left, never below zero, and counts each call's spend", async () => {
+		const budget = new Budget(10);
+		const given: number[] = [];
+		await budget.track(async (usd) => {
+			given.push(usd);
+			return { costUsd: 4 };
+		});
+		await budget.track(async (usd) => {
+			given.push(usd);
+			return { costUsd: 7 };
+		});
+		await budget.track(async (usd) => {
+			given.push(usd);
+			return { costUsd: 0 };
+		});
+		expect(given).toEqual([10, 6, 0]);
+		expect(budget.spent).toBe(11);
+		expect(budget.remaining).toBe(0);
+	});
+
+	it("counts a failed call's partial cost from AgentError, and nothing for other errors", async () => {
+		const budget = new Budget(10);
+		const failed = new AgentError("timeout", "timed out", USAGE, 2.5, 3);
+		await expect(budget.track(async () => Promise.reject(failed))).rejects.toBe(failed);
+		await expect(budget.track(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+		expect(budget.spent).toBe(2.5);
+	});
+
+	it("gives parallel calls equal shares of what's left, then counts what they actually spent", async () => {
+		const budget = new Budget(10);
+		const given: number[] = [];
+		const call = (cost: number) => async (usd: number) => {
+			given.push(usd);
+			await Promise.resolve();
+			return { costUsd: cost };
+		};
+		await Promise.all([budget.track(call(1), { shareOf: 5 }), budget.track(call(3), { shareOf: 5 })]);
+		expect(given).toEqual([2, 2]);
+		expect(budget.spent).toBe(4);
+		expect(budget.remaining).toBe(6);
 	});
 });

@@ -466,6 +466,29 @@ describe("openSandbox", () => {
 		expect(sbx.headSha).toBe(HEAD_SHA);
 	});
 
+	it("fetches the PR's base branch in the same authenticated fetch, after the PR head", async () => {
+		const sbx = await openSandbox(repo(), { kind: "pull", number: 12, headSha: HEAD_SHA, baseBranch: "release/1.x" }, deps());
+		expect(sbx.headSha).toBe(HEAD_SHA);
+		const fetches = fake.commands().filter((c) => c.includes("'fetch'"));
+		expect(fetches).toHaveLength(1);
+		expect(fetches[0]).toContain("'credential.helper=!bash /opt/factory/app/build/git-credential-staged.sh /tmp/factory-fetch-");
+		expect(fetches[0]).toMatch(
+			/'fetch' '--quiet' '--no-tags' 'origin' 'refs\/pull\/12\/head' '\+refs\/heads\/release\/1\.x:refs\/remotes\/origin\/release\/1\.x'$/,
+		);
+		expect(fake.execIndex("scrub-credentials.sh")).toBeGreaterThan(fake.execIndex("'fetch'"));
+		expect(fake.execIndex(`'checkout' '--quiet' '--detach' '${HEAD_SHA}'`)).toBeGreaterThan(fake.execIndex("scrub-credentials.sh"));
+	});
+
+	it("rejects an unsafe base branch before creating anything", async () => {
+		await expect(openSandbox(repo(), { kind: "pull", number: 12, headSha: HEAD_SHA, baseBranch: "main:refs/heads/x" }, deps())).rejects.toThrow(
+			"unsupported base branch name",
+		);
+		await expect(openSandbox(repo(), { kind: "pull", number: 12, headSha: HEAD_SHA, baseBranch: "-x" }, deps())).rejects.toThrow(
+			"unsupported base branch name",
+		);
+		expect(fake.calls).toEqual([]);
+	});
+
 	it("reinstalls as the runner user only when the lockfile hash changed", async () => {
 		fake.lockfileHash = "b".repeat(64);
 		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());

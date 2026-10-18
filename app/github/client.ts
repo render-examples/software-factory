@@ -172,7 +172,10 @@ export class GitHubClient {
 		);
 	}
 
-	/** The open PR from `head`, or a new one. Safe to repeat: a replayed run finds the PR the first one opened. */
+	/**
+	 * The open PR from `head` with its title and body refreshed, or a new one. Safe to repeat: a replayed run
+	 * finds the PR the first one opened.
+	 */
 	async findOrCreatePull(args: {
 		head: string;
 		base: string;
@@ -181,7 +184,7 @@ export class GitHubClient {
 		draft?: boolean;
 	}): Promise<{ pull: PullRequest; created: boolean }> {
 		const existing = await this.findOpenPull(args.head);
-		if (existing) return { pull: existing, created: false };
+		if (existing) return { pull: await this.updatePull(existing.number, args), created: false };
 		try {
 			const raw = await this.http.json<RawPull>("POST", `${this.base}/pulls`, {
 				body: { head: args.head, base: args.base, title: args.title, body: args.body, draft: args.draft ?? true },
@@ -206,6 +209,11 @@ export class GitHubClient {
 			if (error instanceof GitHubError && error.status === 404) return null;
 			throw error;
 		}
+	}
+
+	private async updatePull(number: number, args: { title: string; body: string }): Promise<PullRequest> {
+		const raw = await this.http.json<RawPull>("PATCH", `${this.base}/pulls/${number}`, { body: { title: args.title, body: args.body } });
+		return toPull(raw);
 	}
 
 	private async findOpenPull(head: string): Promise<PullRequest | null> {

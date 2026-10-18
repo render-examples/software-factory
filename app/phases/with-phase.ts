@@ -2,6 +2,7 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import { config, type RepoContext } from "../config/index.js";
 import { emit } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
+import { Budget } from "./budget.js";
 import { checkPermission } from "./permission.js";
 import {
 	finishStatus,
@@ -22,6 +23,8 @@ export interface PhaseRun {
 	subject: Subject;
 	traceId: string;
 	runId: string;
+	/** The run's dollars (`limits.perRunUsd`); pass every agent call through it. run.finished records what it spent. */
+	budget: Budget;
 	/** Shows progress in the status comment, such as "drafting the spec". */
 	progress(summary: string): Promise<void>;
 }
@@ -32,7 +35,6 @@ export interface PhaseResult {
 	summary: string;
 	state?: "done" | "failed";
 	links?: StatusLink[];
-	costUsd?: number;
 }
 
 /** An expected failure: its message is shown on GitHub and the task succeeds. Anything else fails the task. */
@@ -76,6 +78,7 @@ export async function withPhase(
 	const gh = opts.gh ?? githubFor(repo);
 	const base = { traceId, runId, repo: repo.fullName, subject: subjectName(subject) };
 	const startedAt = Date.now();
+	const budget = new Budget(config.limits.perRunUsd);
 
 	const status = (state: Exclude<RunState, "running">, summary: string, links?: StatusLink[]) =>
 		finishStatus({ gh, number: subject.number, runId, phase, state, summary, links });
@@ -88,7 +91,7 @@ export async function withPhase(
 		await emit({
 			...base,
 			type: "run.finished",
-			payload: { phase, state, outcome, durationMs: Date.now() - startedAt, ...extra },
+			payload: { phase, state, outcome, durationMs: Date.now() - startedAt, costUsd: budget.spent, ...extra },
 		});
 		return { state, outcome, summary, traceId, runId };
 	};
@@ -104,10 +107,10 @@ export async function withPhase(
 		const progress = async (summary: string) => {
 			await setStatus({ gh, number: subject.number, runId, phase, state: "running", summary });
 		};
-		const result = await fn({ gh, repo, subject, traceId, runId, progress });
+		const result = await fn({ gh, repo, subject, traceId, runId, budget, progress });
 		const state = result.state ?? "done";
 		await status(state, result.summary, result.links);
-		return await finished(state, result.outcome, result.summary, { costUsd: result.costUsd });
+		return await finished(state, result.outcome, result.summary);
 	} catch (error) {
 		if (error instanceof PhaseError) {
 			await status("failed", error.message);
