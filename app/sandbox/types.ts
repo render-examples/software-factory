@@ -40,7 +40,13 @@ export interface Sandbox {
 
 export type SandboxRef =
 	| { kind: "branch"; name: string }
-	| { kind: "pull"; number: number; headSha: string };
+	| {
+			kind: "pull";
+			number: number;
+			headSha: string;
+			/** Also fetched, in the same fetch, to `refs/remotes/origin/<baseBranch>`, so the PR's merge base is present. */
+			baseBranch?: string;
+	  };
 
 /** Written by the snapshot build to `${APP_DIR}/manifest.json`. */
 export interface SnapshotManifest {

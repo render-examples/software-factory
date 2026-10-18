@@ -104,6 +104,9 @@ function checkRef(ref: SandboxRef): void {
 	if (ref.kind === "pull") {
 		if (!Number.isInteger(ref.number) || ref.number <= 0) throw new Error(`invalid pull request number ${ref.number}`);
 		if (!/^[0-9a-f]{40}$/.test(ref.headSha)) throw new Error(`invalid head SHA ${JSON.stringify(ref.headSha)}`);
+		if (ref.baseBranch !== undefined && !SAFE_REF.test(ref.baseBranch)) {
+			throw new Error(`unsupported base branch name ${JSON.stringify(ref.baseBranch)}`);
+		}
 	}
 }
 
@@ -149,13 +152,16 @@ async function fetchRef(client: SandboxClient, id: string, repo: RepoContext, re
 	const dir = `/tmp/factory-fetch-${randomUUID()}`;
 	const quick = { timeoutMs: client.t.verifyTimeoutMs };
 	const source = ref.kind === "branch" ? `refs/heads/${ref.name}` : `refs/pull/${ref.number}/head`;
+	// FETCH_HEAD's first line is the first refspec, so `source` stays first.
+	const refspecs = [source];
+	if (ref.kind === "pull" && ref.baseBranch) refspecs.push(`+refs/heads/${ref.baseBranch}:refs/remotes/origin/${ref.baseBranch}`);
 	await client.check(id, `mkdir -m 700 ${dir}`, quick);
 	let fetchError: unknown;
 	try {
 		const token = await (deps.readToken ?? readToken)(repo);
 		await client.upload(id, `${dir}/github.com`, credentialFile(token));
 		await client.check(id, `chown -R ${RUN_AS}: ${dir} && chmod 600 ${dir}/github.com`, quick);
-		await client.check(id, asRunner("git", ...credentialHelperArgs(dir), "fetch", "--quiet", "--no-tags", "origin", source), {
+		await client.check(id, asRunner("git", ...credentialHelperArgs(dir), "fetch", "--quiet", "--no-tags", "origin", ...refspecs), {
 			timeoutMs: client.t.prepareTimeoutMs,
 		});
 	} catch (err) {
