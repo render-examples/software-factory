@@ -114,7 +114,39 @@ export async function traceEvents(traceId: string): Promise<StoredEvent[]> {
 		"select id, trace_id, run_id, repo, subject, type, payload, created_at from events where trace_id = $1 order by id",
 		[traceId],
 	);
-	return rows.map((row) => ({
+	return rows.map(storedEvent);
+}
+
+/** The newest events matching every given filter, newest first. `before` pages by event time. */
+export async function recentEvents(options: {
+	types?: string[];
+	traceIds?: string[];
+	repo?: string;
+	limit: number;
+	before?: Date;
+}): Promise<StoredEvent[]> {
+	const { rows } = await requireDb().query<EventRow>(
+		`select id, trace_id, run_id, repo, subject, type, payload, created_at
+		from events
+		where ($1::text[] is null or type = any($1))
+			and ($2::text[] is null or trace_id = any($2))
+			and ($3::text is null or repo = $3)
+			and ($4::timestamptz is null or created_at < $4)
+		order by id desc
+		limit $5`,
+		[
+			options.types ?? null,
+			options.traceIds ?? null,
+			options.repo ?? null,
+			options.before ?? null,
+			Math.max(1, Math.min(options.limit, 2000)),
+		],
+	);
+	return rows.map(storedEvent);
+}
+
+function storedEvent(row: EventRow): StoredEvent {
+	return {
 		id: row.id,
 		traceId: row.trace_id,
 		runId: row.run_id ?? undefined,
@@ -123,7 +155,7 @@ export async function traceEvents(traceId: string): Promise<StoredEvent[]> {
 		type: row.type,
 		payload: row.payload,
 		createdAt: row.created_at,
-	}));
+	};
 }
 
 /** Ends the pool so scripts can exit. */
