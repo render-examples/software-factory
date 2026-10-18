@@ -274,6 +274,7 @@ describe("buildSnapshot", () => {
 			"as-runner.sh",
 			"build/git-credential-staged.sh",
 			"build/scrub-credentials.sh",
+			"collect-changes.sh",
 			"install-tools.sh",
 			"lockfile-hash.sh",
 			"run-agent.sh",
