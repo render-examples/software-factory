@@ -49,7 +49,8 @@ export function providerApiKey(provider: string, env: Readonly<Record<string, st
 }
 
 export interface Credentials {
-	fileKey?: string;
+	/** From `--key-file` or `--key-stdin`. */
+	key?: string;
 	/** Provider key vars that were set in `env` before they were removed (local dev without a key file). */
 	envKeys: Record<string, string>;
 }
@@ -61,9 +62,9 @@ export interface Credentials {
  */
 export function takeCredentials(keyFile: string | undefined, env: NodeJS.ProcessEnv): Credentials {
 	const envKeys: Record<string, string> = {};
-	let fileKey: string | undefined;
+	let key: string | undefined;
 	try {
-		if (keyFile) fileKey = readFileSync(keyFile, "utf8").trim() || undefined;
+		if (keyFile) key = readFileSync(keyFile, "utf8").trim() || undefined;
 	} finally {
 		if (keyFile) rmSync(keyFile, { force: true });
 		for (const name of ALL_PROVIDER_KEY_ENV) {
@@ -72,12 +73,12 @@ export function takeCredentials(keyFile: string | undefined, env: NodeJS.Process
 			delete env[name];
 		}
 	}
-	return { fileKey, envKeys };
+	return { key, envKeys };
 }
 
-/** The key file wins; otherwise only the selected provider's own key var. */
+/** The passed key wins; otherwise only the selected provider's own key var. */
 export const apiKeyFor = (creds: Credentials, provider: string): string | undefined =>
-	creds.fileKey ?? providerApiKey(provider, creds.envKeys);
+	creds.key ?? providerApiKey(provider, creds.envKeys);
 
 export const secretsIn = (creds: Credentials): string[] =>
-	[creds.fileKey, ...Object.values(creds.envKeys)].filter((s): s is string => !!s);
+	[creds.key, ...Object.values(creds.envKeys)].filter((s): s is string => !!s);

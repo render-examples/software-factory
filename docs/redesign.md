@@ -186,7 +186,7 @@ const implementation = await runAgent(implementer, { message, vars }, { sandbox,
 
 ### The runner
 
-In a sandbox, `runAgent` uploads the runner input (the rendered prompt, model, tools, output schema, turn, time, and budget limits, and the message) and a one-time model key file, runs the bundled runner, and downloads its events and result. The runner is codebase-researcher's pi runner with the prompt moved out of the bundle and into the input, so changing a prompt is a redeploy, never a snapshot rebuild. Its key handling carries over: the key file is deleted on read, tool processes get a scrubbed environment, and the runner process is non-dumpable. Use a spend-capped model key; credential brokering, when Sandboxes ships it, would keep the key out of the sandbox entirely.
+In a sandbox, `runAgent` uploads the runner input (the rendered prompt, model, tools, output schema, turn, time, and budget limits, and the message) and the model key to a root-only run directory, runs the bundled runner, and downloads its events and result. The runner is codebase-researcher's pi runner with the prompt moved out of the bundle and into the input, so changing a prompt is a redeploy, never a snapshot rebuild. Its key handling carries over, with one change: `run-agent.sh` deletes the key file as root and hands the key to the runner on stdin, so it never exists as a file the runner user can read. Tool processes get a scrubbed environment, and the runner process is non-dumpable. Use a spend-capped model key; credential brokering, when Sandboxes ships it, would keep the key out of the sandbox entirely.
 
 In a task, `runAgent` runs the same agent loop with no tools.
 
