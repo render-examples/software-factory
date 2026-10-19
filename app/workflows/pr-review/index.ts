@@ -71,6 +71,7 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
 		// 2. One sandbox at the PR head: verify, then the specialists in parallel. Closed before synthesis.
+		await progress("opening a sandbox");
 		const { verify, found } = await withPullSandbox(open, repo, pull, async (sandbox) => {
 			const baseRef = await mergeBase(sandbox, pull.baseRef);
 			await progress("running the verify commands");
@@ -105,6 +106,7 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		}
 
 		// 4. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
+		await progress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,
 			headSha: input.headSha,

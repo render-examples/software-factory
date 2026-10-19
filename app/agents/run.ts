@@ -43,7 +43,7 @@ export interface BaseRunOptions {
 	runId?: string;
 	repo?: string;
 	subject?: string;
-	/** Dollars this call may spend (default: `limits.perRunUsd`). Pass what the run has left. */
+	/** Soft dollar threshold for this call (default: `limits.perRunUsd`). Reported usage can cross it. */
 	budgetUsd?: number;
 	/** Default 30 minutes. */
 	timeoutMs?: number;

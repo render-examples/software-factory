@@ -21,7 +21,7 @@ export interface EvalDeps {
 	openSandbox: (repo: RepoContext, ref: SandboxRef) => Promise<Sandbox>;
 	runAgent: AgentRunner;
 	emit: (event: FactoryEvent) => Promise<void>;
-	/** Dollars each case may spend across its agent calls. */
+	/** Soft dollar threshold for each case across its agent calls. */
 	budgetUsd: number;
 	/** Default: a fresh `eval-<uuid>`. */
 	traceId?: string;

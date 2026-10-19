@@ -43,7 +43,7 @@ Open the installation link the script prints and install the App on every reposi
 
 ### 4. Deploy the Blueprint
 
-In the Render Dashboard, create a Blueprint from your fork (**New > Blueprint**). It creates `factory-db`, `factory-gateway`, and `factory-workflows` in Oregon. Fill in the form:
+In the Render Dashboard, create a Blueprint from your fork (**New > Blueprint**). Select your fork, not `render-examples/software-factory`: the committed `factory.config.ts` is application config, so deploying upstream would use its example repository. The Blueprint creates `factory-db`, `factory-gateway`, and `factory-workflows` in Oregon. Fill in the form:
 
 | Service | Variable | Value |
 |---|---|---|
@@ -144,4 +144,4 @@ npm run eval -- --installation 12345                         # run every case li
 npm run eval -- --installation 12345 --case underspecified-search --budget 2
 ```
 
-`--validate` is what CI runs, and it's the default when `CI` is set. A live run needs the Workflows service's environment (the Render API key, the GitHub App, a model key) and the App's installation ID for the target repository (`--installation` or `FACTORY_EVAL_INSTALLATION_ID`). It opens a sandbox from that repository's snapshot, runs the real triage and spec-writer agents on each case, and grades what they produce. With `DATABASE_URL` set, each run records a trace you can open in the trace UI. Live runs cost real money; `--budget` caps each case. [agents.md](agents.md#evals) explains how to add a case.
+`--validate` is what CI runs, and it's the default when `CI` is set. A live run needs the Workflows service's environment (the Render API key, the GitHub App, a model key) and the App's installation ID for the target repository (`--installation` or `FACTORY_EVAL_INSTALLATION_ID`). It opens a sandbox from that repository's snapshot, runs the real triage and spec-writer agents on each case, and grades what they produce. With `DATABASE_URL` set, each run records a trace you can open in the trace UI. Live runs cost real money; `--budget` sets each case's soft stop threshold, which reported usage can exceed. [agents.md](agents.md#evals) explains how to add a case.

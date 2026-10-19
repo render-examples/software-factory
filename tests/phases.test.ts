@@ -1,3 +1,4 @@
+import { ClientError } from "@renderinc/sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FactoryEvent } from "../app/events/index.js";
 
@@ -6,6 +7,8 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
+	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
+	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
@@ -93,6 +96,16 @@ class FakeRuns {
 	});
 }
 
+class FakeCoordination {
+	current = true;
+	private nextId = 1;
+	claim = vi.fn(async (input: { runId: string; repo: string; subject: string }) => ({
+		id: String(this.nextId++),
+		...input,
+	}));
+	isCurrent = vi.fn(async () => this.current);
+}
+
 const subject = { kind: "issue" as const, number: 12 };
 
 beforeEach(() => {
@@ -151,11 +164,21 @@ describe("takeOver", () => {
 		expect((await readStatus(gh, 12))?.data.runId).toBe("trn-new");
 	});
 
-	it("treats a run the API can't find as finished", async () => {
+	it("treats a confirmed missing run as finished", async () => {
 		const gh = new FakeGitHub();
 		gh.addStatus("trn-gone");
 		const runs = new FakeRuns();
+		runs.getTaskRun.mockRejectedValueOnce(new ClientError("not found", 404));
 		expect((await takeOver({ gh, subject, phase: "triage", runId: "trn-new", runs })).cancelledPrevious).toBe(false);
+	});
+
+	it("fails closed when the previous run's state is unknown", async () => {
+		const gh = new FakeGitHub();
+		gh.addStatus("trn-old");
+		const runs = new FakeRuns();
+		runs.getTaskRun.mockRejectedValueOnce(new Error("503"));
+		await expect(takeOver({ gh, subject, phase: "triage", runId: "trn-new", runs })).rejects.toThrow("503");
+		expect((await readStatus(gh, 12))?.data.runId).toBe("trn-old");
 	});
 
 	it("creates the status comment when there is none, ignoring forged markers", async () => {
@@ -255,9 +278,10 @@ describe("withPhase", () => {
 		gh.permissions = { maintainer: "maintain" };
 		gh.addStatus("trn-prev");
 		const runs = new FakeRuns({ "trn-prev": "running" });
+		const coordination = new FakeCoordination();
 		const outcome = await withPhase(
 			ctx,
-			{ repo: REPO, subject, phase: "triage", actor: "maintainer", gh: gh.asClient(), runs },
+			{ repo: REPO, subject, phase: "triage", actor: "maintainer", gh: gh.asClient(), runs, coordination },
 			async (run) => {
 				expect(run.runId).toBe("trn-run");
 				expect(gh.labels.has(WORKING_LABEL)).toBe(true);
@@ -268,6 +292,14 @@ describe("withPhase", () => {
 			},
 		);
 		expect(runs.cancelled).toEqual(["trn-prev"]);
+		expect(coordination.claim).toHaveBeenCalledWith({
+			traceId: "trn-root",
+			runId: "trn-run",
+			repo: REPO.fullName,
+			subject: "issue#12",
+			phase: "triage",
+			actor: "maintainer",
+		});
 		expect(outcome).toEqual({ state: "done", outcome: "asked-questions", summary: "asked 2 questions", traceId: "trn-root", runId: "trn-run" });
 		expect(gh.comments).toHaveLength(1);
 		expect(gh.comments[0]?.body).toContain("**Triage** finished: asked 2 questions");
@@ -276,6 +308,26 @@ describe("withPhase", () => {
 			{ type: "run.started", traceId: "trn-root", runId: "trn-run", repo: REPO.fullName, subject: "issue#12", payload: { phase: "triage", actor: "maintainer" } },
 			{ type: "run.finished", traceId: "trn-root", payload: { state: "done", outcome: "asked-questions", costUsd: 0.42 } },
 		]);
+	});
+
+	it("stops at a checkpoint after a newer run claims the subject", async () => {
+		const gh = new FakeGitHub();
+		gh.permissions = { w: "write" };
+		const coordination = new FakeCoordination();
+		const body = vi.fn(async (run: import("../app/phases/index.js").PhaseRun) => {
+			gh.addStatus("trn-new");
+			coordination.current = false;
+			await run.progress("doing expensive work");
+			return { outcome: "done", summary: "done" };
+		});
+		const outcome = await withPhase(
+			ctx,
+			{ repo: REPO, subject, phase: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns(), coordination },
+			body,
+		);
+		expect(outcome).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect((await readStatus(gh, 12))?.data.runId).toBe("trn-new");
+		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "cancelled", outcome: "superseded" } });
 	});
 
 	it("records an expected PhaseError as failed without failing the task", async () => {

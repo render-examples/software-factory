@@ -31,6 +31,7 @@ export const PrReviewInput = RepoInput.extend({
 export const CancelInput = RepoInput.extend({
 	/** Issue or PR number. */
 	number: z.number().int().positive(),
+	kind: z.enum(["issue", "pr"]),
 	actor: Actor,
 });
 

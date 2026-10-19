@@ -1,6 +1,9 @@
 import { AgentError } from "../agents/run.js";
 
-/** The run's dollar budget, passed down to each agent call. Failed calls count too: AgentError carries their cost. */
+/**
+ * The run's soft dollar threshold, passed down to each agent call. Failed calls count too.
+ * Providers report usage after a response, so actual spend can cross the threshold before the runner stops.
+ */
 export class Budget {
 	spent = 0;
 
@@ -12,7 +15,7 @@ export class Budget {
 
 	/**
 	 * Runs `call` with what the run has left, or with one of `shareOf` equal shares of it, so calls started
-	 * together can't spend each other's share. Counts what the call actually spent either way.
+	 * together limit how much they can overshoot at once. Counts what the call actually spent either way.
 	 */
 	async track<T extends { costUsd: number }>(call: (budgetUsd: number) => Promise<T>, opts: { shareOf?: number } = {}): Promise<T> {
 		try {

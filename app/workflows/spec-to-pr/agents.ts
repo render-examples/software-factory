@@ -7,7 +7,7 @@ import { failureReport, type VerifyRun } from "./verify.js";
 /** An agent that stopped before submitting is an expected failure; its message stays off GitHub. */
 export function agentStopped(err: unknown, who: string): PhaseError | null {
 	if (!(err instanceof AgentError)) return null;
-	const reason = err.code === "budget_exceeded" ? "ran out of budget" : `stopped before finishing (\`${err.code}\`)`;
+	const reason = err.code === "budget_exceeded" ? "reached its soft budget threshold" : `stopped before finishing (\`${err.code}\`)`;
 	return new PhaseError(`the ${who} ${reason}, so no PR was opened.`, "agent_failed");
 }
 

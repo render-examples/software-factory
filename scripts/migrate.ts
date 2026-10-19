@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import pg from "pg";
+import pg from "../node_modules/@types/pg/index.js";
 import { requireEnv } from "../app/config/index.js";
 
 const LOCK_ID = 0x736f66747761; // "softwa": stable advisory lock key for migrations

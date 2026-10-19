@@ -226,7 +226,7 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	const overBudget = () => input.budget_usd !== undefined && costUsd >= input.budget_usd;
 	const budgetFailure = (): Failure => ({
 		code: "budget_exceeded",
-		message: `model cost $${costUsd.toFixed(4)} reached the $${input.budget_usd} budget without a submission`,
+		message: `model cost $${costUsd.toFixed(4)} reached the $${input.budget_usd} soft threshold without a submission`,
 	});
 
 	/** Sends `text`, then restarts the last turn while it fails with a transient model error. */

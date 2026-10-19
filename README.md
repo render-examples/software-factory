@@ -2,11 +2,9 @@
 
 A self-hosted factory that turns a labeled GitHub issue into a spec, a draft pull request, and a COMMENT review. It runs on your own Render workspace: one web service, one Workflows service, Render Sandboxes, and Postgres.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/render-examples/software-factory)
+**Start by [forking this repository](https://github.com/render-examples/software-factory/fork).** The Blueprint must deploy from your fork because `factory.config.ts` is part of the application and names the repositories the factory can act on.
 
 You label an issue and the factory takes it from there. An agent reads the issue and your code in an isolated Sandbox, then asks questions or posts a spec. Approve the spec with a second label, and another agent implements it, runs your verify commands, reviews its own change, and opens a draft PR. Label any PR, including the factory's own, and four specialist reviewers post one COMMENT review. Every step stops at a human decision. The factory never approves or merges anything.
-
-The button deploys this repository as is, which acts on the example repository in `factory.config.ts`. To point it at your own repositories, fork first and deploy your fork.
 
 ## How it works
 
@@ -14,9 +12,9 @@ The button deploys this repository as is, which acts on the example repository i
 |---|---|---|
 | `factory-gateway` | Web Service | Verifies GitHub webhooks, starts the matching Workflows task, serves the trace UI |
 | `factory-workflows` | Workflows | Runs every task: the three phases, agents, snapshot refresh, and cancel |
-| `factory-db` | Postgres | An append-only `events` table for observability, cost, and evals. No decision reads it |
+| `factory-db` | Postgres | An append-only event log. Strict `run.claimed` events order competing phase runs; the rest records observability, cost, and evals |
 
-Each run opens a Sandbox restored from a per-repository snapshot (your code, with dependencies installed), runs its agents there, and terminates the Sandbox when it finishes. Agents never hold a GitHub write credential: the Workflows task publishes their changes through GitHub's API after checking them. There is no queue, no dispatcher, and no cron job. Render Workflows owns run state, and GitHub holds the conversation. See [docs/architecture.md](docs/architecture.md).
+Each run opens a Sandbox restored from a per-repository snapshot (your code, with dependencies installed), runs its agents there, and terminates the Sandbox when it finishes. Agents never hold a GitHub write credential: the Workflows task publishes their changes through GitHub's API after checking them. There is no queue, no dispatcher, and no cron job. Render Workflows owns execution, Postgres orders competing runs on the same issue or PR, and GitHub holds the conversation. See [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites
 
@@ -33,7 +31,7 @@ Setup runs in a fixed order because the App and the gateway each need something 
 1. **Fork and configure.** Fork this repository and list your repositories in `factory.config.ts`, each with its base branch, install command, and verify commands (see [docs/configuration.md](docs/configuration.md)). Commit and push.
 2. **Create the GitHub App.** Run `npm ci`, then `npm run setup:app -- --write-env` (add `--org <org>` to create it in an organization). It opens a page that creates the App through GitHub's manifest flow, then prints `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET`. `--write-env` also saves them to `.env`. The App's webhook starts out inactive.
 3. **Install the App** on every repository in `factory.config.ts`, using the link the script prints.
-4. **Deploy the Blueprint.** Create a Blueprint from your fork in the Render Dashboard, or click the button above. Paste the values from step 2, your Render API key, and your Anthropic key into the form. `RENDER_WORKSPACE_ID` is optional when the key can see only one workspace.
+4. **Deploy the Blueprint.** In the Render Dashboard, create a Blueprint and select your fork—not `render-examples/software-factory`. Paste the values from step 2, your Render API key, and your Anthropic key into the form. `RENDER_WORKSPACE_ID` is optional when the key can see only one workspace.
 5. **Connect the webhook and create the labels.** Once the gateway is live, run `npm run setup:github -- --gateway-url https://<gateway>.onrender.com`. It points the App's webhook at the gateway and creates the factory's labels on each repository.
 6. **Activate the webhook.** GitHub's API can't turn an App webhook on, so open the App's settings page (the script prints the link), check **Webhook > Active**, and save.
 7. **Check everything.** Run `npm run doctor`. It checks the environment, the App's permissions and webhook, each repository's installation and labels, Postgres, and the registered tasks, without printing secrets. Run it in each service's Render Shell (`npm run doctor -- --service gateway` or `--service workflows`) to check the deployed environment.
@@ -50,7 +48,7 @@ The first run on a repository builds its snapshot inline, which takes a few minu
 | Implement a spec | Add `factory:spec-approved` | Implements the spec as it stood when you applied the label, verifies it, and opens a draft PR on `factory/issue-<n>` |
 | Review a PR | Add `factory:pr-review` | Runs your verify commands and posts one COMMENT review on the labeled commit |
 | Stop a run | Comment `/factory cancel` | Cancels the run in progress on that issue or PR |
-| Rerun a phase | Remove the label and add it again | Starts a fresh run. The newest run wins: it cancels any earlier run on the same issue or PR |
+| Rerun a phase | Remove the label and add it again | Appends a new run claim, cancels the earlier run, and stops it at its next ownership checkpoint |
 
 Only people with at least `write` permission on the repository can start or cancel runs (`minimumPermission` in `factory.config.ts`). While a run is active, the issue or PR carries `factory:working`.
 
@@ -64,7 +62,9 @@ Only people with at least `write` permission on the repository can start or canc
 
 ## Cost
 
-Each run has a dollar budget, `limits.perRunUsd` in `factory.config.ts` ($20 by default). It covers every agent the run calls, including ones that fail. Each agent call gets what's left, and an agent stops when its share is spent. PR Reviewer splits the budget so the four specialists, running in parallel, can't spend each other's share or the synthesizer's.
+Each run has a soft dollar threshold, `limits.perRunUsd` in `factory.config.ts` ($20 by default). It covers every agent the run calls, including ones that fail. Each agent call gets the amount remaining, and the runner stops after reported model cost reaches that amount. Model providers report usage after a response, so the response that crosses the threshold is still charged and a run can exceed `perRunUsd`. PR Reviewer splits the remaining amount among the four parallel specialists and the synthesizer to limit that overshoot; it cannot make the threshold a hard cap.
+
+Use a dedicated model key with a provider-enforced spend limit. That provider limit—not `perRunUsd`—is the hard cost backstop.
 
 Agents pick a model by tier. The default tiers are Anthropic's:
 

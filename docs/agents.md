@@ -82,7 +82,7 @@ const review = await run.budget.track((budgetUsd) => runAgent(synthesizer, { mes
 - `runAgent` is a function, not a task. Call it inline, or wrap it in its own `task()` if you want a separate retry, timeout, and Dashboard entry for it.
 - It returns `{ output, usage, costUsd, turns }` and emits `agent.started` and `agent.finished` events.
 - Every failure throws an `AgentError` with a `code` (`timeout`, `max_turns`, `budget_exceeded`, `output_invalid`, and others) and the usage up to that point.
-- **Budget is passed down, not looked up.** `run.budget.track(call)` gives the call what the run has left and adds what it spent, failed calls included. For calls in parallel, pass `{ shareOf: n }` so each gets an equal share, as PR Reviewer does for its specialists.
+- **The soft budget threshold is passed down, not looked up.** `run.budget.track(call)` gives the call what the run has left and adds what it spent, failed calls included. Usage arrives after a model response, so a call can cross its share before the runner stops it. For calls in parallel, pass `{ shareOf: n }` so each gets an equal share and bounds the possible overshoot, as PR Reviewer does for its specialists. The model provider's spend limit is the hard cap.
 - The default timeout is 30 minutes; pass `timeoutMs` to change it.
 
 ## Adding or changing an agent
@@ -127,10 +127,10 @@ A phase is one Workflows task that wraps its work in `withPhase`.
    );
    ```
 
-   `withPhase` handles the permission check, latest-wins takeover, the status comment, the budget, and the events. Throw `PhaseError` for an expected failure whose message is safe to show on GitHub; anything else fails the task with a generic message. Take GitHub, sandboxes, and `runAgent` as injectable dependencies so tests can fake them.
+   `withPhase` handles the permission check, durable run claim, takeover, ownership checkpoints, the status comment, the budget, and the events. Call `run.checkpoint()` immediately before any durable write that does not already follow `run.progress()`. Throw `PhaseError` for an expected failure whose message is safe to show on GitHub; anything else fails the task with a generic message. Take GitHub, sandboxes, and `runAgent` as injectable dependencies so tests can fake them.
 4. **Register it** by exporting it from `app/workflows/index.ts`. `app/src/workflows.ts` imports that module, which registers every task with the SDK. `npm run doctor` checks that every name in `TASKS` is registered.
 5. **Route to it** in `route()` (`app/gateway/routes.ts`) and test the route in `tests/routes.test.ts`. If it needs a new label, add it to `labels` in `factory.config.ts` and to `LABELS` in `scripts/lib/requirements.ts`. If it needs a new webhook event, add it to `REQUIRED_EVENTS` there too, so `setup:app` subscribes to it and `doctor` checks for it.
-6. **Budget and time.** The run's budget is `limits.perRunUsd`. Set `timeoutSeconds` for the longest the phase can take, and keep `sandbox.timeoutSeconds` at least that long.
+6. **Budget and time.** The run's soft budget threshold is `limits.perRunUsd`; reported usage can cross it. Set `timeoutSeconds` for the longest the phase can take, and keep `sandbox.timeoutSeconds` at least that long.
 7. Add tests next to the existing ones (`tests/<name>.test.ts`) using the fakes in `tests/helpers/`, and run `npm run check`.
 
 ## Evals

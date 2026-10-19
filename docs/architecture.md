@@ -1,6 +1,6 @@
 # Architecture
 
-software-factory is three Render resources and the Sandboxes they open. Render Workflows owns run state, GitHub holds the conversation, and Postgres records what happened. The reasoning behind this shape is in [redesign.md](redesign.md).
+software-factory is three Render resources and the Sandboxes they open. Render Workflows owns execution, GitHub holds the conversation, and Postgres orders competing phase runs and records what happened. The reasoning behind this shape is in [redesign.md](redesign.md).
 
 ```mermaid
 flowchart LR
@@ -9,7 +9,8 @@ flowchart LR
   WF -->|"open, exec, upload, download"| SB["Sandboxes<br/>one named snapshot per repo"]
   WF -->|"comments, labels, Git Data, PRs, reviews"| GH
   GW -.->|delivery.received| DB[("factory-db<br/>events")]
-  WF -.->|"run.*, agent.*"| DB
+  WF -->|"run.claimed (strict)"| DB
+  WF -.->|"other run.*, agent.*"| DB
   UI["trace UI (/ui)"] --> DB
 ```
 
@@ -17,7 +18,7 @@ flowchart LR
 |---|---|---|---|
 | `factory-gateway` | Web Service | `app/src/server.ts` | Webhook secret, admin token, Render API key, database URL |
 | `factory-workflows` | Workflows | `app/src/workflows.ts` | Render API key, GitHub App credentials, model key, database URL |
-| `factory-db` | Postgres | `app/sql/` | The `events` table |
+| `factory-db` | Postgres | `app/sql/` | The append-only `events` table: run claims and telemetry |
 
 The gateway holds no GitHub credential and runs no model. Only the Workflows service writes to GitHub.
 
@@ -40,8 +41,9 @@ The gateway holds no GitHub credential and runs no model. Only the Workflows ser
 5. **`withPhase`** (`app/phases/with-phase.ts`) is the lifecycle every phase shares:
    - emits `run.started`;
    - checks the actor's live repository permission against `minimumPermission`, and stops with a `rejected` status if it falls short;
+   - strictly appends `run.claimed` to Postgres and receives its event ID as a fencing token. A phase fails closed if Postgres cannot record or check its claim;
    - takes over the issue or PR: reads the run ID from the status comment's marker, cancels that run if it's still active, records itself as running, and adds `factory:working`;
-   - creates the run's `Budget` (`limits.perRunUsd`) and gives the body a `progress()` callback that updates the status comment;
+   - creates the run's soft `Budget` threshold (`limits.perRunUsd`) and gives the body `checkpoint()` and `progress()` callbacks. Both stop the phase when a newer claim exists; phases checkpoint before agent work and durable GitHub writes;
    - writes the final status and emits `run.finished` with the outcome, duration, and cost. A `PhaseError` is an expected failure: its message goes on GitHub and the task succeeds. Anything else posts a generic message with the run ID and fails the task.
 6. **Open a sandbox.** The phase calls `openSandbox(repo, ref)` and closes the sandbox in `finally`.
 7. **Run agents.** `runAgent` runs each agent in the sandbox (agents with tools) or in the task (agents without), passing what's left of the budget.
@@ -55,7 +57,7 @@ The gateway holds no GitHub credential and runs no model. Only the Workflows ser
 | `spec-to-pr` | Base branch | `implementer`, then the repo's `verify` commands with up to `limits.repairRounds` repair runs, then `self-review` (one revision allowed) | The `factory/issue-<n>` branch through the Git Data API and a draft PR |
 | `pr-review` | PR head, with the base branch fetched | `verify`, then four specialists (security, correctness, performance, tests) in parallel in the same sandbox; the sandbox closes, and the `synthesizer` merges their reports in the task | One COMMENT review on the labeled commit |
 
-`cancel` reads the status comment's run ID and calls `cancelTaskRun`. `refresh-snapshot` rebuilds a repository's snapshot. Neither runs agents.
+After its permission check, `cancel` appends its own claim to fence the phase immediately, then reads the status comment's run ID and calls `cancelTaskRun`. `refresh-snapshot` rebuilds a repository's snapshot. Neither runs agents.
 
 No phase is retried automatically. A retry would repeat agent spend; a relabel starts a fresh run instead.
 
@@ -65,8 +67,9 @@ No phase is retried automatically. A retry would repeat agent spend; a relabel s
 |---|---|
 | Run status, input, result, timing | Workflows task runs (Render Dashboard) |
 | Conversation, labels, spec, PR, review | GitHub |
-| The current run on an issue or PR | The status comment's marker |
-| History for observability, cost, and evals | Postgres `events` |
+| Current-run ordering for an issue or PR | Newest Postgres `run.claimed` event ID |
+| User-visible current run | The status comment's marker and `factory:working` label |
+| History for observability, cost, and evals | Other Postgres `events` rows |
 
 ### GitHub markers
 
@@ -83,16 +86,17 @@ Spec-to-PR implements the spec as it stood when the approval label was applied. 
 
 ### Events
 
-One append-only table (`app/sql/0001_events.sql`): `trace_id` (the phase's root task run), `run_id`, `repo`, `subject` (`issue#12` or `pr#34`), `type`, `payload`, and `created_at`. The gateway's migration (`npm run db:migrate`) runs as its pre-deploy command.
+One append-only table (`app/sql/`): `trace_id` (the phase's root task run), `run_id`, `repo`, `subject` (`issue#12` or `pr#34`), `type`, `payload`, and `created_at`. The gateway's migration (`npm run db:migrate`) runs as its pre-deploy command.
 
 | Type | Emitted by |
 |---|---|
 | `delivery.received` | The gateway, for every authenticated delivery, with its outcome (started, ignored, invalid, rejected, start failed) |
+| `run.claimed` | `withPhase`, after permission succeeds. Its monotonic event ID is the run's fencing token |
 | `run.started`, `run.finished` | `withPhase` and `cancel` |
 | `agent.started`, `agent.finished` | `runAgent`, with model, turns, token usage, cost, and outcome |
 | `eval.started`, `eval.finished` | Live evals |
 
-`emit()` (`app/events/index.ts`) never throws and never blocks a run: a database outage loses events, not runs. Without `DATABASE_URL` it's a no-op. No workflow decision reads the table. The gateway's `/ready` check doesn't touch it either.
+Most rows use `emit()` (`app/events/index.ts`), which never throws and never blocks a run: a database outage can lose telemetry. Run coordination is deliberately different: `claimRun()` and `isCurrentRun()` are strict, and a phase does not proceed when Postgres cannot establish ownership. `DATABASE_URL` is therefore required on `factory-workflows`; the gateway's `/ready` check still does not touch Postgres because webhook delivery can start a task while the workflow service handles the strict check.
 
 The trace UI (`/ui`, `/ui/traces/:traceId`, `/ui/deliveries`) and its JSON twin (`/api/traces`, `/api/traces/:traceId`) read the table. Both answer 503 until `FACTORY_ADMIN_TOKEN` is set. The UI signs in with the token and keeps a signed session cookie; the API takes `Authorization: Bearer <token>`.
 
@@ -122,7 +126,7 @@ An agent is a markdown prompt and a `defineAgent` call (`app/agents/`). `runAgen
 - **In a sandbox**, when the agent declares tools. `opts.sandbox` is required, and that's a type error otherwise. `runAgent` uploads the runner input and the model key to a root-only run directory, runs `sandbox-runtime/run-agent.sh`, which deletes the key file and passes the key to the runner (running as the `factory` user) on stdin, and downloads the runner's event stream. The tools (`read`, `ls`, `bash`, `edit`, `write`) act on the checkout. Only the implementer has `edit` and `write`.
 - **In the task**, when the agent has no tools. The same runner session runs in the Workflows process with no tools at all. Only the synthesizer runs this way.
 
-The runner (`app/runner/`) is one agent loop on the Pi agent core. Its input carries the rendered prompt and the output's JSON Schema, so a prompt change is a redeploy, never a snapshot rebuild. The agent finishes by calling a `submit` tool whose schema is the agent's Zod output schema, and `runAgent` validates the submission again. Every failure throws an `AgentError` that carries the usage so far, so the budget counts failed calls too. See [agents.md](agents.md) to add one.
+The runner (`app/runner/`) is one agent loop on the Pi agent core. Its input carries the rendered prompt and the output's JSON Schema, so a prompt change is a redeploy, never a snapshot rebuild. The agent finishes by calling a `submit` tool whose schema is the agent's Zod output schema, and `runAgent` validates the submission again. Every failure throws an `AgentError` that carries the usage so far, so the budget counts failed calls too. The budget is a soft threshold because model usage arrives after a response; a provider spend limit is the hard cost backstop. See [agents.md](agents.md) to add one.
 
 ## Publishing
 

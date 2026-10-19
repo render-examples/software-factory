@@ -20,7 +20,7 @@ vi.mock("pg", () => {
 	return { default: { Pool } };
 });
 
-const { emit, closeEvents } = await import("../app/events/index.js");
+const { claimRun, closeEvents, emit, isCurrentRun } = await import("../app/events/index.js");
 
 const event = { traceId: "trn-1", type: "run.started", repo: "acme/web", payload: { a: 1 } };
 
@@ -65,5 +65,51 @@ describe("emit", () => {
 			type: "run.started",
 			error: "connection refused",
 		});
+	});
+});
+
+describe("run coordination", () => {
+	const input = {
+		traceId: "trn-root",
+		runId: "trn-2",
+		repo: "acme/web",
+		subject: "issue#12",
+		phase: "triage",
+		actor: "alice",
+	};
+
+	it("requires Postgres instead of degrading to a no-op", async () => {
+		vi.stubEnv("DATABASE_URL", "");
+		await expect(claimRun(input)).rejects.toThrow("DATABASE_URL is not set");
+	});
+
+	it("appends a strict claim and returns its fencing token", async () => {
+		vi.stubEnv("DATABASE_URL", "postgres://fake/db");
+		pg.query.mockResolvedValueOnce({ rows: [{ id: "42" }] });
+		await expect(claimRun(input)).resolves.toEqual({
+			id: "42",
+			runId: "trn-2",
+			repo: "acme/web",
+			subject: "issue#12",
+		});
+		const [sql, params] = pg.query.mock.calls[0] as [string, unknown[]];
+		expect(sql).toMatch(/insert into events/);
+		expect(sql).toContain("'run.claimed'");
+		expect(params).toEqual(["trn-root", "trn-2", "acme/web", "issue#12", JSON.stringify({ phase: "triage", actor: "alice" })]);
+	});
+
+	it("checks the claim against the latest claim for its subject", async () => {
+		vi.stubEnv("DATABASE_URL", "postgres://fake/db");
+		const claim = { id: "42", runId: "trn-2", repo: "acme/web", subject: "issue#12" };
+		pg.query.mockResolvedValueOnce({ rows: [{ id: "42" }] });
+		await expect(isCurrentRun(claim)).resolves.toBe(true);
+		pg.query.mockResolvedValueOnce({ rows: [{ id: "43" }] });
+		await expect(isCurrentRun(claim)).resolves.toBe(false);
+	});
+
+	it("propagates database failures", async () => {
+		vi.stubEnv("DATABASE_URL", "postgres://fake/db");
+		pg.query.mockRejectedValueOnce(new Error("connection refused"));
+		await expect(claimRun(input)).rejects.toThrow("connection refused");
 	});
 });

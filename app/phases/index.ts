@@ -18,4 +18,12 @@ export {
 	workflowRuns,
 } from "./status.js";
 export { traceIds } from "./trace.js";
-export { PhaseError, type PhaseOptions, type PhaseOutcome, type PhaseResult, type PhaseRun, withPhase } from "./with-phase.js";
+export {
+	PhaseError,
+	type PhaseOptions,
+	type PhaseOutcome,
+	type PhaseResult,
+	type PhaseRun,
+	type RunCoordination,
+	withPhase,
+} from "./with-phase.js";
