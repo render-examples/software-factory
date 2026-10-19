@@ -1,5 +1,5 @@
 # Software Factory: three resources.
-# - factory-db: Postgres holding the append-only events table (observability, cost, evals). No workflow decision reads it.
+# - factory-db: Postgres holding the append-only events table. Strict run claims coordinate phases; other rows are telemetry.
 # - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task. Migrations run before each deploy.
 # - factory-workflows: runs every task (phases, agents, snapshot refresh, cancel). It has no `repo` field, so it
 #   deploys from the same repository as this Blueprint, including forks.

@@ -46,7 +46,7 @@ When you change `install`, push to the base branch afterwards (or wait for the n
 | `models.small` | `anthropic/claude-haiku-4-5` | Model for the `small` tier, as `provider/model` from Pi's model registry. No agent uses this tier yet |
 | `models.medium` | `anthropic/claude-sonnet-5` | Triage, self-review, the four specialist reviewers, and the synthesizer |
 | `models.large` | `anthropic/claude-opus-5` | The spec writer and the implementer |
-| `limits.perRunUsd` | `20` | Dollar budget for one run, across every agent it calls, failed calls included |
+| `limits.perRunUsd` | `20` | Soft dollar threshold for one run, across every agent it calls, failed calls included. A model response can cross it before usage is reported; use the model provider's spend limit as the hard cap |
 | `limits.repairRounds` | `2` | Implementer runs allowed after a failed verify in Spec-to-PR |
 | `limits.maxChangedFiles` | `200` | Publishing refuses a change with more files than this |
 | `limits.maxFileBytes` | `1000000` | Publishing refuses any changed file larger than this |
@@ -64,7 +64,7 @@ Each service reads only its own variables. `render.yaml` declares them, and `.en
 
 | Variable | Required | Set by | Meaning |
 |---|---|---|---|
-| `DATABASE_URL` | No | Blueprint (`fromDatabase`) | Postgres connection string. Without it, no events are recorded and the trace UI reports the database as unavailable |
+| `DATABASE_URL` | Yes | Blueprint (`fromDatabase`) | Postgres connection string for migrations, gateway delivery telemetry, and the trace UI. The webhook handler degrades without it, but a deployed factory requires it for workflow coordination |
 | `GITHUB_WEBHOOK_SECRET` | Yes | You (`sync: false`), from `setup:app` | The App's webhook secret. The gateway refuses to start without it |
 | `FACTORY_ADMIN_TOKEN` | No | Blueprint (`generateValue`) | Signs in to the trace UI and authenticates `/api`. Without it, `/ui` and `/api` answer 503 |
 | `RENDER_API_KEY` | Yes | You (`sync: false`) | Starts Workflows tasks |
@@ -75,8 +75,8 @@ Each service reads only its own variables. `render.yaml` declares them, and `.en
 
 | Variable | Required | Set by | Meaning |
 |---|---|---|---|
-| `DATABASE_URL` | No | Blueprint (`fromDatabase`) | Postgres connection string, for events |
-| `RENDER_API_KEY` | Yes | You (`sync: false`) | Creates sandboxes and snapshots, and reads and cancels task runs for latest-wins and `cancel` |
+| `DATABASE_URL` | Yes | Blueprint (`fromDatabase`) | Postgres connection string. Phase runs strictly append and check `run.claimed` events to coordinate ownership; other events remain best-effort telemetry |
+| `RENDER_API_KEY` | Yes | You (`sync: false`) | Creates sandboxes and snapshots, and reads and cancels task runs during takeover and `cancel` |
 | `RENDER_WORKSPACE_ID` | No | You (`sync: false`) | The workspace (`tea-…`) that sandboxes run in. When unset, it's resolved from the API key, which works only if the key can see exactly one workspace |
 | `GITHUB_APP_ID` | Yes | You (`sync: false`), from `setup:app` | The App's ID |
 | `GITHUB_APP_PRIVATE_KEY` | Yes | You (`sync: false`), from `setup:app` | The App's private key: a PEM (real or `\n`-escaped newlines) or a base64-encoded PEM, which is what `setup:app` prints. Installation tokens are minted per webhook, for the installation that sent it |

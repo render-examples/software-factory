@@ -134,6 +134,7 @@ export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unkno
 				throw new PhaseError(refusalSummary(published.refused), "publish_refused");
 			}
 
+			await run.progress("opening the draft pull request");
 			const { pull } = await gh.findOrCreatePull({
 				head: branch,
 				base: repo.config.baseBranch,

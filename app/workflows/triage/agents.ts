@@ -11,13 +11,13 @@ export interface TriageAgentOptions {
 	runId: string;
 	repo: string;
 	subject: string;
-	/** The run's budget, shared by every agent call. */
+	/** The run's soft budget threshold, shared by every agent call. */
 	budget: Budget;
 }
 
 /** Failures that come from the model or its limits; anything else is the platform's and fails the task. */
 const EXPECTED: Partial<Record<AgentErrorCode, string>> = {
-	budget_exceeded: "spent the run's budget",
+	budget_exceeded: "reached the run's soft budget threshold",
 	max_turns: "ran out of turns",
 	timeout: "timed out",
 	no_submission: "ended without submitting a result",
@@ -25,7 +25,7 @@ const EXPECTED: Partial<Record<AgentErrorCode, string>> = {
 	output_invalid: "submitted an invalid result",
 };
 
-/** Triage's two agents in one sandbox, sharing the run's budget: each call gets what the run has left. */
+/** Triage's two agents in one sandbox, sharing the run's soft threshold: each call gets what remains. */
 export function triageAgents(run: AgentRunner, opts: TriageAgentOptions) {
 	const { budget, ...base } = opts;
 	const vars = { repo: opts.repo };

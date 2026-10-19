@@ -15,8 +15,8 @@ export interface SpecialistsResult {
 
 /**
  * The four specialists, in parallel in one sandbox. Each gets an equal share of what the run has left, with one
- * more share held back for the synthesizer, so none can spend another's. One that fails is reported as missing;
- * the budget still counts its partial cost.
+ * more share held back for the synthesizer. Reported usage can cross a share, but splitting bounds the overshoot.
+ * One that fails is reported as missing; the budget still counts its partial cost.
  */
 export async function runSpecialists(
 	run: RunAgent,

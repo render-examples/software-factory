@@ -6,6 +6,8 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
+	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
+	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
@@ -428,7 +430,7 @@ describe("failures", () => {
 		const t = setup({ agents: { implementer: [new AgentError("budget_exceeded", "spent", {} as never, 19.5, 80)] } });
 		const outcome = await t.run();
 		expect(outcome).toMatchObject({ state: "failed", outcome: "agent_failed" });
-		expect(t.status().body).toContain("ran out of budget");
+		expect(t.status().body).toContain("reached its soft budget threshold");
 		expect(t.status().body).not.toContain("spent");
 		expect(finished()).toMatchObject({ costUsd: 19.5 });
 		expect(t.sandbox.close).toHaveBeenCalledOnce();

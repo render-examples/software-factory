@@ -116,7 +116,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const subject = `${isPr ? "pr" : "issue"}#${issue.number}`;
 			const firstLine = (comment.body ?? "").split(/\r?\n/, 1)[0]?.trim();
 			if (firstLine === `${config.commandPrefix} cancel`) {
-				return start(TASKS.cancel, { number: issue.number, actor }, subject);
+				return start(TASKS.cancel, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
 			}
 			if (isPr) return ignore("comment on pull request");
 			if (!issue.labels.some((l) => l.name === config.labels.triage)) return ignore("issue not in triage");

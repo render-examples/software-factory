@@ -6,6 +6,8 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
+	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
+	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");

@@ -2,7 +2,7 @@ import { task } from "@renderinc/sdk/workflows";
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import { config, requireRepo, TASKS } from "../config/index.js";
 import { CancelInput } from "../contracts/tasks.js";
-import { emit } from "../events/index.js";
+import { claimRun, emit } from "../events/index.js";
 import { type GitHubClient, githubFor } from "../github/index.js";
 import {
 	cancelActiveRun,
@@ -33,8 +33,10 @@ export async function cancelRun(
 	const input = CancelInput.parse(raw);
 	const repo = requireRepo(input.repo, input.installationId);
 	const gh = deps.gh ?? githubFor(repo);
-	const { traceId, runId } = traceIds(ctx);
-	const event = { traceId, runId, repo: repo.fullName, subject: `#${input.number}` };
+	const ids = traceIds(ctx);
+	const traceId = ids.traceId;
+	const runId = ids.runId ?? traceId;
+	const event = { traceId, runId, repo: repo.fullName, subject: `${input.kind}#${input.number}` };
 	await emit({ ...event, type: "run.started", payload: { phase: TASKS.cancel, actor: input.actor } });
 
 	const result = await (async (): Promise<CancelResult> => {
@@ -45,6 +47,7 @@ export async function cancelRun(
 			);
 			return { cancelled: false, reason: "permission-denied" };
 		}
+		await claimRun({ ...event, phase: TASKS.cancel, actor: input.actor });
 		const runs = deps.runs ?? workflowRuns();
 		const current = await readStatus(gh, input.number);
 		if (!current || !(await isRunActive(runs, current.data.runId))) {

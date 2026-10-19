@@ -16,7 +16,7 @@ Replays eval cases against the real triage agents in a sandbox restored from the
   --case <id>           Run only this case (repeatable).
   --repo <owner/name>   Repository to run against (default: the first repo in factory.config.ts).
   --installation <id>   GitHub App installation id for that repository (or FACTORY_EVAL_INSTALLATION_ID).
-  --budget <usd>        Dollars each case may spend (default: limits.perRunUsd).
+  --budget <usd>        Soft dollar threshold for each case (default: limits.perRunUsd).
   -h, --help            Show this help.
 
 Live runs need the Workflows service's env: model keys, RENDER_API_KEY, and the GitHub App credentials.
@@ -82,7 +82,9 @@ export async function main(argv: readonly string[], deps: MainDeps = {}): Promis
 	}
 	if (!env.DATABASE_URL?.trim()) out("DATABASE_URL is not set: the run is graded, but no events are recorded.");
 
-	out(`Running ${cases.length} case(s) against ${evalDeps.repo.fullName} at ${evalDeps.repo.config.baseBranch}, $${evalDeps.budgetUsd} each.`);
+	out(
+		`Running ${cases.length} case(s) against ${evalDeps.repo.fullName} at ${evalDeps.repo.config.baseBranch}, $${evalDeps.budgetUsd} soft threshold each.`,
+	);
 	const run = await runEvals(cases, evalDeps);
 	out(`\n${summaryTable(run)}`);
 	return run.failed > 0 ? 1 : 0;

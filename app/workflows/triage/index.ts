@@ -40,6 +40,7 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 		}
 		const thread = readThread(issue, comments, bot);
 
+		await run.progress("opening a sandbox");
 		const sandbox = await (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
 		const agents = triageAgents(deps.runAgent ?? runAgent, {
 			sandbox,
@@ -54,6 +55,7 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 			const decision = await agents.triage(triageMessage(repo.fullName, thread));
 
 			if (decision.decision === "ask") {
+				await run.progress("posting questions");
 				const round = thread.questions ? thread.questions.round + 1 : 1;
 				const body = `${triageQuestionsBody(decision.questions)}\n\n${renderMarker("questions", { round, questions: decision.questions })}`;
 				const comment = thread.questions
@@ -68,12 +70,14 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 			}
 
 			if (decision.decision === "decline") {
+				await run.progress("posting the decision");
 				const comment = await gh.createComment(issue.number, triageDeclineBody(decision.rationale));
 				return { outcome: "declined", summary: "declined the issue.", links: [{ label: "Reason", url: comment.htmlUrl }] };
 			}
 
 			await run.progress(thread.spec ? "revising the spec" : "drafting the spec");
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
+			await run.progress("posting the spec");
 			return await publishSpec(gh, issue, thread.spec, drafted);
 		} finally {
 			await sandbox.close().catch((error: unknown) => {

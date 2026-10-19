@@ -6,6 +6,8 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
+	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
+	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
@@ -422,7 +424,11 @@ describe("triage task", () => {
 
 		const outcome = await runTriage(ctx, input, deps);
 
-		expect(outcome).toMatchObject({ state: "failed", outcome: "budget-exceeded", summary: "the spec-writer agent spent the run's budget." });
+		expect(outcome).toMatchObject({
+			state: "failed",
+			outcome: "budget-exceeded",
+			summary: "the spec-writer agent reached the run's soft budget threshold.",
+		});
 		expect(finished()?.payload).toMatchObject({ state: "failed", outcome: "budget-exceeded", costUsd: 20 });
 		expect(gh.status()).not.toContain("model said");
 		expect(sandbox.closed).toBe(1);

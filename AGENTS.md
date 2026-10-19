@@ -4,7 +4,7 @@ This file applies to the whole repository. Read [docs/architecture.md](docs/arch
 
 ## What this is
 
-software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three phases (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table that no decision reads.
+software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three phases (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table; strict `run.claimed` rows coordinate phase ownership, while every other event is telemetry.
 
 Two processes deploy:
 
@@ -20,7 +20,7 @@ factory.config.ts   Repositories (base branch, install, verify), labels, permiss
 app/
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
   contracts/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
-  events/           emit() and the readers behind the trace UI, over the events table
+  events/           strict run claims, best-effort emit(), and trace UI readers over the events table
   format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
   gateway/          Hono app: signature check, body cap, the routing table (routes.ts), admin auth, trace UI (ui/)
   github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
@@ -28,7 +28,7 @@ app/
   sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
   agents/           One prompt (.md) and defineAgent (.ts) per agent; runAgent runs one in a sandbox or in the task
   publish/          Collects the sandbox's changes and publishes them through the Git Data API
-  phases/           withPhase lifecycle: permission check, latest-wins takeover, status comment, budget, events
+  phases/           withPhase lifecycle: permission, durable claim, takeover, ownership checkpoints, status, budget
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
   sql/              Migrations
   src/              Process entry points
@@ -86,7 +86,7 @@ Don't weaken these without an explicit change to the security model ([docs/secur
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
 10. Every sandbox is created with a timeout and terminated in `finally`.
-11. No workflow decision reads Postgres.
+11. Postgres decides only cross-task run ownership; best-effort telemetry never drives phase behavior.
 
 `tests/agents-catalog.test.ts` pins every agent's model, tools, and turn limit. Change it only on purpose.
 

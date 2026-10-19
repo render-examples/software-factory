@@ -1,4 +1,4 @@
-import { Render } from "@renderinc/sdk";
+import { ClientError, Render } from "@renderinc/sdk";
 import { TASKS } from "../config/index.js";
 import {
 	findMarkedComment,
@@ -67,14 +67,15 @@ export async function readStatus(
 	return findMarkedComment(await gh.listIssueComments(number), "status", await gh.botLogin());
 }
 
-/** Whether a task run is pending or running. A run the API can't find is treated as finished. */
+/** Whether a task run is pending or running. A confirmed 404 is finished; unknown state fails closed. */
 export async function isRunActive(runs: RunControl, taskRunId: string): Promise<boolean> {
 	try {
 		const { status } = await runs.getTaskRun(taskRunId);
 		return status === "pending" || status === "running";
 	} catch (error) {
-		warn("could not read task run; treating it as finished", error, { taskRunId });
-		return false;
+		if (error instanceof ClientError && error.statusCode === 404) return false;
+		warn("could not read task run; refusing to assume it finished", error, { taskRunId });
+		throw error;
 	}
 }
 
@@ -88,8 +89,8 @@ export async function cancelActiveRun(runs: RunControl, taskRunId: string): Prom
 }
 
 /**
- * Latest wins: cancels the run the status comment records if it's still active, then records this run as
- * running in the same comment.
+ * Reconciles GitHub after a durable claim: cancels the run the status comment records if it is still active,
+ * then records this run for people to see. Postgres claim order, not the comment, decides ownership.
  */
 export async function takeOver(opts: {
 	gh: StatusGitHub;

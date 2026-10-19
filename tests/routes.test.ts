@@ -76,14 +76,14 @@ describe("route: starts", () => {
 		expect(r).toMatchObject({
 			kind: "start",
 			task: "cancel",
-			input: { repo: REPO, installationId: 7, number: 12, actor: "maintainer" },
+			input: { repo: REPO, installationId: 7, number: 12, kind: "issue", actor: "maintainer" },
 			subject: "issue#12",
 		});
 	});
 
 	it("cancel command on a PR starts cancel", () => {
 		const r = route("issue_comment", comment(`${config.commandPrefix} cancel`, { pull_request: {}, labels: [] }), DELIVERY);
-		expect(r).toMatchObject({ kind: "start", task: "cancel", input: { number: 12 }, subject: "pr#12" });
+		expect(r).toMatchObject({ kind: "start", task: "cancel", input: { number: 12, kind: "pr" }, subject: "pr#12" });
 	});
 
 	it("a reply on an issue in triage starts triage with the comment id", () => {

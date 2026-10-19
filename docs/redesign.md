@@ -13,7 +13,7 @@ The redesign keeps what the factory is for (labeled issue to spec to draft PR to
 - Three phases: Triage, Spec-to-PR, and PR Reviewer.
 - Many repositories from one deployment.
 - Three Render resources: a gateway, a Workflows service, and Postgres.
-- Postgres records what happened (observability, cost, evals). No workflow decision reads it.
+- Postgres orders competing phase runs with append-only claims and records observability, cost, and evals. Only run ownership reads it.
 - Agents run either in a Workflows task (no tools) or in a sandbox (with tools), decided at the call site.
 - One sandbox snapshot per repository, refreshed without a cron.
 
@@ -26,7 +26,8 @@ flowchart LR
   GH[GitHub] -->|webhook| GW[factory-gateway<br/>verify, route, startTask]
   GW -->|"startTask(task, input, idempotencyKey = delivery id)"| WF[factory-workflows]
   GW -.->|delivery event| EV[(factory-db<br/>events)]
-  WF -.->|"emit(), never blocks"| EV
+  WF -->|"run.claimed (strict)"| EV
+  WF -.->|"other events (best effort)"| EV
   WF --> SB[Sandboxes<br/>one named snapshot per repo]
   WF -->|labels, comments, PRs, reviews| GH
   UI[trace UI, evals] --> EV
@@ -36,7 +37,7 @@ flowchart LR
 |---|---|---|---|
 | `factory-gateway` | Web Service | Webhook secret, admin token, Render API key, database URL | Verify webhooks, route them to tasks, serve the trace UI |
 | `factory-workflows` | Workflows | Render API key, GitHub App, model keys, database URL | Every task: phases, agents, snapshot refresh, cancel |
-| `factory-db` | Postgres | Events | Append-only record of deliveries, runs, agent turns, and costs |
+| `factory-db` | Postgres | Events | Append-only run claims plus deliveries, agent turns, and costs |
 
 There is no dispatcher and no cron job.
 
@@ -50,16 +51,16 @@ The gateway verifies the signature, maps the event to one task and its input, an
 | `issue_comment.created` | Human reply on an issue in triage | `triage` | `{ repo, issue, actor, commentId }` |
 | `issues.labeled` | `factory:spec-approved` | `spec-to-pr` | `{ repo, issue, actor, labeledAt }` |
 | `pull_request.labeled` | `factory:pr-review` | `pr-review` | `{ repo, pr, headSha, actor }` |
-| `issue_comment.created` | `/factory cancel` | `cancel` | `{ repo, number, actor }` |
+| `issue_comment.created` | `/factory cancel` | `cancel` | `{ repo, number, kind, actor }` |
 | `push` | To a configured repo's base branch | `refresh-snapshot` | `{ repo, sha }` (idempotency key `repo@sha`) |
 
 `repo` and the GitHub App installation (`installationId`, in every input) come from the webhook, so one App installed on several repositories serves all of them. Repositories missing from `factory.config.ts` are ignored.
 
 The routing table is a pure function from `(event, payload)` to `(task, input) | null`, so it can be tested without a server.
 
-### One active run per issue or PR: latest wins
+### Current run per issue or PR: append-only fencing
 
-Each phase posts or updates a status comment on its issue or PR. A hidden marker in that comment records the current task run ID. When a run starts, it reads the marker, calls `cancelTaskRun` on the previous run if it is still active, and writes its own ID. Relabeling an issue restarts its phase.
+After its permission check, each phase strictly appends a `run.claimed` event. Postgres's monotonic event ID is its fencing token; the greatest claim ID for an issue or PR is current. Runs check that ownership before agent work and durable GitHub writes, and stop when a newer claim exists. The status comment remains the user-facing record: takeover reads its run ID, calls `cancelTaskRun` when it is still active, writes the new ID, and applies `factory:working`. Relabeling an issue restarts its phase.
 
 ### Cancel
 
@@ -71,8 +72,9 @@ The `cancel` task reads the run ID from the status comment marker and calls `can
 |---|---|
 | Run status, results, retries, timing | Workflows task runs |
 | Conversation, labels, spec, PR | GitHub, with hidden markers on every factory-written comment |
-| Current run per issue or PR | The status comment marker |
-| History for observability, cost, and evals | Postgres `events` |
+| Current run per issue or PR | The newest Postgres `run.claimed` event ID |
+| User-visible run status | The status comment marker |
+| History for observability, cost, and evals | Other Postgres `events` rows |
 
 ### Specs live in their GitHub comment
 
@@ -95,9 +97,10 @@ create table events (
 );
 create index on events (trace_id, id);
 create index on events (repo, subject, created_at desc);
+create index events_current_run_claim on events (repo, subject, id desc) where type = 'run.claimed';
 ```
 
-`emit(event)` writes one row and swallows errors: a database outage loses events, never runs. Transcripts aren't stored; agent events record the model, turns, usage, cost, and outcome.
+`claimRun()` and `isCurrentRun()` are strict because cross-task ownership must fail closed. Other rows use `emit(event)`, which swallows errors; failure to write those telemetry rows alone never changes phase behavior. Transcripts aren't stored; agent events record the model, turns, usage, cost, and outcome.
 
 ## Repositories
 
@@ -182,7 +185,7 @@ const implementation = await runAgent(implementer, { message, vars }, { sandbox,
 - An agent that declares tools requires `{ sandbox }`; that is a type error otherwise. A Workflows task holds the factory's secrets, so tools never run there.
 - `runAgent` is a function, not a task. Wrap it in `task()` when you want its own retry, timeout, and line in the Render Dashboard; call it inline when you don't. Tasks are named by hand, so names can't collide by accident. Every agent call in the phases is inline today.
 - It returns `{ output, usage, costUsd, turns }` and emits `agent.started` and `agent.finished` events.
-- **Budget is passed down, not looked up.** The workflow gives each call the budget remaining (`Budget.track`); the runner stops when it is spent, and the workflow subtracts the reported cost.
+- **The soft budget threshold is passed down, not looked up.** The workflow gives each call the amount remaining (`Budget.track`); the runner stops after reported cost reaches it, and the workflow subtracts that cost. Because providers report usage after a response, the response that crosses the threshold is charged; a provider spend limit is the hard cap.
 
 ### The runner
 
@@ -195,7 +198,7 @@ In a task, `runAgent` runs the same agent loop with no tools.
 Each phase is one task that opens one sandbox per run and closes it in `finally`. Sandboxes pass between tasks by ID.
 
 **Triage** (`triage`)
-1. Check the actor's permission, and take over the issue (latest wins).
+1. Check the actor's permission, append its run claim, and take over the issue. Check ownership at each progress or write boundary.
 2. Open a sandbox at the base branch.
 3. The triage agent, in the sandbox, decides: ask questions, draft a spec, or decline.
 4. Post questions, or post or revise the spec comment, or decline.
@@ -239,7 +242,7 @@ This replaces `git archive` and the tar parser.
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
 10. Every sandbox is created with a timeout and terminated in `finally`.
-11. No workflow decision reads Postgres.
+11. Postgres decides only cross-task run ownership; telemetry never drives phase behavior.
 
 ## What goes
 
@@ -274,7 +277,7 @@ From the October 7 review, the publish problems (`git archive`, `git replace` by
 1. **Foundations.** Events table and `emit()`. Multi-repo `factory.config.ts` and `RepoContext`. The gateway's routing table and direct `startTask`. Delete the dispatcher, the cron, and the old store and migrations. `render.yaml` with three resources and the Workflows `repo` pin removed.
 2. **Sandboxes.** Lift codebase-researcher's builder, verification, and credential scrub. Per-repo named snapshots, the `refresh-snapshot` task on push, and `openSandbox(repo, ref)`.
 3. **Agent runtime.** The runner with the prompt and output schema in its input, `defineAgent`, `runAgent` for tasks and sandboxes, budgets passed down, and events.
-4. **Phase helpers.** Permission check, latest-wins takeover through the status comment marker, the `cancel` task, status labels, and terminal comments.
+4. **Phase helpers.** Permission check, append-only run claims, takeover through the status comment marker, ownership checkpoints, the `cancel` task, status labels, and terminal comments.
 5. **Triage.** The spec comment with its JSON marker and hash, questions, and revisions.
 6. **Spec-to-PR.** Approval check against the label timeline, implement, verify and repair, self-review, and the new publishing flow.
 7. **PR Reviewer.** Verify, parallel specialists in one sandbox, the synthesizer in the task, and the COMMENT review.

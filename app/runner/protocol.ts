@@ -26,7 +26,7 @@ export const RunnerInput = z.object({
 	output_schema: z.record(z.string(), z.unknown()),
 	max_turns: z.number().int().positive(),
 	timeout_ms: z.number().int().positive(),
-	/** Stop once the model cost of this run reaches this many dollars. */
+	/** Soft threshold: stop after reported model cost reaches this many dollars. A response can cross it. */
 	budget_usd: z.number().positive().optional(),
 	/** Working directory for tools: the repository checkout. Required when `tools` is non-empty. */
 	cwd: z.string().min(1).optional(),

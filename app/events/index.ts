@@ -1,7 +1,7 @@
-import pg from "pg";
-import type { FactoryEvent, StoredEvent, TraceSummary } from "./types.js";
+import pg from "../../node_modules/@types/pg/index.js";
+import type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";
 
-export type { FactoryEvent, StoredEvent, TraceSummary } from "./types.js";
+export type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";
 
 let pool: pg.Pool | undefined;
 
@@ -53,6 +53,35 @@ export async function emit(event: FactoryEvent): Promise<void> {
 	} catch (error) {
 		warn("event dropped", error, { type: event.type, traceId: event.traceId });
 	}
+}
+
+/**
+ * Appends the authoritative ownership claim for a phase run. Unlike telemetry `emit`, this is strict:
+ * a run must not proceed when Postgres cannot order it against competing runs.
+ */
+export async function claimRun(input: RunClaimInput): Promise<RunClaim> {
+	const { rows } = await requireDb().query<{ id: string }>(
+		`insert into events (trace_id, run_id, repo, subject, type, payload)
+		values ($1, $2, $3, $4, 'run.claimed', $5)
+		returning id::text as id`,
+		[input.traceId, input.runId, input.repo, input.subject, JSON.stringify({ phase: input.phase, actor: input.actor })],
+	);
+	const id = rows[0]?.id;
+	if (!id) throw new Error("run claim insert returned no event id");
+	return { id, runId: input.runId, repo: input.repo, subject: input.subject };
+}
+
+/** Whether `claim` is still the newest durable claim for its issue or PR. Fails closed on database errors. */
+export async function isCurrentRun(claim: RunClaim): Promise<boolean> {
+	const { rows } = await requireDb().query<{ id: string }>(
+		`select id::text as id
+		from events
+		where repo = $1 and subject = $2 and type = 'run.claimed'
+		order by id desc
+		limit 1`,
+		[claim.repo, claim.subject],
+	);
+	return rows[0]?.id === claim.id;
 }
 
 interface TraceRow {

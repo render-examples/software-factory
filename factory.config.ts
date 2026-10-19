@@ -20,7 +20,7 @@ export interface FactoryConfig {
 	/** "provider/model" per tier, from Pi's model registry. */
 	models: Record<ModelTier, string>;
 	limits: {
-		/** Dollar budget for one run, across every agent it calls. */
+		/** Soft dollar threshold for one run. Reported usage can cross it; use a provider spend limit as the hard cap. */
 		perRunUsd: number;
 		/** Fix rounds after a failed verify in Spec-to-PR. */
 		repairRounds: number;
