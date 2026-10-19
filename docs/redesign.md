@@ -1,6 +1,6 @@
 # Redesign: less machinery, more platform
 
-Status: implemented, October 2026. Replaces the 0.1.0 architecture in [`0-1-0-spec.md`](0-1-0-spec.md). The current behavior is documented in [architecture.md](architecture.md), [security.md](security.md), and [agents.md](agents.md); where this document and the code disagree, the code and those docs win.
+Status: implemented, October 2026. Replaces the 0.1.0 architecture, whose code and design spec remain at the [`legacy-0.1.0`](https://github.com/render-examples/software-factory/tree/legacy-0.1.0) tag. The current behavior is documented in [architecture.md](architecture.md), [security.md](security.md), and [agents.md](agents.md); where this document and the code disagree, the code and those docs win.
 
 ## Why
 
