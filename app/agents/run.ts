@@ -203,9 +203,11 @@ async function runInTask(input: RunnerInput, apiKey: string | undefined, faux: F
 }
 
 /**
- * In a sandbox. Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: it runs the runner as the
- * unprivileged user from REPO_DIR with `<runDir>/input.json` on stdin and `--key-file <runDir>/key`, writes
- * stdout to `<runDir>.jsonl` and the exit status to `<runDir>.exit`, and deletes the key.
+ * In a sandbox. Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it reads and deletes
+ * `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that user from
+ * REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by `<runDir>/input.json`. It
+ * writes stdout to `<runDir>.jsonl` and the exit status to `<runDir>.exit`. `<runDir>` must be root-only (mode
+ * 700) when the key is uploaded, so the runner user can't reach the key file before it's deleted.
  */
 async function runInSandbox(sandbox: Sandbox, input: RunnerInput, apiKey: string, timeoutMs: number, signal?: AbortSignal): Promise<RunnerOutput> {
 	const runDir = `/tmp/agent-${randomUUID()}`;

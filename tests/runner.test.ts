@@ -83,6 +83,38 @@ describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 		expect(stdout + stderr).not.toContain(key);
 	});
 
+	it("--key-stdin takes the key from the first line of stdin and the input from the rest, and never echoes the key", () => {
+		const ws = makeWorkspace();
+		const key = "sk-ant-test-stdin-0123456789abcdef";
+		const { code, stdout, stderr } = runCli(["--faux", "--key-stdin"], ` ${key} \r\n${JSON.stringify(makeInput(ws))}`);
+		expect(terminal(parseEvents(stdout))).toMatchObject({ type: "result", output: { summary: "[faux]" } });
+		expect(stdout + stderr).not.toContain(key);
+		expect(code).toBe(0);
+	});
+
+	it("--key-stdin rejects an empty first line, and --key-stdin with --key-file, with invalid_input", () => {
+		const ws = makeWorkspace();
+		const input = JSON.stringify(makeInput(ws));
+		for (const stdin of [`\n${input}`, `  \n${input}`, ""]) {
+			const { code, stdout } = runCli(["--faux", "--key-stdin"], stdin);
+			expect(terminal(parseEvents(stdout)), stdin).toMatchObject({ type: "error", code: "invalid_input", message: expect.stringContaining("empty") });
+			expect(code).toBe(2);
+		}
+
+		const keyFile = join(ws.scratchDir, "..", "both.key");
+		const key = "sk-ant-test-both-0123456789";
+		writeFileSync(keyFile, `${key}\n`);
+		const { code, stdout, stderr } = runCli(["--faux", "--key-file", keyFile, "--key-stdin"], `${key}\n${input}`);
+		expect(terminal(parseEvents(stdout))).toMatchObject({
+			type: "error",
+			code: "invalid_input",
+			message: expect.stringContaining("mutually exclusive"),
+		});
+		expect(code).toBe(2);
+		expect(existsSync(keyFile)).toBe(false);
+		expect(stdout + stderr).not.toContain(key);
+	});
+
 	it("rejects invalid input with invalid_input and exit 2", () => {
 		const ws = makeWorkspace();
 		const cases = [
@@ -309,14 +341,28 @@ describe("credentials", { timeout: 30_000 }, () => {
 		expect(code).toBe(0);
 	});
 
-	it("prefers the key file, else the selected provider's own var, and removes every provider's vars", () => {
+	it("redacts a --key-stdin key from every event", async () => {
+		const ws = makeWorkspace();
+		const key = "sk-ant-test-STDINKEY-0123456789";
+		const { code, stdout, events } = await runScripted(
+			`${key}\n${JSON.stringify(makeInput(ws))}`,
+			() => [call("bash", { command: `echo ${key}` }), call(SUBMIT, { ...GOOD, summary: `saw ${key}` })],
+			["--key-stdin"],
+		);
+		expect(toolResults(events)[0]?.output_preview).toContain("[REDACTED]");
+		expect(terminal(events)).toMatchObject({ type: "result", output: { summary: "saw [REDACTED]" } });
+		expect(stdout).not.toContain(key);
+		expect(code).toBe(0);
+	});
+
+	it("prefers the passed key, else the selected provider's own var, and removes every provider's vars", () => {
 		const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: " sk-ant-env ", ANTHROPIC_AUTH_TOKEN: "bearer", OPENAI_API_KEY: "sk-openai", PATH: "/bin" };
 		const creds = takeCredentials(undefined, env);
 		expect(env).toEqual({ PATH: "/bin" });
 		expect(apiKeyFor(creds, "anthropic")).toBe("sk-ant-env");
 		expect(apiKeyFor(creds, "openai")).toBe("sk-openai");
 		expect(apiKeyFor(creds, "google")).toBeUndefined();
-		expect(apiKeyFor({ ...creds, fileKey: "from-file" }, "anthropic")).toBe("from-file");
+		expect(apiKeyFor({ ...creds, key: "from-file" }, "anthropic")).toBe("from-file");
 	});
 });
 

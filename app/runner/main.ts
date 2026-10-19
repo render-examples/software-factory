@@ -27,7 +27,10 @@ function useScratch(scratchDir: string): void {
 	process.env.TMPDIR = scratchDir;
 }
 
-/** `runner.mjs [--key-file PATH] [--faux] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on stdout. Returns the exit code. */
+/**
+ * `runner.mjs [--key-file PATH | --key-stdin] [--faux] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on
+ * stdout. With `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
+ */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
 	const emit = createEmitter(io.write);
@@ -37,11 +40,16 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
-	let args: { "key-file"?: string; faux?: boolean; "self-test"?: boolean };
+	let args: { "key-file"?: string; "key-stdin"?: boolean; faux?: boolean; "self-test"?: boolean };
 	try {
 		args = parseArgs({
 			args: argv,
-			options: { "key-file": { type: "string" }, faux: { type: "boolean" }, "self-test": { type: "boolean" } },
+			options: {
+				"key-file": { type: "string" },
+				"key-stdin": { type: "boolean" },
+				faux: { type: "boolean" },
+				"self-test": { type: "boolean" },
+			},
 		}).values;
 	} catch (err) {
 		return fail("invalid_input", errorMessage(err));
@@ -54,14 +62,26 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return fail("invalid_input", `cannot read --key-file: ${errorMessage(err)}`);
 	}
 	for (const secret of secretsIn(creds)) emit.redact(secret);
+	if (args["key-file"] !== undefined && args["key-stdin"]) return fail("invalid_input", "--key-file and --key-stdin are mutually exclusive");
 	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
+
+	let stdin: string | undefined;
+	if (args["key-stdin"]) {
+		const text = await readAll(io.stdin);
+		const newline = text.indexOf("\n");
+		const key = (newline === -1 ? text : text.slice(0, newline)).trim();
+		emit.redact(key);
+		if (!key) return fail("invalid_input", "--key-stdin: the first line of stdin is empty");
+		creds = { ...creds, key };
+		stdin = newline === -1 ? "" : text.slice(newline + 1);
+	}
 
 	if (args["self-test"]) return selfTest(io);
 
 	let json: unknown;
 	try {
-		json = JSON.parse(await readAll(io.stdin));
+		json = JSON.parse(stdin ?? (await readAll(io.stdin)));
 	} catch (err) {
 		return fail("invalid_input", `stdin is not valid JSON: ${errorMessage(err)}`);
 	}

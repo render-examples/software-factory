@@ -119,7 +119,7 @@ The Sandbox API allows 100 requests a minute per workspace. `SandboxClient` (`ap
 
 An agent is a markdown prompt and a `defineAgent` call (`app/agents/`). `runAgent(agent, { message, vars }, opts)` runs it where it's called:
 
-- **In a sandbox**, when the agent declares tools. `opts.sandbox` is required, and that's a type error otherwise. `runAgent` uploads the runner input and a one-time key file, runs `sandbox-runtime/run-agent.sh` as the `factory` user, and downloads the runner's event stream. The tools (`read`, `ls`, `bash`, `edit`, `write`) act on the checkout. Only the implementer has `edit` and `write`.
+- **In a sandbox**, when the agent declares tools. `opts.sandbox` is required, and that's a type error otherwise. `runAgent` uploads the runner input and the model key to a root-only run directory, runs `sandbox-runtime/run-agent.sh`, which deletes the key file and passes the key to the runner (running as the `factory` user) on stdin, and downloads the runner's event stream. The tools (`read`, `ls`, `bash`, `edit`, `write`) act on the checkout. Only the implementer has `edit` and `write`.
 - **In the task**, when the agent has no tools. The same runner session runs in the Workflows process with no tools at all. Only the synthesizer runs this way.
 
 The runner (`app/runner/`) is one agent loop on the Pi agent core. Its input carries the rendered prompt and the output's JSON Schema, so a prompt change is a redeploy, never a snapshot rebuild. The agent finishes by calling a `submit` tool whose schema is the agent's Zod output schema, and `runAgent` validates the submission again. Every failure throws an `AgentError` that carries the usage so far, so the budget counts failed calls too. See [agents.md](agents.md) to add one.

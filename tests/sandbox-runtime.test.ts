@@ -10,29 +10,32 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const RUNTIME = fileURLToPath(new URL("../sandbox-runtime/", import.meta.url));
 const TOKEN = "ghs_scrubTestToken000000000000000000000";
 
-/** Stand-in for the bundled runner.mjs that follows its CLI contract. input.mode "keep-key" leaves the key file; "fail" exits 3. */
+/**
+ * Stand-in for the bundled runner.mjs that follows its CLI contract. input.mode "fail" exits 3; "no-read" exits 0
+ * after one read of stdin. input.keyFile is checked for existence; input.probe receives the runner's argv and env.
+ */
 const FAKE_RUNNER = `
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 if (args.includes("--self-test")) {
 	console.log(JSON.stringify({ ok: true, version: "fake" }));
 	process.exit(0);
 }
-const keyPath = args.includes("--key-file") ? args[args.indexOf("--key-file") + 1] : null;
-const input = JSON.parse(readFileSync(0, "utf8"));
+const head = Buffer.alloc(65536);
+const first = head.subarray(0, readSync(0, head, 0, head.length, null)).toString("utf8");
+if (first.includes('"mode":"no-read"')) process.exit(0);
+const text = first + readFileSync(0, "utf8");
 let key = null;
-if (keyPath) {
-	key = readFileSync(keyPath, "utf8");
-	if (input.mode !== "keep-key") unlinkSync(keyPath);
+let rest = text;
+if (args.includes("--key-stdin")) {
+	const newline = text.indexOf("\\n");
+	key = text.slice(0, newline);
+	rest = text.slice(newline + 1);
 }
-const report = {
-	input,
-	key,
-	keyFileGone: keyPath ? !existsSync(keyPath) : null,
-	keyInEnv: key !== null && Object.values(process.env).includes(key),
-	cwd: process.cwd(),
-	envKeys: Object.keys(process.env).sort(),
-};
+const input = JSON.parse(rest);
+const keyFileExists = input.keyFile ? existsSync(input.keyFile) : null;
+if (input.probe) writeFileSync(input.probe, JSON.stringify({ argv: process.argv, env: process.env }));
+const report = { input, key, keyFileExists, args, cwd: process.cwd(), envKeys: Object.keys(process.env).sort() };
 console.log(JSON.stringify({ type: "started" }));
 console.log(JSON.stringify({ type: "report", report }));
 process.stderr.write("fake runner diagnostics\\n");
@@ -182,7 +185,7 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 	async function runDir(name: string, input: object, key?: string): Promise<string> {
 		const dir = join(tmp, "runs", name);
 		await mkdir(dir, { recursive: true, mode: 0o700 });
-		await writeFile(join(dir, "input.json"), JSON.stringify(input));
+		await writeFile(join(dir, "input.json"), JSON.stringify({ ...input, keyFile: join(dir, "key"), probe: `${dir}.probe` }));
 		if (key) await writeFile(join(dir, "key"), key);
 		return dir;
 	}
@@ -192,40 +195,56 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 		return lines.find((l) => l.type === "report").report;
 	};
 
-	it("feeds input on stdin from the checkout, writes .jsonl and .exit beside the run dir, and removes the key", async () => {
-		const dir = await runDir("run-ok", { mode: "ok", task: "hello" }, "sk-ant-script-key");
+	it("deletes the key file before the runner starts and feeds the key as the first line of stdin with --key-stdin", async () => {
+		const key = "sk-ant-script-key";
+		const dir = await runDir("run-ok", { mode: "ok", task: "hello" }, `${key}\n`);
 		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
 		expect(res.code).toBe(0);
 		expect(res.stdout).toBe("");
 		expect(res.stderr).toContain("fake runner diagnostics");
 		expect(await readFile(`${dir}.exit`, "utf8")).toBe("0\n");
 		const report = reportOf(await readFile(`${dir}.jsonl`, "utf8"));
-		expect(report).toMatchObject({ input: { task: "hello" }, key: "sk-ant-script-key", keyFileGone: true, keyInEnv: false, cwd: repo });
+		expect(report).toMatchObject({ input: { task: "hello" }, key, keyFileExists: false, args: ["--key-stdin"], cwd: repo });
 		expect(report.envKeys).not.toContain("DATABASE_URL");
 		expect(report.envKeys).toEqual(expect.arrayContaining(["HOME", "PATH", "TMPDIR", "GIT_CONFIG_GLOBAL"]));
+		const probe = await readFile(`${dir}.probe`, "utf8");
+		expect(JSON.parse(probe).argv).toContain("--key-stdin");
+		expect(probe).not.toContain("--key-file");
+		expect(probe).not.toContain(key);
 		expect(existsSync(join(dir, "key"))).toBe(false);
 	});
 
-	it("deletes the key even when the runner keeps it and fails, and records the exit status", async () => {
-		const dir = await runDir("run-fail", { mode: "fail" }, "sk-ant-kept");
-		await writeFile(join(dir, "input.json"), JSON.stringify({ mode: "fail" }));
+	it("records the runner's exit status when it fails, and when it exits without reading stdin", async () => {
+		const dir = await runDir("run-fail", { mode: "fail" }, "sk-ant-fail");
 		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
 		expect(res.code).toBe(3);
 		expect(await readFile(`${dir}.exit`, "utf8")).toBe("3\n");
 		expect(existsSync(join(dir, "key"))).toBe(false);
 
-		const kept = await runDir("run-keep", { mode: "keep-key" }, "sk-ant-kept");
-		const res2 = await bash(join(app, "run-agent.sh"), [kept, "30"]);
+		// Larger than a pipe buffer, so the writer gets SIGPIPE; the runner's status still wins.
+		const early = await runDir("run-no-read", { mode: "no-read", padding: "x".repeat(1 << 20) }, "sk-ant-early");
+		const res2 = await bash(join(app, "run-agent.sh"), [early, "30"]);
 		expect(res2.code).toBe(0);
-		expect(reportOf(await readFile(`${kept}.jsonl`, "utf8"))).toMatchObject({ keyFileGone: false });
-		expect(existsSync(join(kept, "key"))).toBe(false);
+		expect(await readFile(`${early}.exit`, "utf8")).toBe("0\n");
+		expect(existsSync(join(early, "key"))).toBe(false);
 	});
 
-	it("passes no --key-file when there is no key", async () => {
+	it("refuses a key file with more than one line, without starting the runner", async () => {
+		const dir = await runDir("run-multiline", { mode: "ok" }, "sk-ant-line1\nsk-ant-line2");
+		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
+		expect(res.code).toBe(1);
+		expect(res.stderr).toContain("more than one line");
+		expect(res.stderr).not.toContain("sk-ant-line");
+		expect(existsSync(join(dir, "key"))).toBe(false);
+		expect(existsSync(`${dir}.probe`)).toBe(false);
+	});
+
+	it("passes no key flag and the input as-is when there is no key", async () => {
 		const dir = await runDir("run-nokey", { mode: "ok" });
 		const res = await bash(join(app, "run-agent.sh"), [`${dir}/`, "30"]);
 		expect(res.code).toBe(0);
-		expect(reportOf(await readFile(`${dir}.jsonl`, "utf8"))).toMatchObject({ key: null, keyFileGone: null });
+		expect(await readFile(`${dir}.exit`, "utf8")).toBe("0\n");
+		expect(reportOf(await readFile(`${dir}.jsonl`, "utf8"))).toMatchObject({ input: { mode: "ok" }, key: null, keyFileExists: false, args: [] });
 	});
 });
 

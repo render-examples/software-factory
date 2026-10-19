@@ -183,7 +183,7 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 		return fail("invalid_input", `unknown model "${input.model_provider}/${input.model}" (not in the Pi ${PI_VERSION} registry)`);
 	}
 	if (!opts.faux && !opts.apiKey) {
-		return fail("agent_error", `no API key for provider "${input.model_provider}": pass --key-file or set the provider's env var`);
+		return fail("agent_error", `no API key for provider "${input.model_provider}": pass --key-file or --key-stdin, or set the provider's env var`);
 	}
 	const model = capMaxTokens(opts.faux ? registerFauxModel(models, opts.faux(input), requested) : requested, input.thinking_level);
 
