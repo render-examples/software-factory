@@ -9,7 +9,7 @@ function paint(code: string, text: string): string {
 export const bold = (text: string) => paint("1", text);
 export const dim = (text: string) => paint("2", text);
 export const green = (text: string) => paint("32", text);
-export const red = (text: string) => paint("31", text);
+const red = (text: string) => paint("31", text);
 export const yellow = (text: string) => paint("33", text);
 
 export type Level = "pass" | "warn" | "fail" | "skip";
@@ -29,7 +29,7 @@ const MARKS: Record<Level, (text: string) => string> = {
 };
 
 /** Replaces every occurrence of each secret with `***`. Secrets shorter than 4 characters are ignored. */
-export function redact(text: string, secrets: readonly string[]): string {
+function redact(text: string, secrets: readonly string[]): string {
 	let out = text;
 	for (const secret of secrets) {
 		if (secret.length >= 4) out = out.split(secret).join("***");

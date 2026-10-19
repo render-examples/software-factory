@@ -25,7 +25,7 @@ export type ThinkingLevel = RunnerInput["thinking_level"];
 
 const MAX_OUTPUT_TOKENS = 16_384;
 /** Passed to the agent so the max_tokens cap below stays in step with Pi's thinking budget. */
-export const THINKING_BUDGETS = { minimal: 1024, low: 2048, medium: 8192, high: 16_384 } as const;
+const THINKING_BUDGETS = { minimal: 1024, low: 2048, medium: 8192, high: 16_384 } as const;
 
 /** Time kept back from `timeout_ms` so the runner reports its own timeout before the host kills it. */
 const SAFETY_MARGIN_MS = 10_000;
@@ -35,7 +35,7 @@ const ABORT_GRACE_MS = 5_000;
 const MAX_MODEL_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 2_000;
 
-export const SUBMIT_REMINDER =
+const SUBMIT_REMINDER =
 	`You stopped without calling ${SUBMIT_TOOL}. Call it now, exactly once, with your final output built from ` +
 	"what you have found so far.";
 
@@ -82,7 +82,7 @@ export function createEmitter(write: (chunk: string) => Promise<void>): Emitter 
 const PREVIEW_CHARS = 2000;
 const TRUNCATED = "…[truncated]";
 
-export function outputPreview(result: unknown): string {
+function outputPreview(result: unknown): string {
 	const content = (result as { content?: unknown } | undefined)?.content;
 	if (!Array.isArray(content)) return "";
 	const text = content
@@ -95,7 +95,7 @@ export function outputPreview(result: unknown): string {
  * Undefined for all-zero usage (e.g. a request aborted before it was sent). When the provider reports no cost
  * (the faux provider never does), the cost is computed from the model's prices.
  */
-export function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
+function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
 	const count = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
 	const usage: Usage = {
 		input_tokens: count(u.input),
@@ -117,7 +117,7 @@ export function createModels(): MutableModels {
 }
 
 /** Applies the Anthropic thinking token budget only for anthropic-messages models; others use effort levels. */
-export function capMaxTokens(model: Model<Api>, level: ThinkingLevel): Model<Api> {
+function capMaxTokens(model: Model<Api>, level: ThinkingLevel): Model<Api> {
 	if (model.api !== "anthropic-messages") return model;
 	const thinking = level === "off" ? 0 : THINKING_BUDGETS[level];
 	return { ...model, maxTokens: Math.min(model.maxTokens, MAX_OUTPUT_TOKENS + thinking) };

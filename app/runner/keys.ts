@@ -40,7 +40,7 @@ export const PROVIDER_KEY_ENV: Readonly<Record<string, readonly string[]>> = {
 	"zai-coding-cn": ["ZAI_CODING_CN_API_KEY"],
 };
 
-export const ALL_PROVIDER_KEY_ENV: readonly string[] = [...new Set(Object.values(PROVIDER_KEY_ENV).flat())];
+const ALL_PROVIDER_KEY_ENV: readonly string[] = [...new Set(Object.values(PROVIDER_KEY_ENV).flat())];
 
 /** The selected provider's own (first) key var, never another provider's. */
 export function providerApiKey(provider: string, env: Readonly<Record<string, string | undefined>>): string | undefined {

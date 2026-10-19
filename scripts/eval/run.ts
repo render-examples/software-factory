@@ -14,7 +14,7 @@ import { type CaseOutcome, type Grade, gradeCase } from "./grade.js";
 /** The factory's bot login in replayed threads. No case comment uses it, so none is read as the factory's own. */
 export const EVAL_BOT = "software-factory-eval[bot]";
 /** Replayed issues have no real number; every case uses this one. */
-export const EVAL_ISSUE_NUMBER = 1;
+const EVAL_ISSUE_NUMBER = 1;
 
 export interface EvalDeps {
 	repo: RepoContext;
@@ -98,7 +98,7 @@ export async function runEvals(cases: readonly EvalCase[], deps: EvalDeps): Prom
  * Replays one case the way the triage phase runs an issue, minus GitHub: the same thread, the same messages, the
  * same agents sharing one budget in one sandbox at the base branch, and the same spec validation and retry.
  */
-export async function runCase(c: EvalCase, traceId: string, deps: EvalDeps): Promise<CaseOutcome> {
+async function runCase(c: EvalCase, traceId: string, deps: EvalDeps): Promise<CaseOutcome> {
 	const outputs: CaseOutcome["outputs"] = [];
 	const budget = new Budget(deps.budgetUsd);
 	const outcome = (rest: Partial<CaseOutcome> = {}): CaseOutcome => ({ outputs, costUsd: budget.spent, ...rest });
@@ -165,6 +165,6 @@ export function caseComments(c: EvalCase): IssueComment[] {
 	}));
 }
 
-export const caseSubject = (c: EvalCase) => `eval:${c.id}`;
+const caseSubject = (c: EvalCase) => `eval:${c.id}`;
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));

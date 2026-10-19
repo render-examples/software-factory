@@ -8,13 +8,6 @@ export const REPO_DIR = `${SANDBOX_ROOT}/repo`;
 export const SCRATCH_DIR = `${SANDBOX_ROOT}/scratch`;
 /** Unprivileged user agents and repository code run as. */
 export const RUN_AS = "factory";
-/**
- * `bash ${RUN_AGENT_SCRIPT} <run_dir> <timeout_seconds>`: feeds `<run_dir>/input.json` to the runner as RUN_AS
- * (preceded by a line holding `<run_dir>/key`, with `--key-stdin`, when present; the key file is deleted
- * before RUN_AS gets `<run_dir>`), writing stdout to `<run_dir>.jsonl` and the exit status to `<run_dir>.exit`.
- * Put `<run_dir>` under /tmp, created root-only (mode 700).
- */
-export const RUN_AGENT_SCRIPT = `${APP_DIR}/run-agent.sh`;
 
 export interface ExecResult {
 	exitCode: number;

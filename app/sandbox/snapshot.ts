@@ -21,13 +21,13 @@ export function snapshotName(repo: Pick<RepoContext, "owner" | "name">): string 
 }
 
 /** Snapshots kept per name: a sandbox that started restoring just before a new build finished must still find its own. */
-export const KEEP_SNAPSHOTS = 2;
+const KEEP_SNAPSHOTS = 2;
 /** Render terminates the builder after this, even if the task building it crashed. */
-export const BUILDER_TIMEOUT_SECONDS = 3_600;
-export const SANDBOX_RUNTIME_DIR = fileURLToPath(new URL("../../sandbox-runtime/", import.meta.url));
+const BUILDER_TIMEOUT_SECONDS = 3_600;
+const SANDBOX_RUNTIME_DIR = fileURLToPath(new URL("../../sandbox-runtime/", import.meta.url));
 
 /** Copied into APP_DIR and kept in the snapshot. `build/` is needed again when a restored sandbox fetches. */
-export const RUNTIME_SCRIPTS = [
+const RUNTIME_SCRIPTS = [
 	"install-tools.sh",
 	"as-runner.sh",
 	"run-agent.sh",
@@ -42,7 +42,7 @@ const STAGE = "/tmp/factory-stage";
 const STAGE_CREDS = `${STAGE}/creds`;
 const SANDBOX_GITCONFIG = "[core]\n\tfsmonitor = false\n[advice]\n\tdetachedHead = false\n";
 /** Username GitHub expects alongside an installation token. */
-export const GITHUB_TOKEN_USER = "x-access-token";
+const GITHUB_TOKEN_USER = "x-access-token";
 
 export interface SnapshotDeps {
 	/** A read-only token for the repository. Defaults to a GitHub App installation token with `contents: read`. */
@@ -207,7 +207,7 @@ function createRunnerUserCommand(): string {
 }
 
 /** The env file that the sandbox-runtime scripts source. */
-export function envFileContent(nodePath: string, dropTool: string): string {
+function envFileContent(nodePath: string, dropTool: string): string {
 	const nodeDir = nodePath.substring(0, nodePath.lastIndexOf("/"));
 	return `${[
 		`FACTORY_ROOT=${SANDBOX_ROOT}`,

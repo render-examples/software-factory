@@ -394,13 +394,13 @@ export interface ToolOptions {
 }
 
 /** Without edit or write the agent is read-only, and bash applies the read-only shell policy. */
-export const isReadOnly = (tools: readonly ToolName[]): boolean => !tools.includes("edit") && !tools.includes("write");
+const isReadOnly = (tools: readonly ToolName[]): boolean => !tools.includes("edit") && !tools.includes("write");
 
 /**
  * Builds the child env from an allowlist so nothing from the runner's environment (model credentials,
  * the Render API key) can reach a model-controlled process.
  */
-export function shellEnv(path: string | undefined, scratchDir: string): Record<string, string> {
+function shellEnv(path: string | undefined, scratchDir: string): Record<string, string> {
 	return {
 		PATH: path || "/usr/local/bin:/usr/bin:/bin",
 		LANG: process.env.LANG || "C.UTF-8",

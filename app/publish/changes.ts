@@ -101,7 +101,7 @@ export function parseChangesFile(buf: Buffer): ChangesFile {
 }
 
 /** Parses `git diff-tree -r -z --no-renames --no-abbrev` output strictly, keeping each path's raw bytes. */
-export function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
+function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
 	const files: Array<ChangedFile & { rawPath: Buffer }> = [];
 	let pos = 0;
 	const field = (): Buffer => {
@@ -160,7 +160,7 @@ function parseSizes(sizes: Buffer): Map<string, number> {
 }
 
 /** Parses `git cat-file --batch` output and checks every object's bytes against its SHA. */
-export function parseBlobs(blobs: Buffer, expected: ReadonlyMap<string, number>): Map<string, Buffer> {
+function parseBlobs(blobs: Buffer, expected: ReadonlyMap<string, number>): Map<string, Buffer> {
 	const result = new Map<string, Buffer>();
 	let pos = 0;
 	while (pos < blobs.length) {
@@ -185,7 +185,7 @@ export function parseBlobs(blobs: Buffer, expected: ReadonlyMap<string, number>)
 }
 
 /** Why a path can't be published, or null. Paths come from git, but the sandbox could forge them. */
-export function unsafePath(path: string, rawPath: Buffer): string | null {
+function unsafePath(path: string, rawPath: Buffer): string | null {
 	if (!Buffer.from(path, "utf8").equals(rawPath)) return "is not valid UTF-8";
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
 	if (/[\u0000-\u001f\u007f]/.test(path)) return "contains a control character";

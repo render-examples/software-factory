@@ -4,11 +4,11 @@
  */
 import { z } from "zod";
 
-export const TOOL_NAMES = ["read", "ls", "bash", "edit", "write"] as const;
+const TOOL_NAMES = ["read", "ls", "bash", "edit", "write"] as const;
 export const ToolName = z.enum(TOOL_NAMES);
 export type ToolName = z.infer<typeof ToolName>;
 
-export const ThinkingLevel = z.enum(["off", "minimal", "low", "medium", "high"]);
+const ThinkingLevel = z.enum(["off", "minimal", "low", "medium", "high"]);
 
 export const RunnerInput = z.object({
 	trace_id: z.string().min(1),

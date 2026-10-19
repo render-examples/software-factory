@@ -2,7 +2,7 @@ import type { Implementation, SelfReview, Spec } from "../contracts/index.js";
 import { BODY_MAX_CHARS, bullets, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
 /** GitHub's limit on a pull request title. */
-export const TITLE_MAX_CHARS = 256;
+const TITLE_MAX_CHARS = 256;
 
 /** A verify command as the workflow ran it. */
 export interface VerifyResult {
@@ -70,6 +70,6 @@ export function verificationTable(results: readonly VerifyResult[]): string {
 }
 
 /** Escapes characters that end a table cell. */
-export function escapeCell(text: string): string {
+function escapeCell(text: string): string {
 	return text.replaceAll("|", "\\|");
 }

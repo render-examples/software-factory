@@ -10,7 +10,7 @@ import { outputSchemaProblem } from "../runner/submit.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
 
-export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Extra time the host gives run-agent.sh beyond the runner's own timeout, to flush events and exit. */
 const EXEC_GRACE_MS = 60_000;
 
@@ -256,7 +256,7 @@ function emptySummary(): Summary {
 }
 
 /** Sums usage over the runner's events and finds the terminal one. Turns come from `result`, else count model calls. */
-export function summarize(jsonl: string): Summary {
+function summarize(jsonl: string): Summary {
 	const summary = emptySummary();
 	let calls = 0;
 	for (const line of jsonl.split("\n")) {

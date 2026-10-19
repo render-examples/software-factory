@@ -14,7 +14,7 @@ import { route } from "./routes.js";
 import { verifySignature } from "./signature.js";
 import { type EventsReader, uiRoutes } from "./ui/index.js";
 
-export { type Route, route } from "./routes.js";
+export type { Route } from "./routes.js";
 export type { EventsReader } from "./ui/index.js";
 
 export interface GatewayDeps {

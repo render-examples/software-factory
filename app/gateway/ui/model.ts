@@ -23,7 +23,7 @@ export function str(payload: Payload | undefined, key: string): string | undefin
 	return typeof value === "string" ? value : undefined;
 }
 
-export function num(payload: Payload | undefined, key: string): number | undefined {
+function num(payload: Payload | undefined, key: string): number | undefined {
 	const value = payload?.[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
