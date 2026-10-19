@@ -7,7 +7,7 @@ import { CASES_DIR, loadCases, selectCases } from "./case.js";
 import { casePlan, summaryTable } from "./report.js";
 import { type EvalDeps, runEvals } from "./run.js";
 
-export const USAGE = `Usage: npm run eval -- [options]
+const USAGE = `Usage: npm run eval -- [options]
 
 Replays eval cases against the real triage agents in a sandbox restored from the repository's snapshot, and grades them.
 

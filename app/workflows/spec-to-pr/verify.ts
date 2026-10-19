@@ -3,7 +3,7 @@ import type { Sandbox } from "../../sandbox/index.js";
 
 export const VERIFY_TIMEOUT_MS = 20 * 60 * 1000;
 /** How much of a command's output the repair run sees. */
-export const OUTPUT_TAIL_CHARS = 4096;
+const OUTPUT_TAIL_CHARS = 4096;
 
 /** A verify command as the workflow ran it. */
 export interface VerifyRun extends VerifyResult {

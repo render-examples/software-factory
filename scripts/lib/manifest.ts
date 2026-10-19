@@ -10,7 +10,7 @@ import { REQUIRED_EVENTS, REQUIRED_PERMISSIONS } from "./requirements.js";
 
 /** The gateway doesn't exist yet. setup:github sets the real URL; the hook stays inactive until then. */
 export const PLACEHOLDER_WEBHOOK_URL = "https://example.com/software-factory-gateway-not-deployed";
-export const HOMEPAGE = "https://github.com/render-examples/software-factory";
+const HOMEPAGE = "https://github.com/render-examples/software-factory";
 
 export interface Manifest {
 	name: string;
@@ -59,7 +59,7 @@ export function newState(): string {
 	return randomBytes(32).toString("hex");
 }
 
-export function stateMatches(expected: string, received: string | null): boolean {
+function stateMatches(expected: string, received: string | null): boolean {
 	if (!received) return false;
 	const a = Buffer.from(expected);
 	const b = Buffer.from(received);

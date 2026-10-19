@@ -1,4 +1,4 @@
-export const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
 
 /** Reads the body with a hard cap. Returns null when exceeded. */
 export async function readBody(request: Request, maxBytes = MAX_BODY_BYTES): Promise<string | null> {

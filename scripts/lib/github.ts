@@ -138,7 +138,7 @@ export class GitHubApp {
 	}
 }
 
-export class RepoClient {
+class RepoClient {
 	private readonly base: string;
 
 	constructor(

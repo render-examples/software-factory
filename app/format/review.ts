@@ -7,7 +7,7 @@ export const MAX_INLINE_COMMENTS = 50;
 const INLINE_BODY_MAX_CHARS = 8_000;
 
 /** The only review event the factory posts: it never approves or requests changes. */
-export const REVIEW_EVENT = "COMMENT";
+const REVIEW_EVENT = "COMMENT";
 
 /** One inline comment, as GitHub's create-review API takes it. */
 export interface InlineComment {

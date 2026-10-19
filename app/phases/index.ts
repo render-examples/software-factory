@@ -1,20 +1,17 @@
 export { Budget } from "./budget.js";
 export { checkPermission, permissionAtLeast } from "./permission.js";
 export {
-	addWorkingLabel,
 	cancelActiveRun,
 	finishStatus,
 	isRunActive,
 	type Phase,
 	type RunControl,
 	readStatus,
-	removeWorkingLabel,
 	type StatusGitHub,
 	type StatusLink,
 	type StatusUpdate,
 	type Subject,
 	setStatus,
-	statusBody,
 	subjectName,
 	takeOver,
 	WORKING_LABEL,

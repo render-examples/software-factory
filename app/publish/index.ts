@@ -16,18 +16,14 @@ export {
 	type ChangedFile,
 	type ChangeStatus,
 	type ChangesFile,
-	checkChanges,
 	type PublishLimits,
-	parseBlobs,
-	parseChangesFile,
-	parseRawDiff,
 	type RefusalReason,
 } from "./changes.js";
 
 /** `bash ${COLLECT_CHANGES_SCRIPT} <repo_dir> <base_sha> <out_file> <max_changed_files> <max_file_bytes>`; see the script. */
-export const COLLECT_CHANGES_SCRIPT = `${APP_DIR}/collect-changes.sh`;
+const COLLECT_CHANGES_SCRIPT = `${APP_DIR}/collect-changes.sh`;
 
-export const DEFAULT_IDENTITY = {
+const DEFAULT_IDENTITY = {
 	name: "software-factory[bot]",
 	email: "software-factory[bot]@users.noreply.github.com",
 } as const;

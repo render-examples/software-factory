@@ -153,7 +153,7 @@ export async function finishStatus(update: StatusUpdate & { state: Exclude<RunSt
 	return wrote;
 }
 
-export function statusBody(s: { phase: string; runId: string; state: RunState; summary?: string; links?: StatusLink[] }): string {
+function statusBody(s: { phase: string; runId: string; state: RunState; summary?: string; links?: StatusLink[] }): string {
 	const title = PHASE_TITLES[s.phase] ?? s.phase;
 	const detail = s.summary ? `: ${s.summary}` : "";
 	const line = {
@@ -170,7 +170,7 @@ export function statusBody(s: { phase: string; runId: string; state: RunState; s
 }
 
 /** Labels are cosmetic: failures are logged, never fail a run. */
-export async function addWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
+async function addWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
 	try {
 		await gh.ensureLabel(WORKING_LABEL, "fbca04", "software-factory is working on this");
 		await gh.addLabels(number, [WORKING_LABEL]);
@@ -179,7 +179,7 @@ export async function addWorkingLabel(gh: StatusGitHub, number: number): Promise
 	}
 }
 
-export async function removeWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
+async function removeWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
 	try {
 		await gh.removeLabel(number, WORKING_LABEL);
 	} catch (error) {

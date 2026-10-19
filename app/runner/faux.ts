@@ -11,7 +11,7 @@ import {
 import type { RunnerInput } from "./protocol.js";
 import { SUBMIT_TOOL } from "./submit.js";
 
-export const FAUX_MODEL = "faux";
+const FAUX_MODEL = "faux";
 export type FauxScript = (input: RunnerInput) => FauxResponseStep[];
 
 /**

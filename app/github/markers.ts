@@ -37,7 +37,7 @@ export type StatusMarker = MarkerData["status"];
 export type SpecMarker = MarkerData["spec"];
 
 /** GitHub caps a comment at 65,536 characters; the marker leaves room for the readable part. */
-export const MAX_MARKER_CHARS = 48_000;
+const MAX_MARKER_CHARS = 48_000;
 
 export function renderMarker<K extends MarkerKind>(kind: K, data: MarkerData[K]): string {
 	const encoded = Buffer.from(JSON.stringify(SCHEMAS[kind].parse(data)), "utf8").toString("base64url");

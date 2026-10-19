@@ -23,7 +23,7 @@ export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message:
 }
 
 /** Repository-relative paths of every tracked file at the sandbox's checkout. */
-export async function trackedPaths(sandbox: Sandbox): Promise<Set<string>> {
+async function trackedPaths(sandbox: Sandbox): Promise<Set<string>> {
 	const res = await sandbox.exec("git ls-files -z", { asRunner: true });
 	if (res.exitCode !== 0) throw new Error(`git ls-files exited ${res.exitCode}: ${res.stderr.trim().slice(-500)}`);
 	return new Set(res.stdout.split("\0").filter(Boolean));

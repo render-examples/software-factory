@@ -3,7 +3,7 @@ import type { Spec } from "../contracts/index.js";
 import { bullets, codeSpan, fitAround, sanitize, sanitizeInline, truncate } from "./text.js";
 
 /** The rendered spec comment's budget: the caller's marker carries the spec again as JSON, up to SPEC_MAX_JSON_CHARS. */
-export const SPEC_BODY_MAX_CHARS = 32_000;
+const SPEC_BODY_MAX_CHARS = 32_000;
 
 /** The spec's sections as Markdown, with no heading or instructions: for the spec comment and the implementer's message. */
 export function renderSpecSections(spec: Spec): string {
