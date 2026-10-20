@@ -2,7 +2,7 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import { task } from "@renderinc/sdk/workflows";
 import { runAgent } from "../../agents/index.js";
 import { requireRepo, TASKS } from "../../config/index.js";
-import { PrReviewInput } from "../../contracts/tasks.js";
+import { PrReviewInput } from "../../schemas/tasks.js";
 import { type GitHubClient, githubFor } from "../../github/index.js";
 import { RunError, type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";

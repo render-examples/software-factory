@@ -1,4 +1,4 @@
-import { type Review, type ReviewComment, SEVERITIES, type Severity } from "../contracts/index.js";
+import { type Review, type ReviewComment, SEVERITIES, type Severity } from "../schemas/index.js";
 import { type VerifyResult, verificationTable } from "./pull-request.js";
 import { BODY_MAX_CHARS, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 

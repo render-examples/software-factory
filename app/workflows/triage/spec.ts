@@ -1,5 +1,5 @@
 import { config } from "../../config/index.js";
-import { type SpecDraft, validateSpec } from "../../contracts/index.js";
+import { type SpecDraft, validateSpec } from "../../schemas/index.js";
 import { renderSpec, sanitizeInline, truncate } from "../../format/index.js";
 import { contentHash, type GitHubClient, type Issue, renderMarker } from "../../github/index.js";
 import { RunError, type RunResult } from "../../runs/index.js";

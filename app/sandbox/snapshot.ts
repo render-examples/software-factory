@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +112,8 @@ export async function buildSnapshot(
 		await client.check(id, `mkdir -p -m 700 ${STAGE}`, { ...boot, waitReady: true });
 		// Uploaded as an opaque .tgz and extracted in the sandbox: the upload endpoint rejects an
 		// uncompressed tar of the bundled runner's JavaScript, and doesn't accept application/gzip.
-		await client.upload(id, `${STAGE}/stage.tgz`, await stageArchive());
+		const stage = await stageArchive();
+		await client.upload(id, `${STAGE}/stage.tgz`, stage.archive);
 		await client.check(id, `tar -xzf ${STAGE}/stage.tgz -C ${STAGE} && rm ${STAGE}/stage.tgz`, boot);
 		await client.check(
 			id,
@@ -162,6 +164,7 @@ export async function buildSnapshot(
 			baseBranch: branch,
 			sha,
 			lockfileHash,
+			runnerHash: stage.runnerHash,
 			install,
 			createdAt: new Date().toISOString(),
 		};
@@ -291,8 +294,9 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 }
 
 /** A gzipped tar of the runtime scripts and a freshly built, self-contained runner bundle. */
-async function stageArchive(): Promise<Buffer> {
+async function stageArchive(): Promise<{ archive: Buffer; runnerHash: string }> {
 	const bundle = await bundleRunner();
+	const runnerHash = createHash("sha256").update(bundle).digest("hex");
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
 		await mkdir(join(dir, "runner"));
@@ -301,7 +305,7 @@ async function stageArchive(): Promise<Buffer> {
 		for (const file of RUNTIME_SCRIPTS) await cp(join(SANDBOX_SCRIPTS_DIR, file), join(dir, file));
 		const chunks: Buffer[] = [];
 		for await (const chunk of createTar({ cwd: dir, portable: true, gzip: true }, await readdir(dir))) chunks.push(chunk as Buffer);
-		return Buffer.concat(chunks);
+		return { archive: Buffer.concat(chunks), runnerHash };
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

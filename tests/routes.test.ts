@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { config } from "../app/config/index.js";
-import { PrReviewInput, SpecToPrInput, TriageInput } from "../app/contracts/tasks.js";
+import { PrReviewInput, SpecToPrInput, TriageInput } from "../app/schemas/tasks.js";
 import { route } from "../app/gateway/routes.js";
 
 const REPO = Object.keys(config.repos)[0] as string;

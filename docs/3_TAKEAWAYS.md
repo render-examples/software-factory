@@ -131,7 +131,7 @@ can redeliver old events.
 Implementation:
 [`app/gateway/index.ts`](../app/gateway/index.ts),
 [`app/github/markers.ts`](../app/github/markers.ts), and
-[`app/publish/index.ts`](../app/publish/index.ts).
+[`app/changeset/index.ts`](../app/changeset/index.ts).
 
 ## Use snapshots as a prepared base, not stale truth
 
@@ -253,8 +253,8 @@ Generalize this as **proposal versus authority**:
 
 Implementation:
 [`sandbox/collect-changes.sh`](../sandbox/collect-changes.sh),
-[`app/publish/changes.ts`](../app/publish/changes.ts), and
-[`app/publish/index.ts`](../app/publish/index.ts).
+[`app/changeset/changes.ts`](../app/changeset/changes.ts), and
+[`app/changeset/index.ts`](../app/changeset/index.ts).
 
 ## Treat guardrails and boundaries differently
 
@@ -326,7 +326,7 @@ their own limits. Rebuild targets, identities, links, and permissions from
 trusted state rather than accepting them from the model.
 
 Implementation:
-[`app/contracts/`](../app/contracts),
+[`app/schemas/`](../app/schemas),
 [`app/runner/submit.ts`](../app/runner/submit.ts), and
 [`app/agents/run.ts`](../app/agents/run.ts).
 

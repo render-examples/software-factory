@@ -7,6 +7,7 @@ export {
 	AgentError,
 	type AgentErrorCode,
 	type AgentRun,
+	type AgentTrace,
 	type BaseRunOptions,
 	type RunAgentInput,
 	type RunAgentOptions,

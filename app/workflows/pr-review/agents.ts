@@ -1,5 +1,5 @@
 import { AgentError, type BaseRunOptions, prReviewer, type runAgent } from "../../agents/index.js";
-import type { Review } from "../../contracts/index.js";
+import type { Review } from "../../schemas/index.js";
 import type { Budget } from "../../runs/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 

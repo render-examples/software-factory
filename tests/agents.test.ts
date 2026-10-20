@@ -99,6 +99,11 @@ describe("runAgent in a sandbox", () => {
 			usage: { input_tokens: 2500, output_tokens: 300, cache_read_tokens: 50, cache_write_tokens: 10, cost_usd: expect.closeTo(0.03, 10) },
 			costUsd: expect.closeTo(0.03, 10),
 			turns: 2,
+			trace: {
+				toolCalls: [{ tool: "ls", args: {} }],
+				toolResults: [],
+				assistantText: [],
+			},
 		});
 
 		const runDir = sandbox.runDir as string;

@@ -1,5 +1,5 @@
 import { config } from "../../config/index.js";
-import { Spec } from "../../contracts/index.js";
+import { Spec } from "../../schemas/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment } from "../../github/index.js";
 import { RunError } from "../../runs/index.js";
 

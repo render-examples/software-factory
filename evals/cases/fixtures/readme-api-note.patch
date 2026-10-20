@@ -1,0 +1,12 @@
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,8 @@ npm run dev -- --port 3000
+ 
+ Open `http://localhost:3000`. The API lives at `/api/todos`.
+ 
++The API accepts and returns JSON for todo create and update requests.
++
+ ## Scripts
+ 
+ | Script | What it does |

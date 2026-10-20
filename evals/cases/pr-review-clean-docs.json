@@ -1,0 +1,18 @@
+{
+	"id": "pr-review-clean-docs",
+	"description": "The PR reviewer does not invent inline findings for a correct documentation-only change.",
+	"tags": ["review", "clean"],
+	"stage": "pr-review",
+	"fixture": {
+		"patch": "fixtures/readme-api-note.patch"
+	},
+	"pull": {
+		"title": "Document the todo API format",
+		"body": "Clarify that create and update requests use JSON."
+	},
+	"expect": {
+		"riskTier": "trivial",
+		"maxComments": 0,
+		"maxCostUsd": 5
+	}
+}

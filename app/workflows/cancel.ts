@@ -1,7 +1,7 @@
 import { task } from "@renderinc/sdk/workflows";
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import { config, requireRepo, TASKS } from "../config/index.js";
-import { CancelInput } from "../contracts/tasks.js";
+import { CancelInput } from "../schemas/tasks.js";
 import { claimRun, emit } from "../events/index.js";
 import { type GitHubClient, githubFor } from "../github/index.js";
 import {

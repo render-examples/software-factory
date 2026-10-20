@@ -1,5 +1,5 @@
 import { AgentError, type AgentErrorCode, type runAgent, specWriter, triage } from "../../agents/index.js";
-import type { SpecDraft, TriageDecision } from "../../contracts/index.js";
+import type { SpecDraft, TriageDecision } from "../../schemas/index.js";
 import { type Budget, RunError } from "../../runs/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 

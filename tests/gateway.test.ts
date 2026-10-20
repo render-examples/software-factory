@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { config, type TaskName } from "../app/config/index.js";
-import { TriageInput } from "../app/contracts/tasks.js";
+import { TriageInput } from "../app/schemas/tasks.js";
 import type { FactoryEvent } from "../app/events/index.js";
 import { createGateway, type GatewayDeps } from "../app/gateway/index.js";
 

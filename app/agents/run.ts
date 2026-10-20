@@ -16,6 +16,13 @@ const EXEC_GRACE_MS = 60_000;
 
 export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
 
+/** Safe, redacted runner observations retained for evals and diagnostics. */
+export interface AgentTrace {
+	toolCalls: Array<{ tool: string; args: unknown }>;
+	toolResults: Array<{ tool: string; isError: boolean; outputPreview: string }>;
+	assistantText: string[];
+}
+
 export class AgentError extends Error {
 	override readonly name = "AgentError";
 	constructor(
@@ -25,6 +32,7 @@ export class AgentError extends Error {
 		readonly usage: Usage,
 		readonly costUsd: number,
 		readonly turns: number,
+		readonly trace?: AgentTrace,
 	) {
 		super(message);
 	}
@@ -60,6 +68,8 @@ export interface AgentRun<Output extends OutputSchema> {
 	usage: Usage;
 	costUsd: number;
 	turns: number;
+	/** Present for real runner calls; optional so lightweight test doubles remain valid. */
+	trace?: AgentTrace;
 }
 
 /** Test seam: when set, in-task runs use these deterministic responses instead of calling a model. */
@@ -157,7 +167,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			throw failure("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`, summary);
 		}
 		finish("ok", summary);
-		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns };
+		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns, trace: summary.trace };
 	} catch (err) {
 		const error = err instanceof AgentError ? err : failure("agent_error", errorMessage(err), summary);
 		finish(error.code, summary, error.message);
@@ -166,7 +176,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 }
 
 function failure(code: AgentErrorCode, message: string, summary: Summary): AgentError {
-	return new AgentError(code, message, summary.usage, summary.costUsd, summary.turns);
+	return new AgentError(code, message, summary.usage, summary.costUsd, summary.turns, summary.trace);
 }
 
 function checkInput(raw: RunnerInput, summary: Summary): RunnerInput {
@@ -247,12 +257,19 @@ interface Summary {
 	costUsd: number;
 	turns: number;
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
+	trace: AgentTrace;
 	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
 
 function emptySummary(): Summary {
-	return { usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0 }, costUsd: 0, turns: 0, invalidLines: 0 };
+	return {
+		usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0 },
+		costUsd: 0,
+		turns: 0,
+		trace: { toolCalls: [], toolResults: [], assistantText: [] },
+		invalidLines: 0,
+	};
 }
 
 /** Sums usage over the runner's events and finds the terminal one. Turns come from `result`, else count model calls. */
@@ -269,7 +286,13 @@ function summarize(jsonl: string): Summary {
 			continue;
 		}
 		if (summary.terminal) continue;
-		if (event.type === "usage") {
+		if (event.type === "tool_call") {
+			summary.trace.toolCalls.push({ tool: event.tool, args: event.args });
+		} else if (event.type === "tool_result") {
+			summary.trace.toolResults.push({ tool: event.tool, isError: event.is_error, outputPreview: event.output_preview });
+		} else if (event.type === "assistant_text") {
+			summary.trace.assistantText.push(event.text);
+		} else if (event.type === "usage") {
 			const u = summary.usage;
 			u.input_tokens += event.usage.input_tokens;
 			u.output_tokens += event.usage.output_tokens;

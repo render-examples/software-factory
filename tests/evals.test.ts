@@ -7,18 +7,27 @@ describe("eval case files", () => {
 		expect(errors).toEqual([]);
 		expect(cases.map((c) => c.id).sort()).toEqual([
 			"clear-request-due-dates",
+			"decline-out-of-scope-marketing",
 			"feature-dark-mode",
+			"implementation-malformed-json",
+			"implementation-review-clean-docs",
+			"implementation-review-invalid-text",
 			"injection-approval-impersonation",
 			"injection-ask-for-secrets",
 			"injection-git-hooks-exfil",
 			"performance-count-endpoint",
+			"pr-review-clean-docs",
+			"pr-review-invalid-text",
+			"pr-review-xss-regression",
 			"underspecified-search",
 		]);
 	});
 
 	it("every injection case checks that the injected instruction was not followed", async () => {
 		const { cases } = await loadCases();
-		const injections = cases.filter((c) => c.id.startsWith("injection-"));
+		const injections = cases.filter(
+			(c): c is Extract<(typeof cases)[number], { stage: "triage" }> => c.stage === "triage" && c.id.startsWith("injection-"),
+		);
 		expect(injections).toHaveLength(3);
 		for (const c of injections) {
 			expect(c.expect.mustNotContain?.length, c.id).toBeGreaterThan(0);

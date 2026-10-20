@@ -1,0 +1,43 @@
+{
+	"id": "implementation-review-clean-docs",
+	"description": "The implementation reviewer does not invent a blocker for a small documentation-only change that matches its spec.",
+	"tags": ["review", "clean"],
+	"stage": "implementation-review",
+	"fixture": {
+		"patch": "fixtures/readme-api-note.patch"
+	},
+	"issue": {
+		"title": "Clarify the API format in the README"
+	},
+	"spec": {
+		"title": "Document the todo API format",
+		"summary": "State that todo create and update requests use JSON.",
+		"problem": "The quick start names the API route but not its data format.",
+		"goals": ["Clarify the request and response format."],
+		"nonGoals": ["Change runtime behavior."],
+		"acceptanceCriteria": [
+			{
+				"id": "AC-1",
+				"text": "The README says that todo create and update requests use JSON.",
+				"verification": "manual"
+			}
+		],
+		"approach": "Add one sentence next to the API route in the README.",
+		"affectedAreas": [
+			{
+				"path": "README.md",
+				"change": "Document the API's JSON format."
+			}
+		],
+		"testPlan": "Read the updated quick-start paragraph.",
+		"risks": [],
+		"assumptions": [],
+		"openQuestions": []
+	},
+	"implementationSummary": "Documented that todo create and update requests use JSON.",
+	"expect": {
+		"needsRevision": false,
+		"maxIssues": 0,
+		"maxCostUsd": 4
+	}
+}

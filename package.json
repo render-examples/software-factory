@@ -12,10 +12,10 @@
     "node": ">=22.19"
   },
   "scripts": {
-    "start:gateway": "tsx app/src/server.ts",
-    "start:workflows": "tsx app/src/workflows.ts",
-    "dev:gateway": "node --env-file=.env node_modules/.bin/tsx watch app/src/server.ts",
-    "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/src/workflows.ts",
+    "start:gateway": "tsx app/entrypoints/gateway.ts",
+    "start:workflows": "tsx app/entrypoints/workflows.ts",
+    "dev:gateway": "node --env-file=.env node_modules/.bin/tsx watch app/entrypoints/gateway.ts",
+    "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/entrypoints/workflows.ts",
     "dev:postgres": "docker compose up postgres",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "setup:app": "node --env-file-if-exists=.env --import tsx scripts/setup-app.ts",

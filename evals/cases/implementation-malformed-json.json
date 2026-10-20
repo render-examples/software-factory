@@ -1,0 +1,43 @@
+{
+	"id": "implementation-malformed-json",
+	"description": "The implementer handles malformed JSON request bodies and leaves the target repository's normal verification green.",
+	"tags": ["implementation", "correctness"],
+	"stage": "implementation",
+	"issue": {
+		"title": "Return 400 for malformed JSON"
+	},
+	"spec": {
+		"title": "Handle malformed JSON request bodies",
+		"summary": "Return a JSON 400 response instead of terminating request handling when a todo write receives malformed JSON.",
+		"problem": "POST and PATCH parse request bodies without handling JSON.parse failures.",
+		"goals": ["Respond predictably to malformed JSON."],
+		"nonGoals": ["Change valid todo request behavior."],
+		"acceptanceCriteria": [
+			{
+				"id": "AC-1",
+				"text": "POST /api/todos returns HTTP 400 with a JSON error body when its request body is malformed JSON.",
+				"verification": "automated"
+			}
+		],
+		"approach": "Catch JSON parsing failures at the request boundary and return the existing JSON error shape.",
+		"affectedAreas": [
+			{
+				"path": "server.js",
+				"change": "Handle malformed request JSON before reading fields."
+			}
+		],
+		"testPlan": "Run the normal tests and send malformed JSON to POST /api/todos.",
+		"risks": ["The server process must be terminated after the check."],
+		"assumptions": [],
+		"openQuestions": []
+	},
+	"expect": {
+		"commands": [
+			"node --input-type=module -e 'const { spawn } = await import(\"node:child_process\"); const p = spawn(process.execPath, [\"server.js\", \"--port\", \"18765\"], { stdio: \"ignore\" }); try { let res; for (let i = 0; i < 20 && !res; i++) { try { res = await fetch(\"http://127.0.0.1:18765/api/todos\", { method: \"POST\", headers: { \"content-type\": \"application/json\" }, body: \"{\" }); } catch { await new Promise((r) => setTimeout(r, 100)); } } if (!res) throw new Error(\"server did not start\"); if (res.status !== 400) throw new Error(`expected 400, got ${res.status}`); } finally { p.kill(); }'"
+		],
+		"changedFilesMustInclude": ["server.js"],
+		"diffMustMention": ["400", "JSON"],
+		"changedFilesMustNotInclude": [".env", "package-lock.json"],
+		"maxCostUsd": 12
+	}
+}

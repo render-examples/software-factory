@@ -1,0 +1,12 @@
+diff --git a/public/index.html b/public/index.html
+--- a/public/index.html
++++ b/public/index.html
+@@ -59,7 +59,7 @@
+       }
+     }
+ 
+-    function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
++    function esc(s) { return s; }
+ 
+     form.addEventListener("submit", async (e) => {
+       e.preventDefault();

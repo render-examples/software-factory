@@ -58,12 +58,12 @@ docs/
   2_ARCHITECTURE.md           Repository map, execution paths, interfaces, trust boundaries
   3_TAKEAWAYS.md              Reusable architecture and agent patterns
 app/
-  src/
-    server.ts                 Gateway process entry point
+  entrypoints/
+    gateway.ts                Gateway process entry point
     workflows.ts              Workflows process entry point and task registration
   config/
     index.ts                  Config import, RepoContext, task names, model resolution
-  contracts/                  Zod schemas for task inputs and agent outputs
+  schemas/                  Zod schemas for task inputs and agent outputs
   gateway/
     index.ts                  Hono webhook and admin application
     signature.ts, body.ts     Constant-time signature check and body limit
@@ -100,7 +100,7 @@ app/
     client.ts                 Issues, PRs, labels, comments, reviews, permissions
     markers.ts                Hidden marker schemas and trusted lookup
     git-data.ts               Blob, tree, commit, and ref operations
-  publish/
+  changeset/
     changes.ts                Validate collected paths, modes, blobs, and limits
     index.ts                  Rebuild and compare the GitHub tree, then move the branch
   events/
@@ -116,7 +116,7 @@ sandbox/
   verify.sh                   Check layout, permissions, credentials, process hardening
   build/                      Staged Git credential helper and scrubber
 scripts/                      App setup, GitHub setup, doctor, migrations, evals
-evals/cases/                  Live Triage and spec-writer cases
+evals/                        Pinned live stage cases and seeded review patches
 tests/                        Unit and boundary tests with fakes
 ```
 
@@ -343,7 +343,7 @@ providers report usage after responses.
 
 ### 9. Validate and publish changes
 
-Publishing stays in [`app/publish/`](../app/publish); no GitHub write token
+Publishing stays in [`app/changeset/`](../app/changeset); no GitHub write token
 enters the Sandbox.
 
 1. `collect-changes.sh` uses a throwaway Git directory to stage the working
@@ -388,7 +388,7 @@ and verification command derives from this context.
 
 ### Task contracts
 
-[`app/contracts/tasks.ts`](../app/contracts/tasks.ts) defines bounded Zod
+[`app/schemas/tasks.ts`](../app/schemas/tasks.ts) defines bounded Zod
 inputs for Triage, Spec-to-PR, PR Reviewer, cancel, and snapshot refresh. Each
 extends the repository and installation fields. Stage-specific fields contain
 only the issue or PR, actor, approval time, head SHA, or refresh SHA needed by

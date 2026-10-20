@@ -1,4 +1,4 @@
-import { TriageDecision } from "../../contracts/index.js";
+import { TriageDecision } from "../../schemas/index.js";
 import { defineAgent } from "../define.js";
 
 /** Placeholders in prompt.md. `repo`: "owner/name". */

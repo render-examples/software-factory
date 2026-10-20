@@ -1,5 +1,5 @@
 import type { RepoConfig } from "../../config/index.js";
-import { Implementation } from "../../contracts/index.js";
+import { Implementation } from "../../schemas/index.js";
 import { defineAgent } from "../define.js";
 
 /** Placeholders in prompt.md. `repo`: "owner/name"; `verifyCommands`: see {@link verifyCommandsVar}. */

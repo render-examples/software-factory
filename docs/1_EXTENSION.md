@@ -236,7 +236,7 @@ for every call. The default call timeout is 30 minutes.
    `defineAgent`.
 2. Export the definition and its placeholder names from
    `app/agents/index.ts`.
-3. Add or reuse a bounded Zod schema in `app/contracts/`.
+3. Add or reuse a bounded Zod schema in `app/schemas/`.
 4. Call it from a stage, passing a Sandbox exactly when it declares tools.
 5. Add it to `tests/agents-catalog.test.ts` with its intended model, tools,
    turn limit, placeholders, and sample output.
@@ -259,7 +259,7 @@ the working label, and the stage budget.
 
 1. Add the task name to `TASKS` in `app/config/index.ts` and the `Stage` type
    and title in `app/runs/status.ts`.
-2. Add a bounded Zod input schema to `app/contracts/tasks.ts`. Extend
+2. Add a bounded Zod input schema to `app/schemas/tasks.ts`. Extend
    `RepoInput` so the repository and installation still come from the
    authenticated webhook.
 3. Implement the task under `app/workflows/<name>/`. Parse input, call
@@ -319,8 +319,10 @@ arbitrary destinations through an agent schema.
 
 ## Add eval cases
 
-Evals currently cover Triage and the spec writer. One JSON file under
-[`evals/cases/`](../evals/cases) describes the issue and expectations:
+The suite covers `triage`, `implementation`, `implementation-review`, and
+`pr-review`. One JSON file under [`evals/cases/`](../evals/cases) describes
+the input and expectations. Cases that need a seeded change reference a
+trusted patch under `evals/cases/fixtures/`.
 
 ```json
 {
@@ -345,7 +347,13 @@ Expectations can constrain:
 - `decision`: `ask`, `draft`, or `decline`;
 - `questionsMax`: maximum questions;
 - `specMustMention`: case-insensitive required terms;
-- `mustNotContain`: strings forbidden from any output; and
+- `commands`: trusted post-implementation checks that must pass;
+- `changedFilesMustInclude` and `changedFilesMustNotInclude`: diff bounds;
+- `needsRevision`, `riskTier`, `findings`, and comment/issue limits for
+  reviewers;
+- `mustNotContain`: strings forbidden from submissions and produced diffs;
+- `forbiddenToolArgs`: strings forbidden from the actual serialized tool
+  arguments; and
 - `maxCostUsd`: maximum reported case cost.
 
 `comments` replays an oldest-first conversation. Mark a comment `"bot": true`
@@ -367,7 +375,14 @@ npm run eval -- \
 ```
 
 Include adversarial cases for new prompts and tools. A live eval uses the
-real model and Sandbox and incurs cost.
+real model and Sandbox and incurs cost. Include a clean seeded patch for every
+reviewer so the suite measures false positives as well as defect recall.
+
+The suite opens the configured branch but requires its checked-out commit to
+equal `evals/fixture.json`. Update that SHA only after reviewing target
+changes, and establish a new baseline rather than comparing runs across
+different fixtures. Use `--trials 3 --json <path>` for a release candidate;
+all trials must pass.
 
 ## Run a second deployment
 

@@ -1,4 +1,4 @@
-import type { Implementation, ImplementationReview, Spec } from "../contracts/index.js";
+import type { Implementation, ImplementationReview, Spec } from "../schemas/index.js";
 import { BODY_MAX_CHARS, bullets, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
 /** GitHub's limit on a pull request title. */
