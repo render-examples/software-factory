@@ -253,7 +253,7 @@ The catalog deliberately pins the security-relevant shape of every agent.
 Widening tools or moving an agent between the Sandbox and Workflows process
 should require an explicit test change.
 
-Changes to `app/runner/` or `sandbox-runtime/` are different from prompt
+Changes to `app/runner/` or `sandbox/` are different from prompt
 changes: those files are bundled into each repository snapshot. Rebuild by
 pushing to each base branch or starting `refresh-snapshot` manually.
 

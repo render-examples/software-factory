@@ -108,7 +108,7 @@ app/
     types.ts                  Event contracts
   format/                     Bound and sanitize model text for GitHub
   sql/                        Append-only event table migrations
-sandbox-runtime/
+sandbox/
   install-tools.sh            Prepare the builder
   as-runner.sh                Drop privilege and clear the environment
   run-agent.sh                Deliver the model key and run one agent

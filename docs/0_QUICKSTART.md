@@ -328,7 +328,7 @@ npx vitest run tests/gateway.test.ts
 When applicable, also run:
 
 ```bash
-shellcheck sandbox-runtime/*.sh sandbox-runtime/build/*.sh
+shellcheck sandbox/*.sh sandbox/build/*.sh
 render blueprints validate render.yaml
 npm audit --omit=dev --audit-level=high
 ```
@@ -371,7 +371,7 @@ crossed by the response that reports the usage.
 
 - `factory.config.ts`, application code, or prompt changes require a deploy
   of the affected services.
-- Runner or `sandbox-runtime/` changes are bundled into repository snapshots.
+- Runner or `sandbox/` changes are bundled into repository snapshots.
   They reach a repository on its next base-branch push or manual
   `refresh-snapshot` run.
 - A changed `install` command is detected when a Sandbox opens and causes a

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const RUNTIME = fileURLToPath(new URL("../sandbox-runtime/", import.meta.url));
+const RUNTIME = fileURLToPath(new URL("../sandbox/", import.meta.url));
 const TOKEN = "ghs_scrubTestToken000000000000000000000";
 
 /**

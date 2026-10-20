@@ -11,7 +11,7 @@ import { type GitDataClient, gitData } from "../app/github/git-data.js";
 import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/publish/index.js";
 import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
 
-const SCRIPT = fileURLToPath(new URL("../sandbox-runtime/collect-changes.sh", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../sandbox/collect-changes.sh", import.meta.url));
 const IDENTITY = {
 	name: "Factory Bot",
 	email: "bot@example.com",
