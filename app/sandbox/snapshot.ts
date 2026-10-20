@@ -24,7 +24,7 @@ export function snapshotName(repo: Pick<RepoContext, "owner" | "name">): string 
 const KEEP_SNAPSHOTS = 2;
 /** Render terminates the builder after this, even if the task building it crashed. */
 const BUILDER_TIMEOUT_SECONDS = 3_600;
-const SANDBOX_RUNTIME_DIR = fileURLToPath(new URL("../../sandbox-runtime/", import.meta.url));
+const SANDBOX_SCRIPTS_DIR = fileURLToPath(new URL("../../sandbox/", import.meta.url));
 
 /** Copied into APP_DIR and kept in the snapshot. `build/` is needed again when a restored sandbox fetches. */
 const RUNTIME_SCRIPTS = [
@@ -206,7 +206,7 @@ function createRunnerUserCommand(): string {
 	);
 }
 
-/** The env file that the sandbox-runtime scripts source. */
+/** The env file that the sandbox scripts source. */
 function envFileContent(nodePath: string, dropTool: string): string {
 	const nodeDir = nodePath.substring(0, nodePath.lastIndexOf("/"));
 	return `${[
@@ -298,7 +298,7 @@ async function stageArchive(): Promise<Buffer> {
 		await mkdir(join(dir, "runner"));
 		await mkdir(join(dir, "build"));
 		await writeFile(join(dir, "runner/runner.mjs"), bundle);
-		for (const file of RUNTIME_SCRIPTS) await cp(join(SANDBOX_RUNTIME_DIR, file), join(dir, file));
+		for (const file of RUNTIME_SCRIPTS) await cp(join(SANDBOX_SCRIPTS_DIR, file), join(dir, file));
 		const chunks: Buffer[] = [];
 		for await (const chunk of createTar({ cwd: dir, portable: true, gzip: true }, await readdir(dir))) chunks.push(chunk as Buffer);
 		return Buffer.concat(chunks);

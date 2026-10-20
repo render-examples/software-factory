@@ -183,9 +183,9 @@ Git configuration.
 
 Implementation:
 [`app/sandbox/snapshot.ts`](../app/sandbox/snapshot.ts),
-[`sandbox-runtime/build/git-credential-staged.sh`](../sandbox-runtime/build/git-credential-staged.sh),
+[`sandbox/build/git-credential-staged.sh`](../sandbox/build/git-credential-staged.sh),
 and
-[`sandbox-runtime/build/scrub-credentials.sh`](../sandbox-runtime/build/scrub-credentials.sh).
+[`sandbox/build/scrub-credentials.sh`](../sandbox/build/scrub-credentials.sh).
 
 ## Put tool-using agents in the Sandbox
 
@@ -253,7 +253,7 @@ Generalize this as **proposal versus authority**:
 - grant the smallest host component the authority to commit the effect.
 
 Implementation:
-[`sandbox-runtime/collect-changes.sh`](../sandbox-runtime/collect-changes.sh),
+[`sandbox/collect-changes.sh`](../sandbox/collect-changes.sh),
 [`app/publish/changes.ts`](../app/publish/changes.ts), and
 [`app/publish/index.ts`](../app/publish/index.ts).
 
@@ -283,8 +283,8 @@ quietly becoming the only defense.
 
 Implementation:
 [`app/runner/tools.ts`](../app/runner/tools.ts),
-[`sandbox-runtime/as-runner.sh`](../sandbox-runtime/as-runner.sh), and
-[`sandbox-runtime/verify.sh`](../sandbox-runtime/verify.sh).
+[`sandbox/as-runner.sh`](../sandbox/as-runner.sh), and
+[`sandbox/verify.sh`](../sandbox/verify.sh).
 
 ## Verify real security properties before work
 
@@ -305,7 +305,7 @@ Turn critical security claims into executable preconditions and test them
 where the protected operation begins.
 
 Implementation:
-[`sandbox-runtime/verify.sh`](../sandbox-runtime/verify.sh) and
+[`sandbox/verify.sh`](../sandbox/verify.sh) and
 [`app/sandbox/verify.ts`](../app/sandbox/verify.ts).
 
 ## Use typed, bounded contracts around models

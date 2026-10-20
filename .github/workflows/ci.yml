@@ -21,7 +21,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run eval -- --validate
-      - run: shellcheck sandbox-runtime/*.sh sandbox-runtime/build/*.sh
+      - run: shellcheck sandbox/*.sh sandbox/build/*.sh
       - run: npm audit --omit=dev --audit-level=high
 
   # Validation checks plans, regions, and conflicts against a real workspace, so it needs an API key.

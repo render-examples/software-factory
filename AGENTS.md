@@ -34,7 +34,7 @@ app/
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
   sql/              Migrations
   src/              Process entry points
-sandbox-runtime/    Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
+sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
 scripts/            setup-app, setup-github, doctor, migrate, eval
 evals/cases/        Eval cases (JSON)
 tests/              Vitest unit tests; fakes in tests/helpers/
@@ -70,7 +70,7 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 - Task inputs and results stay small and JSON-serializable. Built-in phases
   keep one sandbox within one task; if a future workflow shares a running
   sandbox across tasks, pass its ID and reconnect with `connectSandbox`.
-- Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox-runtime/`, which CI checks with shellcheck.
+- Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
 - Phases take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
 - Keep the suite near 100 tests. Test durable behavior at process and trust
@@ -117,14 +117,14 @@ each is enforced):
   `SERVICE_ENV` in `scripts/lib/requirements.ts` (so `doctor` checks it), and
   [docs/1_EXTENSION.md](docs/1_EXTENSION.md#environment-reference).
 - **A webhook event, label, or App permission:** update `scripts/lib/requirements.ts`, which `setup:app`, `setup:github`, and `doctor` all read.
-- **The runner or `sandbox-runtime/`:** these are baked into each snapshot, so they reach sandboxes only after a rebuild (the next push to each base branch, or a `refresh-snapshot` run).
+- **The runner or `sandbox/`:** these are baked into each snapshot, so they reach sandboxes only after a rebuild (the next push to each base branch, or a `refresh-snapshot` run).
 
 ## Verify
 
 ```bash
 npm run check                    # Biome lint, tsc --noEmit, all Vitest tests
 npm run eval -- --validate       # eval case files
-shellcheck sandbox-runtime/*.sh sandbox-runtime/build/*.sh
+shellcheck sandbox/*.sh sandbox/build/*.sh
 render blueprints validate render.yaml   # when render.yaml changes
 npm audit --omit=dev --audit-level=high
 ```
