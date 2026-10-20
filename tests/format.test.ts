@@ -47,7 +47,6 @@ const comment = (overrides: Partial<ReviewComment> = {}): ReviewComment => ({
 	severity: "medium",
 	title: "Unbounded query",
 	body: "Add a limit.",
-	sources: ["performance"],
 	...overrides,
 });
 
@@ -86,10 +85,10 @@ describe("renderReview", () => {
 	const review = (comments: ReviewComment[], summary = "Looks mostly fine."): Review => ({ summary, riskTier: "medium", comments });
 
 	it("is always a COMMENT review with inline comments mapped to GitHub's shape", () => {
-		const payload = renderReview(review([comment({ title: "SQL injection", severity: "high", sources: ["security", "correctness"] })]));
+		const payload = renderReview(review([comment({ title: "SQL injection", severity: "high" })]));
 		expect(payload.event).toBe("COMMENT");
 		expect(payload.comments).toEqual([{ path: "src/db.ts", line: 12, side: "RIGHT", body: expect.any(String) }]);
-		expect(payload.comments[0]?.body).toMatch(/^\*\*High\*\*: SQL injection\n\nAdd a limit\.\n\n<sub>security, correctness<\/sub>$/);
+		expect(payload.comments[0]?.body).toBe("**High**: SQL injection\n\nAdd a limit.");
 		expect(payload.body).toMatch(/^## Factory review\n\n\*\*Risk:\*\* medium · \*\*Findings:\*\* 1 high · \*\*Inline comments:\*\* 1/);
 		expect(payload.body).toMatch(/never approves or requests changes/);
 	});

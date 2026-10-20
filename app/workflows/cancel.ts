@@ -14,7 +14,7 @@ import {
 	type StatusGitHub,
 	traceIds,
 	workflowRuns,
-} from "../phases/index.js";
+} from "../runs/index.js";
 
 export type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
 
@@ -37,7 +37,7 @@ export async function cancelRun(
 	const traceId = ids.traceId;
 	const runId = ids.runId ?? traceId;
 	const event = { traceId, runId, repo: repo.fullName, subject: `${input.kind}#${input.number}` };
-	await emit({ ...event, type: "run.started", payload: { phase: TASKS.cancel, actor: input.actor } });
+	await emit({ ...event, type: "run.started", payload: { stage: TASKS.cancel, actor: input.actor } });
 
 	const result = await (async (): Promise<CancelResult> => {
 		if (!(await checkPermission(gh, input.actor))) {
@@ -47,7 +47,7 @@ export async function cancelRun(
 			);
 			return { cancelled: false, reason: "permission-denied" };
 		}
-		await claimRun({ ...event, phase: TASKS.cancel, actor: input.actor });
+		await claimRun({ ...event, stage: TASKS.cancel, actor: input.actor });
 		const runs = deps.runs ?? workflowRuns();
 		const current = await readStatus(gh, input.number);
 		if (!current || !(await isRunActive(runs, current.data.runId))) {
@@ -59,14 +59,14 @@ export async function cancelRun(
 			gh,
 			number: input.number,
 			runId: current.data.runId,
-			phase: current.data.phase,
+			stage: current.data.stage,
 			state: "cancelled",
 			summary: `cancelled by @${input.actor}.`,
 		});
 		return { cancelled: true, runId: current.data.runId };
 	})();
 
-	await emit({ ...event, type: "run.finished", payload: { phase: TASKS.cancel, state: "done", ...result } });
+	await emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });
 	return result;
 }
 

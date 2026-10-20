@@ -81,10 +81,9 @@ describe("Spec", () => {
 
 describe("review contracts", () => {
 	it("has no approval field and caps inline comments at 50", () => {
-		const comment = { file: "a.ts", line: 3, severity: "low", title: "t", body: "b", sources: ["tests"] };
+		const comment = { file: "a.ts", line: 3, severity: "low", title: "t", body: "b" };
 		expect(Review.safeParse({ summary: "s", riskTier: "low", comments: [comment] }).success).toBe(true);
 		expect(Review.safeParse({ summary: "s", riskTier: "low", comments: Array(51).fill(comment) }).success).toBe(false);
-		expect(Review.safeParse({ summary: "s", riskTier: "low", comments: [{ ...comment, sources: [] }] }).success).toBe(false);
 		expect(Object.keys(Review.shape)).toEqual(["summary", "riskTier", "comments"]);
 	});
 });

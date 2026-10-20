@@ -1,4 +1,3 @@
-import type { SpecialistReport } from "../../contracts/index.js";
 import { truncate } from "../../format/index.js";
 import type { PullFile, PullRequest } from "../../github/index.js";
 import type { VerifyRun } from "./verify.js";
@@ -6,13 +5,8 @@ import type { VerifyRun } from "./verify.js";
 const BODY_MAX_CHARS = 20_000;
 const MAX_LISTED_FILES = 300;
 
-export interface Missing {
-	name: string;
-	reason: string;
-}
-
-/** A specialist's task message: the PR's text as untrusted data, the changed files, and the verify results. */
-export function specialistMessage(pull: PullRequest, files: readonly PullFile[], verify: readonly VerifyRun[]): string {
+/** The reviewer's task message: the PR's text as untrusted data, the changed files, and the verify results. */
+export function reviewerMessage(pull: PullRequest, files: readonly PullFile[], verify: readonly VerifyRun[]): string {
 	const listed = files.slice(0, MAX_LISTED_FILES).map((f) => {
 		const renamed = f.previousFilename ? `, renamed from ${f.previousFilename}` : "";
 		return `- ${f.filename} (${f.status}${renamed}, +${f.additions} -${f.deletions})`;
@@ -22,22 +16,7 @@ export function specialistMessage(pull: PullRequest, files: readonly PullFile[],
 		pullSection(pull),
 		`## Changed files (${files.length})\n\n${listed.join("\n") || "(none listed)"}`,
 		verifySection(verify),
-		"Review the change for your area and call `submit` once.",
-	].join("\n\n");
-}
-
-/** The synthesizer's task message: everything it merges, with the specialists' reports as JSON. */
-export function synthesizerMessage(
-	pull: PullRequest,
-	verify: readonly VerifyRun[],
-	reports: Record<string, SpecialistReport>,
-	missing: readonly Missing[],
-): string {
-	return [
-		pullSection(pull),
-		verifySection(verify),
-		`## Specialist reports\n\n${fenced(JSON.stringify({ reports, missing }, null, 2), "json")}`,
-		"Merge these into one review and call `submit` once.",
+		"Review the complete change and call `submit` once.",
 	].join("\n\n");
 }
 

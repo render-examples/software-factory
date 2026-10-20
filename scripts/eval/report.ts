@@ -14,8 +14,8 @@ export function summaryTable(run: EvalRun): string {
 
 /** What --validate prints for a valid set of cases. */
 export function casePlan(cases: readonly EvalCase[]): string {
-	const rows = cases.map((c) => [c.id, c.phase, checks(c.expect).join(", ")]);
-	return [...table(["case", "phase", "checks"], rows), "", `${cases.length} case(s) valid.`].join("\n");
+	const rows = cases.map((c) => [c.id, c.stage, checks(c.expect).join(", ")]);
+	return [...table(["case", "stage", "checks"], rows), "", `${cases.length} case(s) valid.`].join("\n");
 }
 
 function checks(expect: EvalCase["expect"]): string[] {

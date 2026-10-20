@@ -2,15 +2,14 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import { task } from "@renderinc/sdk/workflows";
 import { runAgent } from "../../agents/index.js";
 import { requireRepo, TASKS } from "../../config/index.js";
-import type { Review } from "../../contracts/index.js";
 import { PrReviewInput } from "../../contracts/tasks.js";
 import { type GitHubClient, githubFor } from "../../github/index.js";
-import { PhaseError, type PhaseOutcome, type PhaseResult, type RunControl, subjectName, withPhase } from "../../phases/index.js";
+import { RunError, type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";
-import { failureReason, type RunAgent, runSpecialists, SPECIALIST_NAMES, synthesize } from "./agents.js";
+import { failureReason, reviewPull, type RunAgent } from "./agents.js";
 import { headMoved, mergeBase, type OpenSandbox, withPullSandbox } from "./checkout.js";
 import { commentable, pullDiffLines } from "./diff-lines.js";
-import { specialistMessage, synthesizerMessage } from "./messages.js";
+import { reviewerMessage } from "./messages.js";
 import { findReview, postReview } from "./post.js";
 import { runVerify } from "./verify.js";
 
@@ -23,26 +22,26 @@ export interface PrReviewDeps {
 }
 
 /**
- * PR Reviewer: verify the PR head, run the four specialists in parallel in one sandbox, merge their findings
- * in this task, and post one COMMENT review. It never approves or requests changes.
+ * PR Reviewer: verify the PR head, review it in one sandbox, and post one COMMENT review.
+ * It never approves or requests changes.
  */
-export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: PrReviewDeps = {}): Promise<PhaseOutcome> {
+export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: PrReviewDeps = {}): Promise<RunOutcome> {
 	const input = PrReviewInput.parse(raw);
 	const repo = requireRepo(input.repo, input.installationId);
 	const gh = deps.gh ?? githubFor(repo);
 	const open = deps.openSandbox ?? ((r, ref) => openSandbox(r, ref));
 	const run = deps.runAgent ?? runAgent;
 	const subject = { kind: "pr", number: input.pr } as const;
-	const phase = {
+	const stage = {
 		repo,
 		subject,
-		phase: TASKS.prReview,
+		stage: TASKS.prReview,
 		actor: input.actor,
 		gh,
 		runs: deps.runs,
 	};
 
-	return withPhase(ctx, phase, async ({ traceId, runId, budget, progress }): Promise<PhaseResult> => {
+	return withRun(ctx, stage, async ({ traceId, runId, budget, progress }): Promise<RunResult> => {
 		const base = {
 			traceId,
 			runId,
@@ -70,42 +69,29 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		const files = await gh.listPullFiles(input.pr);
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
-		// 2. One sandbox at the PR head: verify, then the specialists in parallel. Closed before synthesis.
+		// 2. One sandbox at the PR head: verify, then review the complete change.
 		await progress("opening a sandbox");
-		const { verify, found } = await withPullSandbox(open, repo, pull, async (sandbox) => {
+		const { verify, review } = await withPullSandbox(open, repo, pull, async (sandbox) => {
 			const baseRef = await mergeBase(sandbox, pull.baseRef);
 			await progress("running the verify commands");
 			const verify = await runVerify(sandbox, repo.config.verify);
 
-			await progress(`reviewing with ${SPECIALIST_NAMES.length} specialists`);
-			const found = await runSpecialists(run, {
-				sandbox,
-				message: specialistMessage(pull, files, verify),
-				vars: { repo: repo.fullName, baseRef },
-				budget,
-				base,
-			});
-			return { verify, found };
+			await progress("reviewing the pull request");
+			try {
+				const review = await reviewPull(run, {
+					sandbox,
+					message: reviewerMessage(pull, files, verify),
+					vars: { repo: repo.fullName, baseRef },
+					budget,
+					base,
+				});
+				return { verify, review };
+			} catch (err) {
+				throw new RunError(`the PR reviewer ${failureReason(err)}, so no review was posted.`, "review_failed");
+			}
 		});
-		if (found.missing.length === SPECIALIST_NAMES.length) {
-			throw new PhaseError("none of the specialist reviewers finished, so there's no review to post.", "no_reports");
-		}
 
-		// 3. The synthesizer merges the reports, in this task: it has no tools, so no sandbox.
-		await progress("merging the specialists' findings");
-		let review: Review;
-		try {
-			review = await synthesize(run, {
-				message: synthesizerMessage(pull, verify, found.reports, found.missing),
-				repo: repo.fullName,
-				budget,
-				base,
-			});
-		} catch (err) {
-			throw new PhaseError(`the synthesizer ${failureReason(err)}, so no review was posted.`, "synthesis_failed");
-		}
-
-		// 4. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
+		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
 		await progress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,
@@ -114,7 +100,6 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			review,
 			render: {
 				verification: verify,
-				missing: found.missing,
 				isCommentable: commentable(diffLines),
 			},
 		});
@@ -124,7 +109,6 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			`risk **${review.riskTier}**`,
 			`${inlineComments} inline comment${inlineComments === 1 ? "" : "s"}`,
 			...(failedVerify > 0 ? [`${failedVerify} of ${verify.length} verify commands failed`] : []),
-			...(found.missing.length > 0 ? [`${found.missing.length} reviewer${found.missing.length === 1 ? "" : "s"} didn't finish`] : []),
 		];
 		return {
 			outcome: "reviewed",
@@ -134,7 +118,7 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 	});
 }
 
-/** Not retried: specialists cost real money, and a relabel starts a fresh review. */
+/** Not retried: review costs real money, and a relabel starts a fresh review. */
 export const prReview = task(
 	{
 		name: TASKS.prReview,

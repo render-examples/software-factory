@@ -4,7 +4,7 @@ export {
 	cancelActiveRun,
 	finishStatus,
 	isRunActive,
-	type Phase,
+	type Stage,
 	type RunControl,
 	readStatus,
 	type StatusGitHub,
@@ -19,11 +19,11 @@ export {
 } from "./status.js";
 export { traceIds } from "./trace.js";
 export {
-	PhaseError,
-	type PhaseOptions,
-	type PhaseOutcome,
-	type PhaseResult,
-	type PhaseRun,
+	RunError,
+	type RunOptions,
+	type RunOutcome,
+	type RunResult,
+	type RunContext,
 	type RunCoordination,
-	withPhase,
-} from "./with-phase.js";
+	withRun,
+} from "./with-run.js";

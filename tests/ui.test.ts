@@ -34,7 +34,7 @@ const traceFixture = (): StoredEvent[] => [
 		task: "triage",
 		deliveryId: "d-1",
 	}),
-	ev("run.started", 1, { phase: "triage", actor: "maintainer" }),
+	ev("run.started", 1, { stage: "triage", actor: "maintainer" }),
 	ev("agent.started", 2, { agentId: "triager", model: "anthropic/claude-x", where: "task", tools: [] }),
 	ev("agent.finished", 7, {
 		agentId: "triager",
@@ -45,7 +45,7 @@ const traceFixture = (): StoredEvent[] => [
 		costUsd: 0.0123,
 		message: XSS,
 	}),
-	ev("run.finished", 10, { phase: "triage", state: "done", outcome: XSS, costUsd: 0.0123, durationMs: 9000 }),
+	ev("run.finished", 10, { stage: "triage", state: "done", outcome: XSS, costUsd: 0.0123, durationMs: 9000 }),
 ];
 
 const summaryFixture = (): TraceSummary[] => [

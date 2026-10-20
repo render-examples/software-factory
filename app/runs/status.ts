@@ -9,7 +9,7 @@ import {
 	type StatusMarker,
 } from "../github/index.js";
 
-export type Phase = typeof TASKS.triage | typeof TASKS.specToPr | typeof TASKS.prReview;
+export type Stage = typeof TASKS.triage | typeof TASKS.specToPr | typeof TASKS.prReview;
 
 export interface Subject {
 	kind: "issue" | "pr";
@@ -21,7 +21,7 @@ export interface StatusLink {
 	url: string;
 }
 
-/** On the issue or PR while a phase runs. */
+/** On the issue or PR while a stage runs. */
 export const WORKING_LABEL = "factory:working";
 
 export type StatusGitHub = Pick<
@@ -49,7 +49,7 @@ export function workflowRuns(): RunControl {
 	return defaultRuns;
 }
 
-const PHASE_TITLES: Record<string, string> = {
+const STAGE_TITLES: Record<string, string> = {
 	[TASKS.triage]: "Triage",
 	[TASKS.specToPr]: "Spec-to-PR",
 	[TASKS.prReview]: "PR Reviewer",
@@ -95,11 +95,11 @@ export async function cancelActiveRun(runs: RunControl, taskRunId: string): Prom
 export async function takeOver(opts: {
 	gh: StatusGitHub;
 	subject: Subject;
-	phase: Phase;
+	stage: Stage;
 	runId: string;
 	runs?: RunControl;
 }): Promise<{ commentId: number; previousRunId: string | null; cancelledPrevious: boolean }> {
-	const { gh, subject, phase, runId } = opts;
+	const { gh, subject, stage, runId } = opts;
 	const current = await readStatus(gh, subject.number);
 	const previousRunId = current && current.data.runId !== runId ? current.data.runId : null;
 	let cancelledPrevious = false;
@@ -110,7 +110,7 @@ export async function takeOver(opts: {
 			cancelledPrevious = true;
 		}
 	}
-	const body = statusBody({ phase, runId, state: "running" });
+	const body = statusBody({ stage, runId, state: "running" });
 	const comment = current
 		? await gh.updateComment(current.comment.id, body)
 		: await gh.createComment(subject.number, body);
@@ -122,7 +122,7 @@ export interface StatusUpdate {
 	gh: StatusGitHub;
 	number: number;
 	runId: string;
-	phase: string;
+	stage: string;
 	state: RunState;
 	summary?: string;
 	links?: StatusLink[];
@@ -154,8 +154,8 @@ export async function finishStatus(update: StatusUpdate & { state: Exclude<RunSt
 	return wrote;
 }
 
-function statusBody(s: { phase: string; runId: string; state: RunState; summary?: string; links?: StatusLink[] }): string {
-	const title = PHASE_TITLES[s.phase] ?? s.phase;
+function statusBody(s: { stage: string; runId: string; state: RunState; summary?: string; links?: StatusLink[] }): string {
+	const title = STAGE_TITLES[s.stage] ?? s.stage;
 	const detail = s.summary ? `: ${s.summary}` : "";
 	const line = {
 		running: `**${title}** is running (run \`${s.runId}\`)${detail}`,
@@ -166,7 +166,7 @@ function statusBody(s: { phase: string; runId: string; state: RunState; summary?
 	}[s.state];
 	const links = (s.links ?? []).map((link) => `- [${link.label}](${link.url})`);
 	const footer = s.state === "running" ? [] : [`<sub>run \`${s.runId}\`</sub>`];
-	const marker = renderMarker("status", { runId: s.runId, phase: s.phase, state: s.state, at: new Date().toISOString() });
+	const marker = renderMarker("status", { runId: s.runId, stage: s.stage, state: s.state, at: new Date().toISOString() });
 	return [line, ...(links.length ? ["", ...links] : []), ...(footer.length ? ["", ...footer] : []), "", marker].join("\n");
 }
 

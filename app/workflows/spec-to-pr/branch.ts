@@ -1,7 +1,7 @@
 import type { Spec } from "../../contracts/index.js";
 import { sanitizeInline } from "../../format/index.js";
 import type { GitDataClient, GitHubClient, GitIdentity } from "../../github/index.js";
-import { PhaseError } from "../../phases/index.js";
+import { RunError } from "../../runs/index.js";
 import type { RefusalReason } from "../../publish/index.js";
 
 export const branchName = (issue: number): string => `factory/issue-${issue}`;
@@ -35,7 +35,7 @@ export async function ownedCommits(git: GitDataClient, branch: string, baseSha: 
 	const committer = commit.committer;
 	const ours = committer?.name === bot.name && committer.email.toLowerCase() === bot.email.toLowerCase() && commit.parents.length === 1;
 	if (!ours) {
-		throw new PhaseError(
+		throw new RunError(
 			`the branch \`${branch}\` has commits the factory didn't make, so it was left alone. Delete or rename the branch and reapply the label to retry.`,
 			"branch_taken",
 		);

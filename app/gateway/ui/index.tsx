@@ -134,7 +134,7 @@ function TraceRow(props: { trace: TraceListItem }) {
 			<td>
 				<Subject repo={t.repo} subject={t.subject} />
 			</td>
-			<td>{t.phase ?? <span class="meta">—</span>}</td>
+			<td>{t.stage ?? <span class="meta">—</span>}</td>
 			<td>
 				<Badge value={t.state} />
 				{t.outcome && <div class="detail">{t.outcome}</div>}
@@ -183,7 +183,7 @@ function TimelineRow(props: { item: TimelineItem; start?: Date }) {
 					{time}
 					<td>run started</td>
 					<td>
-						{item.phase ?? "?"}
+						{item.stage ?? "?"}
 						{item.actor && <span class="meta"> by @{item.actor}</span>}
 						{item.runId && <div class="meta mono">run {item.runId}</div>}
 					</td>
@@ -195,7 +195,7 @@ function TimelineRow(props: { item: TimelineItem; start?: Date }) {
 					{time}
 					<td>run finished</td>
 					<td>
-						{item.phase ?? "?"} <Badge value={item.state} /> {item.outcome}
+						{item.stage ?? "?"} <Badge value={item.state} /> {item.outcome}
 						<div class="meta">
 							cost <span class="cost">{formatCost(item.costUsd)}</span> · duration {formatDuration(item.durationMs)}
 						</div>
@@ -333,7 +333,7 @@ export function uiRoutes(opts: { adminToken?: string; events: EventsReader }): H
 								<th>Trace</th>
 								<th>Repo</th>
 								<th>Subject</th>
-								<th>Phase</th>
+								<th>Stage</th>
 								<th>State</th>
 								<th>Cost</th>
 								<th>Duration</th>

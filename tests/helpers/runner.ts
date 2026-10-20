@@ -4,11 +4,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage as testStubAssistantMessage, fauxToolCall as testStubToolCall } from "@earendil-works/pi-ai";
 import { writeRunnerBundle } from "../../app/runner/bundle.js";
-import type { FauxScript } from "../../app/runner/faux.js";
 import { main } from "../../app/runner/main.js";
 import { RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/protocol.js";
+import type { TestStub } from "../../app/runner/test-stub.js";
 
 export const SUBMIT = "submit";
 
@@ -89,25 +89,25 @@ export function terminal(events: RunnerEvent[]) {
 
 export const toolResults = (events: RunnerEvent[]) => events.flatMap((e) => (e.type === "tool_result" ? [e] : []));
 
-/** Runs main() in-process with a scripted faux model. */
-export async function runScripted(input: unknown, script: FauxScript, extraArgs: string[] = []) {
+/** Runs main() in-process with deterministic model responses. */
+export async function runWithTestStub(input: unknown, testStub: TestStub, extraArgs: string[] = []) {
 	let stdout = "";
-	const code = await main(["--faux", ...extraArgs], {
+	const code = await main(["--test-stub", ...extraArgs], {
 		stdin: Readable.from([typeof input === "string" ? input : JSON.stringify(input)]),
 		write: async (chunk) => {
 			stdout += chunk;
 		},
-		fauxScript: script,
+		testStub,
 	});
 	return { code, stdout, events: parseEvents(stdout) };
 }
 
 const toolUse = { stopReason: "toolUse" } as const;
-export const say = (text: string) => fauxAssistantMessage(text);
-export const call = (name: string, args: Record<string, unknown>) => fauxAssistantMessage(fauxToolCall(name, args), toolUse);
+export const say = (text: string) => testStubAssistantMessage(text);
+export const call = (name: string, args: Record<string, unknown>) => testStubAssistantMessage(testStubToolCall(name, args), toolUse);
 export const calls = (...c: Array<[string, Record<string, unknown>]>) =>
-	fauxAssistantMessage(
-		c.map(([name, args]) => fauxToolCall(name, args)),
+	testStubAssistantMessage(
+		c.map(([name, args]) => testStubToolCall(name, args)),
 		toolUse,
 	);
 

@@ -6,7 +6,7 @@ This file applies to the whole repository. Read
 
 ## What this is
 
-software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three phases (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table; strict `run.claimed` rows coordinate phase ownership, while every other event is telemetry.
+software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three stages (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table; strict `run.claimed` rows coordinate stage ownership, while every other event is telemetry.
 
 Two processes deploy:
 
@@ -28,9 +28,9 @@ app/
   github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
   runner/           The agent runner: one Pi agent loop, tools, submit, key handling. Bundled into the snapshot
   sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
-  agents/           One prompt (.md) and defineAgent (.ts) per agent; runAgent runs one in a sandbox or in the task
+  agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
   publish/          Collects the sandbox's changes and publishes them through the Git Data API
-  phases/           withPhase lifecycle: permission, durable claim, takeover, ownership checkpoints, status, budget
+  runs/             withRun lifecycle: permission, durable claim, takeover, ownership checkpoints, status, budget
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
   sql/              Migrations
   src/              Process entry points
@@ -44,8 +44,8 @@ Dependencies point one way, from entry points down to leaves:
 
 ```text
 src → gateway, workflows
-workflows → phases, publish, agents, sandbox, github, format, events, contracts, config
-phases → agents, github, events, config
+workflows → runs, publish, agents, sandbox, github, format, events, contracts, config
+runs → agents, github, events, config
 agents → sandbox, runner, events, contracts, config
 publish → sandbox, github, config
 sandbox → runner (to bundle it), github (read tokens), config
@@ -67,12 +67,12 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 - Strict TypeScript, ESM, NodeNext. Relative imports end in `.js`. No path aliases.
 - Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
 - Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
-- Task inputs and results stay small and JSON-serializable. Built-in phases
+- Task inputs and results stay small and JSON-serializable. Built-in stages
   keep one sandbox within one task; if a future workflow shares a running
   sandbox across tasks, pass its ID and reconnect with `connectSandbox`.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
-- Phases take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
+- Stage implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
 - Keep the suite near 100 tests. Test durable behavior at process and trust
   boundaries: authenticated inputs, user-visible outcomes, authority,
   cleanup, and security invariants. Prefer one end-to-end happy path and the
@@ -102,13 +102,13 @@ each is enforced):
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
 10. Every sandbox is created with a timeout and terminated in `finally`.
-11. Postgres decides only cross-task run ownership; best-effort telemetry never drives phase behavior.
+11. Postgres decides only cross-task run ownership; best-effort telemetry never drives stage behavior.
 
-`tests/agents-catalog.test.ts` pins every agent's model, tools, and turn limit. Change it only on purpose.
+`tests/agents-catalog.test.ts` protects unique agent identities and tool authority. Change it only on purpose.
 
 ## Common changes
 
-- **An agent or a phase:** follow
+- **An agent or a stage:** follow
   [docs/1_EXTENSION.md](docs/1_EXTENSION.md#customize-an-agent).
 - **A configuration key:** add it to `FactoryConfig` in `factory.config.ts`
   with a doc comment, and to

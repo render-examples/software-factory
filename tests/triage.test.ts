@@ -12,7 +12,7 @@ vi.mock("../app/events/index.js", () => ({
 
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
-const { WORKING_LABEL } = await import("../app/phases/index.js");
+const { WORKING_LABEL } = await import("../app/runs/index.js");
 const { runTriage } = await import("../app/workflows/triage/index.js");
 type AgentRunner = import("../app/workflows/triage/agents.js").AgentRunner;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -80,7 +80,7 @@ class FakeGitHub {
 		return { ...comment };
 	}
 
-	/** Comments other than the status comment withPhase keeps. */
+	/** Comments other than the status comment withRun keeps. */
 	written(): IssueComment[] {
 		return this.comments.filter((c) => !parseMarker(c.body, "status"));
 	}
@@ -355,7 +355,7 @@ describe("triage task", () => {
 		expect(parseMarker(gh.written()[0]?.body ?? "", "spec")?.spec).toEqual(spec());
 	});
 
-	it("fails the phase when the spec is still invalid, posting no spec and closing the sandbox", async () => {
+	it("fails the stage when the spec is still invalid, posting no spec and closing the sandbox", async () => {
 		const { gh, sandbox, calls, deps } = setup({
 			triage: [{ output: decision({}) }],
 			"spec-writer": [{ output: draft(invalidSpec()) }, { output: draft(invalidSpec()) }],

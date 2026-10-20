@@ -57,7 +57,7 @@ describe("run coordination", () => {
 		runId: "trn-2",
 		repo: "acme/web",
 		subject: "issue#12",
-		phase: "triage",
+		stage: "triage",
 		actor: "alice",
 	};
 
@@ -78,7 +78,7 @@ describe("run coordination", () => {
 		const [sql, params] = pg.query.mock.calls[0] as [string, unknown[]];
 		expect(sql).toMatch(/insert into events/);
 		expect(sql).toContain("'run.claimed'");
-		expect(params).toEqual(["trn-root", "trn-2", "acme/web", "issue#12", JSON.stringify({ phase: "triage", actor: "alice" })]);
+		expect(params).toEqual(["trn-root", "trn-2", "acme/web", "issue#12", JSON.stringify({ stage: "triage", actor: "alice" })]);
 	});
 
 	it("checks the claim against the latest claim for its subject", async () => {

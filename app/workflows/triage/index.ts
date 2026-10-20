@@ -5,7 +5,7 @@ import { type RepoContext, requireRepo, TASKS } from "../../config/index.js";
 import { TriageInput } from "../../contracts/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { type GitHubClient, renderMarker } from "../../github/index.js";
-import { type PhaseOutcome, type PhaseResult, type RunControl, subjectName, withPhase } from "../../phases/index.js";
+import { type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
 import { openSandbox, type Sandbox, type SandboxRef } from "../../sandbox/index.js";
 import { type AgentRunner, triageAgents } from "./agents.js";
 import { draftSpec, publishSpec } from "./spec.js";
@@ -23,13 +23,13 @@ export interface TriageDeps {
  * Triage one issue: the triage agent reads the issue and the repository and decides to ask questions, draft
  * (or revise) the spec, or decline. Every GitHub write goes through the format helpers and carries a marker.
  */
-export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: TriageDeps = {}): Promise<PhaseOutcome> {
+export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: TriageDeps = {}): Promise<RunOutcome> {
 	const input = TriageInput.parse(raw);
 	const repo = requireRepo(input.repo, input.installationId);
 	const subject = { kind: "issue" as const, number: input.issue };
-	const phase = { repo, subject, phase: TASKS.triage, actor: input.actor, gh: deps.gh, runs: deps.runs };
+	const stage = { repo, subject, stage: TASKS.triage, actor: input.actor, gh: deps.gh, runs: deps.runs };
 
-	return withPhase(ctx, phase, async (run): Promise<PhaseResult> => {
+	return withRun(ctx, stage, async (run): Promise<RunResult> => {
 		const { gh } = run;
 		const [issue, comments, bot] = await Promise.all([gh.getIssue(input.issue), gh.listIssueComments(input.issue), gh.botLogin()]);
 		if (input.commentId !== undefined) {

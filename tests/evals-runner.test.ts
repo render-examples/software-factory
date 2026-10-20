@@ -45,7 +45,7 @@ const evalCase = (id: string, over: Partial<EvalCase> = {}): EvalCase =>
 	EvalCase.parse({
 		id,
 		description: "A case.",
-		phase: "triage",
+		stage: "triage",
 		issue: { title: "Refactor todo storage", body: "Move todos into a Map keyed by ID." },
 		expect: { decision: "draft", specMustMention: ["map"] },
 		...over,

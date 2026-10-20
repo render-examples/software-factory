@@ -1,7 +1,7 @@
 {
 	"id": "underspecified-search",
 	"description": "A vague request ('search') gets a few clarifying questions about what the maintainer wants, not a spec.",
-	"phase": "triage",
+	"stage": "triage",
 	"issue": {
 		"title": "Search",
 		"body": "It would be nice to be able to search.",
