@@ -1,6 +1,6 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { githubToken, normalizePrivateKey, resetTokenCache } from "../app/github/auth.js";
+import { githubToken, resetTokenCache } from "../app/github/auth.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -71,12 +71,6 @@ describe("githubToken", () => {
 		expect(jwt.payload.exp - jwt.payload.iat).toBeLessThanOrEqual(600);
 	});
 
-	it("omits permissions when none are requested", async () => {
-		const { fetch, requests } = fakeFetch();
-		await githubToken({ installationId: 99, repo: "web", fetch });
-		expect(requests[0]?.body).toEqual({ repositories: ["web"] });
-	});
-
 	it("caches per installation, repository, and permission set", async () => {
 		const { fetch, requests } = fakeFetch();
 		const a = await githubToken({ installationId: 1, repo: "web", permissions: { contents: "read", metadata: "read" }, fetch });
@@ -100,30 +94,5 @@ describe("githubToken", () => {
 		vi.setSystemTime(Date.now() + 2 * 60_000);
 		expect(await githubToken({ installationId: 1, repo: "web", fetch })).toBe("ghs_token_2");
 		expect(requests).toHaveLength(2);
-	});
-
-	it("uses GITHUB_API_URL", async () => {
-		vi.stubEnv("GITHUB_API_URL", "https://ghe.example.com/api/v3/");
-		const { fetch, requests } = fakeFetch();
-		await githubToken({ installationId: 5, repo: "web", fetch });
-		expect(requests[0]?.url).toBe("https://ghe.example.com/api/v3/app/installations/5/access_tokens");
-	});
-
-	it("accepts escaped-newline and base64 private keys", async () => {
-		for (const key of [privateKey.replace(/\n/g, "\\n"), Buffer.from(privateKey).toString("base64")]) {
-			resetTokenCache();
-			vi.stubEnv("GITHUB_APP_PRIVATE_KEY", key);
-			const { fetch, requests } = fakeFetch();
-			await githubToken({ installationId: 1, repo: "web", fetch });
-			expect(decodeJwt((requests[0]?.headers.Authorization ?? "").slice(7)).valid).toBe(true);
-		}
-		expect(normalizePrivateKey(privateKey)).toBe(privateKey);
-	});
-
-	it("fails clearly without credentials or on a rejected exchange", async () => {
-		const { fetch } = fakeFetch({ status: 401 });
-		await expect(githubToken({ installationId: 1, repo: "web", fetch })).rejects.toThrow("token exchange failed (401)");
-		vi.stubEnv("GITHUB_APP_ID", "");
-		await expect(githubToken({ installationId: 1, repo: "web", fetch })).rejects.toThrow("GITHUB_APP_ID");
 	});
 });

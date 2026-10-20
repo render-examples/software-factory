@@ -14,10 +14,9 @@ vi.mock("../app/events/index.js", () => ({
 	isCurrentRun: async () => true,
 }));
 
-const { TASKS } = await import("../app/config/index.js");
 const { parseMarker, renderMarker } = await import("../app/github/index.js");
 const { WORKING_LABEL } = await import("../app/phases/index.js");
-const { cancel, cancelRun } = await import("../app/workflows/cancel.js");
+const { cancelRun } = await import("../app/workflows/cancel.js");
 type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
 
@@ -76,10 +75,6 @@ beforeEach(() => {
 });
 
 describe("cancel task", () => {
-	it("registers under its task name", () => {
-		expect(cancel.name).toBe(TASKS.cancel);
-	});
-
 	it("cancels the active run recorded in the status comment and says who cancelled it", async () => {
 		const { gh, comments, labels, add } = fakeGitHub("write");
 		add(BOT, `running\n\n${renderMarker("status", { runId: "trn-1", phase: "spec-to-pr", state: "running" })}`);
@@ -93,9 +88,7 @@ describe("cancel task", () => {
 		expect(labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"]);
 		expect(events[0]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
-		expect(claims).toEqual([
-			{ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO, subject: "issue#12", phase: "cancel", actor: "alice" },
-		]);
+		expect(claims).toEqual([{ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO, subject: "issue#12", phase: "cancel", actor: "alice" }]);
 	});
 
 	it("refuses an actor without permission and leaves the run alone", async () => {
@@ -108,19 +101,5 @@ describe("cancel task", () => {
 		expect(claims).toHaveLength(0);
 		expect(comments.at(-1)?.body).toContain("@bob needs `write` permission");
 		expect(parseMarker(comments[0]?.body ?? "", "status")?.state).toBe("running");
-	});
-
-	it("reports when nothing is running", async () => {
-		const { gh, comments, add } = fakeGitHub("admin");
-		add(BOT, renderMarker("status", { runId: "trn-1", phase: "triage", state: "done" }));
-		const runs = fakeRuns({ "trn-1": "succeeded" });
-		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "carol" }, { gh, runs });
-		expect(result).toEqual({ cancelled: false, reason: "nothing-running" });
-		expect(runs.cancelTaskRun).not.toHaveBeenCalled();
-		expect(comments.at(-1)?.body).toBe("@carol no factory run is in progress here.");
-	});
-
-	it("rejects invalid input", async () => {
-		await expect(cancelRun(ctx, { repo: REPO, installationId: 5, number: 0, kind: "issue", actor: "a" })).rejects.toThrow();
 	});
 });

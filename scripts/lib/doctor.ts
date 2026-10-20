@@ -1,5 +1,5 @@
 /** doctor: read-only checks of one or both services' environment, the GitHub App, Postgres, and Workflows tasks. */
-import pg from "../../node_modules/@types/pg/index.js";
+import pg from "pg";
 import { TASKS } from "../../app/config/index.js";
 import { PROVIDER_KEY_ENV } from "../../app/runner/keys.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";

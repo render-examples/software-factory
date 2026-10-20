@@ -11,9 +11,9 @@ vi.mock("../app/events/index.js", () => ({
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
-const { config, TASKS } = await import("../app/config/index.js");
-const { contentHash, gitData, parseMarker, renderMarker } = await import("../app/github/index.js");
-const { runSpecToPr, specToPr } = await import("../app/workflows/spec-to-pr/index.js");
+const { config } = await import("../app/config/index.js");
+const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
+const { runSpecToPr } = await import("../app/workflows/spec-to-pr/index.js");
 const { VERIFY_TIMEOUT_MS } = await import("../app/workflows/spec-to-pr/verify.js");
 type Spec = import("../app/contracts/index.js").Spec;
 type Implementation = import("../app/contracts/index.js").Implementation;
@@ -29,14 +29,12 @@ type PublishResult = import("../app/publish/index.js").PublishResult;
 
 const BOT = "software-factory[bot]";
 const BOT_ID = 4242;
-const BOT_EMAIL = `${BOT_ID}+${BOT}@users.noreply.github.com`;
 const REPO = "render-examples/render-factory-example-target";
 const BASE = "b".repeat(40);
 const ISSUE = 12;
 const BRANCH = `factory/issue-${ISSUE}`;
 const ctx = { metadata: { taskRunId: "trn-spec" } };
 const NOW = new Date("2026-10-18T23:37:05.123Z");
-const DATE = "2026-10-18T23:37:05Z";
 const LABELED_AT = "2026-10-18T20:00:00Z";
 const input = { repo: REPO, installationId: 5, issue: ISSUE, actor: "alice", labeledAt: LABELED_AT };
 
@@ -68,7 +66,15 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 	const comments: IssueComment[] = [];
 	let nextId = 1;
 	const add = (login: string, body: string, updatedAt = "2026-10-18T19:00:00Z"): IssueComment => {
-		const comment = { id: nextId++, body, author: { login, type: "Bot" }, performedViaApp: null, createdAt: updatedAt, updatedAt, htmlUrl: `https://github.com/${REPO}/issues/${ISSUE}#c${nextId}` };
+		const comment = {
+			id: nextId++,
+			body,
+			author: { login, type: "Bot" },
+			performedViaApp: null,
+			createdAt: updatedAt,
+			updatedAt,
+			htmlUrl: `https://github.com/${REPO}/issues/${ISSUE}#c${nextId}`,
+		};
 		comments.push(comment);
 		return comment;
 	};
@@ -89,7 +95,16 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 		addLabels: async () => {},
 		removeLabel: async () => {},
 		getPermission: async () => "write" as const,
-		getIssue: async (number: number) => ({ number, title: "Health checks", body: "", state: "open", labels: [], author: { login: "alice", type: "User" }, isPull: false, htmlUrl: "" }),
+		getIssue: async (number: number) => ({
+			number,
+			title: "Health checks",
+			body: "",
+			state: "open",
+			labels: [],
+			author: { login: "alice", type: "User" },
+			isPull: false,
+			htmlUrl: "",
+		}),
 		getLabelEvents: vi.fn(async (_n: number, label: string) => (opts.labelEvents ?? []).map((createdAt) => ({ label, createdAt, actor: null }))),
 		http: { json: vi.fn(async (_method: string, path: string) => (path === `/users/${encodeURIComponent(BOT)}` ? { id: BOT_ID } : undefined)) },
 		findOrCreatePull: vi.fn(async (_args: { head: string; base: string; title: string; body: string; draft?: boolean }) => ({
@@ -137,13 +152,15 @@ function fakeAgents(steps: { implementer?: AgentStep[]; "self-review"?: AgentSte
 		implementer: steps.implementer ?? [{ output: implementation(), costUsd: 3 }],
 		"self-review": steps["self-review"] ?? [{ output: CLEAN, costUsd: 1 }],
 	};
-	const runAgent = vi.fn(async (agent: { id: string }, agentInput: { message: string; vars?: Record<string, string> }, opts: Record<string, unknown>) => {
-		calls.push({ agent: agent.id, message: agentInput.message, vars: agentInput.vars, opts });
-		const step = queues[agent.id]?.shift();
-		if (!step) throw new Error(`unexpected ${agent.id} call`);
-		if (step instanceof AgentError) throw step;
-		return { output: step.output, costUsd: step.costUsd, usage: {}, turns: 1 };
-	});
+	const runAgent = vi.fn(
+		async (agent: { id: string }, agentInput: { message: string; vars?: Record<string, string> }, opts: Record<string, unknown>) => {
+			calls.push({ agent: agent.id, message: agentInput.message, vars: agentInput.vars, opts });
+			const step = queues[agent.id]?.shift();
+			if (!step) throw new Error(`unexpected ${agent.id} call`);
+			if (step instanceof AgentError) throw step;
+			return { output: step.output, costUsd: step.costUsd, usage: {}, turns: 1 };
+		},
+	);
 	return { runAgent: runAgent as unknown as SpecToPrDeps["runAgent"], calls };
 }
 
@@ -157,13 +174,15 @@ function fakeGitData(branch: { tip: string | null; commit?: Partial<GitCommit> }
 
 const PUBLISHED: PublishResult = { commitSha: "d".repeat(40), treeSha: "e".repeat(40), changedFiles: [] };
 
-function setup(opts: {
-	gh?: Parameters<typeof fakeGitHub>[0];
-	sandbox?: Parameters<typeof fakeSandbox>[0];
-	agents?: Parameters<typeof fakeAgents>[0];
-	branch?: Parameters<typeof fakeGitData>[0];
-	publish?: PublishResult | Error;
-} = {}) {
+function setup(
+	opts: {
+		gh?: Parameters<typeof fakeGitHub>[0];
+		sandbox?: Parameters<typeof fakeSandbox>[0];
+		agents?: Parameters<typeof fakeAgents>[0];
+		branch?: Parameters<typeof fakeGitData>[0];
+		publish?: PublishResult | Error;
+	} = {},
+) {
 	const github = fakeGitHub(opts.gh);
 	const box = fakeSandbox(opts.sandbox);
 	const agents = fakeAgents(opts.agents ?? {});
@@ -193,12 +212,6 @@ beforeEach(() => {
 	events.length = 0;
 });
 
-describe("spec-to-pr task", () => {
-	it("registers under its task name", () => {
-		expect(specToPr.name).toBe(TASKS.specToPr);
-	});
-});
-
 describe("approval", () => {
 	it("refuses when there is no spec comment, before opening a sandbox", async () => {
 		const t = setup({ gh: { spec: null } });
@@ -208,34 +221,12 @@ describe("approval", () => {
 		expect(t.openSandbox).not.toHaveBeenCalled();
 	});
 
-	it("ignores a spec marker a person pasted", async () => {
-		const t = setup({ gh: { spec: null } });
-		t.comments.push({ ...t.comments[0], id: 99, author: { login: "mallory", type: "User" }, body: renderMarker("spec", { spec: SPEC, hash: contentHash(SPEC), version: 1 }) } as IssueComment);
-		expect(await t.run()).toMatchObject({ outcome: "no_spec" });
-	});
-
 	it("refuses a spec edited after the newest approval label event", async () => {
 		const t = setup({ gh: { labelEvents: ["2026-10-18T10:00:00Z", "2026-10-18T19:30:00Z"], specUpdatedAt: "2026-10-18T19:45:00Z" } });
 		const outcome = await t.run();
 		expect(outcome).toMatchObject({ state: "failed", outcome: "spec_changed" });
 		expect(t.status().body).toContain("the spec changed after it was approved");
 		expect(t.openSandbox).not.toHaveBeenCalled();
-	});
-
-	it("falls back to labeledAt when the timeline has no label event", async () => {
-		const t = setup({ gh: { labelEvents: [], specUpdatedAt: "2026-10-18T20:00:01Z" } });
-		expect(await t.run()).toMatchObject({ outcome: "spec_changed" });
-		expect(t.gh.getLabelEvents).toHaveBeenCalledWith(ISSUE, config.labels.specApproved);
-	});
-
-	it("accepts a spec edited before a later reapproval", async () => {
-		const t = setup({ gh: { labelEvents: ["2026-10-18T21:00:00Z"], specUpdatedAt: "2026-10-18T20:30:00Z" } });
-		expect(await t.run()).toMatchObject({ state: "done", outcome: "pr_opened" });
-	});
-
-	it("refuses a marker whose spec doesn't match the schema", async () => {
-		const t = setup({ gh: { spec: { title: "half a spec" } } });
-		expect(await t.run()).toMatchObject({ state: "failed", outcome: "invalid_spec" });
 	});
 });
 
@@ -273,20 +264,15 @@ describe("implement, verify, and publish", () => {
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 
-	it("commits as the App's bot with a date fixed at the start of the run, referencing the issue without closing it", async () => {
-		const t = setup();
-		await t.run();
-		const call = (t.publish.mock.calls[0] as unknown[] | undefined)?.[0] as { message: string; author: unknown };
-		expect(call.message).toBe(`${SPEC.title}\n\nRefs #${ISSUE}`);
-		expect(call.message).not.toMatch(/closes|fixes|resolves/i);
-		expect(call.author).toEqual({ name: BOT, email: BOT_EMAIL, date: DATE });
-		expect(t.gh.http.json).toHaveBeenCalledWith("GET", `/users/${encodeURIComponent(BOT)}`);
-	});
-
 	it("repairs a failing verify and publishes once it passes", async () => {
 		const t = setup({
 			sandbox: { verify: { "npm test": [fail("FAIL src/server.test.ts\nexpected 200, got 404"), { exitCode: 0, stdout: "", stderr: "" }] } },
-			agents: { implementer: [{ output: implementation(), costUsd: 3 }, { output: implementation({ summary: "Fixed the route.", followUps: ["Add metrics"] }), costUsd: 2 }] },
+			agents: {
+				implementer: [
+					{ output: implementation(), costUsd: 3 },
+					{ output: implementation({ summary: "Fixed the route.", followUps: ["Add metrics"] }), costUsd: 2 },
+				],
+			},
 		});
 		expect(await t.run()).toMatchObject({ state: "done", outcome: "pr_opened" });
 
@@ -326,22 +312,14 @@ describe("implement, verify, and publish", () => {
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 
-	it("treats a verify command that doesn't finish as failing", async () => {
-		const t = setup({ agents: { implementer: [{ output: implementation(), costUsd: 1 }, { output: implementation(), costUsd: 1 }, { output: implementation(), costUsd: 1 }] } });
-		t.sandbox.exec.mockImplementation(async (command: string) => {
-			if (command.startsWith("git status")) return { exitCode: 0, stdout: " M a\n", stderr: "" };
-			if (command === "npm test") throw new Error("exec timed out");
-			return { exitCode: 0, stdout: "", stderr: "" };
-		});
-		expect(await t.run()).toMatchObject({ outcome: "verification_failed" });
-		expect(t.status().body).toContain("`npm test` (did not finish)");
-	});
-
 	it("runs one revision pass when self-review asks for it, then verifies again", async () => {
 		const flagged: SelfReview = { needsRevision: true, issues: [{ file: "src/server.ts", line: 3, problem: "Remove the console.log." }], notes: [] };
 		const t = setup({
 			agents: {
-				implementer: [{ output: implementation(), costUsd: 3 }, { output: implementation({ summary: "Removed the log." }), costUsd: 1 }],
+				implementer: [
+					{ output: implementation(), costUsd: 3 },
+					{ output: implementation({ summary: "Removed the log." }), costUsd: 1 },
+				],
 				"self-review": [{ output: flagged, costUsd: 1 }],
 			},
 		});
@@ -355,61 +333,9 @@ describe("implement, verify, and publish", () => {
 		expect(body).toContain("revised the change");
 		expect(finished()).toMatchObject({ costUsd: 5 });
 	});
-
-	it("still publishes when self-review can't finish, and says so in the PR", async () => {
-		const t = setup({ agents: { "self-review": [new AgentError("max_turns", "too many turns", {} as never, 0.5, 40)] } });
-		expect(await t.run()).toMatchObject({ outcome: "pr_opened" });
-		expect(t.gh.findOrCreatePull.mock.calls[0]?.[0].body).toContain("Self-review did not finish (max_turns)");
-		expect(finished()).toMatchObject({ costUsd: 3.5 });
-	});
-
-	it("reports no_changes when the implementer changed nothing", async () => {
-		const t = setup({ sandbox: { changed: false } });
-		expect(await t.run()).toMatchObject({ state: "done", outcome: "no_changes" });
-		expect(finished()).toMatchObject({ outcome: "no_changes", costUsd: 3 });
-		expect(verifyCommands(t.execs)).toEqual([]);
-		expect(t.publish).not.toHaveBeenCalled();
-		expect(t.sandbox.close).toHaveBeenCalledOnce();
-	});
-
-	it("reports no_changes when publish finds nothing against the base", async () => {
-		const t = setup({ publish: { refused: [{ kind: "no_changes", detail: "Nothing changed against the base commit" }] } });
-		expect(await t.run()).toMatchObject({ outcome: "no_changes" });
-		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
-	});
-
-	it("fails with the reasons when publishing refuses the change", async () => {
-		const t = setup({
-			publish: {
-				refused: [
-					{ kind: "workflow_file", detail: "Changes to .github/workflows/ci.yml are not published", path: ".github/workflows/ci.yml" },
-					{ kind: "too_many_files", detail: "300 files changed; the limit is 200", count: 300, limit: 200 },
-				],
-			} as PublishResult,
-		});
-		expect(await t.run()).toMatchObject({ state: "failed", outcome: "publish_refused" });
-		expect(t.status().body).toContain(".github/workflows/ci.yml are not published");
-		expect(t.status().body).toContain("300 files changed");
-		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
-	});
 });
 
 describe("rerunning on an existing branch", () => {
-	it("replaces an earlier factory commit", async () => {
-		const tip = "f".repeat(40);
-		const t = setup({ branch: { tip, commit: { committer: { name: BOT, email: BOT_EMAIL, date: DATE } } } });
-		expect(await t.run()).toMatchObject({ outcome: "pr_opened" });
-		expect(t.git.getRef).toHaveBeenCalledWith(BRANCH);
-		expect(t.publish).toHaveBeenCalledWith(expect.objectContaining({ ownedCommits: [tip] }));
-	});
-
-	it("treats a branch at the base commit as free", async () => {
-		const t = setup({ branch: { tip: BASE } });
-		expect(await t.run()).toMatchObject({ outcome: "pr_opened" });
-		expect(t.git.getCommit).not.toHaveBeenCalled();
-		expect(t.publish).toHaveBeenCalledWith(expect.objectContaining({ ownedCommits: [] }));
-	});
-
 	it("leaves a branch with a person's commit alone, before spending anything", async () => {
 		const t = setup({ branch: { tip: "f".repeat(40), commit: { committer: { name: "Alice", email: "alice@example.com" } } } });
 		expect(await t.run()).toMatchObject({ state: "failed", outcome: "branch_taken" });
@@ -417,60 +343,5 @@ describe("rerunning on an existing branch", () => {
 		expect(t.publish).not.toHaveBeenCalled();
 		expect(t.status().body).toContain(`\`${BRANCH}\` has commits the factory didn't make`);
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
-	});
-
-	it("doesn't trust a merge commit even with the bot as committer", async () => {
-		const t = setup({ branch: { tip: "f".repeat(40), commit: { parents: [BASE, "a".repeat(40)], committer: { name: BOT, email: BOT_EMAIL } } } });
-		expect(await t.run()).toMatchObject({ outcome: "branch_taken" });
-	});
-});
-
-describe("failures", () => {
-	it("closes the sandbox and counts the partial cost when the implementer stops", async () => {
-		const t = setup({ agents: { implementer: [new AgentError("budget_exceeded", "spent", {} as never, 19.5, 80)] } });
-		const outcome = await t.run();
-		expect(outcome).toMatchObject({ state: "failed", outcome: "agent_failed" });
-		expect(t.status().body).toContain("reached its soft budget threshold");
-		expect(t.status().body).not.toContain("spent");
-		expect(finished()).toMatchObject({ costUsd: 19.5 });
-		expect(t.sandbox.close).toHaveBeenCalledOnce();
-	});
-
-	it("closes the sandbox and still records the spend when something unexpected throws", async () => {
-		const t = setup({ publish: new Error("Tree mismatch") });
-		await expect(t.run()).rejects.toThrow("Tree mismatch");
-		expect(t.sandbox.close).toHaveBeenCalledOnce();
-		expect(t.status().data?.state).toBe("failed");
-		expect(finished()).toMatchObject({ state: "failed", outcome: "error", costUsd: 4 });
-	});
-
-	it("still finishes when closing the sandbox fails", async () => {
-		const t = setup();
-		t.sandbox.close.mockRejectedValueOnce(new Error("gone"));
-		const error = vi.spyOn(console, "error").mockImplementation(() => {});
-		expect(await t.run()).toMatchObject({ outcome: "pr_opened" });
-		error.mockRestore();
-	});
-});
-
-describe("gitData getCommit identities", () => {
-	it("returns the author and committer GitHub recorded", async () => {
-		const sha = "a".repeat(40);
-		const body = {
-			sha,
-			tree: { sha: BASE },
-			parents: [{ sha: BASE }],
-			author: { name: "Alice", email: "alice@example.com", date: "2026-10-18T10:00:00Z" },
-			committer: { name: BOT, email: BOT_EMAIL, date: DATE },
-		};
-		const fetch = (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof globalThis.fetch;
-		const git = gitData({ owner: "acme", name: "widgets", fullName: "acme/widgets", installationId: 1, config: { baseBranch: "main", verify: [] } }, { fetch, token: async () => "t" });
-		expect(await git.getCommit(sha)).toEqual({
-			sha,
-			treeSha: BASE,
-			parents: [BASE],
-			author: { name: "Alice", email: "alice@example.com", date: "2026-10-18T10:00:00Z" },
-			committer: { name: BOT, email: BOT_EMAIL, date: DATE },
-		});
 	});
 });

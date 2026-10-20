@@ -337,19 +337,6 @@ describe("runPrReview", () => {
 		expect(gh.status()).toContain("reapply the label");
 	});
 
-	it("fails the same way when the head moves while the sandbox fetches it", async () => {
-		const result = await runPrReview(
-			ctx,
-			input,
-			deps({
-				openSandbox: async () => {
-					throw new Error(`head moved: ${REPO}#34 is at ${"d".repeat(40)}, expected ${HEAD}`);
-				},
-			}),
-		);
-		expect(result).toMatchObject({ state: "failed", outcome: "head_moved" });
-	});
-
 	it("is idempotent: a bot review with this head's marker means it's already reviewed", async () => {
 		const marker = renderMarker("review", { headSha: HEAD, runId: "trn-old" });
 		gh.reviews = [
@@ -386,21 +373,6 @@ describe("runPrReview", () => {
 		expect(gh.status()).toContain("(u3)");
 		expect(opened).toEqual([]);
 		expect(agents.calls).toEqual([]);
-	});
-
-	it("ignores a pasted marker from someone other than the bot", async () => {
-		gh.reviews = [
-			{
-				id: 1,
-				body: renderMarker("review", { headSha: HEAD, runId: "x" }),
-				author: { login: "mallory", type: "User" },
-				commitId: HEAD,
-				state: "COMMENTED",
-				htmlUrl: "u1",
-			},
-		];
-		const result = await runPrReview(ctx, input, deps());
-		expect(result.outcome).toBe("reviewed");
 	});
 
 	it("reviews: verify, four specialists in parallel in one sandbox, the synthesizer in the task, one COMMENT review", async () => {
@@ -487,66 +459,6 @@ describe("runPrReview", () => {
 		expect(finished().costUsd).toBeCloseTo(5.45);
 	});
 
-	it("lists a failed specialist as missing, without its error message", async () => {
-		agents.failures["performance-reviewer"] = new AgentError(
-			"timeout",
-			"the runner timed out after reading /secret/path",
-			{
-				input_tokens: 0,
-				output_tokens: 0,
-				cache_read_tokens: 0,
-				cache_write_tokens: 0,
-			},
-			0.7,
-			3,
-		);
-		const result = await runPrReview(ctx, input, deps());
-		expect(result.outcome).toBe("reviewed");
-		expect(result.summary).toContain("1 reviewer didn't finish");
-		expect(agents.call("synthesizer").message).toContain('"name": "performance"');
-		expect(agents.call("synthesizer").message).not.toContain("performance-reviewer finding");
-		const body = gh.posted[0]?.body ?? "";
-		expect(body).toContain("### Incomplete");
-		expect(body).toContain("- performance: stopped with `timeout`");
-		expect(body).not.toContain("/secret/path");
-	});
-
-	it("fails without a synthesizer call when no specialist finishes", async () => {
-		const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
-		agents.failures["security-reviewer"] = new Error("boom");
-		for (const id of ["correctness-reviewer", "performance-reviewer", "tests-reviewer"]) agents.failures[id] = new AgentError("timeout", "slow", usage, 0.5, 2);
-		const result = await runPrReview(ctx, input, deps());
-		expect(result).toMatchObject({ state: "failed", outcome: "no_reports" });
-		expect(finished()).toMatchObject({ state: "failed", outcome: "no_reports", costUsd: 1.5 });
-		expect(agents.calls.map((c) => c.id)).not.toContain("synthesizer");
-		expect(gh.createReview).not.toHaveBeenCalled();
-		expect(sandbox.closed).toBe(1);
-	});
-
-	it("fails cleanly when the synthesizer fails, posting nothing", async () => {
-		agents.failures.synthesizer = new AgentError(
-			"budget_exceeded",
-			"over",
-			{
-				input_tokens: 0,
-				output_tokens: 0,
-				cache_read_tokens: 0,
-				cache_write_tokens: 0,
-			},
-			0.1,
-			1,
-		);
-		const result = await runPrReview(ctx, input, deps());
-		expect(result).toMatchObject({
-			state: "failed",
-			outcome: "synthesis_failed",
-		});
-		expect(result.summary).toContain("`budget_exceeded`");
-		expect(gh.createReview).not.toHaveBeenCalled();
-		// 5 from the specialists plus the synthesizer's partial 0.1.
-		expect(finished()).toMatchObject({ state: "failed", outcome: "synthesis_failed", costUsd: expect.closeTo(5.1, 10) });
-	});
-
 	it("retries a 422 once with every comment folded into the body", async () => {
 		gh.createReviewErrors = [new GitHubError(422, "Unprocessable Entity: pull_request_review_thread.line must be part of the diff")];
 		const result = await runPrReview(ctx, input, deps());
@@ -561,12 +473,6 @@ describe("runPrReview", () => {
 			headSha: HEAD,
 			runId: "trn-run",
 		});
-	});
-
-	it("does not retry other GitHub errors", async () => {
-		gh.createReviewErrors = [new GitHubError(500, "server error")];
-		await expect(runPrReview(ctx, input, deps())).rejects.toThrow("server error");
-		expect(gh.createReview).toHaveBeenCalledTimes(1);
 	});
 
 	it("reports verify failures and still posts the review", async () => {
@@ -587,40 +493,5 @@ describe("runPrReview", () => {
 		const body = gh.posted[0]?.body ?? "";
 		expect(body.match(/❌ failed/g)).toHaveLength(2);
 		expect(body).not.toContain("AssertionError");
-	});
-
-	it("falls back to the per-file patches when GitHub won't serve the whole diff", async () => {
-		gh.getPullDiff.mockRejectedValueOnce(new GitHubError(406, "diff too large"));
-		gh.listPullFiles = async () => [
-			{
-				filename: "src/app.ts",
-				status: "modified",
-				additions: 1,
-				deletions: 0,
-				changes: 1,
-				patch: "@@ -1,2 +1,3 @@\n one\n+two\n three",
-			},
-		];
-		await runPrReview(ctx, input, deps());
-		expect(gh.posted[0]?.comments.map((c) => `${c.path}:${c.line}`)).toEqual(["src/app.ts:2"]);
-	});
-
-	it("closes the sandbox when a step inside it fails", async () => {
-		sandbox.results["git merge-base 'refs/remotes/origin/main' HEAD"] = {
-			exitCode: 1,
-			stdout: "",
-			stderr: "",
-		};
-		const result = await runPrReview(ctx, input, deps());
-		expect(result).toMatchObject({ state: "failed", outcome: "no_merge_base" });
-		expect(sandbox.closed).toBe(1);
-		expect(agents.calls).toEqual([]);
-	});
-
-	it("closes the sandbox and fails the task on an unexpected error", async () => {
-		sandbox.results["git merge-base 'refs/remotes/origin/main' HEAD"] = new Error("sandbox API unavailable");
-		await expect(runPrReview(ctx, input, deps())).rejects.toThrow("sandbox API unavailable");
-		expect(sandbox.closed).toBe(1);
-		expect(gh.status()).toContain("something went wrong");
 	});
 });

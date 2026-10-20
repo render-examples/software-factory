@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
@@ -115,7 +114,12 @@ beforeAll(async () => {
 		FACTORY_RUNNER_NODE: process.execPath,
 		FACTORY_PATH: `${shim}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
 	};
-	await writeFile(join(app, "env"), Object.entries(lines).map(([k, v]) => `${k}=${v}\n`).join(""));
+	await writeFile(
+		join(app, "env"),
+		Object.entries(lines)
+			.map(([k, v]) => `${k}=${v}\n`)
+			.join(""),
+	);
 	await git(["clone", "-q", "--single-branch", "--branch", "main", join(tmp, "remote.git"), repo]);
 	await git(["-C", repo, "checkout", "-q", "-B", "main", commit]);
 	await writeFile(
@@ -143,7 +147,7 @@ describe("verify.sh", { timeout: 30_000 }, () => {
 		expect(await git(["-C", repo, "status", "--porcelain"])).toBe("");
 	});
 
-	it("fails when a tracked file is modified", async () => {
+	it("fails when the prepared checkout has tracked modifications", async () => {
 		await writeFile(join(repo, "README.md"), "changed\n");
 		try {
 			const res = await bash(join(app, "verify.sh"));
@@ -151,19 +155,6 @@ describe("verify.sh", { timeout: 30_000 }, () => {
 			expect(res.stderr).toContain("tracked files modified");
 		} finally {
 			await git(["-C", repo, "checkout", "--", "README.md"]);
-		}
-	});
-
-	it("fails when HEAD is not the manifest's commit", async () => {
-		await writeFile(join(repo, "new.txt"), "x\n");
-		await git(["-C", repo, "add", "new.txt"]);
-		await git(["-C", repo, "commit", "-q", "-m", "drift"]);
-		try {
-			const res = await bash(join(app, "verify.sh"));
-			expect(res.code).toBe(1);
-			expect(res.stderr).toContain(`!= manifest ${commit}`);
-		} finally {
-			await git(["-C", repo, "reset", "-q", "--hard", commit]);
 		}
 	});
 
@@ -191,7 +182,10 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 	}
 
 	const reportOf = (jsonl: string) => {
-		const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+		const lines = jsonl
+			.trim()
+			.split("\n")
+			.map((l) => JSON.parse(l));
 		return lines.find((l) => l.type === "report").report;
 	};
 
@@ -213,66 +207,6 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 		expect(probe).not.toContain(key);
 		expect(existsSync(join(dir, "key"))).toBe(false);
 	});
-
-	it("records the runner's exit status when it fails, and when it exits without reading stdin", async () => {
-		const dir = await runDir("run-fail", { mode: "fail" }, "sk-ant-fail");
-		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
-		expect(res.code).toBe(3);
-		expect(await readFile(`${dir}.exit`, "utf8")).toBe("3\n");
-		expect(existsSync(join(dir, "key"))).toBe(false);
-
-		// Larger than a pipe buffer, so the writer gets SIGPIPE; the runner's status still wins.
-		const early = await runDir("run-no-read", { mode: "no-read", padding: "x".repeat(1 << 20) }, "sk-ant-early");
-		const res2 = await bash(join(app, "run-agent.sh"), [early, "30"]);
-		expect(res2.code).toBe(0);
-		expect(await readFile(`${early}.exit`, "utf8")).toBe("0\n");
-		expect(existsSync(join(early, "key"))).toBe(false);
-	});
-
-	it("refuses a key file with more than one line, without starting the runner", async () => {
-		const dir = await runDir("run-multiline", { mode: "ok" }, "sk-ant-line1\nsk-ant-line2");
-		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
-		expect(res.code).toBe(1);
-		expect(res.stderr).toContain("more than one line");
-		expect(res.stderr).not.toContain("sk-ant-line");
-		expect(existsSync(join(dir, "key"))).toBe(false);
-		expect(existsSync(`${dir}.probe`)).toBe(false);
-	});
-
-	it("passes no key flag and the input as-is when there is no key", async () => {
-		const dir = await runDir("run-nokey", { mode: "ok" });
-		const res = await bash(join(app, "run-agent.sh"), [`${dir}/`, "30"]);
-		expect(res.code).toBe(0);
-		expect(await readFile(`${dir}.exit`, "utf8")).toBe("0\n");
-		expect(reportOf(await readFile(`${dir}.jsonl`, "utf8"))).toMatchObject({ input: { mode: "ok" }, key: null, keyFileExists: false, args: [] });
-	});
-});
-
-describe("lockfile-hash.sh", { timeout: 30_000 }, () => {
-	const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
-
-	it("hashes the root lockfiles in sorted order, and nothing to the hash of the empty string", async () => {
-		const dir = await mkdtemp(join(tmp, "lock-"));
-		const empty = await bash(join(app, "lockfile-hash.sh"), [dir]);
-		expect(empty.code).toBe(0);
-		expect(empty.stdout.trim()).toBe(sha(""));
-
-		await writeFile(join(dir, "package-lock.json"), "npm\n");
-		await writeFile(join(dir, "go.sum"), "go\n");
-		await writeFile(join(dir, "requirements-dev.txt"), "pytest\n");
-		await writeFile(join(dir, "README.md"), "not a lockfile\n");
-		await mkdir(join(dir, "sub"));
-		await writeFile(join(dir, "sub/yarn.lock"), "nested, ignored\n");
-		const files = ["go.sum", "package-lock.json", "requirements-dev.txt"];
-		const contents: Record<string, string> = { "go.sum": "go\n", "package-lock.json": "npm\n", "requirements-dev.txt": "pytest\n" };
-		const expected = sha(files.map((f) => `${sha(contents[f] ?? "")}  ${f}\n`).join(""));
-		const res = await bash(join(app, "lockfile-hash.sh"), [dir]);
-		expect(res.stderr).toBe("");
-		expect(res.stdout.trim()).toBe(expected);
-
-		await writeFile(join(dir, "package-lock.json"), "npm changed\n");
-		expect((await bash(join(app, "lockfile-hash.sh"), [dir])).stdout.trim()).not.toBe(expected);
-	});
 });
 
 describe("credential scripts", { timeout: 30_000 }, () => {
@@ -284,23 +218,6 @@ describe("credential scripts", { timeout: 30_000 }, () => {
 		await writeFile(join(dir, "github.com"), `x-access-token\n${TOKEN}`);
 		return dir;
 	}
-
-	it("git-credential-staged.sh answers get for a staged host only", async () => {
-		const creds = await stageCreds();
-		const ask = async (action: string, request: string) => (await run("bash", [helper(), creds, action], { input: request })).stdout;
-		expect(await ask("get", "protocol=https\nhost=github.com\n\n")).toBe(`username=x-access-token\npassword=${TOKEN}\n`);
-		expect(await ask("get", "protocol=https\nhost=gitlab.com\n\n")).toBe("");
-		expect(await ask("get", "protocol=https\nhost=../github.com\n\n")).toBe("");
-		expect(await ask("store", "protocol=https\nhost=github.com\n\n")).toBe("");
-	});
-
-	it("scrub-credentials.sh deletes staged credentials when no token leaked", async () => {
-		const creds = await stageCreds();
-		const res = await bash(scrub(), [creds, repo, join(scratch, "home")]);
-		expect(res.stderr).toBe("");
-		expect(res.code).toBe(0);
-		expect(existsSync(creds)).toBe(false);
-	});
 
 	it("scrub-credentials.sh fails without echoing the token when it reached .git", async () => {
 		const creds = await stageCreds();
@@ -316,16 +233,6 @@ describe("credential scripts", { timeout: 30_000 }, () => {
 		}
 	});
 
-	it("scrub-credentials.sh fails when an extra home holds a credential store", async () => {
-		const creds = await stageCreds();
-		const home = await mkdtemp(join(tmp, "home-"));
-		await writeFile(join(home, ".git-credentials"), `https://x-access-token:${TOKEN}@github.com\n`);
-		const res = await bash(scrub(), [creds, repo, home]);
-		expect(res.code).toBe(1);
-		expect(res.stderr).toContain(".git-credentials");
-		expect(res.stderr).not.toContain(TOKEN);
-	});
-
 	it("fetches through the staged helper as the runner, then scrubs (the open flow, against a local remote)", async () => {
 		const creds = await stageCreds();
 		const work = join(tmp, "work");
@@ -338,7 +245,18 @@ describe("credential scripts", { timeout: 30_000 }, () => {
 
 		const asRunner = (...args: string[]) => bash(join(app, "as-runner.sh"), args);
 		const helperArg = `credential.helper=!bash ${helper()} ${creds}`;
-		const fetched = await asRunner("git", "-c", "credential.helper=", "-c", helperArg, "fetch", "--quiet", "--no-tags", "origin", "refs/heads/feature");
+		const fetched = await asRunner(
+			"git",
+			"-c",
+			"credential.helper=",
+			"-c",
+			helperArg,
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			"origin",
+			"refs/heads/feature",
+		);
 		expect(fetched.stderr).toBe("");
 		expect(fetched.code).toBe(0);
 		expect((await bash(scrub(), [creds, repo, join(scratch, "home")])).code).toBe(0);

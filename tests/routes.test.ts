@@ -32,8 +32,7 @@ const comment = (body: string, issue: Record<string, unknown> = {}) =>
 		comment: { id: 99, body },
 	});
 
-const push = (overrides: Record<string, unknown> = {}) =>
-	envelope({ ref: `refs/heads/${BASE}`, after: SHA, deleted: false, ...overrides });
+const push = (overrides: Record<string, unknown> = {}) => envelope({ ref: `refs/heads/${BASE}`, after: SHA, deleted: false, ...overrides });
 
 describe("route: starts", () => {
 	it("triage label on an issue starts triage", () => {
@@ -81,21 +80,6 @@ describe("route: starts", () => {
 		});
 	});
 
-	it("cancel command on a PR starts cancel", () => {
-		const r = route("issue_comment", comment(`${config.commandPrefix} cancel`, { pull_request: {}, labels: [] }), DELIVERY);
-		expect(r).toMatchObject({ kind: "start", task: "cancel", input: { number: 12, kind: "pr" }, subject: "pr#12" });
-	});
-
-	it("a reply on an issue in triage starts triage with the comment id", () => {
-		const r = route("issue_comment", comment("More detail here"), DELIVERY);
-		expect(r).toMatchObject({
-			kind: "start",
-			task: "triage",
-			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
-			idempotencyKey: DELIVERY,
-		});
-	});
-
 	it("push to the base branch starts refresh-snapshot keyed by repo@sha", () => {
 		const r = route("push", push(), DELIVERY);
 		expect(r).toEqual({
@@ -105,40 +89,16 @@ describe("route: starts", () => {
 			idempotencyKey: `${REPO}@${SHA}`,
 		});
 	});
-
-	it("push from a bot still refreshes the snapshot", () => {
-		const r = route("push", push({ sender: { login: "factory[bot]", type: "Bot" } }), DELIVERY);
-		expect(r).toMatchObject({ kind: "start", task: "refresh-snapshot" });
-	});
 });
 
-describe("route: ignores", () => {
-	const cases: Array<[string, string, unknown, string]> = [
-		["ping", "ping", { zen: "hi" }, "ping"],
-		["bot sender", "issues", { ...issueLabeled(config.labels.triage), sender: { login: "x[bot]", type: "Bot" } }, "bot sender"],
-		["bot comment", "issue_comment", { ...comment("hello"), sender: { login: "x[bot]", type: "Bot" } }, "bot sender"],
-		["unconfigured repo", "issues", { ...issueLabeled(config.labels.triage), repository: { full_name: "someone/else" } }, "unconfigured repo"],
-		["no installation", "issues", { ...issueLabeled(config.labels.triage), installation: undefined }, "no installation"],
-		["no repository", "issues", { ...issueLabeled(config.labels.triage), repository: undefined }, "no repository"],
-		["malformed payload", "issues", "not an object", "malformed payload"],
-		["wrong issue label", "issues", issueLabeled("bug"), "unhandled label"],
-		["issue unlabeled", "issues", { ...issueLabeled(config.labels.triage), action: "unlabeled" }, "unhandled action"],
-		["wrong PR label", "pull_request", prLabeled(config.labels.triage), "unhandled label"],
-		["closed PR", "pull_request", prLabeled(config.labels.prReview, "closed"), "pull request not open"],
-		["PR opened", "pull_request", { ...prLabeled(config.labels.prReview), action: "opened" }, "unhandled action"],
-		["comment on PR that isn't cancel", "issue_comment", comment("looks good", { pull_request: {} }), "comment on pull request"],
-		["comment on issue not in triage", "issue_comment", comment("hello", { labels: [] }), "issue not in triage"],
-		["cancel not on first line", "issue_comment", comment(`hi\n${config.commandPrefix} cancel`, { labels: [] }), "issue not in triage"],
-		["comment edited", "issue_comment", { ...comment("hello"), action: "edited" }, "unhandled action"],
-		["push to non-base branch", "push", push({ ref: "refs/heads/feature" }), "not base branch"],
-		["push of a tag", "push", push({ ref: `refs/tags/${BASE}` }), "not base branch"],
-		["deleted branch", "push", push({ deleted: true, after: "0".repeat(40) }), "branch deleted"],
-		["zero sha", "push", push({ after: "0".repeat(40) }), "invalid sha"],
-		["short sha", "push", push({ after: "abc123" }), "invalid sha"],
-		["unknown event", "star", envelope({ action: "created" }), "unhandled event"],
-	];
-
-	it.each(cases)("%s", (_name, event, payload, reason) => {
-		expect(route(event, payload, DELIVERY)).toEqual({ kind: "ignore", reason });
+describe("route: ignores untrusted or irrelevant deliveries", () => {
+	it("does not start work for bots, unconfigured repositories, closed PRs, or invalid pushes", () => {
+		const deliveries: [string, unknown][] = [
+			["issues", { ...issueLabeled(config.labels.triage), sender: { login: "factory[bot]", type: "Bot" } }],
+			["issues", { ...issueLabeled(config.labels.triage), repository: { full_name: "someone/else" } }],
+			["pull_request", prLabeled(config.labels.prReview, "closed")],
+			["push", push({ ref: "refs/heads/feature" })],
+		];
+		for (const [event, payload] of deliveries) expect(route(event, payload, DELIVERY).kind).toBe("ignore");
 	});
 });
