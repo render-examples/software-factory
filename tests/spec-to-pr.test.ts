@@ -29,7 +29,10 @@ type PublishResult = import("../app/changeset/index.js").PublishResult;
 
 const BOT = "software-factory[bot]";
 const BOT_ID = 4242;
-const REPO = "render-examples/render-factory-example-target";
+const REPO = Object.keys(config.repos)[0];
+if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
+const [BUILD_COMMAND, TEST_COMMAND] = config.repos[REPO].verify;
+if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two verify commands");
 const BASE = "b".repeat(40);
 const ISSUE = 12;
 const BRANCH = `factory/issue-${ISSUE}`;
@@ -241,7 +244,7 @@ describe("implement, verify, and publish", () => {
 		const [impl, review] = t.calls;
 		expect(impl?.message).toContain(`issue #${ISSUE}: Health checks`);
 		expect(impl?.message).toContain("GET /health returns 200");
-		expect(impl?.vars).toEqual({ repo: REPO, verifyCommands: "- `npm run build`\n- `npm test`" });
+		expect(impl?.vars).toEqual({ repo: REPO, verifyCommands: `- \`${BUILD_COMMAND}\`\n- \`${TEST_COMMAND}\`` });
 		expect(impl?.opts).toMatchObject({ sandbox: t.sandbox, traceId: "trn-spec", budgetUsd: config.limits.perRunUsd });
 		expect(review?.vars).toEqual({ repo: REPO, baseRef: BASE });
 		expect(review?.message).toContain("Added GET /health.");
@@ -249,8 +252,8 @@ describe("implement, verify, and publish", () => {
 		expect(finished()).toMatchObject({ outcome: "pr_opened", costUsd: 4 });
 
 		expect(t.execs.filter((e) => !e.command.startsWith("git status"))).toEqual([
-			{ command: "npm run build", opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
-			{ command: "npm test", opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
+			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
+			{ command: TEST_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
 		]);
 		expect(t.publish).toHaveBeenCalledWith(
 			expect.objectContaining({ sandbox: t.sandbox, baseSha: BASE, branch: BRANCH, ownedCommits: [], gitData: t.git }),
@@ -266,7 +269,7 @@ describe("implement, verify, and publish", () => {
 
 	it("repairs a failing verify and publishes once it passes", async () => {
 		const t = setup({
-			sandbox: { verify: { "npm test": [fail("FAIL src/server.test.ts\nexpected 200, got 404"), { exitCode: 0, stdout: "", stderr: "" }] } },
+			sandbox: { verify: { [TEST_COMMAND]: [fail("FAIL src/server.test.ts\nexpected 200, got 404"), { exitCode: 0, stdout: "", stderr: "" }] } },
 			agents: {
 				implementer: [
 					{ output: implementation(), costUsd: 3 },
@@ -281,7 +284,7 @@ describe("implement, verify, and publish", () => {
 		expect(repair?.message).toContain("expected 200, got 404");
 		expect(repair?.message).toContain("repair round 1 of 2");
 		expect(repair?.opts).toMatchObject({ budgetUsd: config.limits.perRunUsd - 3 });
-		expect(verifyCommands(t.execs)).toEqual(["npm run build", "npm test", "npm run build", "npm test"]);
+		expect(verifyCommands(t.execs)).toEqual([BUILD_COMMAND, TEST_COMMAND, BUILD_COMMAND, TEST_COMMAND]);
 		const body = t.gh.findOrCreatePull.mock.calls[0]?.[0].body ?? "";
 		expect(body).toContain("Added GET /health.");
 		expect(body).toContain("Add metrics");
@@ -290,7 +293,7 @@ describe("implement, verify, and publish", () => {
 
 	it("fails without publishing when repairs run out, naming the failing commands but not their output", async () => {
 		const t = setup({
-			sandbox: { verify: { "npm test": [fail("SECRET-LOOKING LOG LINE")] } },
+			sandbox: { verify: { [TEST_COMMAND]: [fail("SECRET-LOOKING LOG LINE")] } },
 			agents: {
 				implementer: [
 					{ output: implementation(), costUsd: 3 },
@@ -306,7 +309,7 @@ describe("implement, verify, and publish", () => {
 		expect(t.calls.some((c) => c.agent === "implementation-reviewer")).toBe(false);
 		expect(t.publish).not.toHaveBeenCalled();
 		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
-		expect(t.status().body).toContain("`npm test` (exit 1)");
+		expect(t.status().body).toContain(`\`${TEST_COMMAND}\` (exit 1)`);
 		expect(t.status().body).not.toContain("SECRET-LOOKING");
 		expect(finished()).toMatchObject({ state: "failed", costUsd: 7 });
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
@@ -332,7 +335,7 @@ describe("implement, verify, and publish", () => {
 		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "implementation-reviewer", "implementer"]);
 		expect(t.calls[2]?.message).toContain("src/server.ts:3: Remove the console.log.");
 		expect(t.calls[2]?.opts).toMatchObject({ budgetUsd: config.limits.perRunUsd - 4 });
-		expect(verifyCommands(t.execs)).toEqual(["npm run build", "npm test", "npm run build", "npm test"]);
+		expect(verifyCommands(t.execs)).toEqual([BUILD_COMMAND, TEST_COMMAND, BUILD_COMMAND, TEST_COMMAND]);
 		const body = t.gh.findOrCreatePull.mock.calls[0]?.[0].body ?? "";
 		expect(body).toContain("revised the change");
 		expect(finished()).toMatchObject({ costUsd: 5 });

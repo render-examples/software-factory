@@ -26,7 +26,8 @@ type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 
 const BOT = "software-factory[bot]";
-const REPO = "render-examples/render-factory-example-target";
+const REPO = Object.keys(config.repos)[0];
+if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
 const APPROVED = config.labels.specApproved;
 const ctx = { metadata: { taskRunId: "trn-triage", rootTaskRunId: "trn-triage" } };
 const input = { repo: REPO, installationId: 5, issue: 12, actor: "maintainer" };
