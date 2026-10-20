@@ -20,7 +20,9 @@ const { finishStatus, readStatus, takeOver, WORKING_LABEL, withRun } = await imp
 
 const BOT = "software-factory[bot]";
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
-const REPO = requireRepo("render-examples/render-factory-example-target", 5);
+const REPO_NAME = Object.keys(config.repos)[0];
+if (!REPO_NAME) throw new Error("factory.config.ts must configure at least one repository");
+const REPO = requireRepo(REPO_NAME, 5);
 
 class FakeGitHub {
 	comments: IssueComment[] = [];
