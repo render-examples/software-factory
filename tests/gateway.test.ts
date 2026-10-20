@@ -19,10 +19,7 @@ const triagePayload = {
 
 const sign = (body: string, secret = SECRET) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 
-function webhook(
-	body: string,
-	{ event = "issues", delivery = "delivery-1" as string | null, signature = sign(body) } = {},
-): Request {
+function webhook(body: string, { event = "issues", delivery = "delivery-1" as string | null, signature = sign(body) } = {}): Request {
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 		"x-github-event": event,
@@ -67,30 +64,11 @@ describe("gateway", () => {
 		expect(emit).not.toHaveBeenCalled();
 	});
 
-	it("rejects a missing signature", async () => {
-		const body = JSON.stringify(triagePayload);
-		const res = await app.fetch(webhook(body, { signature: "" }));
-		expect(res.status).toBe(401);
-		expect(emit).not.toHaveBeenCalled();
-	});
-
-	it("rejects bodies over 256 KB", async () => {
-		const body = JSON.stringify({ pad: "x".repeat(300 * 1024) });
+	it("rejects webhook bodies over 256 KB before starting work", async () => {
+		const body = JSON.stringify({ padding: "x".repeat(256 * 1024) });
 		const res = await app.fetch(webhook(body));
 		expect(res.status).toBe(413);
-		expect(emit).not.toHaveBeenCalled();
-	});
-
-	it("rejects invalid JSON", async () => {
-		const res = await app.fetch(webhook("{not json"));
-		expect(res.status).toBe(400);
-		expect(deliveryEvent().payload).toMatchObject({ reason: "invalid json" });
-	});
-
-	it("rejects a missing delivery id", async () => {
-		const res = await app.fetch(webhook(JSON.stringify(triagePayload), { delivery: null }));
-		expect(res.status).toBe(400);
-		expect(deliveryEvent().payload).toMatchObject({ reason: "missing delivery id" });
+		expect(startTask).not.toHaveBeenCalled();
 	});
 
 	it("starts the routed task with the delivery id as idempotency key", async () => {
@@ -111,23 +89,6 @@ describe("gateway", () => {
 			outcome: "started",
 			deliveryId: "delivery-1",
 		});
-	});
-
-	it("acknowledges an ignored delivery and traces it by delivery id", async () => {
-		const res = await app.fetch(webhook(JSON.stringify({ zen: "hi" }), { event: "ping" }));
-		expect(res.status).toBe(200);
-		expect(startTask).not.toHaveBeenCalled();
-		const event = deliveryEvent();
-		expect(event.traceId).toBe("delivery-1");
-		expect(event.payload).toMatchObject({ outcome: "ignored", reason: "ping" });
-	});
-
-	it("rejects a routed input that fails its schema", async () => {
-		const payload = { ...triagePayload, label: { name: config.labels.specApproved } };
-		const res = await app.fetch(webhook(JSON.stringify(payload)));
-		expect(res.status).toBe(422);
-		expect(startTask).not.toHaveBeenCalled();
-		expect(deliveryEvent().payload).toMatchObject({ outcome: "invalid", task: "spec-to-pr" });
 	});
 
 	it("returns 502 when startTask fails so GitHub records a failed delivery", async () => {

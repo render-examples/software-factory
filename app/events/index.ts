@@ -1,4 +1,4 @@
-import pg from "../../node_modules/@types/pg/index.js";
+import pg from "pg";
 import type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";
 
 export type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";

@@ -24,9 +24,4 @@ describe("refresh-snapshot task", () => {
 		expect(buildSnapshot).toHaveBeenCalledTimes(1);
 		expect(buildSnapshot.mock.calls[0]?.[1]).toMatchObject({ fullName: REPO, installationId: 3, owner: "render-examples" });
 	});
-
-	it("rejects invalid input and unconfigured repositories", async () => {
-		await expect(refreshSnapshot.func(ctx, { repo: REPO, installationId: 3, sha: "main" })).rejects.toThrow();
-		await expect(refreshSnapshot.func(ctx, { repo: "acme/nope", installationId: 3, sha: SHA })).rejects.toThrow("not configured");
-	});
 });

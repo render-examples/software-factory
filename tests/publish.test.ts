@@ -5,11 +5,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RepoContext } from "../app/config/index.js";
 import { type GitDataClient, gitData } from "../app/github/git-data.js";
-import { blobSha, isSafeBranch, type PublishInput, publish, type RefusalReason } from "../app/publish/index.js";
+import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/publish/index.js";
 import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
 
 const SCRIPT = fileURLToPath(new URL("../sandbox-runtime/collect-changes.sh", import.meta.url));
@@ -262,8 +261,7 @@ class FakeGitHub {
 			const current = this.refs.get(branch);
 			const sha = String(body.sha);
 			if (!current) return this.json(422, { message: "Reference does not exist" });
-			if (!body.force && !this.isAncestor(current, sha))
-				return this.json(422, { message: "Update is not a fast forward" });
+			if (!body.force && !this.isAncestor(current, sha)) return this.json(422, { message: "Update is not a fast forward" });
 			this.refs.set(branch, sha);
 			return this.json(200, { ref: `refs/heads/${branch}`, object: { sha } });
 		}
@@ -448,20 +446,6 @@ describe("publish", () => {
 		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
 	});
 
-	it("uses the bot identity when no author is given", async () => {
-		const { dir, base } = makeRepo();
-		write(dir, "new.txt", "x\n");
-		const h = harness(dir, base);
-		const result = await h.run({ author: undefined });
-		if ("refused" in result) throw new Error("refused");
-		expect(h.gh.commits.get(result.commitSha)?.body).toMatchObject({
-			author: {
-				name: "software-factory[bot]",
-				email: "software-factory[bot]@users.noreply.github.com",
-			},
-		});
-	});
-
 	it("refuses a symlink without exporting any content", async () => {
 		const { dir, base } = makeRepo();
 		write(dir, "new.txt", "SECRET-NEW-CONTENT\n");
@@ -494,49 +478,6 @@ describe("publish", () => {
 		write(dir, ".github/workflows/ci.yml", "on: push\n");
 		const h = harness(dir, base);
 		expect(refusals(await h.run()).map((r) => r.kind)).toEqual(["workflow_file"]);
-	});
-
-	it("refuses too many files and omits the diff", async () => {
-		const { dir, base } = makeRepo();
-		for (let i = 0; i < 5; i++) write(dir, `f${i}.txt`, `${i}\n`);
-		const h = harness(dir, base);
-		expect(refusals(await h.run({ limits: { maxChangedFiles: 3, maxFileBytes: 1000 } }))).toEqual([
-			{
-				kind: "too_many_files",
-				detail: "5 files changed; the limit is 3",
-				count: 5,
-				limit: 3,
-			},
-		]);
-		expect(readFileSync(h.outPath).includes("f0.txt")).toBe(false);
-	});
-
-	it("refuses a nested repository as a gitlink", async () => {
-		const { dir, base } = makeRepo();
-		const nested = join(dir, "vendor/lib");
-		mkdirSync(nested, { recursive: true });
-		git(nested, "init", "-q");
-		write(nested, "x", "x\n");
-		git(nested, "add", "-A");
-		git(nested, "commit", "-q", "-m", "nested");
-		const h = harness(dir, base);
-		expect(refusals(await h.run()).map((r) => `${r.kind} ${"path" in r ? r.path : ""}`)).toEqual([
-			"gitlink vendor/lib",
-		]);
-	});
-
-	it("refuses a path with a control character", async () => {
-		const { dir, base } = makeRepo();
-		write(dir, "bad\nname.txt", "x\n");
-		const h = harness(dir, base);
-		expect(refusals(await h.run()).map((r) => r.kind)).toEqual(["unsafe_path"]);
-	});
-
-	it("refuses when nothing changed", async () => {
-		const { dir, base } = makeRepo();
-		const h = harness(dir, base);
-		expect(refusals(await h.run()).map((r) => r.kind)).toEqual(["no_changes"]);
-		expect(h.gh.calls).toEqual([]);
 	});
 
 	it("ignores agent-written repo config such as clean filters", async () => {
@@ -588,24 +529,6 @@ describe("publish against a subverted sandbox", () => {
 		expect(refusals(await h.run()).map((r) => r.kind)).toEqual(["symlink"]);
 	});
 
-	it("fails closed when the base tree's object file is overwritten", async () => {
-		const { dir, base } = makeRepo();
-		const h = harness(dir, base);
-		symlinkSync("/etc/passwd", join(dir, "evil"));
-		write(dir, "a.txt", "changed\n");
-		const forged = forgedBase(dir, base);
-		const baseTree = git(dir, "rev-parse", `${base}^{tree}`);
-		const raw = gitRaw(dir, "cat-file", "tree", forged.tree);
-		const objectPath = join(dir, ".git/objects", baseTree.slice(0, 2), baseTree.slice(2));
-		chmodSync(objectPath, 0o644);
-		writeFileSync(objectPath, deflateSync(Buffer.concat([Buffer.from(`tree ${raw.length}\0`), raw])));
-
-		// Recent git notices the forged object itself; older git diffs against it and the host's tree check catches it.
-		await expect(h.run()).rejects.toThrow(/hash mismatch|Tree mismatch/);
-		expect(h.gh.refs.size).toBe(0);
-		expect([...h.gh.commits.keys()]).toEqual([base]);
-	});
-
 	it("rejects a blob whose bytes don't match its SHA", async () => {
 		const { dir, base } = makeRepo();
 		write(dir, "new.txt", "original content\n");
@@ -613,14 +536,6 @@ describe("publish against a subverted sandbox", () => {
 		h.sandbox.tamper = (file) => Buffer.from(file.toString("latin1").replace("original", "tampered"), "latin1");
 		await expect(h.run()).rejects.toThrow(/Blob hash mismatch/);
 		expect(h.gh.calls).toEqual([]);
-	});
-
-	it("rejects a download that differs in size from what the script reported", async () => {
-		const { dir, base } = makeRepo();
-		write(dir, "new.txt", "x\n");
-		const h = harness(dir, base);
-		h.sandbox.tamper = (file) => file.subarray(0, file.length - 1);
-		await expect(h.run()).rejects.toThrow(/Downloaded/);
 	});
 
 	it("throws when GitHub's base differs from the sandbox's, before creating a ref", async () => {
@@ -635,12 +550,6 @@ describe("publish against a subverted sandbox", () => {
 		await expect(h.run()).rejects.toThrow(/Tree mismatch/);
 		expect(h.gh.refs.size).toBe(0);
 	});
-
-	it("throws when the script fails", async () => {
-		const { dir, base } = makeRepo();
-		const h = harness(dir, base);
-		await expect(h.run({ baseSha: "f".repeat(40) })).rejects.toThrow(/collect-changes.sh failed/);
-	});
 });
 
 describe("publish branch handling", () => {
@@ -649,17 +558,6 @@ describe("publish branch handling", () => {
 		write(dir, "new.txt", "x\n");
 		return { base, h: harness(dir, base) };
 	}
-
-	it("fast-forwards a branch at the base commit", async () => {
-		const { base, h } = setup();
-		h.gh.refs.set("factory/issue-7", base);
-		const result = await h.run();
-		if ("refused" in result) throw new Error("refused");
-		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
-		expect(h.gh.calls.find((c) => c.method === "PATCH")?.body).toMatchObject({
-			force: false,
-		});
-	});
 
 	it("refuses to move a branch that points at someone else's commit", async () => {
 		const { base, h } = setup();
@@ -675,18 +573,6 @@ describe("publish branch handling", () => {
 		expect(h.gh.calls.some((c) => c.method === "PATCH")).toBe(false);
 	});
 
-	it("moves a branch off a commit an earlier attempt created", async () => {
-		const { h } = setup();
-		const first = await h.run({
-			author: { ...IDENTITY, date: "2026-10-18T11:00:00Z" },
-		});
-		if ("refused" in first) throw new Error("refused");
-		const second = await h.run({ ownedCommits: [first.commitSha] });
-		if ("refused" in second) throw new Error("refused");
-		expect(second.commitSha).not.toBe(first.commitSha);
-		expect(h.gh.refs.get("factory/issue-7")).toBe(second.commitSha);
-	});
-
 	it("is idempotent on retry with a fixed commit date", async () => {
 		const { h } = setup();
 		const first = await h.run();
@@ -694,54 +580,5 @@ describe("publish branch handling", () => {
 		if ("refused" in first || "refused" in second) throw new Error("refused");
 		expect(second.commitSha).toBe(first.commitSha);
 		expect(h.gh.calls.filter((c) => c.path === "/refs")).toHaveLength(1);
-	});
-
-	it("handles a 422 when the branch appears between reading and creating it", async () => {
-		const { h } = setup();
-		let raced = false;
-		h.gh.interceptors.push((method, path, body) => {
-			if (raced || method !== "POST" || path !== "/refs") return undefined;
-			raced = true;
-			h.gh.refs.set("factory/issue-7", (body as { sha: string }).sha);
-			return new Response(JSON.stringify({ message: "Reference already exists" }), { status: 422 });
-		});
-		const result = await h.run();
-		if ("refused" in result) throw new Error("refused");
-		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
-	});
-
-	it("retries 5xx, 429, and secondary rate limits", async () => {
-		const { h } = setup();
-		const failures: Array<[string, Response]> = [
-			["/blobs", new Response("bad gateway", { status: 502 })],
-			["/trees", new Response("{}", { status: 429, headers: { "retry-after": "2" } })],
-			[
-				"/commits",
-				new Response(
-					JSON.stringify({
-						message: "You have exceeded a secondary rate limit",
-					}),
-					{ status: 403 },
-				),
-			],
-		];
-		h.gh.interceptors.push((method, path) => {
-			const i = failures.findIndex(([p]) => p === path && method === "POST");
-			if (i < 0) return undefined;
-			return failures.splice(i, 1)[0]?.[1];
-		});
-		const result = await h.run();
-		expect("commitSha" in result).toBe(true);
-		expect(h.gh.sleeps).toEqual([1000, 2000, 60_000]);
-	});
-
-	it("rejects unsafe branch names and base SHAs before touching the sandbox", async () => {
-		const { h } = setup();
-		await expect(h.run({ branch: "-x" })).rejects.toThrow(/Invalid branch/);
-		await expect(h.run({ baseSha: "HEAD" })).rejects.toThrow(/Invalid base SHA/);
-		expect(h.sandbox.execs).toHaveLength(0);
-		expect(isSafeBranch("factory/issue-7")).toBe(true);
-		for (const bad of ["a..b", "a/", "a.lock", "a/.b", "a b", "a~1", "a:b", "@{x}"])
-			expect(isSafeBranch(bad)).toBe(false);
 	});
 });

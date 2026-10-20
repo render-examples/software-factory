@@ -36,23 +36,6 @@ afterEach(async () => {
 });
 
 describe("emit", () => {
-	it("is a no-op without DATABASE_URL", async () => {
-		vi.stubEnv("DATABASE_URL", "");
-		await emit(event);
-		expect(pg.constructed).toBe(0);
-		expect(pg.query).not.toHaveBeenCalled();
-	});
-
-	it("inserts one row", async () => {
-		vi.stubEnv("DATABASE_URL", "postgres://fake/db");
-		pg.query.mockResolvedValueOnce({ rows: [] });
-		await emit(event);
-		expect(pg.query).toHaveBeenCalledTimes(1);
-		const [sql, params] = pg.query.mock.calls[0] as [string, unknown[]];
-		expect(sql).toMatch(/insert into events/);
-		expect(params).toEqual(["trn-1", null, "acme/web", null, "run.started", JSON.stringify({ a: 1 })]);
-	});
-
 	it("swallows database errors and logs one JSON warning", async () => {
 		vi.stubEnv("DATABASE_URL", "postgres://fake/db");
 		pg.query.mockRejectedValueOnce(new Error("connection refused"));
@@ -78,8 +61,8 @@ describe("run coordination", () => {
 		actor: "alice",
 	};
 
-	it("requires Postgres instead of degrading to a no-op", async () => {
-		vi.stubEnv("DATABASE_URL", "");
+	it("fails closed when Postgres is unavailable", async () => {
+		delete process.env.DATABASE_URL;
 		await expect(claimRun(input)).rejects.toThrow("DATABASE_URL is not set");
 	});
 

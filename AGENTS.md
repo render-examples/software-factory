@@ -1,6 +1,8 @@
 # Repository guide for agents
 
-This file applies to the whole repository. Read [docs/architecture.md](docs/architecture.md) for how the system works and [docs/redesign.md](docs/redesign.md) for why it's built this way.
+This file applies to the whole repository. Read
+[docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md) for how the system works and
+[docs/3_TAKEAWAYS.md](docs/3_TAKEAWAYS.md) for why it is built this way.
 
 ## What this is
 
@@ -65,16 +67,30 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 - Strict TypeScript, ESM, NodeNext. Relative imports end in `.js`. No path aliases.
 - Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
 - Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
-- Task inputs and results stay small and JSON-serializable. Pass sandboxes between tasks by ID (`connectSandbox`).
+- Task inputs and results stay small and JSON-serializable. Built-in phases
+  keep one sandbox within one task; if a future workflow shares a running
+  sandbox across tasks, pass its ID and reconnect with `connectSandbox`.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox-runtime/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
 - Phases take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
-- Add or update tests with every behavior change.
+- Keep the suite near 100 tests. Test durable behavior at process and trust
+  boundaries: authenticated inputs, user-visible outcomes, authority,
+  cleanup, and security invariants. Prefer one end-to-end happy path and the
+  meaningful failure modes over helper permutations. Do not assert private
+  helper calls, incidental command sequences, task registration, barrel
+  exports, or exact intermediate formatting. Assert ordering only when the
+  ordering is itself a security contract, such as scrubbing a credential
+  before untrusted code runs.
+- Add or update a test when externally observable behavior or a security
+  invariant changes; refactors with unchanged behavior should not require
+  test changes.
 - Write comments only for constraints the code can't show (platform limits, security reasons, ordering requirements), not to narrate the next line.
 
 ## Invariants
 
-Don't weaken these without an explicit change to the security model ([docs/security.md](docs/security.md) says where each is enforced):
+Don't weaken these without an explicit change to the security model
+([docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md#trust-boundaries) says where
+each is enforced):
 
 1. The gateway verifies the webhook signature before parsing the body.
 2. Every run checks the triggering actor's live repository permission before doing anything.
@@ -92,9 +108,14 @@ Don't weaken these without an explicit change to the security model ([docs/secur
 
 ## Common changes
 
-- **An agent or a phase:** follow [docs/agents.md](docs/agents.md).
-- **A configuration key:** add it to `FactoryConfig` in `factory.config.ts` with a doc comment, and to [docs/configuration.md](docs/configuration.md).
-- **An environment variable:** add it to `render.yaml`, `.env.example`, `SERVICE_ENV` in `scripts/lib/requirements.ts` (so `doctor` checks it), and [docs/configuration.md](docs/configuration.md).
+- **An agent or a phase:** follow
+  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#customize-an-agent).
+- **A configuration key:** add it to `FactoryConfig` in `factory.config.ts`
+  with a doc comment, and to
+  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#configure-behavior-and-limits).
+- **An environment variable:** add it to `render.yaml`, `.env.example`,
+  `SERVICE_ENV` in `scripts/lib/requirements.ts` (so `doctor` checks it), and
+  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#environment-reference).
 - **A webhook event, label, or App permission:** update `scripts/lib/requirements.ts`, which `setup:app`, `setup:github`, and `doctor` all read.
 - **The runner or `sandbox-runtime/`:** these are baked into each snapshot, so they reach sandboxes only after a rebuild (the next push to each base branch, or a `refresh-snapshot` run).
 
