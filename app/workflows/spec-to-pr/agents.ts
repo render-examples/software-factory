@@ -1,5 +1,5 @@
 import { AgentError } from "../../agents/index.js";
-import type { Implementation, ImplementationReview, Spec } from "../../contracts/index.js";
+import type { Implementation, ImplementationReview, Spec } from "../../schemas/index.js";
 import { renderSpecSections } from "../../format/index.js";
 import { RunError } from "../../runs/index.js";
 import { failureReport, type VerifyRun } from "./verify.js";

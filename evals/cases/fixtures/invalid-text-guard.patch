@@ -1,0 +1,12 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -42,7 +42,7 @@ async function handler(req, res) {
+ 	if (url.pathname === "/api/todos" && req.method === "POST") {
+ 		const raw = await readBody(req);
+ 		const { text } = JSON.parse(raw);
+-		if (!text || typeof text !== "string") {
++		if (!text && typeof text !== "string") {
+ 			jsonResponse(res, 400, { error: "text is required" });
+ 			return;
+ 		}

@@ -18,10 +18,10 @@ type AgentRunner = import("../app/workflows/triage/agents.js").AgentRunner;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
-type Spec = import("../app/contracts/index.js").Spec;
-type SpecDraft = import("../app/contracts/index.js").SpecDraft;
-type SpecNotes = import("../app/contracts/index.js").SpecNotes;
-type TriageDecision = import("../app/contracts/index.js").TriageDecision;
+type Spec = import("../app/schemas/index.js").Spec;
+type SpecDraft = import("../app/schemas/index.js").SpecDraft;
+type SpecNotes = import("../app/schemas/index.js").SpecNotes;
+type TriageDecision = import("../app/schemas/index.js").TriageDecision;
 type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 

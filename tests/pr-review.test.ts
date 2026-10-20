@@ -23,7 +23,7 @@ type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type ExecResult = import("../app/sandbox/index.js").ExecResult;
 type OpenedSandbox = import("../app/sandbox/index.js").OpenedSandbox;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
-type Review = import("../app/contracts/index.js").Review;
+type Review = import("../app/schemas/index.js").Review;
 type RunAgent = typeof import("../app/agents/index.js").runAgent;
 type PrReviewDeps = import("../app/workflows/pr-review/index.js").PrReviewDeps;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Implementation, Review, ReviewComment, Spec } from "../app/contracts/index.js";
+import type { Implementation, Review, ReviewComment, Spec } from "../app/schemas/index.js";
 import { BODY_MAX_CHARS, COMMENT_MAX_CHARS, pullRequestBody, renderReview, renderSpec } from "../app/format/index.js";
 
 /** An @ GitHub would turn into a mention, outside fenced code. */

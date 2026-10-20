@@ -10,8 +10,8 @@ software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COM
 
 Two processes deploy:
 
-- `app/src/server.ts`: the gateway web service. Verifies webhooks, routes each to one task, calls `startTask` with the delivery ID as the idempotency key, and serves the trace UI.
-- `app/src/workflows.ts`: the Workflows service. Importing `app/workflows/index.ts` registers every task.
+- `app/entrypoints/gateway.ts`: the gateway web service. Verifies webhooks, routes each to one task, calls `startTask` with the delivery ID as the idempotency key, and serves the trace UI.
+- `app/entrypoints/workflows.ts`: the Workflows service. Importing `app/workflows/index.ts` registers every task.
 
 `app/sql/` holds the migrations, applied by `npm run db:migrate` as the gateway's pre-deploy command.
 
@@ -21,7 +21,9 @@ Two processes deploy:
 factory.config.ts   Repositories (base branch, install, verify), labels, permission, model tiers, limits, sandbox timeout
 app/
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
-  contracts/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
+  changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
+  schemas/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
+  entrypoints/       Gateway and Workflows process entry points
   events/           strict run claims, best-effort emit(), and trace UI readers over the events table
   format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
   gateway/          Hono app: signature check, body cap, the routing table (routes.ts), admin auth, trace UI (ui/)
@@ -29,11 +31,9 @@ app/
   runner/           The agent runner: one Pi agent loop, tools, submit, key handling. Bundled into the snapshot
   sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
-  publish/          Collects the sandbox's changes and publishes them through the Git Data API
   runs/             withRun lifecycle: permission, durable claim, takeover, ownership checkpoints, status, budget
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
   sql/              Migrations
-  src/              Process entry points
 sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
 scripts/            setup-app, setup-github, doctor, migrate, eval
 evals/cases/        Eval cases (JSON)
@@ -44,10 +44,10 @@ Dependencies point one way, from entry points down to leaves:
 
 ```text
 src → gateway, workflows
-workflows → runs, publish, agents, sandbox, github, format, events, contracts, config
+workflows → runs, changeset, agents, sandbox, github, format, events, contracts, config
 runs → agents, github, events, config
 agents → sandbox, runner, events, contracts, config
-publish → sandbox, github, config
+changeset → sandbox, github, config
 sandbox → runner (to bundle it), github (read tokens), config
 format → contracts, config
 gateway → contracts, events, config

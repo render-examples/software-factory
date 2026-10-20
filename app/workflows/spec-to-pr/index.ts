@@ -1,12 +1,12 @@
 import { type TaskContext, task } from "@renderinc/sdk/workflows";
 import { AgentError, implementationReviewer, implementer, runAgent, verifyCommandsVar } from "../../agents/index.js";
 import { config, type RepoContext, requireRepo, TASKS } from "../../config/index.js";
-import type { Implementation, ImplementationReview } from "../../contracts/index.js";
-import { SpecToPrInput } from "../../contracts/tasks.js";
+import type { Implementation, ImplementationReview } from "../../schemas/index.js";
+import { SpecToPrInput } from "../../schemas/tasks.js";
 import { pullRequestBody, pullRequestTitle } from "../../format/index.js";
 import { type GitDataClient, type GitHubClient, gitData, githubFor } from "../../github/index.js";
 import { RunError, type RunOutcome, type RunResult, type RunControl, withRun } from "../../runs/index.js";
-import { publish } from "../../publish/index.js";
+import { publish } from "../../changeset/index.js";
 import { type OpenedSandbox, openSandbox, type SandboxRef } from "../../sandbox/index.js";
 import {
 	agentStopped,

@@ -1,5 +1,5 @@
 import { config } from "../config/index.js";
-import type { Spec } from "../contracts/index.js";
+import type { Spec } from "../schemas/index.js";
 import { bullets, codeSpan, fitAround, sanitize, sanitizeInline, truncate } from "./text.js";
 
 /** The rendered spec comment's budget: the caller's marker carries the spec again as JSON, up to SPEC_MAX_JSON_CHARS. */

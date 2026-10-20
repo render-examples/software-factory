@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RepoContext } from "../app/config/index.js";
 import { type GitDataClient, gitData } from "../app/github/git-data.js";
-import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/publish/index.js";
+import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
 import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
 
 const SCRIPT = fileURLToPath(new URL("../sandbox/collect-changes.sh", import.meta.url));

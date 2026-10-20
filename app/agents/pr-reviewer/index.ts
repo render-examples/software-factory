@@ -1,4 +1,4 @@
-import { Review } from "../../contracts/index.js";
+import { Review } from "../../schemas/index.js";
 import { defineAgent } from "../define.js";
 
 /** Placeholders in prompt.md. `repo`: "owner/name"; `baseRef`: the PR's merge base. */

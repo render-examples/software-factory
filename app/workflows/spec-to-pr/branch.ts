@@ -1,8 +1,8 @@
-import type { Spec } from "../../contracts/index.js";
+import type { Spec } from "../../schemas/index.js";
 import { sanitizeInline } from "../../format/index.js";
 import type { GitDataClient, GitHubClient, GitIdentity } from "../../github/index.js";
 import { RunError } from "../../runs/index.js";
-import type { RefusalReason } from "../../publish/index.js";
+import type { RefusalReason } from "../../changeset/index.js";
 
 export const branchName = (issue: number): string => `factory/issue-${issue}`;
 

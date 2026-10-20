@@ -50,6 +50,8 @@ export interface SnapshotManifest {
 	sha: string;
 	/** sha256 over the repository's lockfiles; a mismatch after fetch triggers a reinstall. */
 	lockfileHash: string;
+	/** sha256 of the bundled agent runner stored in this snapshot. Absent on snapshots built before this field existed. */
+	runnerHash?: string;
 	install: string | null;
 	createdAt: string;
 }

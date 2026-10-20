@@ -7,7 +7,7 @@ import {
 	RefreshSnapshotInput,
 	SpecToPrInput,
 	TriageInput,
-} from "../contracts/tasks.js";
+} from "../schemas/tasks.js";
 import { emit as defaultEmit, listTraces, recentEvents, traceEvents } from "../events/index.js";
 import { readBody } from "./body.js";
 import { route } from "./routes.js";

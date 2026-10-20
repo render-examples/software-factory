@@ -308,7 +308,7 @@ render workflows tasks runs start --local \
 ```
 
 Task input schemas are in
-[`app/contracts/tasks.ts`](../app/contracts/tasks.ts).
+[`app/schemas/tasks.ts`](../app/schemas/tasks.ts).
 
 ## Check changes
 
@@ -340,8 +340,11 @@ credentials are configured.
 
 ## Run evals
 
-Eval cases in [`evals/cases/`](../evals/cases) exercise Triage decisions,
-questions, specs, prompt-injection resistance, and cost.
+Eval cases in [`evals/cases/`](../evals/cases) exercise Triage and specs,
+implementation, pre-publish implementation review, PR review, prompt-injection
+resistance, verification, false positives, and cost. The suite is pinned to
+the target revision in [`evals/fixture.json`](../evals/fixture.json); live
+runs stop before a model call if that branch has drifted.
 
 ```bash
 # Schema validation only: no services and no model cost
@@ -355,13 +358,28 @@ npm run eval -- \
   --installation 12345 \
   --case underspecified-search \
   --budget 2
+
+# Three trials of the reviewer cases, with a reusable run artifact
+npm run eval -- \
+  --installation 12345 \
+  --stage pr-review \
+  --trials 3 \
+  --json eval-run.json
+
+# Fail on a per-case regression against an approved run of the same fixture
+npm run eval -- \
+  --installation 12345 \
+  --baseline approved-eval-run.json
 ```
 
 A live run needs the Workflows environment and the App installation ID for
 the target repository, provided by `--installation` or
 `FACTORY_EVAL_INSTALLATION_ID`. It restores the repository snapshot, runs the
-real Triage and spec-writer agents, and grades their output. With
-`DATABASE_URL`, it also records a trace.
+real stage agents, captures their tool calls, diffs, verification, cost, and
+timing, and grades their output. Every requested trial must pass. With
+`DATABASE_URL`, it also records a trace. Refresh the pinned SHA intentionally
+when the target repository changes; baseline comparison refuses different
+fixture revisions.
 
 Live evals spend real money. Their budget is a soft threshold and may be
 crossed by the response that reports the usage.

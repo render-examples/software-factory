@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Spec, type SpecDraft, SpecNotes, type TriageDecision } from "../../contracts/index.js";
+import { Spec, type SpecDraft, SpecNotes, type TriageDecision } from "../../schemas/index.js";
 import { findMarkedComment, type Issue, type IssueComment, parseMarker } from "../../github/index.js";
 
 export interface CurrentSpec {

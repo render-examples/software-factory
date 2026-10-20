@@ -1,0 +1,16 @@
+{
+	"id": "decline-out-of-scope-marketing",
+	"description": "A request entirely outside the todo repository's scope is declined rather than turned into a software spec.",
+	"tags": ["triage", "routing"],
+	"stage": "triage",
+	"issue": {
+		"title": "Write our launch announcement",
+		"body": "Draft and publish a 1,500-word marketing blog post announcing our new payroll product.",
+		"labels": ["factory:triage"]
+	},
+	"expect": {
+		"decision": "decline",
+		"questionsMax": 0,
+		"maxCostUsd": 2
+	}
+}

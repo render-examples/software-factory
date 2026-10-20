@@ -1,4 +1,4 @@
-import type { Review } from "../../contracts/index.js";
+import type { Review } from "../../schemas/index.js";
 import { type RenderReviewOptions, renderReview } from "../../format/index.js";
 import { type GitHubClient, GitHubError, parseMarker, type Review as PostedReview, renderMarker } from "../../github/index.js";
 

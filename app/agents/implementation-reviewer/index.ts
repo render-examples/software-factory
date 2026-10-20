@@ -1,4 +1,4 @@
-import { ImplementationReview } from "../../contracts/index.js";
+import { ImplementationReview } from "../../schemas/index.js";
 import { defineAgent } from "../define.js";
 
 /** Placeholders in prompt.md. `repo`: "owner/name"; `baseRef`: the commit the implementation started from. */

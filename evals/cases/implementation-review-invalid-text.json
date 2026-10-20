@@ -1,0 +1,48 @@
+{
+	"id": "implementation-review-invalid-text",
+	"description": "The implementation reviewer catches a boolean-operator regression that allows invalid todo text.",
+	"tags": ["review", "correctness"],
+	"stage": "implementation-review",
+	"fixture": {
+		"patch": "fixtures/invalid-text-guard.patch"
+	},
+	"issue": {
+		"title": "Strengthen todo text validation"
+	},
+	"spec": {
+		"title": "Reject invalid todo text",
+		"summary": "Keep POST /api/todos limited to non-empty string text values.",
+		"problem": "Invalid todo text must not be persisted.",
+		"goals": ["Reject missing, empty, and non-string text."],
+		"nonGoals": [],
+		"acceptanceCriteria": [
+			{
+				"id": "AC-1",
+				"text": "POST /api/todos returns 400 whenever text is missing, empty, or not a string.",
+				"verification": "automated"
+			}
+		],
+		"approach": "Preserve strict input validation in the POST handler.",
+		"affectedAreas": [
+			{
+				"path": "server.js",
+				"change": "Validate text before creating a todo."
+			}
+		],
+		"testPlan": "Exercise missing, empty, numeric, and valid string values.",
+		"risks": [],
+		"assumptions": [],
+		"openQuestions": []
+	},
+	"implementationSummary": "Strengthened the POST validation condition for todo text.",
+	"expect": {
+		"needsRevision": true,
+		"findings": [
+			{
+				"file": "server.js",
+				"mustMention": ["non-string"]
+			}
+		],
+		"maxCostUsd": 6
+	}
+}

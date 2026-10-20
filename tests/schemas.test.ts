@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Review, Spec, SpecDraft, TriageDecision, validateSpec } from "../app/contracts/index.js";
+import { Review, Spec, SpecDraft, TriageDecision, validateSpec } from "../app/schemas/index.js";
 
 const spec = (overrides: Partial<Spec> = {}): Spec => ({
 	title: "Add a dark mode toggle",

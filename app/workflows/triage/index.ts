@@ -2,7 +2,7 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import { task } from "@renderinc/sdk/workflows";
 import { runAgent } from "../../agents/index.js";
 import { type RepoContext, requireRepo, TASKS } from "../../config/index.js";
-import { TriageInput } from "../../contracts/index.js";
+import { TriageInput } from "../../schemas/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { type GitHubClient, renderMarker } from "../../github/index.js";
 import { type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
