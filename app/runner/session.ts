@@ -13,9 +13,9 @@ import {
 	type Usage as PiUsage,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { type FauxScript, registerFauxModel } from "./faux.js";
 import { RUNNER_EXIT, type RunnerErrorCode, type RunnerEvent, RunnerInput, type Usage } from "./protocol.js";
 import { createSubmitTool, MAX_SUBMIT_ATTEMPTS, outputSchemaProblem, SUBMIT_TOOL } from "./submit.js";
+import { registerTestStubModel, type TestStub } from "./test-stub.js";
 import { createTools } from "./tools.js";
 
 /** Reported in `started` and `--self-test`. */
@@ -93,7 +93,7 @@ function outputPreview(result: unknown): string {
 
 /**
  * Undefined for all-zero usage (e.g. a request aborted before it was sent). When the provider reports no cost
- * (the faux provider never does), the cost is computed from the model's prices.
+ * (the test stub never does), the cost is computed from the model's prices.
  */
 function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
 	const count = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
@@ -158,10 +158,10 @@ export interface SessionOptions {
 	/** Already validated with parseInput. */
 	input: RunnerInput;
 	emit: Emitter;
-	/** Passed with every request; unused with `faux`. */
+	/** Passed with every request; unused with `testStub`. */
 	apiKey?: string;
-	/** Replaces the model with a scripted faux provider (tests, snapshot self-checks). */
-	faux?: FauxScript;
+	/** Replaces the model with deterministic test responses (tests, snapshot self-checks). */
+	testStub?: TestStub;
 	/** Epoch ms the `timeout_ms` budget is measured from (default: now). */
 	startedAt?: number;
 	/** Aborting stops the run with `agent_error`. */
@@ -182,10 +182,13 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	if (!requested) {
 		return fail("invalid_input", `unknown model "${input.model_provider}/${input.model}" (not in the Pi ${PI_VERSION} registry)`);
 	}
-	if (!opts.faux && !opts.apiKey) {
+	if (!opts.testStub && !opts.apiKey) {
 		return fail("agent_error", `no API key for provider "${input.model_provider}": pass --key-file or --key-stdin, or set the provider's env var`);
 	}
-	const model = capMaxTokens(opts.faux ? registerFauxModel(models, opts.faux(input), requested) : requested, input.thinking_level);
+	const model = capMaxTokens(
+		opts.testStub ? registerTestStubModel(models, opts.testStub(input), requested) : requested,
+		input.thinking_level,
+	);
 
 	let submission: { output: unknown } | undefined;
 	let failure: Failure | undefined;

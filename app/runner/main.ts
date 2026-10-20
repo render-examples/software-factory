@@ -1,10 +1,10 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { defaultFauxScript, type FauxScript } from "./faux.js";
 import { apiKeyFor, type Credentials, secretsIn, takeCredentials } from "./keys.js";
 import { RUNNER_EXIT } from "./protocol.js";
 import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
+import { defaultTestStub, type TestStub } from "./test-stub.js";
 
 export const SUPPORTED_PROVIDERS = ["anthropic", "openai", "google"] as const;
 
@@ -12,8 +12,8 @@ export interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
 	/** Resolves once `chunk` is flushed. */
 	write(chunk: string): Promise<void>;
-	/** Replaces the default `--faux` script (tests). */
-	fauxScript?: FauxScript;
+	/** Replaces the default `--test-stub` responses (tests). */
+	testStub?: TestStub;
 }
 
 const processIO = (): MainIO => ({
@@ -28,8 +28,8 @@ function useScratch(scratchDir: string): void {
 }
 
 /**
- * `runner.mjs [--key-file PATH | --key-stdin] [--faux] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on
- * stdout. With `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
+ * `runner.mjs [--key-file PATH | --key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL
+ * on stdout. With `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
  */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
@@ -40,15 +40,15 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
-	let args: { "key-file"?: string; "key-stdin"?: boolean; faux?: boolean; "self-test"?: boolean };
+	let args: { "key-file"?: string; "key-stdin"?: boolean; "self-test"?: boolean; "test-stub"?: boolean };
 	try {
 		args = parseArgs({
 			args: argv,
 			options: {
 				"key-file": { type: "string" },
 				"key-stdin": { type: "boolean" },
-				faux: { type: "boolean" },
 				"self-test": { type: "boolean" },
+				"test-stub": { type: "boolean" },
 			},
 		}).values;
 	} catch (err) {
@@ -94,7 +94,7 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 			input,
 			emit,
 			apiKey: apiKeyFor(creds, input.model_provider),
-			faux: args.faux ? (io.fauxScript ?? defaultFauxScript) : undefined,
+			testStub: args["test-stub"] ? (io.testStub ?? defaultTestStub) : undefined,
 			startedAt,
 		});
 	} catch (err) {

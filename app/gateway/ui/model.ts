@@ -33,13 +33,16 @@ function obj(payload: Payload | undefined, key: string): Payload | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Payload) : undefined;
 }
 
+/** `phase` is the field emitted before the stage/run terminology change. */
+const stageOf = (payload: Payload | undefined) => str(payload, "stage") ?? str(payload, "phase");
+
 /** One row of the trace list. */
 export interface TraceListItem {
 	traceId: string;
 	repo: string | null;
 	subject: string | null;
-	/** The phase, or the task a delivery tried to start. */
-	phase?: string;
+	/** The stage, or the task a delivery tried to start. */
+	stage?: string;
 	/** running, done, failed, rejected; or the delivery outcome for traces that never started a run. */
 	state?: string;
 	outcome?: string;
@@ -71,13 +74,13 @@ export function summarizeTraces(traces: TraceSummary[], events: StoredEvent[]): 
 			eventCount: trace.eventCount,
 		};
 		if (started || finished) {
-			item.phase = str(finished?.payload, "phase") ?? str(started?.payload, "phase");
+			item.stage = stageOf(finished?.payload) ?? stageOf(started?.payload);
 			item.state = finished ? (str(finished.payload, "state") ?? "finished") : "running";
 			item.outcome = str(finished?.payload, "outcome");
 			item.costUsd = num(finished?.payload, "costUsd");
 			item.durationMs = num(finished?.payload, "durationMs");
 		} else if (delivery) {
-			item.phase = str(delivery.payload, "task");
+			item.stage = str(delivery.payload, "task");
 			item.state = str(delivery.payload, "outcome");
 			item.outcome = str(delivery.payload, "reason");
 		}
@@ -103,12 +106,12 @@ export type TimelineItem =
 			task?: string;
 			deliveryId?: string;
 	  }
-	| { kind: "run.started"; at: Date; runId?: string; phase?: string; actor?: string }
+	| { kind: "run.started"; at: Date; runId?: string; stage?: string; actor?: string }
 	| {
 			kind: "run.finished";
 			at: Date;
 			runId?: string;
-			phase?: string;
+			stage?: string;
 			state?: string;
 			outcome?: string;
 			costUsd?: number;
@@ -200,7 +203,7 @@ export function buildTrace(traceId: string, events: StoredEvent[]): TraceView {
 				});
 				break;
 			case "run.started":
-				items.push({ kind: "run.started", at, runId: event.runId, phase: str(p, "phase"), actor: str(p, "actor") });
+				items.push({ kind: "run.started", at, runId: event.runId, stage: stageOf(p), actor: str(p, "actor") });
 				break;
 			case "run.finished": {
 				const costUsd = num(p, "costUsd");
@@ -211,7 +214,7 @@ export function buildTrace(traceId: string, events: StoredEvent[]): TraceView {
 					kind: "run.finished",
 					at,
 					runId: event.runId,
-					phase: str(p, "phase"),
+					stage: stageOf(p),
 					state: str(p, "state"),
 					outcome: str(p, "outcome"),
 					costUsd,

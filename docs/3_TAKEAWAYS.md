@@ -57,7 +57,7 @@ can see and audit them without learning a separate control plane.
 Implementation:
 [`app/gateway/routes.ts`](../app/gateway/routes.ts),
 [`app/workflows/spec-to-pr/approval.ts`](../app/workflows/spec-to-pr/approval.ts),
-and [`app/phases/permission.ts`](../app/phases/permission.ts).
+and [`app/runs/permission.ts`](../app/runs/permission.ts).
 
 ## Keep conversation and artifacts in the system of record
 
@@ -81,7 +81,7 @@ transactions the host cannot provide.
 
 Implementation:
 [`app/github/markers.ts`](../app/github/markers.ts),
-[`app/phases/status.ts`](../app/phases/status.ts), and
+[`app/runs/status.ts`](../app/runs/status.ts), and
 [`app/workflows/triage/spec.ts`](../app/workflows/triage/spec.ts).
 
 ## Fence competing runs with append-only claims
@@ -90,7 +90,7 @@ Starting a newer run does not instantly stop an older process. Cancellation
 is cooperative, webhooks can be redelivered, and a task may be between a
 model call and a write.
 
-Each phase therefore appends `run.claimed` after checking permission.
+Each stage therefore appends `run.claimed` after checking permission.
 Postgres's monotonic event ID is the fencing token. The greatest claim ID for
 one repository and issue or PR is current. Runs recheck ownership before
 agent work, progress changes, and durable writes.
@@ -108,7 +108,7 @@ instead of risking two writers. Keep unrelated telemetry best-effort.
 
 Implementation:
 [`app/events/index.ts`](../app/events/index.ts) and
-[`app/phases/with-phase.ts`](../app/phases/with-phase.ts).
+[`app/runs/with-run.ts`](../app/runs/with-run.ts).
 
 ## Design for idempotency beyond the platform window
 
@@ -211,19 +211,18 @@ Implementation:
 [`app/agents/run.ts`](../app/agents/run.ts), and
 [`tests/agents-catalog.test.ts`](../tests/agents-catalog.test.ts).
 
-## Reuse one Sandbox across related agents
+## Reuse one Sandbox within a stage
 
-PR Reviewer runs verification and four specialist agents in one Sandbox.
-They share the same exact checkout and avoid four restores. The specialists
-run in parallel, then a tool-less synthesizer combines their bounded reports
-after the Sandbox closes.
+Spec-to-PR runs the implementer and implementation reviewer in one Sandbox.
+They see the same working tree without publishing or restoring it between
+calls. PR Reviewer likewise runs verification and its reviewer against one
+exact checkout.
 
 This is a useful unit-of-isolation rule:
 
-- use a fresh Sandbox for each independently authorized phase;
-- reuse that Sandbox for cooperating agents in the same phase and on the same
-  immutable input;
-- close it before running synthesis that needs no repository tools; and
+- use a fresh Sandbox for each independently authorized stage;
+- reuse that Sandbox for related work in the same stage and on the same
+  checkout;
 - never reuse it across issues, PRs, or human approval boundaries.
 
 Implementation:
@@ -296,10 +295,10 @@ calls produced the intended boundary.
 absence, runner, and process hardening:
 
 - before a builder creates a snapshot; and
-- after every phase Sandbox is restored.
+- after every stage Sandbox is restored.
 
 The host separately refuses to send a model key unless it confirms the runner
-is non-dumpable. A failed check produces no snapshot or no phase work.
+is non-dumpable. A failed check produces no snapshot or no stage work.
 
 Turn critical security claims into executable preconditions and test them
 where the protected operation begins.
@@ -319,8 +318,8 @@ The rest of the system consumes domain values, not prose parsing:
 - Triage returns a bounded decision and questions;
 - the spec writer returns explicit spec sections;
 - the implementer reports a bounded summary;
-- reviewers return structured findings;
-- the synthesizer returns one review contract.
+- the implementation reviewer returns bounded revision issues; and
+- the PR reviewer returns one bounded review contract.
 
 Bound lengths and array sizes because outputs reach external systems with
 their own limits. Rebuild targets, identities, links, and permissions from
@@ -333,23 +332,23 @@ Implementation:
 
 ## Make budget propagation explicit
 
-A phase creates one `Budget` and passes the amount remaining into every agent
+A stage creates one `Budget` and passes the amount remaining into every agent
 call. The budget adds usage from successes and failures. Parallel calls
 receive shares to bound how far simultaneous responses can overshoot.
 
 This is better than having each agent look up a global number:
 
-- the caller decides how work shares one phase budget;
+- the caller decides how work shares one stage budget;
 - nested repair and review calls cannot forget earlier spend;
 - tests can assert budget behavior; and
-- traces report actual cost at agent and phase levels.
+- traces report actual cost at agent and stage levels.
 
 The threshold is still soft: model providers report cost after a response, so
 the response that crosses it is charged. Pair software accounting with a
 provider-enforced spend limit.
 
 Implementation:
-[`app/phases/budget.ts`](../app/phases/budget.ts) and
+[`app/runs/budget.ts`](../app/runs/budget.ts) and
 [`app/agents/run.ts`](../app/agents/run.ts).
 
 ## Separate coordination from observability
@@ -361,7 +360,7 @@ One event table serves two roles with deliberately different failure modes:
 
 This keeps useful traces from becoming an accidental dependency while keeping
 cross-task ownership durable. The trace UI reads events but never drives
-phase decisions.
+stage decisions.
 
 When one store contains both control and telemetry, make the distinction
 visible in APIs and error handling. Avoid letting a convenient dashboard query
@@ -374,7 +373,7 @@ Implementation:
 ## Preserve deterministic and live test paths
 
 Unit tests inject fake GitHub, Sandbox, run-control, and agent dependencies.
-The runner also has a faux script path that exercises its session, tools,
+The runner also has a test stub that exercises its session, tools,
 submission, events, and error handling without a live model.
 
 Live evals complement deterministic tests. They replay bounded issues through
@@ -389,7 +388,7 @@ Use both:
 - targeted live evals for model behavior and prompt-injection cases.
 
 Implementation:
-[`app/runner/faux.ts`](../app/runner/faux.ts),
+[`app/runner/test-stub.ts`](../app/runner/test-stub.ts),
 [`tests/`](../tests), and [`scripts/eval/`](../scripts/eval).
 
 ## State residual risks explicitly

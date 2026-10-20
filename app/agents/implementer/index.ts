@@ -1,8 +1,8 @@
-import type { RepoConfig } from "../config/index.js";
-import { Implementation } from "../contracts/index.js";
-import { defineAgent } from "./define.js";
+import type { RepoConfig } from "../../config/index.js";
+import { Implementation } from "../../contracts/index.js";
+import { defineAgent } from "../define.js";
 
-/** Placeholders in implementer.md. `repo`: "owner/name"; `verifyCommands`: see {@link verifyCommandsVar}. */
+/** Placeholders in prompt.md. `repo`: "owner/name"; `verifyCommands`: see {@link verifyCommandsVar}. */
 export const implementerVars = ["repo", "verifyCommands"] as const;
 
 /**
@@ -11,7 +11,7 @@ export const implementerVars = ["repo", "verifyCommands"] as const;
  */
 export const implementer = defineAgent({
 	id: "implementer",
-	prompt: "implementer.md",
+	prompt: "implementer/prompt.md",
 	model: "large",
 	tools: ["read", "ls", "bash", "edit", "write"],
 	output: Implementation,

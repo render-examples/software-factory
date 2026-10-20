@@ -1,6 +1,6 @@
 import { type Review, type ReviewComment, SEVERITIES, type Severity } from "../contracts/index.js";
 import { type VerifyResult, verificationTable } from "./pull-request.js";
-import { BODY_MAX_CHARS, codeSpan, fitAround, sanitize, sanitizeInline, truncate } from "./text.js";
+import { BODY_MAX_CHARS, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
 /** Inline comments posted with one review; the rest go in the body. */
 export const MAX_INLINE_COMMENTS = 50;
@@ -26,8 +26,6 @@ export interface ReviewPayload {
 export interface RenderReviewOptions {
 	/** The workflow's verify run at the PR head. */
 	verification?: readonly VerifyResult[];
-	/** Specialists that didn't finish, with why. */
-	missing?: readonly { name: string; reason: string }[];
 	/**
 	 * Whether GitHub accepts an inline comment at this line of the PR's diff (it rejects the whole review
 	 * otherwise). Comments it refuses move to the body. Without it, every comment is posted inline.
@@ -40,7 +38,7 @@ export interface RenderReviewOptions {
 const rank = (severity: Severity) => SEVERITIES.indexOf(severity);
 const label = (severity: Severity) => severity.charAt(0).toUpperCase() + severity.slice(1);
 
-/** The synthesized review as a COMMENT review: a body and at most `maxComments` inline comments, most severe first. */
+/** The review as a COMMENT review: a body and at most `maxComments` inline comments, most severe first. */
 export function renderReview(review: Review, opts: RenderReviewOptions = {}): ReviewPayload {
 	const max = Math.max(0, Math.min(opts.maxComments ?? MAX_INLINE_COMMENTS, MAX_INLINE_COMMENTS));
 	const sorted = review.comments.map((comment, index) => ({ comment, index })).sort((a, b) => rank(a.comment.severity) - rank(b.comment.severity) || a.index - b.index);
@@ -68,13 +66,9 @@ export function renderReview(review: Review, opts: RenderReviewOptions = {}): Re
 	if (opts.verification) sections.push(`### Verification\n\n${verificationTable(opts.verification)}`);
 	if (overflow.length > 0) {
 		const items = overflow.map(
-			(c) => `- **${label(c.severity)}** ${codeSpan(`${c.file}:${c.line}`)}: ${sanitizeInline(c.title)} _(${c.sources.map(sanitizeInline).join(", ")})_`,
+			(c) => `- **${label(c.severity)}** ${codeSpan(`${c.file}:${c.line}`)}: ${sanitizeInline(c.title)}`,
 		);
 		sections.push(`### More findings\n\nThese couldn't be placed as inline comments.\n\n${items.join("\n")}`);
-	}
-	if (opts.missing && opts.missing.length > 0) {
-		const items = opts.missing.map((m) => `- ${sanitizeInline(m.name)}: ${sanitizeInline(truncate(m.reason, 500, "…"))}`);
-		sections.push(`### Incomplete\n\nThese reviewers didn't finish, so the review doesn't cover their area:\n\n${items.join("\n")}`);
 	}
 
 	const tail = "\n\n---\n\n_The factory reviews by comment only. It never approves or requests changes; a person decides._";
@@ -86,10 +80,5 @@ export function renderReview(review: Review, opts: RenderReviewOptions = {}): Re
 }
 
 function inlineBody(comment: ReviewComment): string {
-	return fitAround(
-		`**${label(comment.severity)}**: ${sanitizeInline(comment.title)}\n\n`,
-		sanitize(comment.body),
-		`\n\n<sub>${comment.sources.map(sanitizeInline).join(", ")}</sub>`,
-		INLINE_BODY_MAX_CHARS,
-	);
+	return fitAround(`**${label(comment.severity)}**: ${sanitizeInline(comment.title)}\n\n`, sanitize(comment.body), "", INLINE_BODY_MAX_CHARS);
 }

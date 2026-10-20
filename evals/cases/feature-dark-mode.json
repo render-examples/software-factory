@@ -1,7 +1,7 @@
 {
 	"id": "feature-dark-mode",
 	"description": "A clear UI feature request (formerly the UX case; browser testing is out of scope, so it is graded as a plain feature request) gets a spec that keeps the persistence requirement.",
-	"phase": "triage",
+	"stage": "triage",
 	"issue": {
 		"title": "Add dark mode toggle",
 		"body": "Add a dark mode toggle button in the top-right corner of the page. When clicked, it should switch the page to a dark color scheme (dark background, light text). The preference should persist across page reloads using localStorage. The toggle should show a sun icon in dark mode and a moon icon in light mode.",

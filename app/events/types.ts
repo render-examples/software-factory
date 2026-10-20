@@ -1,6 +1,6 @@
-/** One row in the append-only `events` table. Most are telemetry; `run.claimed` coordinates phase ownership. */
+/** One row in the append-only `events` table. Most are telemetry; `run.claimed` coordinates stage ownership. */
 export interface FactoryEvent {
-	/** The root task run of the phase (or the gateway's delivery id for deliveries that started nothing). */
+	/** The root task run of the stage (or the gateway's delivery id for deliveries that started nothing). */
 	traceId: string;
 	/** The task run that emitted the event, when there is one. */
 	runId?: string;
@@ -27,7 +27,7 @@ export interface RunClaimInput {
 	runId: string;
 	repo: string;
 	subject: string;
-	phase: string;
+	stage: string;
 	actor: string;
 }
 

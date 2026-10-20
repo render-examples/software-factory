@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { config, modelFor } from "../config/index.js";
 import { emit } from "../events/index.js";
-import type { FauxScript } from "../runner/faux.js";
 import { providerApiKey } from "../runner/keys.js";
 import { type RunnerErrorCode, RunnerEvent, RunnerInput, type ToolName, type Usage } from "../runner/protocol.js";
 import { createEmitter, errorMessage, runSession } from "../runner/session.js";
 import { outputSchemaProblem } from "../runner/submit.js";
+import type { TestStub } from "../runner/test-stub.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
 
@@ -38,7 +38,7 @@ export interface RunAgentInput {
 }
 
 export interface BaseRunOptions {
-	/** Root task run of the phase; every event this run emits carries it. */
+	/** Root task run of the stage; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
 	repo?: string;
@@ -62,8 +62,8 @@ export interface AgentRun<Output extends OutputSchema> {
 	turns: number;
 }
 
-/** Test seam: when set, in-task runs replay this faux script instead of calling a model. Not for production code. */
-export const testing: { fauxScript?: FauxScript } = {};
+/** Test seam: when set, in-task runs use these deterministic responses instead of calling a model. */
+export const testing: { testStub?: TestStub } = {};
 
 const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
 
@@ -138,13 +138,13 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			},
 			summary,
 		);
-		const fauxScript = sandbox ? undefined : testing.fauxScript;
+		const testStub = sandbox ? undefined : testing.testStub;
 		const apiKey = providerApiKey(provider, process.env);
-		if (!apiKey && !fauxScript) throw failure("agent_error", `no API key for provider "${provider}" in the environment`, summary);
+		if (!apiKey && !testStub) throw failure("agent_error", `no API key for provider "${provider}" in the environment`, summary);
 
 		const stdout = sandbox
 			? await runInSandbox(sandbox, runnerInput, apiKey as string, timeoutMs, base.signal)
-			: await runInTask(runnerInput, apiKey, fauxScript, base.signal);
+			: await runInTask(runnerInput, apiKey, testStub, base.signal);
 		summary = summarize(stdout.text);
 		const end = summary.terminal;
 		if (!end) {
@@ -187,14 +187,14 @@ interface RunnerOutput {
 }
 
 /** In a Workflows task: the same session, in this process, with no tools. */
-async function runInTask(input: RunnerInput, apiKey: string | undefined, faux: FauxScript | undefined, signal?: AbortSignal): Promise<RunnerOutput> {
+async function runInTask(input: RunnerInput, apiKey: string | undefined, testStub: TestStub | undefined, signal?: AbortSignal): Promise<RunnerOutput> {
 	let text = "";
 	const emitter = createEmitter(async (chunk) => {
 		text += chunk;
 	});
 	if (apiKey) emitter.redact(apiKey);
 	try {
-		await runSession({ input, emit: emitter, apiKey, faux, signal });
+		await runSession({ input, emit: emitter, apiKey, testStub, signal });
 	} catch (err) {
 		if (!emitter.terminated) emitter({ type: "error", code: "agent_error", message: errorMessage(err) });
 	}

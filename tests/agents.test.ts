@@ -19,7 +19,7 @@ const Report = z.object({
 	priority: z.number().int().default(2),
 });
 
-const synthesizer = defineAgent({ id: "synthesizer", prompt: PROMPT, model: "small", tools: [], output: Report, maxTurns: 5 });
+const taskAgent = defineAgent({ id: "task-agent", prompt: PROMPT, model: "small", tools: [], output: Report, maxTurns: 5 });
 const reviewer = defineAgent({
 	id: "reviewer",
 	prompt: PROMPT,
@@ -38,15 +38,15 @@ beforeEach(() => {
 	vi.mocked(emit).mockImplementation(async () => {});
 });
 afterEach(() => {
-	testing.fauxScript = undefined;
+	testing.testStub = undefined;
 	delete process.env.ANTHROPIC_API_KEY;
 });
 
 describe("defineAgent", () => {
 	it("reads the prompt file verbatim and converts the output schema (fields with defaults optional)", () => {
-		expect(synthesizer.prompt).toBe("You are a test agent for {{repo}}.\n\nReport on issue #{{ issue }} and submit exactly once.\n");
-		expect(synthesizer.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
-		expect(synthesizer.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
+		expect(taskAgent.prompt).toBe("You are a test agent for {{repo}}.\n\nReport on issue #{{ issue }} and submit exactly once.\n");
+		expect(taskAgent.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
+		expect(taskAgent.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
 		expect(reviewer.tools).toEqual(["read", "ls", "bash"]);
 	});
 });
@@ -54,24 +54,24 @@ describe("defineAgent", () => {
 describe("runAgent in a task (no tools)", { timeout: 30_000 }, () => {
 	it("runs the session in-process and returns the Zod-parsed output with usage", async () => {
 		let seen: RunnerInput | undefined;
-		testing.fauxScript = (input) => {
+		testing.testStub = (input) => {
 			seen = input;
 			return [say("Thinking it over."), call(SUBMIT, { verdict: "ok: fine", findings: ["a"] })];
 		};
-		const run = await runAgent(synthesizer, { message: "Merge the findings.", vars }, { traceId: "trace-1", budgetUsd: 5 });
+		const run = await runAgent(taskAgent, { message: "Merge the findings.", vars }, { traceId: "trace-1", budgetUsd: 5 });
 
 		expect(run.output).toEqual({ verdict: "ok: fine", findings: ["a"], priority: 2 });
 		expect(run.turns).toBe(2);
 		expect(run.usage.input_tokens).toBeGreaterThan(0);
 		expect(run.costUsd).toBeGreaterThan(0);
 		expect(run.costUsd).toBe(run.usage.cost_usd);
-		expect(seen).toMatchObject({ agent_id: "synthesizer", message: "Merge the findings.", tools: [], budget_usd: 5 });
+		expect(seen).toMatchObject({ agent_id: "task-agent", message: "Merge the findings.", tools: [], budget_usd: 5 });
 		expect(seen?.cwd).toBeUndefined();
 
 		expect(emitted().map((e) => e.type)).toEqual(["agent.started", "agent.finished"]);
 		expect(emitted()[1]).toMatchObject({
 			traceId: "trace-1",
-			payload: { agentId: "synthesizer", outcome: "ok", turns: 2, costUsd: run.costUsd, usage: run.usage },
+			payload: { agentId: "task-agent", outcome: "ok", turns: 2, costUsd: run.costUsd, usage: run.usage },
 		});
 	});
 });

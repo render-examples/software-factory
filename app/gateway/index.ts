@@ -40,7 +40,7 @@ export function createGateway(deps: GatewayDeps): Hono {
 	const app = new Hono();
 
 	app.get("/health", (c) => c.json({ status: "ok" }));
-	// Gateway readiness does not touch Postgres; phase tasks perform the strict coordination check.
+	// Gateway readiness does not touch Postgres; stage tasks perform the strict coordination check.
 	app.get("/ready", (c) => c.json({ status: "ready" }));
 
 	app.post("/webhooks/github", async (c) => {

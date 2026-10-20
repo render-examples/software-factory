@@ -17,7 +17,7 @@ const { runSpecToPr } = await import("../app/workflows/spec-to-pr/index.js");
 const { VERIFY_TIMEOUT_MS } = await import("../app/workflows/spec-to-pr/verify.js");
 type Spec = import("../app/contracts/index.js").Spec;
 type Implementation = import("../app/contracts/index.js").Implementation;
-type SelfReview = import("../app/contracts/index.js").SelfReview;
+type ImplementationReview = import("../app/contracts/index.js").ImplementationReview;
 type IssueComment = import("../app/github/index.js").IssueComment;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type GitDataClient = import("../app/github/index.js").GitDataClient;
@@ -60,7 +60,7 @@ const implementation = (overrides: Partial<Implementation> = {}): Implementation
 	followUps: [],
 	...overrides,
 });
-const CLEAN: SelfReview = { needsRevision: false, issues: [], notes: [] };
+const CLEAN: ImplementationReview = { needsRevision: false, issues: [], notes: [] };
 
 function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?: string[] } = {}) {
 	const comments: IssueComment[] = [];
@@ -146,11 +146,11 @@ const fail = (stdout: string): ExecResult => ({ exitCode: 1, stdout, stderr: "" 
 type AgentStep = { output: unknown; costUsd: number } | InstanceType<typeof AgentError>;
 
 /** Answers each agent from its own queue, by agent id. */
-function fakeAgents(steps: { implementer?: AgentStep[]; "self-review"?: AgentStep[] }) {
+function fakeAgents(steps: { implementer?: AgentStep[]; "implementation-reviewer"?: AgentStep[] }) {
 	const calls: Array<{ agent: string; message: string; vars?: Record<string, string>; opts: Record<string, unknown> }> = [];
 	const queues: Record<string, AgentStep[]> = {
 		implementer: steps.implementer ?? [{ output: implementation(), costUsd: 3 }],
-		"self-review": steps["self-review"] ?? [{ output: CLEAN, costUsd: 1 }],
+		"implementation-reviewer": steps["implementation-reviewer"] ?? [{ output: CLEAN, costUsd: 1 }],
 	};
 	const runAgent = vi.fn(
 		async (agent: { id: string }, agentInput: { message: string; vars?: Record<string, string> }, opts: Record<string, unknown>) => {
@@ -237,7 +237,7 @@ describe("implement, verify, and publish", () => {
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
 		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: REPO }), { kind: "branch", name: "main" });
-		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "self-review"]);
+		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "implementation-reviewer"]);
 		const [impl, review] = t.calls;
 		expect(impl?.message).toContain(`issue #${ISSUE}: Health checks`);
 		expect(impl?.message).toContain("GET /health returns 200");
@@ -303,7 +303,7 @@ describe("implement, verify, and publish", () => {
 
 		expect(outcome).toMatchObject({ state: "failed", outcome: "verification_failed" });
 		expect(t.calls.filter((c) => c.agent === "implementer")).toHaveLength(1 + config.limits.repairRounds);
-		expect(t.calls.some((c) => c.agent === "self-review")).toBe(false);
+		expect(t.calls.some((c) => c.agent === "implementation-reviewer")).toBe(false);
 		expect(t.publish).not.toHaveBeenCalled();
 		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
 		expect(t.status().body).toContain("`npm test` (exit 1)");
@@ -312,20 +312,24 @@ describe("implement, verify, and publish", () => {
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 
-	it("runs one revision pass when self-review asks for it, then verifies again", async () => {
-		const flagged: SelfReview = { needsRevision: true, issues: [{ file: "src/server.ts", line: 3, problem: "Remove the console.log." }], notes: [] };
+	it("runs one revision pass when implementation review asks for it, then verifies again", async () => {
+		const flagged: ImplementationReview = {
+			needsRevision: true,
+			issues: [{ file: "src/server.ts", line: 3, problem: "Remove the console.log." }],
+			notes: [],
+		};
 		const t = setup({
 			agents: {
 				implementer: [
 					{ output: implementation(), costUsd: 3 },
 					{ output: implementation({ summary: "Removed the log." }), costUsd: 1 },
 				],
-				"self-review": [{ output: flagged, costUsd: 1 }],
+				"implementation-reviewer": [{ output: flagged, costUsd: 1 }],
 			},
 		});
 		expect(await t.run()).toMatchObject({ state: "done", outcome: "pr_opened" });
 
-		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "self-review", "implementer"]);
+		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "implementation-reviewer", "implementer"]);
 		expect(t.calls[2]?.message).toContain("src/server.ts:3: Remove the console.log.");
 		expect(t.calls[2]?.opts).toMatchObject({ budgetUsd: config.limits.perRunUsd - 4 });
 		expect(verifyCommands(t.execs)).toEqual(["npm run build", "npm test", "npm run build", "npm test"]);

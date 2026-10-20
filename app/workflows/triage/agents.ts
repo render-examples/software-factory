@@ -1,6 +1,6 @@
 import { AgentError, type AgentErrorCode, type runAgent, specWriter, triage } from "../../agents/index.js";
 import type { SpecDraft, TriageDecision } from "../../contracts/index.js";
-import { type Budget, PhaseError } from "../../phases/index.js";
+import { type Budget, RunError } from "../../runs/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 
 export type AgentRunner = typeof runAgent;
@@ -36,7 +36,7 @@ export function triageAgents(run: AgentRunner, opts: TriageAgentOptions) {
 		} catch (error) {
 			if (!(error instanceof AgentError)) throw error;
 			const reason = EXPECTED[error.code];
-			if (reason) throw new PhaseError(`the ${agentId} agent ${reason}.`, error.code === "budget_exceeded" ? "budget-exceeded" : "agent-failed");
+			if (reason) throw new RunError(`the ${agentId} agent ${reason}.`, error.code === "budget_exceeded" ? "budget-exceeded" : "agent-failed");
 			throw error;
 		}
 	};

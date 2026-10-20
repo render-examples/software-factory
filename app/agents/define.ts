@@ -10,7 +10,7 @@ export type OutputSchema = z.ZodObject;
 
 export interface AgentSpec<Tools extends readonly ToolName[], Output extends OutputSchema> {
 	id: string;
-	/** File name of the agent's markdown prompt, relative to app/agents/. */
+	/** Path to the agent's Markdown prompt, relative to app/agents/. */
 	prompt: string;
 	model: ModelTier;
 	/** Empty for an agent that runs in a Workflows task; any tool means it runs in a sandbox. */

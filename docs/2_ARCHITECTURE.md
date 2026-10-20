@@ -12,12 +12,12 @@ The Blueprint in [`render.yaml`](../render.yaml) creates three resources:
 
 - **Gateway** (`factory-gateway`) verifies GitHub webhooks, maps each delivery
   to a Workflows task, starts that task, and serves the trace UI.
-- **Workflows** (`factory-workflows`) runs the three phases, cancellation,
+- **Workflows** (`factory-workflows`) runs the three stages, cancellation,
   snapshot refresh, agents, GitHub writes, and Sandbox lifecycle.
 - **Database** (`factory-db`) stores one append-only event table. Strict
   `run.claimed` rows fence competing runs; other rows are observability.
 
-Each phase opens a fresh Render Sandbox restored from a per-repository
+Each stage opens a fresh Render Sandbox restored from a per-repository
 snapshot. The agent and model-directed tools run beside the checkout in that
 Sandbox. Trusted workflow code retains GitHub authority, validates the
 Sandbox's output, and performs every write.
@@ -54,7 +54,7 @@ render.yaml                   Blueprint for gateway, Workflows, and Postgres
 AGENTS.md                     Repository instructions for coding agents
 docs/
   0_QUICKSTART.md             Deploy, use, develop, evaluate, and operate
-  1_EXTENSION.md              Repositories, models, agents, phases, triggers, environment
+  1_EXTENSION.md              Repositories, models, agents, stages, triggers, environment
   2_ARCHITECTURE.md           Repository map, execution paths, interfaces, trust boundaries
   3_TAKEAWAYS.md              Reusable architecture and agent patterns
 app/
@@ -71,18 +71,18 @@ app/
     ui/                       Trace and delivery UI
   workflows/
     triage/                   Triage, thread loading, spec drafting and revision
-    spec-to-pr/               Approval, implementation, verify/repair, self-review
-    pr-review/                Checkout, verify, specialists, synthesis, review posting
+    spec-to-pr/               Approval, implementation, verify/repair, implementation review
+    pr-review/                Checkout, verify, PR review, review posting
     cancel.ts                 Fence and cancel the current run
     refresh-snapshot.ts       Build a repository's named snapshot
-  phases/
-    with-phase.ts             Permission, claim, takeover, checkpoints, status, budget
+  runs/
+    with-run.ts             Permission, claim, takeover, checkpoints, status, budget
     status.ts                 Status comment markers and working label
     budget.ts                 Per-run reported-cost accounting
   agents/
     define.ts                 Typed agent definitions and prompt loading
     run.ts                    In-task or in-Sandbox execution
-    *.md, *.ts                Built-in prompts and definitions
+    <agent>/                  One prompt.md and index.ts per built-in agent
   runner/
     main.ts, session.ts       Model loop inside the task or Sandbox
     protocol.ts               Runner input, tools, events, errors, usage
@@ -167,13 +167,13 @@ The task input carries repository, App installation, actor, issue or PR, and
 commit from the authenticated webhook. None of those destinations comes from
 model output.
 
-### 2. Establish one current phase run
+### 2. Establish one current stage run
 
 Triage, Spec-to-PR, and PR Reviewer parse their Zod input, resolve a
-`RepoContext`, identify their issue or PR, and call `withPhase` in
-[`app/phases/with-phase.ts`](../app/phases/with-phase.ts).
+`RepoContext`, identify their issue or PR, and call `withRun` in
+[`app/runs/with-run.ts`](../app/runs/with-run.ts).
 
-`withPhase`:
+`withRun`:
 
 1. emits `run.started`;
 2. checks the triggering actor's current GitHub permission against
@@ -192,21 +192,21 @@ Progress updates and durable writes are ownership checkpoints. A run replaced
 by a relabel can finish an in-flight model call, but it cannot remain current
 and publish afterwards.
 
-An expected `PhaseError` is safe to show on GitHub and lets the task complete
-with a failed phase outcome. Any other error produces a generic public
+An expected `RunError` is safe to show on GitHub and lets the task complete
+with a failed stage outcome. Any other error produces a generic public
 message containing the run ID, emits a bounded diagnostic, and fails the
 Workflows task.
 
 The `cancel` task checks permission, appends its own claim first to fence the
-phase, then cancels the task ID from the status marker. Snapshot refresh does
+stage, then cancels the task ID from the status marker. Snapshot refresh does
 not claim an issue or PR.
 
-No phase automatically retries. A retry could repeat model spend and durable
+No stage automatically retries. A retry could repeat model spend and durable
 work; a person relabels to start a fresh run.
 
 ### 3. Build and refresh a repository snapshot
 
-A base-branch push starts `refresh-snapshot`. If a phase cannot find an
+A base-branch push starts `refresh-snapshot`. If a stage cannot find an
 available snapshot, it builds one inline once. Both paths call
 `buildSnapshot` in [`app/sandbox/snapshot.ts`](../app/sandbox/snapshot.ts):
 
@@ -230,7 +230,7 @@ The stable name is `factory-<owner>-<name>`. Keeping two snapshots covers a
 restore that began while a replacement was created. A failed refresh leaves
 the earlier snapshot available.
 
-### 4. Open a phase Sandbox
+### 4. Open a stage Sandbox
 
 `openSandbox` in
 [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts):
@@ -252,7 +252,7 @@ the earlier snapshot available.
 For a pull request, the fetched head must equal the SHA from the webhook.
 PR Reviewer also fetches the configured base branch for diff context.
 
-Every phase closes its Sandbox in `finally`. The provider-side timeout handles
+Every stage closes its Sandbox in `finally`. The provider-side timeout handles
 the gap where a Workflows process dies before cleanup.
 
 The Sandbox API client spaces calls by one second per process by default and
@@ -286,7 +286,8 @@ Spec-to-PR:
 5. runs the implementer;
 6. runs configured `verify` commands and permits up to
    `limits.repairRounds` implementer repairs;
-7. runs self-review and permits one requested revision;
+7. runs the independent implementation reviewer and permits one requested
+   revision;
 8. collects the candidate tree in the Sandbox;
 9. validates and publishes it from the trusted Workflows host; and
 10. creates or finds the draft PR.
@@ -297,13 +298,11 @@ choose it or a GitHub destination.
 ### 7. Run PR Reviewer
 
 PR Reviewer opens the exact PR head with the base branch available, runs
-configured verification, and starts four read-only specialists in parallel:
-security, correctness, performance, and tests.
-
-They share one Sandbox but receive no edit or write tools. After they finish,
-the Sandbox closes. The tool-less synthesizer runs in the Workflows process
-and combines bounded specialist reports. Trusted code limits inline comments
-to changed lines and posts one `COMMENT` review on the labeled head SHA.
+configured verification, then runs one read-only `pr-reviewer` agent covering
+security, correctness, performance, and tests. The agent receives no edit or
+write tools and returns the final bounded review contract. Trusted code limits
+inline comments to changed lines and posts one `COMMENT` review on the labeled
+head SHA.
 
 The GitHub client does not expose approve, request-changes, ready-for-review,
 or merge operations.
@@ -317,7 +316,7 @@ turn limit, thinking level, and Zod output schema.
 and builds one `RunnerInput`. Placement follows the tool list:
 
 - **With tools:** upload input and the provider key to a root-only run
-  directory in the phase Sandbox.
+  directory in the stage Sandbox.
 - **Without tools:** run the same session in the Workflows process with no
   tool implementation.
 
@@ -338,7 +337,7 @@ The model finishes by calling `submit` with the definition's JSON Schema.
 The runner can return schema errors for repair, and trusted `runAgent` parses
 the final value again with the authoritative Zod schema.
 
-Reported usage is attached to both successes and failures. The phase budget
+Reported usage is attached to both successes and failures. The stage budget
 therefore accounts for failed agent calls, although it remains soft because
 providers report usage after responses.
 
@@ -362,7 +361,7 @@ enters the Sandbox.
    branch.
 6. An existing branch moves only when it still points at the base commit or a
    prior commit made there by this App. Human commits are never overwritten.
-7. The phase creates or finds the draft PR.
+7. The stage creates or finds the draft PR.
 
 This turns the Sandbox into a source of proposed bytes, not authority over
 Git, GitHub, or the destination.
@@ -391,18 +390,18 @@ and verification command derives from this context.
 
 [`app/contracts/tasks.ts`](../app/contracts/tasks.ts) defines bounded Zod
 inputs for Triage, Spec-to-PR, PR Reviewer, cancel, and snapshot refresh. Each
-extends the repository and installation fields. Phase-specific fields contain
+extends the repository and installation fields. Stage-specific fields contain
 only the issue or PR, actor, approval time, head SHA, or refresh SHA needed by
 trusted code.
 
 The gateway validates before start, and each task validates again on entry.
 
-### Phase contract
+### Stage contract
 
-`withPhase` gives the body a `PhaseRun`:
+`withRun` gives the body a `RunContext`:
 
 ```typescript
-interface PhaseRun {
+interface RunContext {
   gh: GitHubClient;
   repo: RepoContext;
   subject: Subject;
@@ -414,7 +413,7 @@ interface PhaseRun {
 }
 ```
 
-The body can perform phase work but cannot bypass the permission check, claim,
+The body can perform stage work but cannot bypass the permission check, claim,
 takeover, or final lifecycle around it.
 
 ### Agent contract
@@ -459,23 +458,26 @@ hidden marker:
 
 Markers are trusted only on comments or reviews written by the App's bot.
 They make GitHub writes idempotent and store the structured state needed by a
-later human-gated phase.
+later human-gated stage.
 
 | Marker | Carries |
 |---|---|
-| `status` | Run ID, phase, state |
+| `status` | Run ID, stage, state |
 | `questions` | Question round and bounded questions |
 | `spec` | Structured spec, content hash, version, writer notes |
 | `review` | Reviewed head SHA |
+
+New status markers and run events use `stage`; readers still accept the
+legacy `phase` field so existing comments and traces remain visible.
 
 ### Event model
 
 The append-only `events` table contains event ID, trace ID, run ID,
 repository, subject, type, JSON payload, and creation time.
 
-- `run.claimed` is strict. Failure to append or check it stops the phase.
+- `run.claimed` is strict. Failure to append or check it stops the stage.
 - Delivery, run, agent, and eval telemetry use `emit()`, which never changes
-  phase behavior when it cannot write.
+  stage behavior when it cannot write.
 - The greatest claim event ID for a repository and subject is current.
 
 The trace UI and JSON API read events but do not control execution.
@@ -509,7 +511,7 @@ Signature verification happens before JSON parsing or event writes.
 ### Workflows host
 
 The Workflows service holds the Render API key, GitHub App private key, model
-key, and database URL. Trusted phase code selects repositories, refs, and
+key, and database URL. Trusted stage code selects repositories, refs, and
 destinations, validates model and Sandbox output, enforces ownership, and
 performs GitHub writes.
 
@@ -523,7 +525,7 @@ The builder has allow-all egress and a read-only repository token only during
 clone. Runtime installation and self-test happen before the token arrives.
 The token is scrubbed before repository dependency installation.
 
-### Phase Sandbox
+### Stage Sandbox
 
 The restored Sandbox has the checkout and allow-all egress. A read-only token
 appears only during fetch and is scrubbed before agents or verification.
@@ -545,7 +547,7 @@ tree SHA before moving a ref. The Sandbox never receives a write token.
 ### Security invariants
 
 1. Verify a webhook signature before parsing its body.
-2. Check the triggering actor's live permission before phase work.
+2. Check the triggering actor's live permission before stage work.
 3. Keep GitHub writes in trusted workflow code and make them marker-idempotent.
 4. Never put a write credential in a Sandbox.
 5. Run tools only in a Sandbox.
@@ -579,7 +581,7 @@ Tests pin these boundaries, including every built-in agent's model and tools.
 - **Workspace-wide Render key:** both services hold a key that may reach more
   than this application. Use a dedicated Render workspace when isolation
   matters.
-- **Postgres availability:** phases fail closed when they cannot establish or
+- **Postgres availability:** stages fail closed when they cannot establish or
   recheck current ownership.
 - **Dashboard visibility:** Workflows inputs and results are visible to users
   with access to the Render service.

@@ -1,6 +1,6 @@
 import type { RepoContext } from "../../config/index.js";
 import type { PullRequest } from "../../github/index.js";
-import { PhaseError } from "../../phases/index.js";
+import { RunError } from "../../runs/index.js";
 import { type OpenedSandbox, type SandboxRef, type Sandbox, shq } from "../../sandbox/index.js";
 
 export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
@@ -37,19 +37,19 @@ export async function withPullSandbox<T>(open: OpenSandbox, repo: RepoContext, p
 	}
 }
 
-export function headMoved(): PhaseError {
-	return new PhaseError(HEAD_MOVED, "head_moved");
+export function headMoved(): RunError {
+	return new RunError(HEAD_MOVED, "head_moved");
 }
 
 /**
  * The commit the PR branched from: `git merge-base` of the PR head (checked out) and the base branch, which the
- * sandbox fetched to `refs/remotes/origin/<base>`. Specialists diff `<mergeBase>...HEAD`.
+ * sandbox fetched to `refs/remotes/origin/<base>`. The reviewer diffs `<mergeBase>...HEAD`.
  */
 export async function mergeBase(sandbox: Sandbox, baseBranch: string): Promise<string> {
 	const res = await sandbox.exec(`git merge-base ${shq(`refs/remotes/origin/${baseBranch}`)} HEAD`, { asRunner: true });
 	const sha = res.stdout.trim();
 	if (res.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(sha)) {
-		throw new PhaseError(`couldn't find where this PR branched from \`${baseBranch}\`, so there's no diff to review.`, "no_merge_base");
+		throw new RunError(`couldn't find where this PR branched from \`${baseBranch}\`, so there's no diff to review.`, "no_merge_base");
 	}
 	return sha;
 }

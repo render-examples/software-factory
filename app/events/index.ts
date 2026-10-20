@@ -56,7 +56,7 @@ export async function emit(event: FactoryEvent): Promise<void> {
 }
 
 /**
- * Appends the authoritative ownership claim for a phase run. Unlike telemetry `emit`, this is strict:
+ * Appends the authoritative ownership claim for a stage run. Unlike telemetry `emit`, this is strict:
  * a run must not proceed when Postgres cannot order it against competing runs.
  */
 export async function claimRun(input: RunClaimInput): Promise<RunClaim> {
@@ -64,7 +64,7 @@ export async function claimRun(input: RunClaimInput): Promise<RunClaim> {
 		`insert into events (trace_id, run_id, repo, subject, type, payload)
 		values ($1, $2, $3, $4, 'run.claimed', $5)
 		returning id::text as id`,
-		[input.traceId, input.runId, input.repo, input.subject, JSON.stringify({ phase: input.phase, actor: input.actor })],
+		[input.traceId, input.runId, input.repo, input.subject, JSON.stringify({ stage: input.stage, actor: input.actor })],
 	);
 	const id = rows[0]?.id;
 	if (!id) throw new Error("run claim insert returned no event id");

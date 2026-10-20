@@ -1,8 +1,8 @@
 # Quickstart
 
-Deploy the factory, run its three phases, develop locally, and operate it.
+Deploy the factory, run its three stages, develop locally, and operate it.
 Once the default path works, use [1_EXTENSION.md](1_EXTENSION.md) to change
-repositories, models, agents, phases, or GitHub triggers. For the
+repositories, models, agents, stages, or GitHub triggers. For the
 implementation, continue to [2_ARCHITECTURE.md](2_ARCHITECTURE.md).
 
 ## Prerequisites
@@ -103,7 +103,7 @@ In the Render Dashboard, create a Blueprint from **your fork**, not
 | Resource | Type | Purpose |
 |---|---|---|
 | `factory-gateway` | Web Service | Verify webhooks, start tasks, serve the trace UI |
-| `factory-workflows` | Workflows | Run phases, agents, snapshot refresh, and cancel |
+| `factory-workflows` | Workflows | Run stages, agents, snapshot refresh, and cancel |
 | `factory-db` | Postgres | Store strict run claims and best-effort trace events |
 
 Enter these values:
@@ -203,26 +203,27 @@ Spec-to-PR reads the spec as it existed when the label was applied. It refuses
 to continue if the spec was edited afterwards; remove and reapply the label
 to approve the new version.
 
-The phase:
+The stage:
 
 1. implements the spec in a Sandbox;
 2. runs every configured `verify` command;
 3. asks the implementer to repair failures, up to `limits.repairRounds`;
-4. runs a self-review and permits one requested revision;
+4. runs an independent implementation review and permits one requested
+   revision;
 5. validates the collected changes on the host; and
 6. publishes `factory/issue-<number>` and opens a draft PR.
 
 The PR describes the approved spec, implementation, verification, and
-self-review. It references the issue without closing it.
+implementation review. It references the issue without closing it.
 
 ### Review a pull request
 
 Add `factory:pr-review` to any open PR, including one the factory created.
 
-PR Reviewer checks out the labeled head commit, runs `verify`, then runs
-security, correctness, performance, and tests specialists in parallel. A
-synthesizer posts one COMMENT review with a risk tier, summary, verification
-results, and inline comments where GitHub permits them.
+PR Reviewer checks out the labeled head commit, runs `verify`, then inspects
+security, correctness, performance, and tests in one read-only agent call. It
+posts one COMMENT review with a risk tier, summary, verification results, and
+inline comments where GitHub permits them.
 
 The review is pinned to the head SHA from the webhook. Label the PR again to
 review a newer commit.
@@ -235,11 +236,11 @@ Comment this as the first line on an issue or PR:
 /factory cancel
 ```
 
-Only someone with `minimumPermission` can cancel. To restart a phase, remove
+Only someone with `minimumPermission` can cancel. To restart a stage, remove
 its label and add it again. The new run claims the subject, cancels the prior
 task when possible, and the prior run stops at its next ownership checkpoint.
 
-While a phase is active, the issue or PR has `factory:working`. Its status
+While a stage is active, the issue or PR has `factory:working`. Its status
 comment shows progress, the current run ID, and final links.
 
 ## Inspect a run
@@ -251,7 +252,7 @@ https://<gateway>.onrender.com/ui
 ```
 
 Sign in with `FACTORY_ADMIN_TOKEN` from the gateway's Render environment. The
-trace UI shows authenticated deliveries, phase outcomes, agent models, turns,
+trace UI shows authenticated deliveries, stage outcomes, agent models, turns,
 usage, costs, and durations. The same run appears under
 `factory-workflows` in the Render Dashboard.
 
@@ -392,10 +393,10 @@ crossed by the response that reports the usage.
   `RENDER_API_KEY`, `RENDER_WORKFLOW_SLUG`, and the Workflows service.
 - **A run is rejected:** the triggering actor does not have
   `minimumPermission`.
-- **Snapshot build fails:** inspect `refresh-snapshot` or the first phase run.
+- **Snapshot build fails:** inspect `refresh-snapshot` or the first stage run.
   Common causes are an invalid install command, tracked files changed by
   install, missing App installation, or a Sandbox verification failure.
-- **The phase fails closed around ownership:** Postgres could not append or
+- **The stage fails closed around ownership:** Postgres could not append or
   read `run.claimed`. Restore the database and relabel to retry.
 - **The agent cannot start:** verify the selected model's provider key in
   `factory-workflows` and run `doctor -- --service workflows`.
@@ -406,7 +407,7 @@ crossed by the response that reports the usage.
 ### Operating limits
 
 - Sandbox API calls share the workspace's 100-requests-per-minute limit. The
-  client paces calls, but expect a few concurrent phases rather than dozens.
+  client paces calls, but expect a few concurrent stages rather than dozens.
 - Sandboxes use allow-all egress so installs and Git fetches work.
 - A first run can build a snapshot inline; base-branch pushes refresh it
   asynchronously thereafter.

@@ -3,7 +3,7 @@ import type { RepoContext } from "../../app/config/index.js";
 import type { FactoryEvent } from "../../app/events/index.js";
 import { renderSpec } from "../../app/format/index.js";
 import type { Issue, IssueComment } from "../../app/github/index.js";
-import { Budget } from "../../app/phases/budget.js";
+import { Budget } from "../../app/runs/budget.js";
 import type { Sandbox, SandboxRef } from "../../app/sandbox/index.js";
 import { type AgentRunner, triageAgents } from "../../app/workflows/triage/agents.js";
 import { draftSpec } from "../../app/workflows/triage/spec.js";
@@ -95,7 +95,7 @@ export async function runEvals(cases: readonly EvalCase[], deps: EvalDeps): Prom
 }
 
 /**
- * Replays one case the way the triage phase runs an issue, minus GitHub: the same thread, the same messages, the
+ * Replays one case the way the triage stage runs an issue, minus GitHub: the same thread, the same messages, the
  * same agents sharing one budget in one sandbox at the base branch, and the same spec validation and retry.
  */
 async function runCase(c: EvalCase, traceId: string, deps: EvalDeps): Promise<CaseOutcome> {

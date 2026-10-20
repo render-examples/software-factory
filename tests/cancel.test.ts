@@ -15,7 +15,7 @@ vi.mock("../app/events/index.js", () => ({
 }));
 
 const { parseMarker, renderMarker } = await import("../app/github/index.js");
-const { WORKING_LABEL } = await import("../app/phases/index.js");
+const { WORKING_LABEL } = await import("../app/runs/index.js");
 const { cancelRun } = await import("../app/workflows/cancel.js");
 type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
@@ -77,7 +77,7 @@ beforeEach(() => {
 describe("cancel task", () => {
 	it("cancels the active run recorded in the status comment and says who cancelled it", async () => {
 		const { gh, comments, labels, add } = fakeGitHub("write");
-		add(BOT, `running\n\n${renderMarker("status", { runId: "trn-1", phase: "spec-to-pr", state: "running" })}`);
+		add(BOT, `running\n\n${renderMarker("status", { runId: "trn-1", stage: "spec-to-pr", state: "running" })}`);
 		const runs = fakeRuns({ "trn-1": "running" });
 		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
 		expect(result).toEqual({ cancelled: true, runId: "trn-1" });
@@ -88,12 +88,12 @@ describe("cancel task", () => {
 		expect(labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"]);
 		expect(events[0]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
-		expect(claims).toEqual([{ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO, subject: "issue#12", phase: "cancel", actor: "alice" }]);
+		expect(claims).toEqual([{ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO, subject: "issue#12", stage: "cancel", actor: "alice" }]);
 	});
 
 	it("refuses an actor without permission and leaves the run alone", async () => {
 		const { gh, comments, add } = fakeGitHub("read");
-		add(BOT, renderMarker("status", { runId: "trn-1", phase: "triage", state: "running" }));
+		add(BOT, renderMarker("status", { runId: "trn-1", stage: "triage", state: "running" }));
 		const runs = fakeRuns({ "trn-1": "running" });
 		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "bob" }, { gh, runs });
 		expect(result).toEqual({ cancelled: false, reason: "permission-denied" });

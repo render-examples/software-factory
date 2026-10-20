@@ -1,4 +1,4 @@
-import type { Implementation, SelfReview, Spec } from "../contracts/index.js";
+import type { Implementation, ImplementationReview, Spec } from "../contracts/index.js";
 import { BODY_MAX_CHARS, bullets, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
 /** GitHub's limit on a pull request title. */
@@ -20,7 +20,7 @@ export interface PullRequestBodyInput {
 	issue: number;
 	spec: Spec;
 	implementation: Implementation;
-	selfReview?: SelfReview;
+	implementationReview?: ImplementationReview;
 	/** The workflow's own verify run. Without it, the implementer's self-reported results are shown as such. */
 	verification?: readonly VerifyResult[];
 	/** Link to the spec comment. */
@@ -30,7 +30,7 @@ export interface PullRequestBodyInput {
 
 /** The draft PR's body. The caller appends its hidden marker. */
 export function pullRequestBody(input: PullRequestBodyInput): string {
-	const { spec, implementation, selfReview } = input;
+	const { spec, implementation, implementationReview } = input;
 	const sections: string[] = [`## Summary\n\n${sanitize(implementation.summary)}`];
 
 	sections.push(
@@ -46,8 +46,11 @@ export function pullRequestBody(input: PullRequestBodyInput): string {
 		sections.push(`## Verification (reported by the implementer)\n\n| Result | Command | Notes |\n| --- | --- | --- |\n${rows.join("\n")}`);
 	}
 
-	const notes = [...(selfReview?.notes ?? []), ...(selfReview?.issues ?? []).map((i) => `${i.file}${i.line ? `:${i.line}` : ""}: ${i.problem}`)];
-	if (notes.length > 0) sections.push(`## Self-review notes\n\n${bullets(notes)}`);
+	const notes = [
+		...(implementationReview?.notes ?? []),
+		...(implementationReview?.issues ?? []).map((i) => `${i.file}${i.line ? `:${i.line}` : ""}: ${i.problem}`),
+	];
+	if (notes.length > 0) sections.push(`## Implementation review notes\n\n${bullets(notes)}`);
 	if (implementation.followUps.length > 0) sections.push(`## Follow-ups\n\n${bullets(implementation.followUps)}`);
 
 	const links = input.specUrl ? `\n\n[Specification](${input.specUrl})` : "";

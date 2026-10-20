@@ -2,7 +2,7 @@
 
 Start with a working deployment from [0_QUICKSTART.md](0_QUICKSTART.md).
 This guide covers supported extension points: repositories, labels,
-permissions, models, agents, phases, webhook routes, and evals. Read
+permissions, models, agents, stages, webhook routes, and evals. Read
 [2_ARCHITECTURE.md](2_ARCHITECTURE.md) before changing run coordination,
 Sandbox boundaries, credentials, or publishing.
 
@@ -86,15 +86,15 @@ a new snapshot.
 | `commandPrefix` | `/factory` | Prefix for comment commands; `<prefix> cancel` must be the first line |
 | `minimumPermission` | `write` | Live GitHub permission required to start or cancel: `triage`, `write`, `maintain`, or `admin` |
 | `models.small` | `anthropic/claude-haiku-4-5` | Small model tier; no built-in agent currently uses it |
-| `models.medium` | `anthropic/claude-sonnet-5` | Triage, self-review, specialists, and synthesizer |
+| `models.medium` | `anthropic/claude-sonnet-5` | Triage, implementation reviewer, and PR reviewer |
 | `models.large` | `anthropic/claude-opus-5` | Spec writer and implementer |
-| `limits.perRunUsd` | `20` | Soft reported-cost threshold shared by every agent in a phase |
+| `limits.perRunUsd` | `20` | Soft reported-cost threshold shared by every agent in a stage |
 | `limits.repairRounds` | `2` | Implementer runs allowed after failed verification |
 | `limits.maxChangedFiles` | `200` | Publishing file-count limit |
 | `limits.maxFileBytes` | `1000000` | Publishing per-file size limit |
 | `sandbox.timeoutSeconds` | `14400` | Provider-side Sandbox lifetime backstop |
 
-Keep `sandbox.timeoutSeconds` at least as long as the longest phase task.
+Keep `sandbox.timeoutSeconds` at least as long as the longest stage task.
 Spec-to-PR's task timeout is four hours by default.
 
 After renaming a label, deploy both services and rerun
@@ -102,8 +102,8 @@ After renaming a label, deploy both services and rerun
 
 `perRunUsd` is not a hard cap. Usage arrives after a model response, so the
 response that crosses the remaining budget is still charged. Failed agent
-calls count, and parallel reviewer calls can cross their shares. Always pair
-the software threshold with a provider-enforced spend limit.
+calls count. Always pair the software threshold with a provider-enforced
+spend limit.
 
 ## Choose models
 
@@ -141,8 +141,9 @@ An agent is a Markdown prompt plus a typed definition in
 
 ```text
 app/agents/
-  implementer.md
-  implementer.ts
+  implementer/
+    index.ts
+    prompt.md
 ```
 
 ```typescript
@@ -150,7 +151,7 @@ export const implementerVars = ["repo", "verifyCommands"] as const;
 
 export const implementer = defineAgent({
   id: "implementer",
-  prompt: "implementer.md",
+  prompt: "implementer/prompt.md",
   model: "large",
   tools: ["read", "ls", "bash", "edit", "write"],
   output: Implementation,
@@ -161,7 +162,7 @@ export const implementer = defineAgent({
 | Field | Meaning |
 |---|---|
 | `id` | Unique event and trace name |
-| `prompt` | File relative to `app/agents/`, read verbatim |
+| `prompt` | File relative to `app/agents/`, normally `<id>/prompt.md`, read verbatim |
 | `model` | `small`, `medium`, or `large` |
 | `tools` | Any of `read`, `ls`, `bash`, `edit`, `write` |
 | `output` | Zod object schema used for the `submit` tool and host validation |
@@ -220,31 +221,23 @@ const result = await run.budget.track((budgetUsd) =>
     },
   ),
 );
-
-// No tools: the same model loop runs in the Workflows process.
-const review = await run.budget.track((budgetUsd) =>
-  runAgent(
-    synthesizer,
-    { message, vars: { repo: repo.fullName } },
-    { traceId: run.traceId, budgetUsd },
-  ),
-);
 ```
 
 `runAgent` returns output, usage, reported cost, and turns. It emits
 `agent.started` and `agent.finished`. Failures throw `AgentError` with the
 usage already incurred, so pass every call through `run.budget.track`.
 
-For parallel calls, use the budget helper's `shareOf` option as PR Reviewer
-does. The default call timeout is 30 minutes.
+For parallel calls, use the budget helper's `shareOf` option to reserve budget
+for every call. The default call timeout is 30 minutes.
 
 ### Add an agent
 
-1. Add `app/agents/<id>.md` and `<id>.ts` with `defineAgent`.
+1. Add `app/agents/<id>/prompt.md` and `app/agents/<id>/index.ts` with
+   `defineAgent`.
 2. Export the definition and its placeholder names from
    `app/agents/index.ts`.
 3. Add or reuse a bounded Zod schema in `app/contracts/`.
-4. Call it from a phase, passing a Sandbox exactly when it declares tools.
+4. Call it from a stage, passing a Sandbox exactly when it declares tools.
 5. Add it to `tests/agents-catalog.test.ts` with its intended model, tools,
    turn limit, placeholders, and sample output.
 6. Run `npm run check`.
@@ -257,39 +250,39 @@ Changes to `app/runner/` or `sandbox/` are different from prompt
 changes: those files are bundled into each repository snapshot. Rebuild by
 pushing to each base branch or starting `refresh-snapshot` manually.
 
-## Add a phase
+## Add a stage
 
-A phase is a named Workflows task whose body runs inside `withPhase`. That
+A stage is a named Workflows task whose body runs inside `withRun`. That
 shared lifecycle provides events, a live permission check, a durable run
 claim, takeover of an older run, ownership checkpoints, a status comment,
-the working label, and the phase budget.
+the working label, and the stage budget.
 
-1. Add the task name to `TASKS` in `app/config/index.ts` and the `Phase` type
-   and title in `app/phases/status.ts`.
+1. Add the task name to `TASKS` in `app/config/index.ts` and the `Stage` type
+   and title in `app/runs/status.ts`.
 2. Add a bounded Zod input schema to `app/contracts/tasks.ts`. Extend
    `RepoInput` so the repository and installation still come from the
    authenticated webhook.
 3. Implement the task under `app/workflows/<name>/`. Parse input, call
-   `requireRepo`, identify the issue or PR, and wrap the body in `withPhase`.
+   `requireRepo`, identify the issue or PR, and wrap the body in `withRun`.
 4. Open a Sandbox only when needed and close it in `finally`.
 5. Call `run.progress()` before major steps and `run.checkpoint()`
    immediately before any durable write not already adjacent to progress.
-6. Throw `PhaseError` only for expected messages safe to show on GitHub.
+6. Throw `RunError` only for expected messages safe to show on GitHub.
    Unexpected errors produce a generic public message and fail the task.
 7. Export the task from `app/workflows/index.ts`.
 8. Route an authenticated webhook to it in `app/gateway/routes.ts`, register
    its input in `app/gateway/index.ts`, and test the pure route.
 9. Add labels, webhook events, or App permissions to
    `scripts/lib/requirements.ts` so setup and doctor share the requirement.
-10. Add phase tests with injected GitHub, Sandbox, agent, and run-control
+10. Add stage tests with injected GitHub, Sandbox, agent, and run-control
     fakes, then run `npm run check`.
 
 Set the Workflows task timeout for the longest expected run and ensure
-`sandbox.timeoutSeconds` is at least that large. Built-in phases disable
+`sandbox.timeoutSeconds` is at least that large. Built-in stages disable
 automatic retries because another attempt would repeat model spend; a person
 relabels to start a fresh run.
 
-Before adding another framework around phases, check whether `withPhase`,
+Before adding another framework around stages, check whether `withRun`,
 Workflows task state, GitHub markers, and the existing Postgres claim already
 cover the requirement.
 
@@ -321,7 +314,7 @@ scoped to a Workflows version, so marker idempotency remains necessary.
 
 If integrating a non-GitHub system, keep it as an authenticated adapter:
 verify and acknowledge its event, translate it to a bounded task input, and
-leave repository and write authority with trusted phase code. Do not pass
+leave repository and write authority with trusted stage code. Do not pass
 arbitrary destinations through an agent schema.
 
 ## Add eval cases
@@ -333,7 +326,7 @@ Evals currently cover Triage and the spec writer. One JSON file under
 {
   "id": "underspecified-search",
   "description": "A vague request gets questions, not a spec.",
-  "phase": "triage",
+  "stage": "triage",
   "issue": {
     "title": "Search",
     "body": "It would be nice to be able to search.",

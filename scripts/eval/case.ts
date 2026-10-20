@@ -12,7 +12,7 @@ export const EvalCase = z
 		id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/, "ids are lowercase words joined by hyphens"),
 		description: Text,
 		/** Only triage for now: it runs the triage agent and, on "draft", the spec writer. */
-		phase: z.literal("triage"),
+		stage: z.literal("triage"),
 		issue: z.object({ title: Text, body: Text, labels: z.array(Text).optional() }),
 		/** Oldest first. `bot` marks a comment from some other GitHub App, which triage leaves out of the thread. */
 		comments: z.array(z.object({ author: Text, body: Text, bot: z.boolean().optional() })).optional(),

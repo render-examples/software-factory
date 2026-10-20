@@ -24,17 +24,29 @@ describe("markers", () => {
 	});
 
 	it("returns null for missing, other-kind, corrupted, or invalid markers", () => {
-		const status = renderMarker("status", { runId: "trn-1", phase: "triage", state: "done" });
+		const status = renderMarker("status", { runId: "trn-1", stage: "triage", state: "done" });
 		expect(parseMarker("no marker here", "status")).toBeNull();
 		expect(parseMarker(status, "spec")).toBeNull();
 		expect(parseMarker(status.replace(/ [A-Za-z0-9_-]+ -->/, " AAAA -->"), "status")).toBeNull();
-		const wrongShape = Buffer.from(JSON.stringify({ runId: "x", phase: "triage", state: "exploded" })).toString("base64url");
+		const wrongShape = Buffer.from(JSON.stringify({ runId: "x", stage: "triage", state: "exploded" })).toString("base64url");
 		expect(parseMarker(`<!-- software-factory:status ${wrongShape} -->`, "status")).toBeNull();
+	});
+
+	it("reads legacy status markers as stages while writing the new shape", () => {
+		const legacy = Buffer.from(JSON.stringify({ runId: "trn-old", phase: "triage", state: "done" })).toString("base64url");
+		expect(parseMarker(`<!-- software-factory:status ${legacy} -->`, "status")).toEqual({
+			runId: "trn-old",
+			stage: "triage",
+			state: "done",
+		});
+		expect(Buffer.from(renderMarker("status", { runId: "trn-new", stage: "triage", state: "done" }).split(" ")[2] ?? "", "base64url").toString()).not.toContain(
+			'"phase"',
+		);
 	});
 });
 
 describe("findMarkedComment", () => {
-	const marker = (runId: string) => renderMarker("status", { runId, phase: "triage", state: "running" });
+	const marker = (runId: string) => renderMarker("status", { runId, stage: "triage", state: "running" });
 
 	it("ignores markers pasted by anyone else", () => {
 		const comments = [comment(1, BOT, marker("trn-real")), comment(2, "mallory", `copied: ${marker("trn-forged")}`)];

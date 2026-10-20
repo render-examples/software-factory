@@ -6,7 +6,7 @@ import { Budget } from "./budget.js";
 import { checkPermission } from "./permission.js";
 import {
 	finishStatus,
-	type Phase,
+	type Stage,
 	type RunControl,
 	type StatusLink,
 	type Subject,
@@ -16,8 +16,8 @@ import {
 } from "./status.js";
 import { traceIds } from "./trace.js";
 
-/** What a phase body gets. */
-export interface PhaseRun {
+/** What a stage body gets. */
+export interface RunContext {
 	gh: GitHubClient;
 	repo: RepoContext;
 	subject: Subject;
@@ -31,8 +31,8 @@ export interface PhaseRun {
 	progress(summary: string): Promise<void>;
 }
 
-/** How a phase body ended. `summary` is shown on GitHub, so it must be safe to publish. */
-export interface PhaseResult {
+/** How a stage body ended. `summary` is shown on GitHub, so it must be safe to publish. */
+export interface RunResult {
 	outcome: string;
 	summary: string;
 	state?: "done" | "failed";
@@ -40,13 +40,13 @@ export interface PhaseResult {
 }
 
 /** An expected failure: its message is shown on GitHub and the task succeeds. Anything else fails the task. */
-export class PhaseError extends Error {
+export class RunError extends Error {
 	constructor(
 		message: string,
 		readonly outcome = "failed",
 	) {
 		super(message);
-		this.name = "PhaseError";
+		this.name = "RunError";
 	}
 }
 
@@ -58,17 +58,17 @@ export interface RunCoordination {
 	isCurrent(claim: RunClaim): Promise<boolean>;
 }
 
-export interface PhaseOptions {
+export interface RunOptions {
 	repo: RepoContext;
 	subject: Subject;
-	phase: Phase;
+	stage: Stage;
 	actor: string;
 	gh?: GitHubClient;
 	runs?: RunControl;
 	coordination?: RunCoordination;
 }
 
-export interface PhaseOutcome {
+export interface RunOutcome {
 	state: Exclude<RunState, "running">;
 	outcome: string;
 	summary: string;
@@ -76,13 +76,13 @@ export interface PhaseOutcome {
 	runId: string;
 }
 
-/** The lifecycle every phase shares: events, permission check, durable claim, takeover, checkpoints, and final status. */
-export async function withPhase(
+/** The lifecycle every stage shares: events, permission check, durable claim, takeover, checkpoints, and final status. */
+export async function withRun(
 	ctx: Pick<TaskContext, "metadata">,
-	opts: PhaseOptions,
-	fn: (run: PhaseRun) => Promise<PhaseResult>,
-): Promise<PhaseOutcome> {
-	const { repo, subject, phase, actor } = opts;
+	opts: RunOptions,
+	fn: (run: RunContext) => Promise<RunResult>,
+): Promise<RunOutcome> {
+	const { repo, subject, stage, actor } = opts;
 	const ids = traceIds(ctx);
 	const traceId = ids.traceId;
 	const runId = ids.runId ?? traceId;
@@ -93,38 +93,38 @@ export async function withPhase(
 	const budget = new Budget(config.limits.perRunUsd);
 
 	const status = (state: Exclude<RunState, "running">, summary: string, links?: StatusLink[]) =>
-		finishStatus({ gh, number: subject.number, runId, phase, state, summary, links });
+		finishStatus({ gh, number: subject.number, runId, stage, state, summary, links });
 	const finished = async (
-		state: PhaseOutcome["state"],
+		state: RunOutcome["state"],
 		outcome: string,
 		summary: string,
 		extra: Record<string, unknown> = {},
-	): Promise<PhaseOutcome> => {
+	): Promise<RunOutcome> => {
 		await emit({
 			...base,
 			type: "run.finished",
-			payload: { phase, state, outcome, durationMs: Date.now() - startedAt, costUsd: budget.spent, ...extra },
+			payload: { stage, state, outcome, durationMs: Date.now() - startedAt, costUsd: budget.spent, ...extra },
 		});
 		return { state, outcome, summary, traceId, runId };
 	};
 	const superseded = () => finished("cancelled", "superseded", "a newer run took over.");
 
-	await emit({ ...base, type: "run.started", payload: { phase, actor } });
+	await emit({ ...base, type: "run.started", payload: { stage, actor } });
 	try {
 		if (!(await checkPermission(gh, actor))) {
 			const summary = `@${actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
 			await status("rejected", summary);
 			return await finished("rejected", "permission-denied", summary);
 		}
-		const claim = await coordination.claim({ ...base, phase, actor });
+		const claim = await coordination.claim({ ...base, stage, actor });
 		const checkpoint = async () => {
 			if (!(await coordination.isCurrent(claim))) throw new SupersededRun();
 		};
-		await takeOver({ gh, subject, phase, runId, runs: opts.runs });
+		await takeOver({ gh, subject, stage, runId, runs: opts.runs });
 		await checkpoint();
 		const progress = async (summary: string) => {
 			await checkpoint();
-			if (!(await setStatus({ gh, number: subject.number, runId, phase, state: "running", summary }))) throw new SupersededRun();
+			if (!(await setStatus({ gh, number: subject.number, runId, stage, state: "running", summary }))) throw new SupersededRun();
 			await checkpoint();
 		};
 		const result = await fn({ gh, repo, subject, traceId, runId, budget, checkpoint, progress });
@@ -134,7 +134,7 @@ export async function withPhase(
 		return await finished(state, result.outcome, result.summary);
 	} catch (error) {
 		if (error instanceof SupersededRun) return await superseded();
-		if (error instanceof PhaseError) {
+		if (error instanceof RunError) {
 			await status("failed", error.message);
 			return await finished("failed", error.outcome, error.message);
 		}

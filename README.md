@@ -3,7 +3,7 @@
 A self-hosted factory that turns a labeled GitHub issue into a reviewed spec,
 a verified draft pull request, and a COMMENT review. It runs in your Render
 workspace with one web service, one Workflows service, Postgres, and a fresh
-Render Sandbox for each phase.
+Render Sandbox for each stage.
 
 The factory is deliberately gated by people. Label an issue to triage it,
 approve the resulting spec with a second label, and label the pull request
@@ -27,9 +27,10 @@ belong to people:
 - **Triage** reads the issue, discussion, and code, then asks focused
   questions, writes a spec, or declines.
 - **Spec-to-PR** implements only an explicitly approved spec, runs configured
-  verification, self-reviews the result, and opens a draft PR.
-- **PR Reviewer** runs verification and combines security, correctness,
-  performance, and test reviews into one COMMENT review.
+  verification, independently reviews the implementation, and opens a draft
+  PR.
+- **PR Reviewer** runs verification and reviews security, correctness,
+  performance, and tests in one COMMENT review.
 
 GitHub remains the place where people converse and approve transitions.
 Render Workflows owns durable execution. Postgres orders competing runs on the
@@ -37,9 +38,9 @@ same issue or PR. Sandboxes contain model-directed tools and repository code.
 
 ### What it demonstrates on Render
 
-- **Workflows:** webhook events start durable phase tasks directly; there is no
+- **Workflows:** webhook events start durable stage tasks directly; there is no
   custom queue, dispatcher, heartbeat loop, or cron.
-- **Sandboxes:** every phase restores a per-repository snapshot with
+- **Sandboxes:** every stage restores a per-repository snapshot with
   dependencies installed, fetches the requested ref, and terminates in
   `finally`.
 - **Blueprints:** [`render.yaml`](render.yaml) creates the gateway, Workflows
@@ -60,8 +61,8 @@ same issue or PR. Sandboxes contain model-directed tools and repository code.
    Spec-to-PR uses the exact spec that existed when the label was applied,
    implements it, runs the configured checks, and opens a draft PR on
    `factory/issue-<n>`.
-4. A person applies `factory:pr-review` to any open PR. Four specialist agents
-   inspect the labeled commit and a synthesizer posts one COMMENT review.
+4. A person applies `factory:pr-review` to any open PR. The PR reviewer
+   inspects the labeled commit and posts one COMMENT review.
 5. Each base-branch push starts `refresh-snapshot`, preparing the next
    dependency-installed snapshot. The first run builds one inline if needed.
 
@@ -115,7 +116,7 @@ development, evals, and operations in detail.
 ## Limits
 
 - Phases never chain automatically, and the factory never approves or merges.
-- Verification is command-based; the template has no browser-testing phase.
+- Verification is command-based; the template has no browser-testing stage.
 - `limits.perRunUsd` is a soft threshold because providers report cost after
   a response. A provider-enforced spend limit is the hard backstop.
 - Sandboxes have allow-all egress and share Render's workspace-level Sandbox
@@ -128,7 +129,7 @@ development, evals, and operations in detail.
 - [docs/0_QUICKSTART.md](docs/0_QUICKSTART.md): deploy, use, develop, test,
   evaluate, and operate the factory.
 - [docs/1_EXTENSION.md](docs/1_EXTENSION.md): configure repositories and
-  models, change agents, add phases, and integrate another trigger.
+  models, change agents, add stages, and integrate another trigger.
 - [docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md): repository layout, core
   execution paths, interfaces, state, publishing, and trust boundaries.
 - [docs/3_TAKEAWAYS.md](docs/3_TAKEAWAYS.md): reusable patterns for

@@ -10,7 +10,7 @@ import {
 	makeWorkspace,
 	parseEvents,
 	runCli,
-	runScripted,
+	runWithTestStub,
 	SUBMIT,
 	terminal,
 	toolResults,
@@ -30,22 +30,28 @@ afterEach(() => {
 });
 
 describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
-	it("--faux lists the working directory and submits a value built from the output schema", () => {
+	it("--test-stub lists the working directory and submits a value built from the output schema", () => {
 		const ws = makeWorkspace();
-		const { code, stdout, stderr } = runCli(["--faux"], JSON.stringify(makeInput(ws)));
+		const { code, stdout, stderr } = runCli(["--test-stub"], JSON.stringify(makeInput(ws)));
 		const events = parseEvents(stdout);
-		expect(events[0]).toEqual({ type: "started", at: expect.any(String), agent_id: "test-agent", model: "faux/faux", pi_version: "0.83.0" });
+		expect(events[0]).toEqual({
+			type: "started",
+			at: expect.any(String),
+			agent_id: "test-agent",
+			model: "test-stub/test-stub",
+			pi_version: "0.83.0",
+		});
 		expect(toolResults(events).map((r) => [r.tool, r.is_error])).toEqual([
 			["ls", false],
 			[SUBMIT, false],
 		]);
 		expect(toolResults(events)[0]?.output_preview.split("\n")).toEqual([".git/", "README.md", "src/"]);
-		expect(terminal(events)).toMatchObject({ type: "result", output: { summary: "[faux]", files: [] }, turns: 2 });
+		expect(terminal(events)).toMatchObject({ type: "result", output: { summary: "[test-stub]", files: [] }, turns: 2 });
 		expect(code, stderr).toBe(0);
 	});
 
 	it("runs an agent with no tools and no cwd: the model gets only submit", () => {
-		const { code, stdout } = runCli(["--faux"], JSON.stringify(makeInput(undefined)));
+		const { code, stdout } = runCli(["--test-stub"], JSON.stringify(makeInput(undefined)));
 		const events = parseEvents(stdout);
 		expect(toolResults(events).map((r) => r.tool)).toEqual([SUBMIT]);
 		expect(terminal(events).type).toBe("result");
@@ -55,8 +61,8 @@ describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 	it("--key-stdin takes the key from the first line of stdin and the input from the rest, and never echoes the key", () => {
 		const ws = makeWorkspace();
 		const key = "sk-ant-test-stdin-0123456789abcdef";
-		const { code, stdout, stderr } = runCli(["--faux", "--key-stdin"], ` ${key} \r\n${JSON.stringify(makeInput(ws))}`);
-		expect(terminal(parseEvents(stdout))).toMatchObject({ type: "result", output: { summary: "[faux]" } });
+		const { code, stdout, stderr } = runCli(["--test-stub", "--key-stdin"], ` ${key} \r\n${JSON.stringify(makeInput(ws))}`);
+		expect(terminal(parseEvents(stdout))).toMatchObject({ type: "result", output: { summary: "[test-stub]" } });
 		expect(stdout + stderr).not.toContain(key);
 		expect(code).toBe(0);
 	});
@@ -65,7 +71,7 @@ describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 describe("submit", { timeout: 30_000 }, () => {
 	it("returns every problem to the model, and accepts the corrected submission", async () => {
 		const ws = makeWorkspace();
-		const { code, events } = await runScripted(makeInput(ws), () => [
+		const { code, events } = await runWithTestStub(makeInput(ws), () => [
 			call(SUBMIT, { summary: "x", files: "README.md", confidence: "maybe", extra: 1 }),
 			call(SUBMIT, GOOD),
 		]);
@@ -82,7 +88,7 @@ describe("submit", { timeout: 30_000 }, () => {
 describe("run limits", { timeout: 30_000 }, () => {
 	it("stops after max_turns without a submission", async () => {
 		const ws = makeWorkspace();
-		const { code, events } = await runScripted(makeInput(ws, { max_turns: 3 }), () => [
+		const { code, events } = await runWithTestStub(makeInput(ws, { max_turns: 3 }), () => [
 			...Array.from({ length: 5 }, () => call("ls", {})),
 			call(SUBMIT, GOOD),
 		]);
@@ -105,7 +111,7 @@ describe("credentials", { timeout: 30_000 }, () => {
 		process.env.OPENAI_API_KEY = "sk-openai-not-for-the-model";
 		process.env.RENDER_API_KEY = "rnd-not-for-the-model";
 
-		const { code, stdout, events } = await runScripted(
+		const { code, stdout, events } = await runWithTestStub(
 			makeInput(ws, { tools: ["bash", "write"] }),
 			() => [
 				call("bash", { command: `(test -e ${keyFile} && echo KEY_FILE_PRESENT || echo KEY_FILE_ABSENT; env) > $HOME/env.txt` }),
@@ -130,7 +136,7 @@ describe("credentials", { timeout: 30_000 }, () => {
 describe("tools", { timeout: 30_000 }, () => {
 	it("read-only agents: bash rejects git push and rm, and runs read-only commands", async () => {
 		const ws = makeWorkspace();
-		const { events } = await runScripted(makeInput(ws), () => [
+		const { events } = await runWithTestStub(makeInput(ws), () => [
 			call("bash", { command: "git push origin main" }),
 			call("bash", { command: "rm README.md" }),
 			call("bash", { command: "echo hi > notes.txt" }),
@@ -149,7 +155,7 @@ describe("tools", { timeout: 30_000 }, () => {
 
 	it("agents with edit and write create and edit files in cwd, and bash is unrestricted", async () => {
 		const ws = makeWorkspace();
-		const { events } = await runScripted(makeInput(ws, { tools: ["read", "bash", "edit", "write"] }), () => [
+		const { events } = await runWithTestStub(makeInput(ws, { tools: ["read", "bash", "edit", "write"] }), () => [
 			call("write", { path: "src/new.ts", content: "export const added = true;\n" }),
 			call("edit", { path: "src/app.ts", edits: [{ oldText: "41", newText: "42" }] }),
 			call("bash", { command: "rm README.md && git status --porcelain > $HOME/status.txt" }),
