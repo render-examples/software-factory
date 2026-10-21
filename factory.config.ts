@@ -39,10 +39,10 @@ export function defineFactoryConfig(config: FactoryConfig): FactoryConfig {
 
 export default defineFactoryConfig({
 	repos: {
-		"jacobprall/software-factory-demo": {
+		"render-examples/render-factory-example-target": {
 			baseBranch: "main",
 			install: "npm ci",
-			verify: ["npm run build", "npm test -- --watchAll=false"],
+			verify: ["npm run build", "npm test"],
 		},
 	},
 	labels: {
