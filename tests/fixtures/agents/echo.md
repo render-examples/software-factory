@@ -1,3 +1,3 @@
-You are a test agent for {{repo}}.
+You are a test agent.
 
-Report on issue #{{ issue }} and submit exactly once.
+Report on the task and submit exactly once.

@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,8 +111,7 @@ export async function buildSnapshot(
 		await client.check(id, `mkdir -p -m 700 ${STAGE}`, { ...boot, waitReady: true });
 		// Uploaded as an opaque .tgz and extracted in the sandbox: the upload endpoint rejects an
 		// uncompressed tar of the bundled runner's JavaScript, and doesn't accept application/gzip.
-		const stage = await stageArchive();
-		await client.upload(id, `${STAGE}/stage.tgz`, stage.archive);
+		await client.upload(id, `${STAGE}/stage.tgz`, await stageArchive());
 		await client.check(id, `tar -xzf ${STAGE}/stage.tgz -C ${STAGE} && rm ${STAGE}/stage.tgz`, boot);
 		await client.check(
 			id,
@@ -122,10 +120,10 @@ export async function buildSnapshot(
 				` && cp ${STAGE}/runner/runner.mjs ${APP_DIR}/runner/`,
 			boot,
 		);
-		await client.check(id, `bash ${APP_DIR}/install-tools.sh ${APP_DIR}`, prepare);
-		const env = await detectEnv(client, id);
+		await client.check(id, `bash ${APP_DIR}/install-tools.sh`, prepare);
+		const node = await nodePath(client, id);
 		await client.check(id, createRunnerUserCommand(), boot);
-		await client.upload(id, `${APP_DIR}/env`, envFileContent(env.nodePath, env.dropTool));
+		await client.upload(id, `${APP_DIR}/env`, envFileContent(node));
 		await client.upload(id, `${APP_DIR}/gitconfig`, SANDBOX_GITCONFIG);
 		// The self-test executes third-party code (the bundled packages); the token arrives only after it passes.
 		await client.check(
@@ -135,7 +133,7 @@ export async function buildSnapshot(
 				`chmod -R a+rX,go-w ${APP_DIR}`,
 				`chown ${RUN_AS}: ${SCRATCH_DIR}`,
 				`chmod 700 ${SCRATCH_DIR}`,
-				`timeout 120 ${asRunner(env.nodePath, `${APP_DIR}/runner/runner.mjs`, "--self-test")}`,
+				`timeout 120 ${asRunner(node, `${APP_DIR}/runner/runner.mjs`, "--self-test")}`,
 			].join(" && "),
 			prepare,
 		);
@@ -164,12 +162,11 @@ export async function buildSnapshot(
 			baseBranch: branch,
 			sha,
 			lockfileHash,
-			runnerHash: stage.runnerHash,
 			install,
 			createdAt: new Date().toISOString(),
 		};
 		await client.upload(id, `${APP_DIR}/manifest.json`, JSON.stringify(manifest, null, 2));
-		await client.check(id, lockdownCommand(env.nodePath), prepare);
+		await client.check(id, lockdownCommand(node), prepare);
 		await verifySandbox(client, id);
 
 		const snap = await createSnapshot(client, id, name);
@@ -181,36 +178,23 @@ export async function buildSnapshot(
 	}
 }
 
-/** Detects the node binary path and the available privilege-drop tool inside the sandbox. */
-async function detectEnv(client: SandboxClient, id: string): Promise<{ nodePath: string; dropTool: string }> {
-	const res = await client.exec(
-		id,
-		[
-			`node=$([ -x ${APP_DIR}/node/bin/node ] && echo ${APP_DIR}/node/bin/node || command -v node)`,
-			`drop=none; for t in setpriv runuser su; do command -v "$t" >/dev/null 2>&1 && drop=$t && break; done`,
-			'printf "%s\\n%s\\n" "$node" "$drop"',
-		].join(" && "),
-		{ timeoutMs: client.t.bootTimeoutMs },
-	);
-	if (res.exitCode !== 0) throw new Error(`environment detection failed: ${res.stderr.trim()}`);
-	const [nodePath, dropTool] = res.stdout.trim().split("\n");
-	if (!nodePath?.startsWith("/")) throw new Error("environment detection returned no node path");
-	if (!dropTool || dropTool === "none") throw new Error("no privilege-drop tool (setpriv, runuser, or su) in the builder");
-	return { nodePath, dropTool };
+/** The base image's node, which the runner and the repository's tools run under. */
+async function nodePath(client: SandboxClient, id: string): Promise<string> {
+	const path = (await client.check(id, "command -v node", { timeoutMs: client.t.bootTimeoutMs })).trim();
+	if (!path.startsWith("/")) throw new Error(`command -v node printed ${JSON.stringify(path.slice(0, 200))}`);
+	return path;
 }
 
-/** Creates the unprivileged runner user (useradd or adduser, depending on the distro). */
+/** Creates the unprivileged runner user. */
 function createRunnerUserCommand(): string {
 	return (
 		`id -u ${RUN_AS} >/dev/null 2>&1` +
-		` || { command -v useradd >/dev/null && useradd --system --user-group --no-create-home` +
-		` --home-dir ${SCRATCH_DIR}/home --shell /usr/sbin/nologin ${RUN_AS}; }` +
-		` || { addgroup -S ${RUN_AS} && adduser -S -D -H -h ${SCRATCH_DIR}/home -s /sbin/nologin -G ${RUN_AS} ${RUN_AS}; }`
+		` || useradd --system --user-group --no-create-home --home-dir ${SCRATCH_DIR}/home --shell /usr/sbin/nologin ${RUN_AS}`
 	);
 }
 
 /** The env file that the sandbox scripts source. */
-function envFileContent(nodePath: string, dropTool: string): string {
+function envFileContent(nodePath: string): string {
 	const nodeDir = nodePath.substring(0, nodePath.lastIndexOf("/"));
 	return `${[
 		`FACTORY_ROOT=${SANDBOX_ROOT}`,
@@ -218,10 +202,9 @@ function envFileContent(nodePath: string, dropTool: string): string {
 		`FACTORY_REPO_DIR=${REPO_DIR}`,
 		`FACTORY_SCRATCH_DIR=${SCRATCH_DIR}`,
 		`FACTORY_RUN_AS=${RUN_AS}`,
-		`FACTORY_DROP=${dropTool}`,
 		`FACTORY_NODE=${nodePath}`,
 		`FACTORY_RUNNER_NODE=${APP_DIR}/node-runner`,
-		`FACTORY_PATH=${APP_DIR}/bin:${nodeDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+		`FACTORY_PATH=${nodeDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
 	].join("\n")}\n`;
 }
 
@@ -294,9 +277,8 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 }
 
 /** A gzipped tar of the runtime scripts and a freshly built, self-contained runner bundle. */
-async function stageArchive(): Promise<{ archive: Buffer; runnerHash: string }> {
+async function stageArchive(): Promise<Buffer> {
 	const bundle = await bundleRunner();
-	const runnerHash = createHash("sha256").update(bundle).digest("hex");
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
 		await mkdir(join(dir, "runner"));
@@ -305,7 +287,7 @@ async function stageArchive(): Promise<{ archive: Buffer; runnerHash: string }> 
 		for (const file of RUNTIME_SCRIPTS) await cp(join(SANDBOX_SCRIPTS_DIR, file), join(dir, file));
 		const chunks: Buffer[] = [];
 		for await (const chunk of createTar({ cwd: dir, portable: true, gzip: true }, await readdir(dir))) chunks.push(chunk as Buffer);
-		return { archive: Buffer.concat(chunks), runnerHash };
+		return Buffer.concat(chunks);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

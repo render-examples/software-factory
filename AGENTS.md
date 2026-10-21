@@ -10,7 +10,7 @@ software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COM
 
 Two processes deploy:
 
-- `app/entrypoints/gateway.ts`: the gateway web service. Verifies webhooks, routes each to one task, calls `startTask` with the delivery ID as the idempotency key, and serves the trace UI.
+- `app/entrypoints/gateway.ts`: the gateway web service. Verifies webhooks, routes each to one task, and calls `startTask` with the delivery ID as the idempotency key.
 - `app/entrypoints/workflows.ts`: the Workflows service. Importing `app/workflows/index.ts` registers every task.
 
 `app/sql/` holds the migrations, applied by `npm run db:migrate` as the gateway's pre-deploy command.
@@ -18,25 +18,24 @@ Two processes deploy:
 ## Module map
 
 ```text
-factory.config.ts   Repositories (base branch, install, verify), labels, permission, model tiers, limits, sandbox timeout
+factory.config.ts   Repositories (base branch, install, verify), labels, permission, model tiers, publish and repair limits, sandbox timeout
 app/
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
   changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
   schemas/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
   entrypoints/       Gateway and Workflows process entry points
-  events/           strict run claims, best-effort emit(), and trace UI readers over the events table
+  events/           Strict run claims and best-effort emit() over the events table
   format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
-  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), admin auth, trace UI (ui/)
+  gateway/          Hono app: signature check, body cap, the routing table (routes.ts)
   github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
   runner/           The agent runner: one Pi agent loop, tools, submit, key handling. Bundled into the snapshot
   sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
-  runs/             withRun lifecycle: permission, durable claim, takeover, ownership checkpoints, status, budget
+  runs/             withRun lifecycle: permission, durable claim, takeover, ownership checkpoints, status
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
   sql/              Migrations
 sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
-scripts/            setup-app, setup-github, doctor, migrate, eval
-evals/cases/        Eval cases (JSON)
+scripts/            setup-app, setup-github, doctor, migrate
 tests/              Vitest unit tests; fakes in tests/helpers/
 ```
 
@@ -67,9 +66,8 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 - Strict TypeScript, ESM, NodeNext. Relative imports end in `.js`. No path aliases.
 - Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
 - Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
-- Task inputs and results stay small and JSON-serializable. Built-in stages
-  keep one sandbox within one task; if a future workflow shares a running
-  sandbox across tasks, pass its ID and reconnect with `connectSandbox`.
+- Task inputs and results stay small and JSON-serializable. Each stage opens
+  one sandbox and closes it within the same task.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
 - Stage implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
@@ -123,7 +121,6 @@ each is enforced):
 
 ```bash
 npm run check                    # Biome lint, tsc --noEmit, all Vitest tests
-npm run eval -- --validate       # eval case files
 shellcheck sandbox/*.sh sandbox/build/*.sh
 render blueprints validate render.yaml   # when render.yaml changes
 npm audit --omit=dev --audit-level=high

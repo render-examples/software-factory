@@ -14,6 +14,7 @@ vi.mock("../app/events/index.js", () => ({
 	isCurrentRun: async () => true,
 }));
 
+const { config } = await import("../app/config/index.js");
 const { parseMarker, renderMarker } = await import("../app/github/index.js");
 const { WORKING_LABEL } = await import("../app/runs/index.js");
 const { cancelRun } = await import("../app/workflows/cancel.js");
@@ -21,7 +22,8 @@ type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
 
 const BOT = "software-factory[bot]";
-const REPO = "render-examples/render-factory-example-target";
+const REPO = Object.keys(config.repos)[0];
+if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
 const ctx = { metadata: { taskRunId: "trn-cancel" } };
 
 function fakeGitHub(permission: Permission) {

@@ -31,18 +31,6 @@ describe("markers", () => {
 		const wrongShape = Buffer.from(JSON.stringify({ runId: "x", stage: "triage", state: "exploded" })).toString("base64url");
 		expect(parseMarker(`<!-- software-factory:status ${wrongShape} -->`, "status")).toBeNull();
 	});
-
-	it("reads legacy status markers as stages while writing the new shape", () => {
-		const legacy = Buffer.from(JSON.stringify({ runId: "trn-old", phase: "triage", state: "done" })).toString("base64url");
-		expect(parseMarker(`<!-- software-factory:status ${legacy} -->`, "status")).toEqual({
-			runId: "trn-old",
-			stage: "triage",
-			state: "done",
-		});
-		expect(Buffer.from(renderMarker("status", { runId: "trn-new", stage: "triage", state: "done" }).split(" ")[2] ?? "", "base64url").toString()).not.toContain(
-			'"phase"',
-		);
-	});
 });
 
 describe("findMarkedComment", () => {

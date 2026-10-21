@@ -41,7 +41,7 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		runs: deps.runs,
 	};
 
-	return withRun(ctx, stage, async ({ traceId, runId, budget, progress }): Promise<RunResult> => {
+	return withRun(ctx, stage, async ({ traceId, runId, progress }): Promise<RunResult> => {
 		const base = {
 			traceId,
 			runId,
@@ -80,9 +80,7 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			try {
 				const review = await reviewPull(run, {
 					sandbox,
-					message: reviewerMessage(pull, files, verify),
-					vars: { repo: repo.fullName, baseRef },
-					budget,
+					message: reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify }),
 					base,
 				});
 				return { verify, review };

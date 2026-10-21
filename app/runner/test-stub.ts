@@ -16,7 +16,7 @@ export type TestStub = (input: RunnerInput) => TestStubResponse[];
 
 /**
  * Adds a provider that returns deterministic test responses instead of calling a model. It carries the requested
- * model's prices, so the runner can cost the stub's token estimates and budgets apply.
+ * model's prices, so the runner can cost the stub's token estimates.
  */
 export function registerTestStubModel(models: MutableModels, responses: TestStubResponse[], priced: Model<Api>): Model<Api> {
 	const { input, output, cacheRead, cacheWrite } = priced.cost;

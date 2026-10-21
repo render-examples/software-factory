@@ -17,7 +17,6 @@ const { runSpecToPr } = await import("../app/workflows/spec-to-pr/index.js");
 const { VERIFY_TIMEOUT_MS } = await import("../app/workflows/spec-to-pr/verify.js");
 type Spec = import("../app/schemas/index.js").Spec;
 type Implementation = import("../app/schemas/index.js").Implementation;
-type ImplementationReview = import("../app/schemas/index.js").ImplementationReview;
 type IssueComment = import("../app/github/index.js").IssueComment;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type GitDataClient = import("../app/github/index.js").GitDataClient;
@@ -29,7 +28,10 @@ type PublishResult = import("../app/changeset/index.js").PublishResult;
 
 const BOT = "software-factory[bot]";
 const BOT_ID = 4242;
-const REPO = "render-examples/render-factory-example-target";
+const REPO = Object.keys(config.repos)[0];
+if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
+const [BUILD_COMMAND, TEST_COMMAND] = config.repos[REPO].verify;
+if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two verify commands");
 const BASE = "b".repeat(40);
 const ISSUE = 12;
 const BRANCH = `factory/issue-${ISSUE}`;
@@ -60,7 +62,6 @@ const implementation = (overrides: Partial<Implementation> = {}): Implementation
 	followUps: [],
 	...overrides,
 });
-const CLEAN: ImplementationReview = { needsRevision: false, issues: [], notes: [] };
 
 function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?: string[] } = {}) {
 	const comments: IssueComment[] = [];
@@ -143,22 +144,21 @@ function fakeSandbox(opts: { changed?: boolean; verify?: Record<string, ExecResu
 
 const fail = (stdout: string): ExecResult => ({ exitCode: 1, stdout, stderr: "" });
 
-type AgentStep = { output: unknown; costUsd: number } | InstanceType<typeof AgentError>;
+type AgentStep = { output: unknown } | InstanceType<typeof AgentError>;
 
 /** Answers each agent from its own queue, by agent id. */
-function fakeAgents(steps: { implementer?: AgentStep[]; "implementation-reviewer"?: AgentStep[] }) {
-	const calls: Array<{ agent: string; message: string; vars?: Record<string, string>; opts: Record<string, unknown> }> = [];
+function fakeAgents(steps: { implementer?: AgentStep[] }) {
+	const calls: Array<{ agent: string; message: string; opts: Record<string, unknown> }> = [];
 	const queues: Record<string, AgentStep[]> = {
-		implementer: steps.implementer ?? [{ output: implementation(), costUsd: 3 }],
-		"implementation-reviewer": steps["implementation-reviewer"] ?? [{ output: CLEAN, costUsd: 1 }],
+		implementer: steps.implementer ?? [{ output: implementation() }],
 	};
 	const runAgent = vi.fn(
-		async (agent: { id: string }, agentInput: { message: string; vars?: Record<string, string> }, opts: Record<string, unknown>) => {
-			calls.push({ agent: agent.id, message: agentInput.message, vars: agentInput.vars, opts });
+		async (agent: { id: string }, message: string, opts: Record<string, unknown>) => {
+			calls.push({ agent: agent.id, message, opts });
 			const step = queues[agent.id]?.shift();
 			if (!step) throw new Error(`unexpected ${agent.id} call`);
 			if (step instanceof AgentError) throw step;
-			return { output: step.output, costUsd: step.costUsd, usage: {}, turns: 1 };
+			return { output: step.output, costUsd: 0, usage: {}, turns: 1 };
 		},
 	);
 	return { runAgent: runAgent as unknown as SpecToPrDeps["runAgent"], calls };
@@ -231,26 +231,23 @@ describe("approval", () => {
 });
 
 describe("implement, verify, and publish", () => {
-	it("opens a draft PR on the happy path, passing the remaining budget down and summing costs", async () => {
+	it("opens a draft PR on the happy path", async () => {
 		const t = setup();
 		const outcome = await t.run();
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
 		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: REPO }), { kind: "branch", name: "main" });
-		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "implementation-reviewer"]);
-		const [impl, review] = t.calls;
-		expect(impl?.message).toContain(`issue #${ISSUE}: Health checks`);
+		expect(t.calls.map((c) => c.agent)).toEqual(["implementer"]);
+		const [impl] = t.calls;
+		expect(impl?.message).toContain(`issue #${ISSUE} in ${REPO}: Health checks`);
 		expect(impl?.message).toContain("GET /health returns 200");
-		expect(impl?.vars).toEqual({ repo: REPO, verifyCommands: "- `npm run build`\n- `npm test`" });
-		expect(impl?.opts).toMatchObject({ sandbox: t.sandbox, traceId: "trn-spec", budgetUsd: config.limits.perRunUsd });
-		expect(review?.vars).toEqual({ repo: REPO, baseRef: BASE });
-		expect(review?.message).toContain("Added GET /health.");
-		expect(review?.opts).toMatchObject({ sandbox: t.sandbox, budgetUsd: config.limits.perRunUsd - 3 });
-		expect(finished()).toMatchObject({ outcome: "pr_opened", costUsd: 4 });
+		expect(impl?.message).toContain(`## Verify commands\n\n- \`${BUILD_COMMAND}\`\n- \`${TEST_COMMAND}\``);
+		expect(impl?.opts).toMatchObject({ sandbox: t.sandbox, traceId: "trn-spec" });
+		expect(finished()).toMatchObject({ outcome: "pr_opened" });
 
 		expect(t.execs.filter((e) => !e.command.startsWith("git status"))).toEqual([
-			{ command: "npm run build", opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
-			{ command: "npm test", opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
+			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
+			{ command: TEST_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
 		]);
 		expect(t.publish).toHaveBeenCalledWith(
 			expect.objectContaining({ sandbox: t.sandbox, baseSha: BASE, branch: BRANCH, ownedCommits: [], gitData: t.git }),
@@ -266,12 +263,9 @@ describe("implement, verify, and publish", () => {
 
 	it("repairs a failing verify and publishes once it passes", async () => {
 		const t = setup({
-			sandbox: { verify: { "npm test": [fail("FAIL src/server.test.ts\nexpected 200, got 404"), { exitCode: 0, stdout: "", stderr: "" }] } },
+			sandbox: { verify: { [TEST_COMMAND]: [fail("FAIL src/server.test.ts\nexpected 200, got 404"), { exitCode: 0, stdout: "", stderr: "" }] } },
 			agents: {
-				implementer: [
-					{ output: implementation(), costUsd: 3 },
-					{ output: implementation({ summary: "Fixed the route.", followUps: ["Add metrics"] }), costUsd: 2 },
-				],
+				implementer: [{ output: implementation() }, { output: implementation({ summary: "Fixed the route.", followUps: ["Add metrics"] }) }],
 			},
 		});
 		expect(await t.run()).toMatchObject({ state: "done", outcome: "pr_opened" });
@@ -280,62 +274,29 @@ describe("implement, verify, and publish", () => {
 		expect(repair?.agent).toBe("implementer");
 		expect(repair?.message).toContain("expected 200, got 404");
 		expect(repair?.message).toContain("repair round 1 of 2");
-		expect(repair?.opts).toMatchObject({ budgetUsd: config.limits.perRunUsd - 3 });
-		expect(verifyCommands(t.execs)).toEqual(["npm run build", "npm test", "npm run build", "npm test"]);
+		expect(verifyCommands(t.execs)).toEqual([BUILD_COMMAND, TEST_COMMAND, BUILD_COMMAND, TEST_COMMAND]);
 		const body = t.gh.findOrCreatePull.mock.calls[0]?.[0].body ?? "";
 		expect(body).toContain("Added GET /health.");
 		expect(body).toContain("Add metrics");
-		expect(finished()).toMatchObject({ costUsd: 6 });
 	});
 
 	it("fails without publishing when repairs run out, naming the failing commands but not their output", async () => {
 		const t = setup({
-			sandbox: { verify: { "npm test": [fail("SECRET-LOOKING LOG LINE")] } },
+			sandbox: { verify: { [TEST_COMMAND]: [fail("SECRET-LOOKING LOG LINE")] } },
 			agents: {
-				implementer: [
-					{ output: implementation(), costUsd: 3 },
-					{ output: implementation(), costUsd: 2 },
-					{ output: implementation(), costUsd: 2 },
-				],
+				implementer: [{ output: implementation() }, { output: implementation() }, { output: implementation() }],
 			},
 		});
 		const outcome = await t.run();
 
 		expect(outcome).toMatchObject({ state: "failed", outcome: "verification_failed" });
 		expect(t.calls.filter((c) => c.agent === "implementer")).toHaveLength(1 + config.limits.repairRounds);
-		expect(t.calls.some((c) => c.agent === "implementation-reviewer")).toBe(false);
 		expect(t.publish).not.toHaveBeenCalled();
 		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
-		expect(t.status().body).toContain("`npm test` (exit 1)");
+		expect(t.status().body).toContain(`\`${TEST_COMMAND}\` (exit 1)`);
 		expect(t.status().body).not.toContain("SECRET-LOOKING");
-		expect(finished()).toMatchObject({ state: "failed", costUsd: 7 });
+		expect(finished()).toMatchObject({ state: "failed" });
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
-	});
-
-	it("runs one revision pass when implementation review asks for it, then verifies again", async () => {
-		const flagged: ImplementationReview = {
-			needsRevision: true,
-			issues: [{ file: "src/server.ts", line: 3, problem: "Remove the console.log." }],
-			notes: [],
-		};
-		const t = setup({
-			agents: {
-				implementer: [
-					{ output: implementation(), costUsd: 3 },
-					{ output: implementation({ summary: "Removed the log." }), costUsd: 1 },
-				],
-				"implementation-reviewer": [{ output: flagged, costUsd: 1 }],
-			},
-		});
-		expect(await t.run()).toMatchObject({ state: "done", outcome: "pr_opened" });
-
-		expect(t.calls.map((c) => c.agent)).toEqual(["implementer", "implementation-reviewer", "implementer"]);
-		expect(t.calls[2]?.message).toContain("src/server.ts:3: Remove the console.log.");
-		expect(t.calls[2]?.opts).toMatchObject({ budgetUsd: config.limits.perRunUsd - 4 });
-		expect(verifyCommands(t.execs)).toEqual(["npm run build", "npm test", "npm run build", "npm test"]);
-		const body = t.gh.findOrCreatePull.mock.calls[0]?.[0].body ?? "";
-		expect(body).toContain("revised the change");
-		expect(finished()).toMatchObject({ costUsd: 5 });
 	});
 });
 

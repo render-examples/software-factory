@@ -10,7 +10,6 @@ vi.mock("../app/events/index.js", () => ({
 	isCurrentRun: async () => true,
 }));
 
-const { AgentError } = await import("../app/agents/index.js");
 const { config, requireRepo } = await import("../app/config/index.js");
 const { renderMarker, parseMarker } = await import("../app/github/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -19,8 +18,9 @@ type Permission = import("../app/github/index.js").Permission;
 const { finishStatus, readStatus, takeOver, WORKING_LABEL, withRun } = await import("../app/runs/index.js");
 
 const BOT = "software-factory[bot]";
-const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
-const REPO = requireRepo("render-examples/render-factory-example-target", 5);
+const REPO_NAME = Object.keys(config.repos)[0];
+if (!REPO_NAME) throw new Error("factory.config.ts must configure at least one repository");
+const REPO = requireRepo(REPO_NAME, 5);
 
 class FakeGitHub {
 	comments: IssueComment[] = [];
@@ -139,10 +139,10 @@ describe("withRun", () => {
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.state).toBe("rejected");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"]);
-		expect(events.at(-1)?.payload).toMatchObject({ state: "rejected", costUsd: 0 });
+		expect(events.at(-1)?.payload).toMatchObject({ state: "rejected" });
 	});
 
-	it("runs the stage and records events with the trace id, outcome, and cost", async () => {
+	it("runs the stage and records events with the trace id and outcome", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { maintainer: "maintain" };
 		gh.addStatus("trn-prev");
@@ -155,8 +155,6 @@ describe("withRun", () => {
 				expect(run.runId).toBe("trn-run");
 				expect(gh.labels.has(WORKING_LABEL)).toBe(true);
 				await run.progress("reading the issue");
-				expect(run.budget).toMatchObject({ limitUsd: config.limits.perRunUsd, spent: 0 });
-				await run.budget.track(async () => ({ costUsd: 0.42 }));
 				return { outcome: "asked-questions", summary: "asked 2 questions" };
 			},
 		);
@@ -182,7 +180,7 @@ describe("withRun", () => {
 				subject: "issue#12",
 				payload: { stage: "triage", actor: "maintainer" },
 			},
-			{ type: "run.finished", traceId: "trn-root", payload: { state: "done", outcome: "asked-questions", costUsd: 0.42 } },
+			{ type: "run.finished", traceId: "trn-root", payload: { state: "done", outcome: "asked-questions" } },
 		]);
 	});
 
@@ -211,12 +209,7 @@ describe("withRun", () => {
 		gh.permissions = { w: "write" };
 		const boom = new Error("connect ECONNREFUSED token=ghs_secret");
 		await expect(
-			withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async (run) => {
-				await run.budget
-					.track(async () => {
-						throw new AgentError("agent_error", "model error", USAGE, 0.3, 1);
-					})
-					.catch(() => undefined);
+			withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
 				throw boom;
 			}),
 		).rejects.toBe(boom);
@@ -226,6 +219,6 @@ describe("withRun", () => {
 		expect(body).not.toContain("ECONNREFUSED");
 		expect(parseMarker(body, "status")?.state).toBe("failed");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
-		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "failed", outcome: "error", costUsd: 0.3 } });
+		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "failed", outcome: "error" } });
 	});
 });

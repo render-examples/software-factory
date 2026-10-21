@@ -8,23 +8,17 @@ import {
 	SpecToPrInput,
 	TriageInput,
 } from "../schemas/tasks.js";
-import { emit as defaultEmit, listTraces, recentEvents, traceEvents } from "../events/index.js";
+import { emit as defaultEmit } from "../events/index.js";
 import { readBody } from "./body.js";
 import { route } from "./routes.js";
 import { verifySignature } from "./signature.js";
-import { type EventsReader, uiRoutes } from "./ui/index.js";
 
 export type { Route } from "./routes.js";
-export type { EventsReader } from "./ui/index.js";
 
 export interface GatewayDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	emit?: typeof defaultEmit;
 	webhookSecret: string;
-	/** FACTORY_ADMIN_TOKEN. Without it /ui and /api answer 503. */
-	adminToken?: string;
-	/** What the trace UI reads; defaults to Postgres. */
-	events?: EventsReader;
 }
 
 const INPUTS: Record<TaskName, ZodType> = {
@@ -112,14 +106,6 @@ export function createGateway(deps: GatewayDeps): Hono {
 			return c.json({ error: "could not start task", task }, 502);
 		}
 	});
-
-	app.route(
-		"/",
-		uiRoutes({
-			adminToken: deps.adminToken?.trim() || undefined,
-			events: deps.events ?? { listTraces, traceEvents, recentEvents },
-		}),
-	);
 
 	return app;
 }

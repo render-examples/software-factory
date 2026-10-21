@@ -13,7 +13,7 @@ export interface AgentSpec<Tools extends readonly ToolName[], Output extends Out
 	/** Path to the agent's Markdown prompt, relative to app/agents/. */
 	prompt: string;
 	model: ModelTier;
-	/** Empty for an agent that runs in a Workflows task; any tool means it runs in a sandbox. */
+	/** Tools the agent may call in its sandbox. */
 	tools: Tools;
 	output: Output;
 	maxTurns: number;
@@ -24,7 +24,7 @@ export interface Agent<Tools extends readonly ToolName[] = readonly ToolName[], 
 	extends Omit<AgentSpec<Tools, Output>, "prompt"> {
 	/** Absolute path of the prompt file. */
 	promptPath: string;
-	/** The prompt file's contents, verbatim, with `{{name}}` placeholders still in place. */
+	/** The prompt file's contents, verbatim: the agent's system prompt. */
 	prompt: string;
 	/** `output` as JSON Schema (input side, so fields with defaults are optional): the runner's submit tool takes it. */
 	outputJsonSchema: Record<string, unknown>;

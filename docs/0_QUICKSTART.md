@@ -102,9 +102,9 @@ In the Render Dashboard, create a Blueprint from **your fork**, not
 
 | Resource | Type | Purpose |
 |---|---|---|
-| `factory-gateway` | Web Service | Verify webhooks, start tasks, serve the trace UI |
+| `factory-gateway` | Web Service | Verify webhooks and start tasks |
 | `factory-workflows` | Workflows | Run stages, agents, snapshot refresh, and cancel |
-| `factory-db` | Postgres | Store strict run claims and best-effort trace events |
+| `factory-db` | Postgres | Store strict run claims and best-effort telemetry events |
 
 Enter these values:
 
@@ -113,14 +113,13 @@ Enter these values:
 | Gateway | `GITHUB_WEBHOOK_SECRET` | From `setup:app` |
 | Gateway | `RENDER_API_KEY` | Your Render API key |
 | Workflows | `RENDER_API_KEY` | The same Render API key |
-| Workflows | `RENDER_WORKSPACE_ID` | Workspace ID (`tea-…`); optional when the key sees exactly one workspace |
+| Workflows | `RENDER_WORKSPACE_ID` | Workspace ID (`tea-…`) that owns the Sandboxes |
 | Workflows | `GITHUB_APP_ID` | From `setup:app` |
 | Workflows | `GITHUB_APP_PRIVATE_KEY` | From `setup:app` |
 | Workflows | `ANTHROPIC_API_KEY` | Dedicated, spend-capped Anthropic key |
 
-The Blueprint wires `DATABASE_URL` to both services, wires the workflow slug
-to the gateway, and generates `FACTORY_ADMIN_TOKEN`. The gateway runs the
-database migrations before each deploy. Check every `sync: false` value after
+The Blueprint wires `DATABASE_URL` to both services and the workflow slug to
+the gateway. The gateway runs the database migrations before each deploy. Check every `sync: false` value after
 creation; a blank field counts as unset.
 
 ### 5. Connect the webhook and create labels
@@ -208,13 +207,11 @@ The stage:
 1. implements the spec in a Sandbox;
 2. runs every configured `verify` command;
 3. asks the implementer to repair failures, up to `limits.repairRounds`;
-4. runs an independent implementation review and permits one requested
-   revision;
-5. validates the collected changes on the host; and
-6. publishes `factory/issue-<number>` and opens a draft PR.
+4. validates the collected changes on the host; and
+5. publishes `factory/issue-<number>` and opens a draft PR.
 
-The PR describes the approved spec, implementation, verification, and
-implementation review. It references the issue without closing it.
+The PR describes the approved spec, implementation, and verification. It
+references the issue without closing it.
 
 ### Review a pull request
 
@@ -245,16 +242,19 @@ comment shows progress, the current run ID, and final links.
 
 ## Inspect a run
 
-Open:
+The status comment names the run ID. Find that run under `factory-workflows`
+in the Render Dashboard for its logs, inputs, and result.
 
-```text
-https://<gateway>.onrender.com/ui
+Deliveries, stage outcomes, and each agent's model, turns, token usage, and
+reported cost are also appended to the `events` table. Query them with
+`render psql factory-db`, for example:
+
+```sql
+select created_at, type, subject, payload
+from events
+where trace_id = '<run id>'
+order by id;
 ```
-
-Sign in with `FACTORY_ADMIN_TOKEN` from the gateway's Render environment. The
-trace UI shows authenticated deliveries, stage outcomes, agent models, turns,
-usage, costs, and durations. The same run appears under
-`factory-workflows` in the Render Dashboard.
 
 ## Run locally
 
@@ -314,7 +314,6 @@ Task input schemas are in
 
 ```bash
 npm run check
-npm run eval -- --validate
 ```
 
 `npm run check` runs Biome, TypeScript, and every Vitest test. Tests fake
@@ -334,55 +333,8 @@ render blueprints validate render.yaml
 npm audit --omit=dev --audit-level=high
 ```
 
-CI validates eval cases, runs the normal checks and shellcheck, audits
-production dependencies, and validates `render.yaml` when its Render
-credentials are configured.
-
-## Run evals
-
-Eval cases in [`evals/cases/`](../evals/cases) exercise Triage and specs,
-implementation, pre-publish implementation review, PR review, prompt-injection
-resistance, verification, false positives, and cost. The suite is pinned to
-the target revision in [`evals/fixture.json`](../evals/fixture.json); live
-runs stop before a model call if that branch has drifted.
-
-```bash
-# Schema validation only: no services and no model cost
-npm run eval -- --validate
-
-# Live run against the App installation
-npm run eval -- --installation 12345
-
-# One case with its own soft budget threshold
-npm run eval -- \
-  --installation 12345 \
-  --case underspecified-search \
-  --budget 2
-
-# Three trials of the reviewer cases, with a reusable run artifact
-npm run eval -- \
-  --installation 12345 \
-  --stage pr-review \
-  --trials 3 \
-  --json eval-run.json
-
-# Fail on a per-case regression against an approved run of the same fixture
-npm run eval -- \
-  --installation 12345 \
-  --baseline approved-eval-run.json
-```
-
-A live run needs the Workflows environment and the App installation ID for
-the target repository, provided by `--installation` or
-`FACTORY_EVAL_INSTALLATION_ID`. It restores the repository snapshot, runs the
-real stage agents, captures their tool calls, diffs, verification, cost, and
-timing, and grades their output. Every requested trial must pass. With
-`DATABASE_URL`, it also records a trace. Refresh the pinned SHA intentionally
-when the target repository changes; baseline comparison refuses different
-fixture revisions.
-
-Live evals spend real money. Their budget is a soft threshold and may be
-crossed by the response that reports the usage.
+CI runs the normal checks and shellcheck, audits production dependencies, and
+validates `render.yaml` when its Render credentials are configured.
 
 ## Operate it
 
@@ -429,8 +381,8 @@ crossed by the response that reports the usage.
 - Sandboxes use allow-all egress so installs and Git fetches work.
 - A first run can build a snapshot inline; base-branch pushes refresh it
   asynchronously thereafter.
-- `limits.perRunUsd` limits reported model spend softly. Use a provider-side
-  spend limit for a hard cap.
+- There is no dollar budget. Agent turn limits and timeouts bound each run;
+  set a provider-side spend limit on the model key.
 - PR Reviewer executes the PR's code through your `verify` commands. Do not
   label code you would not run.
 

@@ -13,7 +13,7 @@ export const refreshSnapshot = task(
 	async (_ctx, raw: unknown): Promise<{ snapshotId: string; repo: string; sha: string }> => {
 		const input = RefreshSnapshotInput.parse(raw);
 		const repo = requireRepo(input.repo, input.installationId);
-		const built = await buildSnapshot(await sandboxClient(), repo, input.sha);
+		const built = await buildSnapshot(sandboxClient(), repo, input.sha);
 		return { snapshotId: built.id, repo: repo.fullName, sha: input.sha };
 	},
 );

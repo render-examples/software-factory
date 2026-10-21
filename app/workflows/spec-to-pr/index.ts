@@ -1,22 +1,14 @@
 import { type TaskContext, task } from "@renderinc/sdk/workflows";
-import { AgentError, implementationReviewer, implementer, runAgent, verifyCommandsVar } from "../../agents/index.js";
+import { implementer, runAgent } from "../../agents/index.js";
 import { config, type RepoContext, requireRepo, TASKS } from "../../config/index.js";
-import type { Implementation, ImplementationReview } from "../../schemas/index.js";
+import type { Implementation } from "../../schemas/index.js";
 import { SpecToPrInput } from "../../schemas/tasks.js";
 import { pullRequestBody, pullRequestTitle } from "../../format/index.js";
 import { type GitDataClient, type GitHubClient, gitData, githubFor } from "../../github/index.js";
 import { RunError, type RunOutcome, type RunResult, type RunControl, withRun } from "../../runs/index.js";
 import { publish } from "../../changeset/index.js";
 import { type OpenedSandbox, openSandbox, type SandboxRef } from "../../sandbox/index.js";
-import {
-	agentStopped,
-	implementMessage,
-	implementationReviewMessage,
-	implementationReviewSkipped,
-	mergeImplementation,
-	repairMessage,
-	revisionMessage,
-} from "./agents.js";
+import { agentStopped, implementMessage, mergeImplementation, repairMessage } from "./agents.js";
 import { loadApprovedSpec } from "./approval.js";
 import { botIdentity, branchName, commitDate, commitMessage, ownedCommits, refusalSummary } from "./branch.js";
 import { allPassed, failureSummary, hasChanges, runVerify, type VerifyRun } from "./verify.js";
@@ -36,8 +28,8 @@ export interface SpecToPrDeps {
 }
 
 /**
- * Approved spec to draft PR: implement in one sandbox, verify with up to `limits.repairRounds` repair runs,
- * review the implementation with at most one revision, then publish through the Git Data API and open a draft PR.
+ * Approved spec to draft PR: implement in one sandbox, verify with up to `limits.repairRounds` repair runs, then
+ * publish through the Git Data API and open a draft PR.
  */
 export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: SpecToPrDeps = {}): Promise<RunOutcome> {
 	const input = SpecToPrInput.parse(raw);
@@ -66,57 +58,27 @@ export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			summary: "the implementation agent made no changes, so there is nothing to open a PR for.",
 		});
 
-		const implement = async (message: string): Promise<Implementation> => {
-			const vars = { repo: repo.fullName, verifyCommands: verifyCommandsVar(repo.config.verify) };
-			const call = (budgetUsd: number) => runAgentFn(implementer, { message, vars }, { ...agentOpts, budgetUsd, timeoutMs: IMPLEMENT_TIMEOUT_MS });
-			return (await run.budget.track(call)).output;
-		};
-
-		// Implementation review is advisory: when it can't finish, the verified change still publishes, with a note saying so.
-		const reviewChange = async (implementation: Implementation): Promise<ImplementationReview> => {
-			const message = implementationReviewMessage(issue, spec, implementation);
-			try {
-				const call = (budgetUsd: number) =>
-					runAgentFn(implementationReviewer, { message, vars: { repo: repo.fullName, baseRef: baseSha } }, { ...agentOpts, budgetUsd });
-				return (await run.budget.track(call)).output;
-			} catch (err) {
-				if (err instanceof AgentError) return implementationReviewSkipped(err);
-				throw err;
-			}
-		};
+		const implement = async (message: string): Promise<Implementation> =>
+			(await runAgentFn(implementer, message, { ...agentOpts, timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
 
 		try {
 			const owned = await ownedCommits(git, branch, baseSha, author);
 
 			await run.progress("implementing the spec");
-			let implementation = await implement(implementMessage(issue, spec));
+			let implementation = await implement(implementMessage(repo, issue, spec));
 			if (!(await hasChanges(sandbox))) return noChanges();
 
-			// Repair rounds are shared by the whole run: the verify after an implementation-review revision gets what's left.
-			let repairsLeft = rounds;
-			const verifyAndRepair = async (): Promise<VerifyRun[]> => {
-				for (;;) {
-					await run.progress("running the verify commands");
-					const results = await runVerify(sandbox, repo.config.verify);
-					if (allPassed(results)) return results;
-					if (repairsLeft === 0) {
-						const after = rounds > 0 ? ` after ${rounds} repair round${rounds === 1 ? "" : "s"}` : "";
-						throw new RunError(`verification failed${after}: ${failureSummary(results)}. No PR was opened.`, "verification_failed");
-					}
-					const round = rounds - --repairsLeft;
-					await run.progress(`repairing failed verification (round ${round} of ${rounds})`);
-					implementation = mergeImplementation(implementation, await implement(repairMessage(issue, spec, results, round, rounds)));
+			let verification: VerifyRun[];
+			for (let round = 1; ; round++) {
+				await run.progress("running the verify commands");
+				verification = await runVerify(sandbox, repo.config.verify);
+				if (allPassed(verification)) break;
+				if (round > rounds) {
+					const after = rounds > 0 ? ` after ${rounds} repair round${rounds === 1 ? "" : "s"}` : "";
+					throw new RunError(`verification failed${after}: ${failureSummary(verification)}. No PR was opened.`, "verification_failed");
 				}
-			};
-			let verification = await verifyAndRepair();
-
-			await run.progress("reviewing the change");
-			let review = await reviewChange(implementation);
-			if (review.needsRevision) {
-				await run.progress("revising the change after implementation review");
-				implementation = mergeImplementation(implementation, await implement(revisionMessage(issue, spec, review)));
-				verification = await verifyAndRepair();
-				review = { ...review, notes: [...review.notes, "The implementation agent revised the change for the issues below before this PR opened."] };
+				await run.progress(`repairing failed verification (round ${round} of ${rounds})`);
+				implementation = mergeImplementation(implementation, await implement(repairMessage(repo, issue, spec, verification, round, rounds)));
 			}
 
 			await run.progress("publishing the branch");
@@ -140,7 +102,7 @@ export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unkno
 				head: branch,
 				base: repo.config.baseBranch,
 				title: pullRequestTitle(spec),
-				body: pullRequestBody({ issue: input.issue, spec, implementation, implementationReview: review, verification, specUrl: comment.htmlUrl }),
+				body: pullRequestBody({ issue: input.issue, spec, implementation, verification, specUrl: comment.htmlUrl }),
 				draft: true,
 			});
 			return {
