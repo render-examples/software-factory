@@ -9,7 +9,6 @@ import {
 	LABELS,
 	missingEvents,
 	missingPermissions,
-	OPTIONAL_ENV,
 	SECRET_ENV,
 	SERVICE_ENV,
 	type Service,
@@ -51,7 +50,6 @@ function checkEnv({ env, services }: DoctorOptions, out: Reporter): void {
 		out.heading(`Environment: factory-${service}`);
 		for (const name of SERVICE_ENV[service]) {
 			if (env[name]?.trim()) out.pass(`${name} is set`);
-			else if (OPTIONAL_ENV.has(name)) out.warn(`${name} is not set (optional)`, optionalFix(name));
 			else out.fail(`${name} is not set`, `Set it on factory-${service} (render.yaml declares it)`);
 		}
 		const workspace = env.RENDER_WORKSPACE_ID?.trim();
@@ -59,11 +57,6 @@ function checkEnv({ env, services }: DoctorOptions, out: Reporter): void {
 			out.fail("RENDER_WORKSPACE_ID is not a workspace ID", "It looks like tea-…; find it in Workspace Settings");
 		}
 	}
-}
-
-function optionalFix(name: string): string | undefined {
-	if (name === "RENDER_WORKSPACE_ID") return "Resolved from RENDER_API_KEY when the key can see exactly one workspace";
-	return undefined;
 }
 
 /** The env var each configured provider's key is read from, in config order. */

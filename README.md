@@ -27,8 +27,7 @@ belong to people:
 - **Triage** reads the issue, discussion, and code, then asks focused
   questions, writes a spec, or declines.
 - **Spec-to-PR** implements only an explicitly approved spec, runs configured
-  verification, independently reviews the implementation, and opens a draft
-  PR.
+  verification, repairs failures, and opens a draft PR.
 - **PR Reviewer** runs verification and reviews security, correctness,
   performance, and tests in one COMMENT review.
 
@@ -47,7 +46,7 @@ same issue or PR. Sandboxes contain model-directed tools and repository code.
   service, database, environment wiring, health check, and pre-deploy
   migration.
 - **Postgres:** one append-only event table provides strict run fencing where
-  correctness needs it and best-effort traces everywhere else.
+  correctness needs it and best-effort telemetry everywhere else.
 
 ## How a change flows
 
@@ -76,8 +75,8 @@ the `factory:working` label show which run currently owns an issue or PR.
   Sandbox output and publishes through GitHub's Git Data API.
 - Repository tokens are read-only, exist only during clone or fetch, and are
   scrubbed before repository code or agents run.
-- Agents with tools run only in Sandboxes as an unprivileged user. Agents
-  without tools run in the Workflows task and receive no tools.
+- Every agent runs inside its stage's Sandbox as an unprivileged user. The
+  Workflows task only orchestrates; no tool runs there.
 - Models do not choose repositories, branches, issue numbers, PR numbers, or
   GitHub write targets.
 - Publishing rejects workflow files, symlinks, submodules, unsafe paths,
@@ -111,14 +110,14 @@ declares 22.19 as its minimum).
    its snapshot is built.
 
 The [Quickstart](docs/0_QUICKSTART.md) covers deployment, first use, local
-development, evals, and operations in detail.
+development, and operations in detail.
 
 ## Limits
 
 - Phases never chain automatically, and the factory never approves or merges.
 - Verification is command-based; the template has no browser-testing stage.
-- `limits.perRunUsd` is a soft threshold because providers report cost after
-  a response. A provider-enforced spend limit is the hard backstop.
+- The factory has no dollar budget. Each agent is bounded by its turn limit
+  and timeout; use a provider-enforced spend limit on the model key.
 - Sandboxes have allow-all egress and share Render's workspace-level Sandbox
   API rate limit.
 - Anyone with `minimumPermission` on a configured repository can start model
@@ -127,7 +126,7 @@ development, evals, and operations in detail.
 ## Learn more
 
 - [docs/0_QUICKSTART.md](docs/0_QUICKSTART.md): deploy, use, develop, test,
-  evaluate, and operate the factory.
+  and operate the factory.
 - [docs/1_EXTENSION.md](docs/1_EXTENSION.md): configure repositories and
   models, change agents, add stages, and integrate another trigger.
 - [docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md): repository layout, core

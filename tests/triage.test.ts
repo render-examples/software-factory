@@ -111,12 +111,10 @@ class FakeSandbox {
 	};
 }
 
-type Step = { output: unknown; costUsd?: number } | Error;
+type Step = { output: unknown } | Error;
 interface AgentCall {
 	agent: string;
 	message: string;
-	vars?: Record<string, string>;
-	budgetUsd?: number;
 	sandbox?: unknown;
 	traceId: string;
 }
@@ -127,21 +125,19 @@ function fakeRunner(steps: Record<string, Step[]>) {
 	const calls: AgentCall[] = [];
 	const run = (async (
 		agent: { id: string },
-		agentInput: { message: string; vars?: Record<string, string> },
-		opts: { budgetUsd?: number; sandbox?: unknown; traceId: string },
+		message: string,
+		opts: { sandbox?: unknown; traceId: string },
 	) => {
 		calls.push({
 			agent: agent.id,
-			message: agentInput.message,
-			vars: agentInput.vars,
-			budgetUsd: opts.budgetUsd,
+			message,
 			sandbox: opts.sandbox,
 			traceId: opts.traceId,
 		});
 		const step = steps[agent.id]?.shift();
 		if (!step) throw new Error(`unexpected call to ${agent.id}`);
 		if (step instanceof Error) throw step;
-		return { output: step.output, usage: USAGE, costUsd: step.costUsd ?? 0, turns: 1 };
+		return { output: step.output, usage: USAGE, costUsd: 0, turns: 1 };
 	}) as unknown as AgentRunner;
 	return { run, calls };
 }
@@ -213,7 +209,7 @@ describe("triage task", () => {
 	it("asks questions in a marked comment, from a sandbox at the base branch", async () => {
 		const { gh, sandbox, opened, calls, deps } = setup({
 			triage: [
-				{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }), costUsd: 0.4 },
+				{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) },
 			],
 		});
 		gh.add("reporter", "Ideally it remembers my choice.");
@@ -223,7 +219,8 @@ describe("triage task", () => {
 		expect(outcome).toMatchObject({ state: "done", outcome: "asked", summary: "asked 2 questions." });
 		expect(opened).toEqual([{ kind: "branch", name: "main" }]);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]).toMatchObject({ agent: "triage", vars: { repo: REPO }, sandbox, traceId: "trn-triage", budgetUsd: config.limits.perRunUsd });
+		expect(calls[0]).toMatchObject({ agent: "triage", sandbox, traceId: "trn-triage" });
+		expect(calls[0]?.message).toContain(`in ${REPO}`);
 		expect(calls[0]?.message).toContain("Add a dark mode toggle");
 		expect(calls[0]?.message).toContain('<comment author="reporter">\nIdeally it remembers my choice.\n</comment>');
 
@@ -237,7 +234,7 @@ describe("triage task", () => {
 		expect(gh.status()).toContain(`(${questions?.htmlUrl})`);
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(sandbox.closed).toBe(1);
-		expect(finished()?.payload).toMatchObject({ outcome: "asked", costUsd: 0.4 });
+		expect(finished()?.payload).toMatchObject({ outcome: "asked" });
 	});
 
 	it("updates the same questions comment on the next round and shows the earlier questions as the factory's", async () => {
@@ -280,7 +277,8 @@ describe("triage task", () => {
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "drafted", summary: "drafted spec v1." });
 		expect(calls.map((c) => c.agent)).toEqual(["triage", "spec-writer"]);
-		expect(calls[1]).toMatchObject({ sandbox, vars: { repo: REPO } });
+		expect(calls[1]).toMatchObject({ sandbox });
+		expect(calls[1]?.message).toContain(`in ${REPO}`);
 		expect(calls[1]?.message).toContain("## Triage findings\n\nTheme lives in src/theme.ts.");
 		expect(calls[1]?.message).not.toContain("This is a revision");
 		expect(sandbox.execs).toEqual([{ command: "git ls-files -z", opts: { asRunner: true } }]);

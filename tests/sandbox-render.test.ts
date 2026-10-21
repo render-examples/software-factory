@@ -35,7 +35,7 @@ type ExecHandler = (id: string, command: string) => SandboxExecEvent[];
 const out = (data: string, stream: "stdout" | "stderr" = "stdout"): SandboxExecEvent => ({ type: "output", stream, data });
 const exit = (code = 0): SandboxExecEvent => ({ type: "exit", exit_code: code });
 const info = (overrides: object = {}) =>
-	`${JSON.stringify({ runAs: "factory", uid: 0, drop: "setpriv", node: "v24.14.1", runnerNonDumpable: true, selfTest: { ok: true }, ...overrides })}\n`;
+	`${JSON.stringify({ runAs: "factory", uid: 0, node: "v24.14.1", runnerNonDumpable: true, selfTest: { ok: true }, ...overrides })}\n`;
 
 function snapshot(id: string, status: "creating" | "available" | "failed", name: string | null, requestedAt = new Date().toISOString()) {
 	return {
@@ -77,7 +77,7 @@ class FakeApi {
 		const override = this.overrides(id, command);
 		if (override.length) return override;
 		if (command.includes("verify.sh")) return [out("noise\n", "stderr"), out(info()), exit(0)];
-		if (command.includes('printf "%s\\n%s\\n"')) return [out("/opt/factory/app/node/bin/node\nsetpriv\n"), exit(0)];
+		if (command === "command -v node") return [out("/usr/bin/node\n"), exit(0)];
 		if (command.includes("lockfile-hash.sh")) return [out(`${this.lockfileHash}\n`), exit(0)];
 		if (command.includes("'status' '--porcelain'")) return [out(this.dirtyAfterInstall), exit(0)];
 		if (command.includes("FETCH_HEAD")) return [out(`${this.fetchedSha}\n`), exit(0)];
@@ -159,7 +159,7 @@ class FakeApi {
 }
 
 let fake: FakeApi;
-const client = () => new SandboxClient(fake.api(), { minRequestIntervalMs: 0 }, { pollMs: 1, bootTimeoutMs: 1_000 });
+const client = () => new SandboxClient(fake.api(), { minRequestIntervalMs: 0, pollMs: 1, bootTimeoutMs: 1_000 });
 const readToken = async () => TOKEN;
 
 beforeEach(() => {
@@ -259,7 +259,7 @@ describe("buildSnapshot", () => {
 		expect(env.data).toContain("FACTORY_RUN_AS=factory\n");
 		expect(env.data).toContain("FACTORY_REPO_DIR=/opt/factory/repo\n");
 		expect(env.data).toContain("FACTORY_RUNNER_NODE=/opt/factory/app/node-runner\n");
-		expect(env.data).toContain("FACTORY_DROP=setpriv\n");
+		expect(env.data).toContain("FACTORY_NODE=/usr/bin/node\n");
 	});
 
 	it("never installs when the scrub fails", async () => {

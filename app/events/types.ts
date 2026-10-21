@@ -30,23 +30,3 @@ export interface RunClaimInput {
 	stage: string;
 	actor: string;
 }
-
-/** An event as read back, for the trace UI and evals. */
-export interface StoredEvent extends FactoryEvent {
-	/** bigserial, as a string */
-	id: string;
-	payload: Record<string, unknown>;
-	createdAt: Date;
-}
-
-/** One trace in a listing. */
-export interface TraceSummary {
-	traceId: string;
-	repo: string | null;
-	subject: string | null;
-	firstAt: Date;
-	lastAt: Date;
-	eventCount: number;
-	firstType: string;
-	lastType: string;
-}

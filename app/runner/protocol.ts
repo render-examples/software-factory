@@ -1,6 +1,6 @@
 /**
- * The contract between the host (`runAgent`) and the agent runner. The same runner code runs in a sandbox
- * (bundled into runner.mjs, input on stdin, events on stdout) and in a Workflows task (imported, with no tools).
+ * The contract between the host (`runAgent`) and the agent runner, which runs in a sandbox bundled into
+ * runner.mjs: input on stdin, events on stdout.
  */
 import { z } from "zod";
 
@@ -20,14 +20,11 @@ export const RunnerInput = z.object({
 	model_provider: z.string().min(1),
 	model: z.string().min(1),
 	thinking_level: ThinkingLevel.default("medium"),
-	/** Empty for an agent that runs in a Workflows task. */
 	tools: z.array(ToolName),
 	/** JSON Schema (an object schema) of the agent's output; the runner's `submit` tool takes exactly this. */
 	output_schema: z.record(z.string(), z.unknown()),
 	max_turns: z.number().int().positive(),
 	timeout_ms: z.number().int().positive(),
-	/** Soft threshold: stop after reported model cost reaches this many dollars. A response can cross it. */
-	budget_usd: z.number().positive().optional(),
 	/** Working directory for tools: the repository checkout. Required when `tools` is non-empty. */
 	cwd: z.string().min(1).optional(),
 	/** The only writable location besides `cwd` (HOME and TMPDIR for tools). */
@@ -49,7 +46,6 @@ export const RUNNER_ERROR_CODES = [
 	"no_submission",
 	"invalid_input",
 	"invalid_submission",
-	"budget_exceeded",
 	"max_turns",
 	"agent_error",
 ] as const;

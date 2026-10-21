@@ -1,12 +1,10 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { apiKeyFor, type Credentials, secretsIn, takeCredentials } from "./keys.js";
+import { apiKeyFor, type Credentials, PROVIDER_KEY_ENV, secretsIn, takeCredentials } from "./keys.js";
 import { RUNNER_EXIT } from "./protocol.js";
 import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
 import { defaultTestStub, type TestStub } from "./test-stub.js";
-
-export const SUPPORTED_PROVIDERS = ["anthropic", "openai", "google"] as const;
 
 export interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
@@ -109,7 +107,7 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 async function selfTest(io: MainIO): Promise<number> {
 	const models = createModels();
 	const errors: string[] = [];
-	for (const p of SUPPORTED_PROVIDERS) {
+	for (const p of Object.keys(PROVIDER_KEY_ENV)) {
 		if (!models.getModels(p).length) errors.push(`no models for provider "${p}"`);
 	}
 	const ok = errors.length === 0;

@@ -1,7 +1,7 @@
 import pg from "pg";
-import type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";
+import type { FactoryEvent, RunClaim, RunClaimInput } from "./types.js";
 
-export type { FactoryEvent, RunClaim, RunClaimInput, StoredEvent, TraceSummary } from "./types.js";
+export type { FactoryEvent, RunClaim, RunClaimInput } from "./types.js";
 
 let pool: pg.Pool | undefined;
 
@@ -82,109 +82,6 @@ export async function isCurrentRun(claim: RunClaim): Promise<boolean> {
 		[claim.repo, claim.subject],
 	);
 	return rows[0]?.id === claim.id;
-}
-
-interface TraceRow {
-	trace_id: string;
-	repo: string | null;
-	subject: string | null;
-	first_at: Date;
-	last_at: Date;
-	event_count: string;
-	first_type: string;
-	last_type: string;
-}
-
-/** The most recent traces, newest activity first. `before` pages by last event time. */
-export async function listTraces(options: { repo?: string; limit: number; before?: Date }): Promise<TraceSummary[]> {
-	const { rows } = await requireDb().query<TraceRow>(
-		`select trace_id,
-			max(repo) as repo,
-			max(subject) as subject,
-			min(created_at) as first_at,
-			max(created_at) as last_at,
-			count(*) as event_count,
-			(array_agg(type order by id))[1] as first_type,
-			(array_agg(type order by id desc))[1] as last_type
-		from events
-		where ($1::text is null or repo = $1)
-		group by trace_id
-		having ($3::timestamptz is null or max(created_at) < $3)
-		order by last_at desc
-		limit $2`,
-		[options.repo ?? null, Math.max(1, Math.min(options.limit, 500)), options.before ?? null],
-	);
-	return rows.map((row) => ({
-		traceId: row.trace_id,
-		repo: row.repo,
-		subject: row.subject,
-		firstAt: row.first_at,
-		lastAt: row.last_at,
-		eventCount: Number(row.event_count),
-		firstType: row.first_type,
-		lastType: row.last_type,
-	}));
-}
-
-interface EventRow {
-	id: string;
-	trace_id: string;
-	run_id: string | null;
-	repo: string | null;
-	subject: string | null;
-	type: string;
-	payload: Record<string, unknown>;
-	created_at: Date;
-}
-
-/** Every event in one trace, in insertion order. */
-export async function traceEvents(traceId: string): Promise<StoredEvent[]> {
-	const { rows } = await requireDb().query<EventRow>(
-		"select id, trace_id, run_id, repo, subject, type, payload, created_at from events where trace_id = $1 order by id",
-		[traceId],
-	);
-	return rows.map(storedEvent);
-}
-
-/** The newest events matching every given filter, newest first. `before` pages by event time. */
-export async function recentEvents(options: {
-	types?: string[];
-	traceIds?: string[];
-	repo?: string;
-	limit: number;
-	before?: Date;
-}): Promise<StoredEvent[]> {
-	const { rows } = await requireDb().query<EventRow>(
-		`select id, trace_id, run_id, repo, subject, type, payload, created_at
-		from events
-		where ($1::text[] is null or type = any($1))
-			and ($2::text[] is null or trace_id = any($2))
-			and ($3::text is null or repo = $3)
-			and ($4::timestamptz is null or created_at < $4)
-		order by id desc
-		limit $5`,
-		[
-			options.types ?? null,
-			options.traceIds ?? null,
-			options.repo ?? null,
-			options.before ?? null,
-			Math.max(1, Math.min(options.limit, 2000)),
-		],
-	);
-	return rows.map(storedEvent);
-}
-
-function storedEvent(row: EventRow): StoredEvent {
-	return {
-		id: row.id,
-		traceId: row.trace_id,
-		runId: row.run_id ?? undefined,
-		repo: row.repo ?? undefined,
-		subject: row.subject ?? undefined,
-		type: row.type,
-		payload: row.payload,
-		createdAt: row.created_at,
-	};
 }
 
 /** Ends the pool so scripts can exit. */

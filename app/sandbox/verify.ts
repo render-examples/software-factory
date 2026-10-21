@@ -19,7 +19,6 @@ export function wirePolicy(type: NetworkPolicyType): WirePolicy {
 export const SandboxInfo = z.object({
 	runAs: z.string().min(1),
 	uid: z.number().int(),
-	drop: z.string(),
 	node: z.string(),
 	runnerNonDumpable: z.boolean(),
 	selfTest: z.looseObject({ ok: z.literal(true) }),
