@@ -77,7 +77,7 @@ export async function isCurrentRun(claim: RunClaim): Promise<boolean> {
 		`select id::text as id
 		from events
 		where repo = $1 and subject = $2 and type = 'run.claimed'
-		order by id desc
+		order by events.id desc
 		limit 1`,
 		[claim.repo, claim.subject],
 	);

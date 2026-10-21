@@ -86,6 +86,7 @@ describe("run coordination", () => {
 		const claim = { id: "42", runId: "trn-2", repo: "acme/web", subject: "issue#12" };
 		pg.query.mockResolvedValueOnce({ rows: [{ id: "42" }] });
 		await expect(isCurrentRun(claim)).resolves.toBe(true);
+		expect(pg.query.mock.calls[0]?.[0]).toContain("order by events.id desc");
 		pg.query.mockResolvedValueOnce({ rows: [{ id: "43" }] });
 		await expect(isCurrentRun(claim)).resolves.toBe(false);
 	});

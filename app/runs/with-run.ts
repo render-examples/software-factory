@@ -124,16 +124,13 @@ export async function withRun(
 		await checkpoint();
 		const progress = async (summary: string) => {
 			await checkpoint();
-			// GitHub can briefly return the status comment's previous body after an edit.
-			// The durable claim, checked on both sides of this write, is authoritative.
-			await setStatus({ gh, number: subject.number, runId, stage, state: "running", summary });
+			if (!(await setStatus({ gh, number: subject.number, runId, stage, state: "running", summary }))) throw new SupersededRun();
 			await checkpoint();
 		};
 		const result = await fn({ gh, repo, subject, traceId, runId, budget, checkpoint, progress });
 		await checkpoint();
 		const state = result.state ?? "done";
-		await status(state, result.summary, result.links);
-		await checkpoint();
+		if (!(await status(state, result.summary, result.links))) throw new SupersededRun();
 		return await finished(state, result.outcome, result.summary);
 	} catch (error) {
 		if (error instanceof SupersededRun) return await superseded();
