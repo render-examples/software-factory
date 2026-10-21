@@ -26,8 +26,6 @@ services:
           property: connectionString
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-      - key: FACTORY_ADMIN_TOKEN
-        generateValue: true
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_WORKFLOW_SLUG

@@ -192,7 +192,6 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 
 	let submission: { output: unknown } | undefined;
 	let failure: Failure | undefined;
-	let costUsd = 0;
 	const stopped = new AbortController();
 	const tools = input.tools.length > 0 && input.cwd && input.scratch_dir ? createTools({ tools: input.tools, cwd: input.cwd, scratchDir: input.scratch_dir }) : [];
 
@@ -226,12 +225,6 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 		stopped.abort();
 		if (agent.state.isStreaming) agent.abort();
 	}
-	const overBudget = () => input.budget_usd !== undefined && costUsd >= input.budget_usd;
-	const budgetFailure = (): Failure => ({
-		code: "budget_exceeded",
-		message: `model cost $${costUsd.toFixed(4)} reached the $${input.budget_usd} soft threshold without a submission`,
-	});
-
 	/** Sends `text`, then restarts the last turn while it fails with a transient model error. */
 	const prompt = async (text: string) => {
 		await agent.prompt(text);
@@ -246,16 +239,11 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	};
 	let turns = 0;
 	const unsubscribe = agent.subscribe((event) => {
-		forward(event, emit, model, (usage) => {
-			costUsd += usage.cost_usd ?? 0;
-			// A message that submits still gets its submission checked; anything else stops here, before its tools run.
-			if (overBudget() && event.type === "message_end" && !callsSubmit(event.message)) stop(budgetFailure());
-		});
+		forward(event, emit, model);
 		if (event.type !== "turn_end") return;
 		turns++;
 		// Backstop for batches that still continue after a submission (e.g. a sibling call failed validation).
 		if (submission || failure) stop();
-		else if (overBudget()) stop(budgetFailure());
 		else if (turns >= input.max_turns) stop({ code: "max_turns", message: `turn limit (${input.max_turns}) reached without a submission` });
 	});
 
@@ -303,7 +291,7 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	return failure.code === "timeout" ? RUNNER_EXIT.timeout : RUNNER_EXIT.error;
 }
 
-function forward(event: AgentEvent, emit: Emitter, model: Model<Api>, onUsage: (usage: Usage) => void) {
+function forward(event: AgentEvent, emit: Emitter, model: Model<Api>) {
 	switch (event.type) {
 		case "tool_execution_start":
 			emit({ type: "tool_call", tool_call_id: event.toolCallId, tool: event.toolName, args: event.args });
@@ -326,10 +314,7 @@ function forward(event: AgentEvent, emit: Emitter, model: Model<Api>, onUsage: (
 				.trim();
 			if (text) emit({ type: "assistant_text", text });
 			const usage = toUsage(message.usage, model);
-			if (usage) {
-				emit({ type: "usage", usage });
-				onUsage(usage);
-			}
+			if (usage) emit({ type: "usage", usage });
 			break;
 		}
 	}

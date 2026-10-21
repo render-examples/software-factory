@@ -10,9 +10,7 @@
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"resolveJsonModule": true,
-		"types": ["node"],
-		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx"
+		"types": ["node"]
 	},
 	"include": ["app", "scripts", "tests", "factory.config.ts"],
 	"exclude": ["node_modules"]

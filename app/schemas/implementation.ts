@@ -15,26 +15,5 @@ export const Implementation = z.object({
 	followUps: z.array(z.string().min(1).max(1000)).max(20).describe("Work the spec implies but you left out, for the maintainer."),
 });
 
-export const ImplementationReviewIssue = z.object({
-	file: z.string().min(1),
-	line: z.number().int().min(1).optional(),
-	problem: z.string().min(1).max(2000).describe("The concrete defect and how to fix it."),
-});
-
-/** The implementation reviewer's submission. */
-export const ImplementationReview = z
-	.object({
-		needsRevision: z.boolean().describe("True only for concrete, fixable problems."),
-		issues: z.array(ImplementationReviewIssue).max(30),
-		notes: z.array(z.string().min(1).max(1000)).max(10).describe("Observations for the pull request description that need no fix."),
-	})
-	.superRefine((value, ctx) => {
-		if (value.needsRevision && value.issues.length === 0) {
-			ctx.addIssue({ code: "custom", path: ["issues"], message: "needsRevision needs at least one issue" });
-		}
-	});
-
 export type VerificationRun = z.infer<typeof VerificationRun>;
 export type Implementation = z.infer<typeof Implementation>;
-export type ImplementationReviewIssue = z.infer<typeof ImplementationReviewIssue>;
-export type ImplementationReview = z.infer<typeof ImplementationReview>;

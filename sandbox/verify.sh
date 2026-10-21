@@ -101,10 +101,10 @@ fi
 find "$FACTORY_SCRATCH_DIR/tmp" -mindepth 1 -delete
 
 "$FACTORY_NODE" -e '
-const [runAs, uid, drop, selfTest, nonDumpable] = process.argv.slice(1);
+const [runAs, uid, selfTest, nonDumpable] = process.argv.slice(1);
 console.log(JSON.stringify({
-  runAs, uid: Number(uid), drop, node: process.version,
+  runAs, uid: Number(uid), node: process.version,
   runnerNonDumpable: nonDumpable === "true",
   selfTest: JSON.parse(selfTest.trim().split("\n").pop()),
 }));
-' "$FACTORY_RUN_AS" "$(id -u)" "$FACTORY_DROP" "$self_test" "$non_dumpable"
+' "$FACTORY_RUN_AS" "$(id -u)" "$self_test" "$non_dumpable"

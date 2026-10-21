@@ -56,7 +56,7 @@ export type Service = "gateway" | "workflows";
 
 /** Each service's env vars, exactly as render.yaml declares them. */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
-	gateway: ["DATABASE_URL", "GITHUB_WEBHOOK_SECRET", "FACTORY_ADMIN_TOKEN", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
+	gateway: ["DATABASE_URL", "GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
 	workflows: [
 		"DATABASE_URL",
 		"RENDER_API_KEY",
@@ -67,14 +67,10 @@ export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
 	],
 };
 
-/** Declared in render.yaml but optional at runtime. RENDER_WORKSPACE_ID is resolved from the API key when unset. */
-export const OPTIONAL_ENV: ReadonlySet<string> = new Set(["RENDER_WORKSPACE_ID"]);
-
 /** Values doctor must never print. */
 export const SECRET_ENV: readonly string[] = [
 	"DATABASE_URL",
 	"GITHUB_WEBHOOK_SECRET",
-	"FACTORY_ADMIN_TOKEN",
 	"RENDER_API_KEY",
 	"GITHUB_APP_PRIVATE_KEY",
 ];

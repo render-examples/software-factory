@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { ClientError, Render, ServerError } from "@renderinc/sdk";
 import type { SandboxesClient, SandboxUploadContentType } from "@renderinc/sdk/experimental";
-import { loadSandboxConfig, type SandboxConfig } from "./config.js";
+import { requireEnv } from "../config/index.js";
 import { errorMessage, log } from "./shell.js";
 import type { ExecResult } from "./types.js";
 
@@ -11,6 +11,8 @@ export type SandboxApi = Pick<SandboxesClient, "create" | "get" | "exec" | "uplo
 };
 
 export interface SandboxTimings {
+	/** Client-side pacing for the Sandbox API's limit of 100 requests a minute per workspace. */
+	minRequestIntervalMs: number;
 	/** Gap between status polls. */
 	pollMs: number;
 	bootTimeoutMs: number;
@@ -23,6 +25,7 @@ export interface SandboxTimings {
 }
 
 const DEFAULT_TIMINGS: SandboxTimings = {
+	minRequestIntervalMs: 1_000,
 	pollMs: 3_000,
 	bootTimeoutMs: 5 * 60_000,
 	prepareTimeoutMs: 40 * 60_000,
@@ -58,16 +61,9 @@ export class SandboxClient {
 
 	constructor(
 		readonly api: SandboxApi,
-		readonly cfg: Pick<SandboxConfig, "minRequestIntervalMs">,
 		timings: Partial<SandboxTimings> = {},
 	) {
 		this.t = { ...DEFAULT_TIMINGS, ...timings };
-	}
-
-	static fromConfig(cfg: SandboxConfig): SandboxClient {
-		// useLocalDev: false keeps sandbox calls on api.render.com even under a local workflows dev server.
-		const render = new Render({ useLocalDev: false, token: cfg.apiKey, ownerId: cfg.workspaceId });
-		return new SandboxClient(render.experimental.sandboxes, cfg);
 	}
 
 	/** Paces every API call and retries the given statuses (429 by default, which is never processed server-side). */
@@ -80,7 +76,7 @@ export class SandboxClient {
 		for (let attempt = 1; ; attempt++) {
 			const now = Date.now();
 			const at = Math.max(now, this.#nextRequestAt);
-			this.#nextRequestAt = at + this.cfg.minRequestIntervalMs;
+			this.#nextRequestAt = at + this.t.minRequestIntervalMs;
 			if (at > now) await sleep(at - now, undefined, { signal: opts.signal });
 			try {
 				return await fn();
@@ -163,16 +159,16 @@ export class SandboxClient {
 	}
 }
 
-let shared: Promise<SandboxClient> | undefined;
+let shared: SandboxClient | undefined;
 
-/** The process-wide client, configured from the environment on first use. */
-export function sandboxClient(): Promise<SandboxClient> {
-	shared ??= loadSandboxConfig().then(
-		(cfg) => SandboxClient.fromConfig(cfg),
-		(err: unknown) => {
-			shared = undefined;
-			throw err;
-		},
-	);
+/** The process-wide client, configured from RENDER_API_KEY and RENDER_WORKSPACE_ID on first use. */
+export function sandboxClient(): SandboxClient {
+	if (!shared) {
+		const workspaceId = requireEnv("RENDER_WORKSPACE_ID");
+		if (!workspaceId.startsWith("tea-")) throw new Error("RENDER_WORKSPACE_ID must be a tea-… workspace id");
+		// useLocalDev: false keeps sandbox calls on api.render.com even under a local workflows dev server.
+		const render = new Render({ useLocalDev: false, token: requireEnv("RENDER_API_KEY"), ownerId: workspaceId });
+		shared = new SandboxClient(render.experimental.sandboxes);
+	}
 	return shared;
 }

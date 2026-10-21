@@ -48,7 +48,6 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 			runId: run.runId,
 			repo: repo.fullName,
 			subject: subjectName(subject),
-			budget: run.budget,
 		});
 		try {
 			await run.progress("reading the issue and the repository");

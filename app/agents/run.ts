@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import { config, modelFor } from "../config/index.js";
+import { modelFor } from "../config/index.js";
 import { emit } from "../events/index.js";
 import { providerApiKey } from "../runner/keys.js";
 import { type RunnerErrorCode, RunnerEvent, RunnerInput, type ToolName, type Usage } from "../runner/protocol.js";
-import { createEmitter, errorMessage, runSession } from "../runner/session.js";
+import { errorMessage } from "../runner/session.js";
 import { outputSchemaProblem } from "../runner/submit.js";
-import type { TestStub } from "../runner/test-stub.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
 
@@ -16,88 +15,48 @@ const EXEC_GRACE_MS = 60_000;
 
 export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
 
-/** Safe, redacted runner observations retained for evals and diagnostics. */
-export interface AgentTrace {
-	toolCalls: Array<{ tool: string; args: unknown }>;
-	toolResults: Array<{ tool: string; isError: boolean; outputPreview: string }>;
-	assistantText: string[];
-}
-
 export class AgentError extends Error {
 	override readonly name = "AgentError";
 	constructor(
 		readonly code: AgentErrorCode,
 		message: string,
-		/** Usage up to the failure; the workflow still subtracts it from the budget. */
-		readonly usage: Usage,
-		readonly costUsd: number,
-		readonly turns: number,
-		readonly trace?: AgentTrace,
 	) {
 		super(message);
 	}
 }
 
-export interface RunAgentInput {
-	/** The task for this run. */
-	message: string;
-	/** Fills `{{name}}` placeholders in the agent's prompt. */
-	vars?: Record<string, string>;
-}
-
-export interface BaseRunOptions {
+export interface RunAgentOptions {
+	/** Tools run only here, never in a Workflows task. */
+	sandbox: Sandbox;
 	/** Root task run of the stage; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
 	repo?: string;
 	subject?: string;
-	/** Soft dollar threshold for this call (default: `limits.perRunUsd`). Reported usage can cross it. */
-	budgetUsd?: number;
 	/** Default 30 minutes. */
 	timeoutMs?: number;
 	signal?: AbortSignal;
 }
-
-/** An agent with tools must run in a sandbox (tools never run in a Workflows task); one without tools can't take one. */
-export type RunAgentOptions<Tools extends readonly ToolName[]> = Tools extends readonly []
-	? BaseRunOptions & { sandbox?: never }
-	: BaseRunOptions & { sandbox: Sandbox };
 
 export interface AgentRun<Output extends OutputSchema> {
 	output: z.infer<Output>;
 	usage: Usage;
 	costUsd: number;
 	turns: number;
-	/** Present for real runner calls; optional so lightweight test doubles remain valid. */
-	trace?: AgentTrace;
-}
-
-/** Test seam: when set, in-task runs use these deterministic responses instead of calling a model. */
-export const testing: { testStub?: TestStub } = {};
-
-const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-
-/** Replaces every `{{name}}` with `vars[name]` in one pass; an unknown name throws. */
-export function renderPrompt(prompt: string, vars: Record<string, string> = {}): string {
-	return prompt.replace(PLACEHOLDER, (_match, name: string) => {
-		if (!Object.hasOwn(vars, name)) throw new Error(`prompt placeholder {{${name}}} has no value in vars`);
-		return vars[name] as string;
-	});
 }
 
 /**
- * Runs `agent` where it is called: in this process with no tools, or with tools in `opts.sandbox`. Returns the
- * submission parsed by the agent's Zod schema; every failure throws an AgentError that carries the usage so far.
+ * Runs `agent` in `opts.sandbox` on `message`, the task for this run, and returns the submission parsed by the
+ * agent's Zod schema. Every failure throws an AgentError; usage and cost are recorded on `agent.finished` either way.
  */
 export async function runAgent<Tools extends readonly ToolName[], Output extends OutputSchema>(
 	agent: Agent<Tools, Output>,
-	input: RunAgentInput,
-	opts: RunAgentOptions<Tools>,
+	message: string,
+	opts: RunAgentOptions,
 ): Promise<AgentRun<Output>> {
-	const { sandbox, ...base } = opts as BaseRunOptions & { sandbox?: Sandbox };
+	const { sandbox, ...base } = opts;
 	const { provider, model } = modelFor(agent.model);
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	const budgetUsd = base.budgetUsd ?? config.limits.perRunUsd;
 	const record = (type: string, payload: Record<string, unknown>) => {
 		try {
 			void emit({ traceId: base.traceId, runId: base.runId, repo: base.repo, subject: base.subject, type, payload }).catch(() => {});
@@ -117,75 +76,55 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			...(message ? { message } : {}),
 		});
 
-	record("agent.started", { agentId: agent.id, model: `${provider}/${model}`, tools: agent.tools, where: sandbox ? "sandbox" : "task", budgetUsd });
+	record("agent.started", { agentId: agent.id, model: `${provider}/${model}`, tools: agent.tools });
 	let summary = emptySummary();
 	try {
-		if (agent.tools.length > 0 && !sandbox) throw failure("invalid_input", `agent ${agent.id} has tools and needs a sandbox`, summary);
-		if (agent.tools.length === 0 && sandbox) throw failure("invalid_input", `agent ${agent.id} has no tools and runs in the task, not a sandbox`, summary);
-		if (!(budgetUsd > 0)) throw failure("budget_exceeded", `no budget left ($${budgetUsd})`, summary);
-
-		let systemPrompt: string;
-		try {
-			systemPrompt = renderPrompt(agent.prompt, input.vars);
-		} catch (err) {
-			throw failure("invalid_input", `agent ${agent.id}: ${errorMessage(err)}`, summary);
-		}
-		const runnerInput = checkInput(
-			{
-				trace_id: base.traceId,
-				agent_id: agent.id,
-				system_prompt: systemPrompt,
-				message: input.message,
-				model_provider: provider,
-				model,
-				thinking_level: agent.thinking ?? "medium",
-				tools: [...agent.tools],
-				output_schema: agent.outputJsonSchema,
-				max_turns: agent.maxTurns,
-				timeout_ms: timeoutMs,
-				budget_usd: budgetUsd,
-				...(sandbox ? { cwd: REPO_DIR, scratch_dir: SCRATCH_DIR } : {}),
-			},
-			summary,
-		);
-		const testStub = sandbox ? undefined : testing.testStub;
+		const runnerInput = checkInput({
+			trace_id: base.traceId,
+			agent_id: agent.id,
+			system_prompt: agent.prompt,
+			message,
+			model_provider: provider,
+			model,
+			thinking_level: agent.thinking ?? "medium",
+			tools: [...agent.tools],
+			output_schema: agent.outputJsonSchema,
+			max_turns: agent.maxTurns,
+			timeout_ms: timeoutMs,
+			cwd: REPO_DIR,
+			scratch_dir: SCRATCH_DIR,
+		});
 		const apiKey = providerApiKey(provider, process.env);
-		if (!apiKey && !testStub) throw failure("agent_error", `no API key for provider "${provider}" in the environment`, summary);
+		if (!apiKey) throw new AgentError("agent_error", `no API key for provider "${provider}" in the environment`);
 
-		const stdout = sandbox
-			? await runInSandbox(sandbox, runnerInput, apiKey as string, timeoutMs, base.signal)
-			: await runInTask(runnerInput, apiKey, testStub, base.signal);
+		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
 		summary = summarize(stdout.text);
 		const end = summary.terminal;
 		if (!end) {
-			throw failure("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`, summary);
+			throw new AgentError("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`);
 		}
-		if (end.type === "error") throw failure(end.code, end.message, summary);
+		if (end.type === "error") throw new AgentError(end.code, end.message);
 		const parsed = agent.output.safeParse(end.output);
 		if (!parsed.success) {
 			const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
-			throw failure("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`, summary);
+			throw new AgentError("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`);
 		}
 		finish("ok", summary);
-		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns, trace: summary.trace };
+		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns };
 	} catch (err) {
-		const error = err instanceof AgentError ? err : failure("agent_error", errorMessage(err), summary);
+		const error = err instanceof AgentError ? err : new AgentError("agent_error", errorMessage(err));
 		finish(error.code, summary, error.message);
 		throw error;
 	}
 }
 
-function failure(code: AgentErrorCode, message: string, summary: Summary): AgentError {
-	return new AgentError(code, message, summary.usage, summary.costUsd, summary.turns, summary.trace);
-}
-
-function checkInput(raw: RunnerInput, summary: Summary): RunnerInput {
+function checkInput(raw: RunnerInput): RunnerInput {
 	const parsed = RunnerInput.safeParse(raw);
 	if (!parsed.success) {
-		throw failure("invalid_input", `invalid RunnerInput: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`, summary);
+		throw new AgentError("invalid_input", `invalid RunnerInput: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
 	}
 	const problem = outputSchemaProblem(parsed.data.output_schema);
-	if (problem) throw failure("invalid_input", problem, summary);
+	if (problem) throw new AgentError("invalid_input", problem);
 	return parsed.data;
 }
 
@@ -196,24 +135,8 @@ interface RunnerOutput {
 	detail?: string;
 }
 
-/** In a Workflows task: the same session, in this process, with no tools. */
-async function runInTask(input: RunnerInput, apiKey: string | undefined, testStub: TestStub | undefined, signal?: AbortSignal): Promise<RunnerOutput> {
-	let text = "";
-	const emitter = createEmitter(async (chunk) => {
-		text += chunk;
-	});
-	if (apiKey) emitter.redact(apiKey);
-	try {
-		await runSession({ input, emit: emitter, apiKey, testStub, signal });
-	} catch (err) {
-		if (!emitter.terminated) emitter({ type: "error", code: "agent_error", message: errorMessage(err) });
-	}
-	await emitter.flush();
-	return { text };
-}
-
 /**
- * In a sandbox. Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it reads and deletes
+ * Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it reads and deletes
  * `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that user from
  * REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by `<runDir>/input.json`. It
  * writes stdout to `<runDir>.jsonl` and the exit status to `<runDir>.exit`. `<runDir>` must be root-only (mode
@@ -257,7 +180,6 @@ interface Summary {
 	costUsd: number;
 	turns: number;
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
-	trace: AgentTrace;
 	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
@@ -267,7 +189,6 @@ function emptySummary(): Summary {
 		usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0 },
 		costUsd: 0,
 		turns: 0,
-		trace: { toolCalls: [], toolResults: [], assistantText: [] },
 		invalidLines: 0,
 	};
 }
@@ -286,13 +207,7 @@ function summarize(jsonl: string): Summary {
 			continue;
 		}
 		if (summary.terminal) continue;
-		if (event.type === "tool_call") {
-			summary.trace.toolCalls.push({ tool: event.tool, args: event.args });
-		} else if (event.type === "tool_result") {
-			summary.trace.toolResults.push({ tool: event.tool, isError: event.is_error, outputPreview: event.output_preview });
-		} else if (event.type === "assistant_text") {
-			summary.trace.assistantText.push(event.text);
-		} else if (event.type === "usage") {
+		if (event.type === "usage") {
 			const u = summary.usage;
 			u.input_tokens += event.usage.input_tokens;
 			u.output_tokens += event.usage.output_tokens;

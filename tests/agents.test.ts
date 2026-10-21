@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineAgent, runAgent } from "../app/agents/index.js";
-import { testing } from "../app/agents/run.js";
 import { emit } from "../app/events/index.js";
 import { RunnerInput } from "../app/runner/protocol.js";
 import { REPO_DIR } from "../app/sandbox/types.js";
 import { eventLine, FakeSandbox } from "./helpers/fake-sandbox.js";
-import { call, SUBMIT, say } from "./helpers/runner.js";
 
 vi.mock("../app/events/index.js", () => ({ emit: vi.fn(async () => {}) }));
 
@@ -19,7 +17,6 @@ const Report = z.object({
 	priority: z.number().int().default(2),
 });
 
-const taskAgent = defineAgent({ id: "task-agent", prompt: PROMPT, model: "small", tools: [], output: Report, maxTurns: 5 });
 const reviewer = defineAgent({
 	id: "reviewer",
 	prompt: PROMPT,
@@ -30,7 +27,6 @@ const reviewer = defineAgent({
 	thinking: "high",
 });
 
-const vars = { repo: "acme/web", issue: "12" };
 const emitted = () => vi.mocked(emit).mock.calls.map(([e]) => e);
 
 beforeEach(() => {
@@ -38,41 +34,15 @@ beforeEach(() => {
 	vi.mocked(emit).mockImplementation(async () => {});
 });
 afterEach(() => {
-	testing.testStub = undefined;
 	delete process.env.ANTHROPIC_API_KEY;
 });
 
 describe("defineAgent", () => {
 	it("reads the prompt file verbatim and converts the output schema (fields with defaults optional)", () => {
-		expect(taskAgent.prompt).toBe("You are a test agent for {{repo}}.\n\nReport on issue #{{ issue }} and submit exactly once.\n");
-		expect(taskAgent.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
-		expect(taskAgent.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
+		expect(reviewer.prompt).toBe("You are a test agent.\n\nReport on the task and submit exactly once.\n");
+		expect(reviewer.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
+		expect(reviewer.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
 		expect(reviewer.tools).toEqual(["read", "ls", "bash"]);
-	});
-});
-
-describe("runAgent in a task (no tools)", { timeout: 30_000 }, () => {
-	it("runs the session in-process and returns the Zod-parsed output with usage", async () => {
-		let seen: RunnerInput | undefined;
-		testing.testStub = (input) => {
-			seen = input;
-			return [say("Thinking it over."), call(SUBMIT, { verdict: "ok: fine", findings: ["a"] })];
-		};
-		const run = await runAgent(taskAgent, { message: "Merge the findings.", vars }, { traceId: "trace-1", budgetUsd: 5 });
-
-		expect(run.output).toEqual({ verdict: "ok: fine", findings: ["a"], priority: 2 });
-		expect(run.turns).toBe(2);
-		expect(run.usage.input_tokens).toBeGreaterThan(0);
-		expect(run.costUsd).toBeGreaterThan(0);
-		expect(run.costUsd).toBe(run.usage.cost_usd);
-		expect(seen).toMatchObject({ agent_id: "task-agent", message: "Merge the findings.", tools: [], budget_usd: 5 });
-		expect(seen?.cwd).toBeUndefined();
-
-		expect(emitted().map((e) => e.type)).toEqual(["agent.started", "agent.finished"]);
-		expect(emitted()[1]).toMatchObject({
-			traceId: "trace-1",
-			payload: { agentId: "task-agent", outcome: "ok", turns: 2, costUsd: run.costUsd, usage: run.usage },
-		});
 	});
 });
 
@@ -92,29 +62,34 @@ describe("runAgent in a sandbox", () => {
 
 	it("runs tool-using agents in the sandbox without exposing the model key to commands or events", async () => {
 		const sandbox = new FakeSandbox({ jsonl: `${cannedRun({ verdict: "ok", findings: ["x"] })}\n` });
-		const run = await runAgent(reviewer, { message: "Review it.", vars }, { traceId: "trace-2", sandbox, timeoutMs: 600_000, budgetUsd: 3 });
+		const run = await runAgent(reviewer, "Review it.", { traceId: "trace-2", sandbox, timeoutMs: 600_000 });
 
 		expect(run).toEqual({
 			output: { verdict: "ok", findings: ["x"], priority: 2 },
 			usage: { input_tokens: 2500, output_tokens: 300, cache_read_tokens: 50, cache_write_tokens: 10, cost_usd: expect.closeTo(0.03, 10) },
 			costUsd: expect.closeTo(0.03, 10),
 			turns: 2,
-			trace: {
-				toolCalls: [{ tool: "ls", args: {} }],
-				toolResults: [],
-				assistantText: [],
-			},
 		});
 
 		const runDir = sandbox.runDir as string;
 		expect(runDir).toMatch(/^\/tmp\/agent-[0-9a-f-]{36}$/);
 		expect(sandbox.uploads.get(`${runDir}/key`)).toBe(HOST_KEY);
 		const input = RunnerInput.parse(JSON.parse(sandbox.uploads.get(`${runDir}/input.json`) as string));
-		expect(input).toMatchObject({ agent_id: "reviewer", message: "Review it.", tools: ["read", "ls", "bash"], cwd: REPO_DIR });
+		expect(input).toMatchObject({
+			agent_id: "reviewer",
+			system_prompt: reviewer.prompt,
+			message: "Review it.",
+			tools: ["read", "ls", "bash"],
+			cwd: REPO_DIR,
+		});
 		for (const { command } of sandbox.execs) expect(command).not.toContain(HOST_KEY);
 		expect(sandbox.uploads.get(`${runDir}/input.json`)).not.toContain(HOST_KEY);
 
-		expect(emitted()[0]).toMatchObject({ type: "agent.started", payload: { agentId: "reviewer", where: "sandbox", budgetUsd: 3 } });
-		expect(emitted()[1]).toMatchObject({ type: "agent.finished", payload: { outcome: "ok", turns: 2, model: "anthropic/claude-opus-5" } });
+		expect(emitted()[0]).toMatchObject({ type: "agent.started", payload: { agentId: "reviewer" } });
+		expect(emitted()[1]).toMatchObject({
+			type: "agent.finished",
+			traceId: "trace-2",
+			payload: { outcome: "ok", turns: 2, model: "anthropic/claude-opus-5", costUsd: run.costUsd, usage: run.usage },
+		});
 	});
 });

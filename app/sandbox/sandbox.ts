@@ -38,24 +38,24 @@ const SnapshotManifestSchema = z.object({
 	createdAt: z.string(),
 }) satisfies z.ZodType<SnapshotManifest>;
 
-/** A handle on a running sandbox by id, for tasks that receive the id from a parent task. */
-export function connectSandbox(id: string, client?: SandboxClient): Sandbox {
-	const get = async () => client ?? (await sandboxClient());
+/** A handle on a running sandbox by id. */
+function connectSandbox(id: string, client?: SandboxClient): Sandbox {
+	const get = () => client ?? sandboxClient();
 	return {
 		id,
 		async exec(command, opts = {}) {
-			const c = await get();
+			const c = get();
 			const wrapped = opts.asRunner ? asRunner("bash", "-c", command) : command;
 			return c.exec(id, wrapped, { timeoutMs: opts.timeoutMs ?? c.t.execTimeoutMs, signal: opts.signal });
 		},
 		async upload(path, data) {
-			await (await get()).upload(id, path, data);
+			await get().upload(id, path, data);
 		},
 		async download(path, signal) {
-			return (await get()).download(id, path, signal);
+			return get().download(id, path, signal);
 		},
 		async close() {
-			await (await get()).terminate(id);
+			await get().terminate(id);
 		},
 	};
 }
@@ -73,7 +73,7 @@ export interface OpenSandboxDeps extends SnapshotDeps {
  */
 export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: OpenSandboxDeps = {}): Promise<OpenedSandbox> {
 	checkRef(ref);
-	const client = deps.client ?? (await sandboxClient());
+	const client = deps.client ?? sandboxClient();
 	const id = await createFromSnapshot(client, repo, deps);
 	try {
 		await client.waitRunning(id);

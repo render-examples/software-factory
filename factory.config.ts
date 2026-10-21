@@ -20,8 +20,6 @@ export interface FactoryConfig {
 	/** "provider/model" per tier, from Pi's model registry. */
 	models: Record<ModelTier, string>;
 	limits: {
-		/** Soft dollar threshold for one run. Reported usage can cross it; use a provider spend limit as the hard cap. */
-		perRunUsd: number;
 		/** Fix rounds after a failed verify in Spec-to-PR. */
 		repairRounds: number;
 		/** Publishing refuses a change with more files than this. */
@@ -60,7 +58,6 @@ export default defineFactoryConfig({
 		large: "anthropic/claude-opus-5",
 	},
 	limits: {
-		perRunUsd: 20,
 		repairRounds: 2,
 		maxChangedFiles: 200,
 		maxFileBytes: 1_000_000,

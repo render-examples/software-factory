@@ -47,9 +47,9 @@ mkdir -p "$git_dir/objects/info" "$git_dir/refs"
 printf 'ref: refs/heads/main\n' >"$git_dir/HEAD"
 printf '%s\n' "$objects" >"$git_dir/objects/info/alternates"
 
-while IFS= read -r name; do
-	case $name in GIT_*) unset "$name" ;; esac
-done < <(compgen -e)
+for name in "${!GIT_@}"; do
+	unset "$name"
+done
 export GIT_DIR="$git_dir"
 export GIT_WORK_TREE="$repo_dir"
 export GIT_INDEX_FILE="$git_dir/index"
