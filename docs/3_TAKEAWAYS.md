@@ -1,10 +1,5 @@
 # Takeaways
 
-This project is an example of a broader pattern: use platform-native durable
-tasks for execution, keep human decisions in the system where the work
-already happens, run model-directed tools in disposable Sandboxes, and retain
-write authority in a small trusted host. These are the parts worth reusing.
-
 ## Let the workflow platform own execution
 
 The gateway verifies an event and starts one named Workflows task. Render owns
@@ -187,24 +182,26 @@ Implementation:
 and
 [`sandbox/build/scrub-credentials.sh`](../sandbox/build/scrub-credentials.sh).
 
-## Put tool-using agents in the Sandbox
+## Put the agent in the Sandbox
 
-Agents that read files or run commands execute inside the same Sandbox as the
-checkout. This gives them ordinary local filesystem and process semantics and
-contains the effects of model-directed commands.
+The whole agent loop, model calls and tools alike, runs inside the same
+Sandbox as the checkout. The Workflows task uploads one input file, runs the
+bundled runner, and downloads its events. This gives agents ordinary local
+filesystem and process semantics and contains the effects of model-directed
+commands.
 
-The Workflows host does not proxy each tool call through the Sandbox API.
-That keeps the agent loop simple and avoids multiplying API calls under a
-workspace-level rate limit.
+The alternative, an agent loop in the Workflows task that proxies each tool
+call through the Sandbox API, would keep the model key out of the Sandbox. It
+would also turn every tool call into an API request under a workspace-level
+rate limit, which makes long implementation runs slow and starves concurrent
+stages. Running the agent in the Sandbox costs extra hardening around the key
+instead: root-only delivery over stdin, credential removal before tools run,
+and a non-dumpable runner process.
 
-Keep the placement rule mechanical:
-
-- a tool list requires a Sandbox;
-- an empty tool list forbids a Sandbox; and
-- tools never run in the Workflows process that holds service credentials.
-
-Types, runtime checks, and catalog tests all enforce that rule. Security
-should not depend on every call site remembering it.
+Keep the placement rule mechanical: `runAgent` requires a Sandbox, so tools
+never run in the Workflows process that holds service credentials. Types and
+catalog tests enforce that rule. Security should not depend on every call
+site remembering it.
 
 Implementation:
 [`app/agents/define.ts`](../app/agents/define.ts),
@@ -213,9 +210,9 @@ Implementation:
 
 ## Reuse one Sandbox within a stage
 
-Spec-to-PR runs the implementer and implementation reviewer in one Sandbox.
-They see the same working tree without publishing or restoring it between
-calls. PR Reviewer likewise runs verification and its reviewer against one
+Spec-to-PR runs the implementer, verification, and every repair run in one
+Sandbox. Repairs see the same working tree without publishing or restoring it
+between calls. PR Reviewer likewise runs verification and its reviewer against one
 exact checkout.
 
 This is a useful unit-of-isolation rule:
@@ -317,8 +314,7 @@ The rest of the system consumes domain values, not prose parsing:
 
 - Triage returns a bounded decision and questions;
 - the spec writer returns explicit spec sections;
-- the implementer reports a bounded summary;
-- the implementation reviewer returns bounded revision issues; and
+- the implementer reports a bounded summary; and
 - the PR reviewer returns one bounded review contract.
 
 Bound lengths and array sizes because outputs reach external systems with
@@ -330,75 +326,45 @@ Implementation:
 [`app/runner/submit.ts`](../app/runner/submit.ts), and
 [`app/agents/run.ts`](../app/agents/run.ts).
 
-## Make budget propagation explicit
+## Bound agents by turns and time, not dollars
 
-A stage creates one `Budget` and passes the amount remaining into every agent
-call. The budget adds usage from successes and failures. Parallel calls
-receive shares to bound how far simultaneous responses can overshoot.
+Providers report cost after a response, so an in-process dollar threshold is
+always soft: the response that crosses it is already charged. Rather than
+thread a budget through every stage, each agent has a turn limit and a call
+timeout, every stage has a bounded number of repair runs, and the model key
+carries a provider-enforced spend limit.
 
-This is better than having each agent look up a global number:
-
-- the caller decides how work shares one stage budget;
-- nested repair and review calls cannot forget earlier spend;
-- tests can assert budget behavior; and
-- traces report actual cost at agent and stage levels.
-
-The threshold is still soft: model providers report cost after a response, so
-the response that crosses it is charged. Pair software accounting with a
-provider-enforced spend limit.
+Reported usage and cost are still recorded on every `agent.finished` event,
+for successes and failures alike.
 
 Implementation:
-[`app/runs/budget.ts`](../app/runs/budget.ts) and
-[`app/agents/run.ts`](../app/agents/run.ts).
+[`app/agents/run.ts`](../app/agents/run.ts) and
+[`app/runner/session.ts`](../app/runner/session.ts).
 
 ## Separate coordination from observability
 
 One event table serves two roles with deliberately different failure modes:
 
 - `run.claimed` is part of correctness and fails closed;
-- delivery, run, agent, and eval events are telemetry and fail open.
+- delivery, run, and agent events are telemetry and fail open.
 
-This keeps useful traces from becoming an accidental dependency while keeping
-cross-task ownership durable. The trace UI reads events but never drives
-stage decisions.
+This keeps useful history from becoming an accidental dependency while keeping
+cross-task ownership durable. No stage reads telemetry back.
 
 When one store contains both control and telemetry, make the distinction
 visible in APIs and error handling. Avoid letting a convenient dashboard query
 become hidden workflow state.
 
 Implementation:
-[`app/events/index.ts`](../app/events/index.ts) and
-[`app/gateway/ui/model.ts`](../app/gateway/ui/model.ts).
+[`app/events/index.ts`](../app/events/index.ts).
 
-## Preserve deterministic and live test paths
-
-Unit tests inject fake GitHub, Sandbox, run-control, and agent dependencies.
-The runner also has a test stub that exercises its session, tools,
-submission, events, and error handling without a live model.
-
-Live evals complement deterministic tests. They replay bounded issues through
-the real Triage and spec-writer agents and grade decisions, required content,
-forbidden content, and reported cost.
-
-Use both:
-
-- deterministic tests for contracts, lifecycle, publishing, and security
-  invariants;
-- schema-only eval validation in CI; and
-- targeted live evals for model behavior and prompt-injection cases.
-
-Implementation:
-[`app/runner/test-stub.ts`](../app/runner/test-stub.ts),
-[`tests/`](../tests), and [`scripts/eval/`](../scripts/eval).
-
-## State residual risks explicitly
+## Residual risks
 
 Layered controls reduce authority; they do not make arbitrary code and model
 execution perfectly safe.
 
 This project accepts and documents:
 
-- allow-all Sandbox egress;
 - a model key in the hardened runner's memory during a call;
 - DNS as an exfiltration channel;
 - spend initiated by any collaborator meeting `minimumPermission`;
@@ -407,7 +373,3 @@ This project accepts and documents:
 - a Render API key whose authority may span the workspace;
 - Postgres availability on the run-ownership path; and
 - task inputs and results visible to Render Dashboard users.
-
-For each residual risk, name the operational mitigation and the architectural
-change that would close it. That makes future hardening a conscious decision
-instead of an undocumented assumption.

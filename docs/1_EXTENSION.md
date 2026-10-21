@@ -1,8 +1,7 @@
 # Extend the factory
 
-Start with a working deployment from [0_QUICKSTART.md](0_QUICKSTART.md).
 This guide covers supported extension points: repositories, labels,
-permissions, models, agents, stages, webhook routes, and evals. Read
+permissions, models, agents, stages, and webhook routes. Read
 [2_ARCHITECTURE.md](2_ARCHITECTURE.md) before changing run coordination,
 Sandbox boundaries, credentials, or publishing.
 
@@ -38,7 +37,6 @@ export default defineFactoryConfig({
     large: "anthropic/claude-opus-5",
   },
   limits: {
-    perRunUsd: 20,
     repairRounds: 2,
     maxChangedFiles: 200,
     maxFileBytes: 1_000_000,
@@ -86,9 +84,8 @@ a new snapshot.
 | `commandPrefix` | `/factory` | Prefix for comment commands; `<prefix> cancel` must be the first line |
 | `minimumPermission` | `write` | Live GitHub permission required to start or cancel: `triage`, `write`, `maintain`, or `admin` |
 | `models.small` | `anthropic/claude-haiku-4-5` | Small model tier; no built-in agent currently uses it |
-| `models.medium` | `anthropic/claude-sonnet-5` | Triage, implementation reviewer, and PR reviewer |
+| `models.medium` | `anthropic/claude-sonnet-5` | Triage and PR reviewer |
 | `models.large` | `anthropic/claude-opus-5` | Spec writer and implementer |
-| `limits.perRunUsd` | `20` | Soft reported-cost threshold shared by every agent in a stage |
 | `limits.repairRounds` | `2` | Implementer runs allowed after failed verification |
 | `limits.maxChangedFiles` | `200` | Publishing file-count limit |
 | `limits.maxFileBytes` | `1000000` | Publishing per-file size limit |
@@ -100,10 +97,9 @@ Spec-to-PR's task timeout is four hours by default.
 After renaming a label, deploy both services and rerun
 `npm run setup:github`. Existing labels are not removed automatically.
 
-`perRunUsd` is not a hard cap. Usage arrives after a model response, so the
-response that crosses the remaining budget is still charged. Failed agent
-calls count. Always pair the software threshold with a provider-enforced
-spend limit.
+The factory has no dollar budget. Each agent's `maxTurns` and timeout bound
+its run, and `agent.finished` events record reported usage and cost. Pair the
+model key with a provider-enforced spend limit.
 
 ## Choose models
 
@@ -124,12 +120,12 @@ Workflows service. To use another provider:
 5. set the key in Render; and
 6. run `npm run doctor -- --service workflows`.
 
-The runner has key mappings for multiple Pi providers. Anthropic, OpenAI, and
-Google are covered by the runner self-test; treat other providers as
-unverified until you run the full checks and a live eval.
+The runner maps keys for Anthropic, OpenAI, and Google, and its self-test
+checks that Pi registers models for each. To add another Pi provider, add its
+key variables to `PROVIDER_KEY_ENV` in `app/runner/keys.ts`.
 
-Use a key dedicated to this factory. Tool-using agents call the model from
-inside an allow-all Sandbox, so the key enters the runner for the duration of
+Use a key dedicated to this factory. Agents call the model from inside an
+allow-all Sandbox, so the key enters the runner for the duration of
 the call. The runner removes it from files and environment before tools run
 and uses a non-dumpable process, but provider-side spend limits remain
 important.
@@ -147,8 +143,6 @@ app/agents/
 ```
 
 ```typescript
-export const implementerVars = ["repo", "verifyCommands"] as const;
-
 export const implementer = defineAgent({
   id: "implementer",
   prompt: "implementer/prompt.md",
@@ -161,7 +155,7 @@ export const implementer = defineAgent({
 
 | Field | Meaning |
 |---|---|
-| `id` | Unique event and trace name |
+| `id` | Unique agent name, recorded on its events |
 | `prompt` | File relative to `app/agents/`, normally `<id>/prompt.md`, read verbatim |
 | `model` | `small`, `medium`, or `large` |
 | `tools` | Any of `read`, `ls`, `bash`, `edit`, `write` |
@@ -169,10 +163,9 @@ export const implementer = defineAgent({
 | `maxTurns` | Maximum model calls |
 | `thinking` | Optional `off`, `minimal`, `low`, `medium`, or `high` |
 
-The prompt is the system prompt. Put the run-specific task in
-`runAgent(...).message`. `{{name}}` placeholders are filled from `vars`, and a
-missing value fails before a model call. Each module exports its placeholder
-list, and the catalog test checks it against the prompt.
+The prompt file is the system prompt, sent verbatim. Put everything
+run-specific (the repository, issue, spec, refs, verify commands) in the
+message passed to `runAgent`, built by a typed function in the stage.
 
 Prompts should tell the model to call `submit` exactly once. Do not ask for a
 JSON-only response; the submit tool supplies the JSON Schema. Keep output
@@ -193,10 +186,8 @@ call.
 | `edit` | Replace text in a file |
 | `write` | Write a file |
 
-Any agent with tools must receive a Sandbox. An agent with no tools must run
-in the Workflows process and cannot receive a Sandbox. Types and runtime
-checks enforce both directions, preventing model-directed tools from running
-beside service credentials.
+Every agent runs in a Sandbox: `runAgent` requires one, so model-directed
+tools never run beside service credentials in the Workflows process.
 
 An agent without `edit` or `write` gets an additional shell policy that
 rejects obvious mutation and network commands. This is a behavioral guard,
@@ -207,44 +198,37 @@ boundaries. Only the built-in implementer has write tools.
 
 ```typescript
 // Tools run against this Sandbox checkout.
-const result = await run.budget.track((budgetUsd) =>
-  runAgent(
-    implementer,
-    { message, vars },
-    {
-      sandbox,
-      traceId: run.traceId,
-      runId: run.runId,
-      repo: repo.fullName,
-      subject,
-      budgetUsd,
-    },
-  ),
+const result = await runAgent(
+  implementer,
+  message,
+  {
+    sandbox,
+    traceId: run.traceId,
+    runId: run.runId,
+    repo: repo.fullName,
+    subject,
+  },
 );
 ```
 
 `runAgent` returns output, usage, reported cost, and turns. It emits
-`agent.started` and `agent.finished`. Failures throw `AgentError` with the
-usage already incurred, so pass every call through `run.budget.track`.
-
-For parallel calls, use the budget helper's `shareOf` option to reserve budget
-for every call. The default call timeout is 30 minutes.
+`agent.started` and `agent.finished`, which records usage and cost whether the
+call succeeded or not. Failures throw `AgentError` with a code. The default
+call timeout is 30 minutes.
 
 ### Add an agent
 
 1. Add `app/agents/<id>/prompt.md` and `app/agents/<id>/index.ts` with
    `defineAgent`.
-2. Export the definition and its placeholder names from
-   `app/agents/index.ts`.
+2. Export the definition from `app/agents/index.ts`.
 3. Add or reuse a bounded Zod schema in `app/schemas/`.
-4. Call it from a stage, passing a Sandbox exactly when it declares tools.
-5. Add it to `tests/agents-catalog.test.ts` with its intended model, tools,
-   turn limit, placeholders, and sample output.
+4. Call it from a stage with that stage's Sandbox.
+5. Add it to the `agents` list in `tests/agents-catalog.test.ts`, which pins
+   unique IDs and which agents get write tools.
 6. Run `npm run check`.
 
 The catalog deliberately pins the security-relevant shape of every agent.
-Widening tools or moving an agent between the Sandbox and Workflows process
-should require an explicit test change.
+Widening tools should require an explicit test change.
 
 Changes to `app/runner/` or `sandbox/` are different from prompt
 changes: those files are bundled into each repository snapshot. Rebuild by
@@ -255,7 +239,7 @@ pushing to each base branch or starting `refresh-snapshot` manually.
 A stage is a named Workflows task whose body runs inside `withRun`. That
 shared lifecycle provides events, a live permission check, a durable run
 claim, takeover of an older run, ownership checkpoints, a status comment,
-the working label, and the stage budget.
+and the working label.
 
 1. Add the task name to `TASKS` in `app/config/index.ts` and the `Stage` type
    and title in `app/runs/status.ts`.
@@ -317,77 +301,10 @@ verify and acknowledge its event, translate it to a bounded task input, and
 leave repository and write authority with trusted stage code. Do not pass
 arbitrary destinations through an agent schema.
 
-## Add eval cases
-
-The suite covers `triage`, `implementation`, `implementation-review`, and
-`pr-review`. One JSON file under [`evals/cases/`](../evals/cases) describes
-the input and expectations. Cases that need a seeded change reference a
-trusted patch under `evals/cases/fixtures/`.
-
-```json
-{
-  "id": "underspecified-search",
-  "description": "A vague request gets questions, not a spec.",
-  "stage": "triage",
-  "issue": {
-    "title": "Search",
-    "body": "It would be nice to be able to search.",
-    "labels": ["factory:triage"]
-  },
-  "expect": {
-    "decision": "ask",
-    "questionsMax": 3,
-    "maxCostUsd": 2
-  }
-}
-```
-
-Expectations can constrain:
-
-- `decision`: `ask`, `draft`, or `decline`;
-- `questionsMax`: maximum questions;
-- `specMustMention`: case-insensitive required terms;
-- `commands`: trusted post-implementation checks that must pass;
-- `changedFilesMustInclude` and `changedFilesMustNotInclude`: diff bounds;
-- `needsRevision`, `riskTier`, `findings`, and comment/issue limits for
-  reviewers;
-- `mustNotContain`: strings forbidden from submissions and produced diffs;
-- `forbiddenToolArgs`: strings forbidden from the actual serialized tool
-  arguments; and
-- `maxCostUsd`: maximum reported case cost.
-
-`comments` replays an oldest-first conversation. Mark a comment `"bot": true`
-to represent another App; Triage excludes bot comments from the human thread.
-
-Validate locally with no live calls:
-
-```bash
-npm run eval -- --validate
-```
-
-Then run the new case against a test installation:
-
-```bash
-npm run eval -- \
-  --installation <id> \
-  --case <case-id> \
-  --budget 2
-```
-
-Include adversarial cases for new prompts and tools. A live eval uses the
-real model and Sandbox and incurs cost. Include a clean seeded patch for every
-reviewer so the suite measures false positives as well as defect recall.
-
-The suite opens the configured branch but requires its checked-out commit to
-equal `evals/fixture.json`. Update that SHA only after reviewing target
-changes, and establish a new baseline rather than comparing runs across
-different fixtures. Use `--trials 3 --json <path>` for a release candidate;
-all trials must pass.
-
 ## Run a second deployment
 
 Use a separate GitHub App and database when deployments should have
-independent authority and traces. Within one Render workspace:
+independent authority and history. Within one Render workspace:
 
 1. rename the project resources in `render.yaml`;
 2. update every `fromService` and `fromDatabase` reference;
@@ -409,9 +326,8 @@ load `.env` when present.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DATABASE_URL` | Deployed factory | Migrations, delivery events, and trace UI |
+| `DATABASE_URL` | Deployed factory | Migrations and delivery events |
 | `GITHUB_WEBHOOK_SECRET` | Yes | Verify `x-hub-signature-256`; gateway refuses to start without it |
-| `FACTORY_ADMIN_TOKEN` | Trace UI/API | Authenticate `/ui` and `/api`; those routes return 503 without it |
 | `RENDER_API_KEY` | Yes | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Yes | Prefix task names with the deployed Workflows slug |
 | `PORT` | No | Listener port, default `3000`; server binds `0.0.0.0` |
@@ -422,20 +338,18 @@ load `.env` when present.
 |---|---|---|
 | `DATABASE_URL` | Yes | Strict run claims and best-effort events |
 | `RENDER_API_KEY` | Yes | Create Sandboxes and snapshots; read and cancel task runs |
-| `RENDER_WORKSPACE_ID` | Sometimes | Select the workspace when the key can see more than one |
+| `RENDER_WORKSPACE_ID` | Yes | Workspace (`tea-…`) that owns the Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Yes | Authenticate as the GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Yes | Mint installation tokens; accepts PEM, escaped PEM, or base64 PEM |
 | `ANTHROPIC_API_KEY` | Default models | Model calls; replace or supplement for other providers |
 | `GITHUB_API_URL` | No | GitHub API base URL, default `https://api.github.com` |
-| `RENDER_API_MIN_INTERVAL_MS` | No | Minimum gap between Sandbox API calls, default `1000` |
 
-### Scripts and evals
+### Scripts
 
 | Variable | Used by |
 |---|---|
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | `setup:github`, `doctor` |
 | `RENDER_EXTERNAL_URL` | Deployed `doctor`, to verify the App points at this gateway |
-| `FACTORY_EVAL_INSTALLATION_ID` | Live eval target when `--installation` is omitted |
 | `NO_COLOR` | Disable script color output |
 
 `setup:app --write-env` writes the three GitHub values. `db:migrate` reads

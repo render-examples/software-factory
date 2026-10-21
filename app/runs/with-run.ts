@@ -2,7 +2,6 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import { config, type RepoContext } from "../config/index.js";
 import { claimRun, emit, isCurrentRun, type RunClaim, type RunClaimInput } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
-import { Budget } from "./budget.js";
 import { checkPermission } from "./permission.js";
 import {
 	finishStatus,
@@ -23,8 +22,6 @@ export interface RunContext {
 	subject: Subject;
 	traceId: string;
 	runId: string;
-	/** The run's soft dollar threshold; pass every agent call through it. run.finished records actual spend. */
-	budget: Budget;
 	/** Fails when a newer run has claimed this issue or PR. Call before durable writes. */
 	checkpoint(): Promise<void>;
 	/** Checks ownership, then shows progress in the status comment. */
@@ -90,7 +87,6 @@ export async function withRun(
 	const base = { traceId, runId, repo: repo.fullName, subject: subjectName(subject) };
 	const coordination = opts.coordination ?? { claim: claimRun, isCurrent: isCurrentRun };
 	const startedAt = Date.now();
-	const budget = new Budget(config.limits.perRunUsd);
 
 	const status = (state: Exclude<RunState, "running">, summary: string, links?: StatusLink[]) =>
 		finishStatus({ gh, number: subject.number, runId, stage, state, summary, links });
@@ -103,7 +99,7 @@ export async function withRun(
 		await emit({
 			...base,
 			type: "run.finished",
-			payload: { stage, state, outcome, durationMs: Date.now() - startedAt, costUsd: budget.spent, ...extra },
+			payload: { stage, state, outcome, durationMs: Date.now() - startedAt, ...extra },
 		});
 		return { state, outcome, summary, traceId, runId };
 	};
@@ -127,7 +123,7 @@ export async function withRun(
 			if (!(await setStatus({ gh, number: subject.number, runId, stage, state: "running", summary }))) throw new SupersededRun();
 			await checkpoint();
 		};
-		const result = await fn({ gh, repo, subject, traceId, runId, budget, checkpoint, progress });
+		const result = await fn({ gh, repo, subject, traceId, runId, checkpoint, progress });
 		await checkpoint();
 		const state = result.state ?? "done";
 		if (!(await status(state, result.summary, result.links))) throw new SupersededRun();

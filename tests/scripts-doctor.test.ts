@@ -14,7 +14,6 @@ const TOKEN = "ghs_installationTOKEN123";
 const SECRETS = {
 	DATABASE_URL: "postgresql://factory:pgSECRETpw@db.internal:5432/factory",
 	GITHUB_WEBHOOK_SECRET: "whsec-super-secret-value",
-	FACTORY_ADMIN_TOKEN: "admin-token-secret-value",
 	RENDER_API_KEY: "rnd_renderSECRETkey",
 	ANTHROPIC_API_KEY: "sk-ant-SECRET-model-key",
 	GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY_B64,

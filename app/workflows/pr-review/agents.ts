@@ -1,24 +1,19 @@
-import { AgentError, type BaseRunOptions, prReviewer, type runAgent } from "../../agents/index.js";
+import { AgentError, prReviewer, type RunAgentOptions, type runAgent } from "../../agents/index.js";
 import type { Review } from "../../schemas/index.js";
-import type { Budget } from "../../runs/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 
 export type RunAgent = typeof runAgent;
 
-/** Runs the reviewer in the PR sandbox with the run's remaining budget. */
+/** Runs the reviewer in the PR sandbox. */
 export async function reviewPull(
 	run: RunAgent,
 	opts: {
 		sandbox: Sandbox;
 		message: string;
-		vars: { repo: string; baseRef: string };
-		budget: Budget;
-		base: BaseRunOptions;
+		base: Omit<RunAgentOptions, "sandbox">;
 	},
 ): Promise<Review> {
-	const res = await opts.budget.track((budgetUsd) =>
-		run(prReviewer, { message: opts.message, vars: opts.vars }, { ...opts.base, sandbox: opts.sandbox, budgetUsd }),
-	);
+	const res = await run(prReviewer, opts.message, { ...opts.base, sandbox: opts.sandbox });
 	return res.output;
 }
 

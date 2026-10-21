@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { implementationReviewer, implementer, prReviewer, specWriter, triage } from "../app/agents/index.js";
+import { implementer, prReviewer, specWriter, triage } from "../app/agents/index.js";
 
-const agents = [triage, specWriter, implementer, implementationReviewer, prReviewer];
+const agents = [triage, specWriter, implementer, prReviewer];
 
 describe("agent authority", () => {
 	it("gives every agent a unique id and prompt file", () => {

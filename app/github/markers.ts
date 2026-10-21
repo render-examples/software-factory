@@ -10,25 +10,13 @@ import type { IssueComment } from "./types.js";
 export const RUN_STATES = ["running", "done", "failed", "cancelled", "rejected"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
-const CurrentStatusMarker = z.object({
+const StatusMarker = z.object({
 	runId: z.string().min(1),
 	stage: z.string().min(1),
 	state: z.enum(RUN_STATES),
 	/** ISO 8601 */
 	at: z.string().optional(),
 });
-
-/** Read status comments written before the phase → stage terminology change. New markers always use `stage`. */
-const LegacyStatusMarker = z
-	.object({
-		runId: z.string().min(1),
-		phase: z.string().min(1),
-		state: z.enum(RUN_STATES),
-		at: z.string().optional(),
-	})
-	.transform(({ phase, ...marker }) => ({ ...marker, stage: phase }));
-
-const StatusMarker = z.union([CurrentStatusMarker, LegacyStatusMarker]);
 
 const SpecMarker = z.object({
 	spec: z.unknown(),

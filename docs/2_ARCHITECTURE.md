@@ -11,7 +11,7 @@ Postgres, Sandboxes, agents, and publishing. For deployment use
 The Blueprint in [`render.yaml`](../render.yaml) creates three resources:
 
 - **Gateway** (`factory-gateway`) verifies GitHub webhooks, maps each delivery
-  to a Workflows task, starts that task, and serves the trace UI.
+  to a Workflows task, and starts that task.
 - **Workflows** (`factory-workflows`) runs the three stages, cancellation,
   snapshot refresh, agents, GitHub writes, and Sandbox lifecycle.
 - **Database** (`factory-db`) stores one append-only event table. Strict
@@ -29,15 +29,13 @@ flowchart LR
   gateway -.->|delivery event| db[(Postgres events)]
 
   workflow -->|strict run claim| db
-  workflow -.->|trace events| db
+  workflow -.->|telemetry events| db
   workflow -->|restore, exec, upload, download| sandbox[Fresh Sandbox]
   workflow -->|comments, labels, Git data, PRs, reviews| gh
 
   push[Base-branch push] -->|refresh-snapshot task| builder[Builder Sandbox]
   builder --> snapshot[(Named repository snapshot)]
   snapshot -.-> sandbox
-
-  ui[Trace UI] --> db
 ```
 
 There is no custom queue, dispatcher, heartbeat loop, maintenance service, or
@@ -48,12 +46,12 @@ on the same issue or PR.
 ## Directory overview
 
 ```text
-factory.config.ts             Repositories, labels, permissions, models, limits, Sandbox timeout
+factory.config.ts             Repositories, labels, permissions, models, publish and repair limits, Sandbox timeout
 render.yaml                   Blueprint for gateway, Workflows, and Postgres
 .env.example                  Local environment reference
 AGENTS.md                     Repository instructions for coding agents
 docs/
-  0_QUICKSTART.md             Deploy, use, develop, evaluate, and operate
+  0_QUICKSTART.md             Deploy, use, develop, and operate
   1_EXTENSION.md              Repositories, models, agents, stages, triggers, environment
   2_ARCHITECTURE.md           Repository map, execution paths, interfaces, trust boundaries
   3_TAKEAWAYS.md              Reusable architecture and agent patterns
@@ -65,26 +63,24 @@ app/
     index.ts                  Config import, RepoContext, task names, model resolution
   schemas/                  Zod schemas for task inputs and agent outputs
   gateway/
-    index.ts                  Hono webhook and admin application
+    index.ts                  Hono webhook application
     signature.ts, body.ts     Constant-time signature check and body limit
     routes.ts                 Pure GitHub event-to-task routing table
-    ui/                       Trace and delivery UI
   workflows/
     triage/                   Triage, thread loading, spec drafting and revision
-    spec-to-pr/               Approval, implementation, verify/repair, implementation review
+    spec-to-pr/               Approval, implementation, verify/repair, publishing
     pr-review/                Checkout, verify, PR review, review posting
     cancel.ts                 Fence and cancel the current run
     refresh-snapshot.ts       Build a repository's named snapshot
   runs/
-    with-run.ts             Permission, claim, takeover, checkpoints, status, budget
+    with-run.ts               Permission, claim, takeover, checkpoints, status
     status.ts                 Status comment markers and working label
-    budget.ts                 Per-run reported-cost accounting
   agents/
     define.ts                 Typed agent definitions and prompt loading
-    run.ts                    In-task or in-Sandbox execution
+    run.ts                    Run one agent in a stage Sandbox
     <agent>/                  One prompt.md and index.ts per built-in agent
   runner/
-    main.ts, session.ts       Model loop inside the task or Sandbox
+    main.ts, session.ts       Model loop inside the Sandbox
     protocol.ts               Runner input, tools, events, errors, usage
     tools.ts                  Read, list, shell, edit, and write implementations
     submit.ts                 JSON Schema submission validation
@@ -109,14 +105,13 @@ app/
   format/                     Bound and sanitize model text for GitHub
   sql/                        Append-only event table migrations
 sandbox/
-  install-tools.sh            Prepare the builder
+  install-tools.sh            Add missing tools to the Debian base image
   as-runner.sh                Drop privilege and clear the environment
   run-agent.sh                Deliver the model key and run one agent
   collect-changes.sh          Stage and serialize the candidate tree
   verify.sh                   Check layout, permissions, credentials, process hardening
   build/                      Staged Git credential helper and scrubber
-scripts/                      App setup, GitHub setup, doctor, migrations, evals
-evals/                        Pinned live stage cases and seeded review patches
+scripts/                      App setup, GitHub setup, doctor, migrations
 tests/                        Unit and boundary tests with fakes
 ```
 
@@ -182,11 +177,10 @@ Triage, Spec-to-PR, and PR Reviewer parse their Zod input, resolve a
    as a fencing token;
 4. reads the App-authored status marker, cancels the previous task when it is
    still active, updates the status, and applies `factory:working`;
-5. constructs a `Budget` from `limits.perRunUsd`;
-6. exposes `checkpoint()` and `progress()` to the body;
-7. refuses further work when a newer claim exists;
-8. finalizes the status comment and working label; and
-9. emits `run.finished` with outcome, duration, and reported cost.
+5. exposes `checkpoint()` and `progress()` to the body;
+6. refuses further work when a newer claim exists;
+7. finalizes the status comment and working label; and
+8. emits `run.finished` with outcome and duration.
 
 Progress updates and durable writes are ownership checkpoints. A run replaced
 by a relabel can finish an in-flight model call, but it cannot remain current
@@ -212,8 +206,9 @@ available snapshot, it builds one inline once. Both paths call
 
 1. create an allow-all builder Sandbox with a one-hour provider timeout;
 2. upload runtime scripts and a freshly bundled `runner.mjs`;
-3. install tools, create the unprivileged `factory` user, and self-test the
-   runner before any repository credential arrives;
+3. add ripgrep to the Debian base image (which runs as root and ships Node,
+   git, and `setpriv`), create the unprivileged `factory` user, and self-test
+   the runner before any repository credential arrives;
 4. upload a read-only installation token as a root-only file;
 5. clone the configured base branch at the exact requested commit through a
    staged credential helper;
@@ -286,11 +281,9 @@ Spec-to-PR:
 5. runs the implementer;
 6. runs configured `verify` commands and permits up to
    `limits.repairRounds` implementer repairs;
-7. runs the independent implementation reviewer and permits one requested
-   revision;
-8. collects the candidate tree in the Sandbox;
-9. validates and publishes it from the trusted Workflows host; and
-10. creates or finds the draft PR.
+7. collects the candidate tree in the Sandbox;
+8. validates and publishes it from the trusted Workflows host; and
+9. creates or finds the draft PR.
 
 The branch is deterministically `factory/issue-<number>`. An agent cannot
 choose it or a GitHub destination.
@@ -312,15 +305,11 @@ or merge operations.
 `defineAgent` reads a Markdown prompt and binds it to a model tier, tool list,
 turn limit, thinking level, and Zod output schema.
 
-`runAgent` resolves the tier to `provider/model`, renders prompt placeholders,
-and builds one `RunnerInput`. Placement follows the tool list:
-
-- **With tools:** upload input and the provider key to a root-only run
-  directory in the stage Sandbox.
-- **Without tools:** run the same session in the Workflows process with no
-  tool implementation.
-
-For a Sandbox call, `run-agent.sh`:
+`runAgent` resolves the tier to `provider/model`, pairs the verbatim prompt
+with the stage's task message in one `RunnerInput`, and uploads it with the provider key to a root-only
+run directory in the stage Sandbox. The whole agent loop runs there; the
+Workflows task only uploads input, waits, and downloads events. Then
+`run-agent.sh`:
 
 1. reads and deletes the key file as root;
 2. hands the run directory to the unprivileged user;
@@ -337,9 +326,9 @@ The model finishes by calling `submit` with the definition's JSON Schema.
 The runner can return schema errors for repair, and trusted `runAgent` parses
 the final value again with the authoritative Zod schema.
 
-Reported usage is attached to both successes and failures. The stage budget
-therefore accounts for failed agent calls, although it remains soft because
-providers report usage after responses.
+`agent.finished` records reported usage and cost for both successes and
+failures. There is no dollar budget; `maxTurns` and the call timeout bound
+each agent.
 
 ### 9. Validate and publish changes
 
@@ -407,7 +396,6 @@ interface RunContext {
   subject: Subject;
   traceId: string;
   runId: string;
-  budget: Budget;
   checkpoint(): Promise<void>;
   progress(summary: string): Promise<void>;
 }
@@ -422,7 +410,7 @@ An agent definition fixes prompt, tier, tools, output schema, and turn limit.
 `RunnerInput` in
 [`app/runner/protocol.ts`](../app/runner/protocol.ts) carries only rendered
 prompt, message, model, thinking level, tools, output schema, limits, and
-optional Sandbox paths.
+Sandbox paths.
 
 The event protocol includes lifecycle, model usage, tool calls and results,
 and exactly one terminal result or error. JSONL keeps completed events
@@ -467,21 +455,16 @@ later human-gated stage.
 | `spec` | Structured spec, content hash, version, writer notes |
 | `review` | Reviewed head SHA |
 
-New status markers and run events use `stage`; readers still accept the
-legacy `phase` field so existing comments and traces remain visible.
-
 ### Event model
 
 The append-only `events` table contains event ID, trace ID, run ID,
 repository, subject, type, JSON payload, and creation time.
 
 - `run.claimed` is strict. Failure to append or check it stops the stage.
-- Delivery, run, agent, and eval telemetry use `emit()`, which never changes
-  stage behavior when it cannot write.
+- Delivery, run, and agent telemetry use `emit()`, which never changes
+  stage behavior when it cannot write. Nothing in the application reads it
+  back; query it with `render psql`.
 - The greatest claim event ID for a repository and subject is current.
-
-The trace UI and JSON API read events but do not control execution.
-`FACTORY_ADMIN_TOKEN` protects both.
 
 ## State ownership
 
@@ -492,7 +475,7 @@ The trace UI and JSON API read events but do not control execution.
 | Current-run order for an issue or PR | Newest Postgres `run.claimed` ID |
 | User-visible current run | App-authored status marker and working label |
 | Snapshot filesystem and manifest | Render Sandboxes |
-| Delivery, run, agent, cost, eval history | Postgres events |
+| Delivery, run, agent, and cost history | Postgres events |
 
 The design avoids a second product database for GitHub artifacts and avoids
 rebuilding task state in Postgres.
@@ -504,8 +487,7 @@ scripts, and PR diffs can be adversarial.
 
 ### Gateway
 
-The gateway holds a webhook secret, Render API key, database URL, and admin
-token. It has no GitHub credential and runs no repository code or model.
+The gateway holds a webhook secret, Render API key, and database URL. It has no GitHub credential and runs no repository code or model.
 Signature verification happens before JSON parsing or event writes.
 
 ### Workflows host
@@ -513,11 +495,7 @@ Signature verification happens before JSON parsing or event writes.
 The Workflows service holds the Render API key, GitHub App private key, model
 key, and database URL. Trusted stage code selects repositories, refs, and
 destinations, validates model and Sandbox output, enforces ownership, and
-performs GitHub writes.
-
-Agents without tools can run here because they cannot invoke a process,
-filesystem, network, or repository tool. Their inputs and outputs remain
-untrusted data.
+performs GitHub writes. No agent runs here.
 
 ### Builder Sandbox
 
@@ -529,8 +507,7 @@ The token is scrubbed before repository dependency installation.
 
 The restored Sandbox has the checkout and allow-all egress. A read-only token
 appears only during fetch and is scrubbed before agents or verification.
-Tool-using agents and repository commands run as the unprivileged `factory`
-user. Runtime files are root-owned and read-only.
+Agents and repository commands run as the unprivileged `factory` user. Runtime files are root-owned and read-only.
 
 The model key enters a root-only directory for an agent call, is deleted
 before privilege drops, and travels to the runner over stdin. The runner
@@ -571,8 +548,8 @@ Tests pin these boundaries, including every built-in agent's model and tools.
   exfiltration. Use a dedicated provider-capped key.
 - **DNS:** DNS remains an exfiltration channel even if finer egress controls
   become available.
-- **Authorized spend:** anyone with `minimumPermission` can start work, and a
-  soft per-run threshold can be exceeded by the response reporting usage.
+- **Authorized spend:** anyone with `minimumPermission` can start work. Only
+  turn limits, timeouts, and the provider's spend limit bound its cost.
 - **Fork PR execution:** PR Reviewer fetches and verifies fork code. A
   permitted collaborator decides whether to label it.
 - **Prompt injection:** issue text, comments, source, and diffs reach models.

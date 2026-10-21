@@ -109,7 +109,6 @@ beforeAll(async () => {
 		FACTORY_REPO_DIR: repo,
 		FACTORY_SCRATCH_DIR: scratch,
 		FACTORY_RUN_AS: userInfo().username,
-		FACTORY_DROP: "none",
 		FACTORY_NODE: process.execPath,
 		FACTORY_RUNNER_NODE: process.execPath,
 		FACTORY_PATH: `${shim}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
@@ -139,7 +138,6 @@ describe("verify.sh", { timeout: 30_000 }, () => {
 		expect(res.code).toBe(0);
 		expect(JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "")).toMatchObject({
 			runAs: userInfo().username,
-			drop: "none",
 			runnerNonDumpable: false,
 			selfTest: { ok: true },
 		});
