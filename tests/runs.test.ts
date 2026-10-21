@@ -188,6 +188,33 @@ describe("withRun", () => {
 		]);
 	});
 
+	it("trusts the durable claim when GitHub briefly returns a stale running status", async () => {
+		const gh = new FakeGitHub();
+		gh.permissions = { w: "write" };
+		const previous = gh.addStatus("trn-prev").body;
+		let reads = 0;
+		gh.listIssueComments = async () => {
+			const comments = gh.comments.map((comment) => ({ ...comment }));
+			if (++reads === 2 && comments[0]) comments[0].body = previous;
+			return comments;
+		};
+		const coordination = new FakeCoordination();
+		const body = vi.fn(async (run: import("../app/runs/index.js").RunContext) => {
+			await run.progress("opening a sandbox");
+			return { outcome: "done", summary: "done" };
+		});
+
+		const outcome = await withRun(
+			ctx,
+			{ repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns({ "trn-prev": "completed" }), coordination },
+			body,
+		);
+
+		expect(body).toHaveBeenCalledOnce();
+		expect(outcome).toMatchObject({ state: "done", outcome: "done" });
+		expect(coordination.isCurrent).toHaveBeenCalled();
+	});
+
 	it("stops at a checkpoint after a newer run claims the subject", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { w: "write" };
