@@ -376,15 +376,11 @@ validates `render.yaml` when its Render credentials are configured.
 
 ### Operating limits
 
-- Sandbox API calls share the workspace's 100-requests-per-minute limit. The
-  client paces calls, but expect a few concurrent stages rather than dozens.
-- Sandboxes use allow-all egress so installs and Git fetches work.
-- A first run can build a snapshot inline; base-branch pushes refresh it
-  asynchronously thereafter.
-- There is no dollar budget. Agent turn limits and timeouts bound each run;
-  set a provider-side spend limit on the model key.
-- PR Reviewer executes the PR's code through your `verify` commands. Do not
-  label code you would not run.
+Sandbox API calls share the workspace's 100-requests-per-minute limit. The
+client paces calls, but expect a few concurrent stages rather than dozens.
+The README's [Limits](../README.md#limits) and the architecture guide's
+[residual risks](2_ARCHITECTURE.md#residual-risks) cover the rest, including
+spend and PR code execution.
 
 See [3_TAKEAWAYS.md](3_TAKEAWAYS.md) for the operational and security patterns
 worth carrying into other agent systems.

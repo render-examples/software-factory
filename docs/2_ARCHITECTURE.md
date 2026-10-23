@@ -43,6 +43,29 @@ cron job. Workflows owns task state and timeouts. GitHub holds the human
 conversation and artifacts. Postgres is authoritative only for ordering runs
 on the same issue or PR.
 
+## Read the code in this order
+
+These seven files follow one issue from webhook to draft PR. Each is short
+enough to read in one sitting, and the rest of the repository supports them.
+
+1. [`app/gateway/routes.ts`](../app/gateway/routes.ts): how a GitHub delivery
+   becomes one task with a validated input.
+2. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts): a
+   complete stage. It reads the thread, opens a Sandbox, runs agents, and
+   posts questions or a spec.
+3. [`app/runs/with-run.ts`](../app/runs/with-run.ts): the lifecycle every
+   stage shares, covering permission, claim, takeover, checkpoints, status,
+   and which failures are expected.
+4. [`app/agents/run.ts`](../app/agents/run.ts): how one agent call runs inside
+   the stage's Sandbox and comes back as typed output.
+5. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts): restoring a
+   snapshot, fetching the requested ref, and closing the Sandbox.
+6. [`app/workflows/spec-to-pr/index.ts`](../app/workflows/spec-to-pr/index.ts):
+   implement, verify, repair, and publish.
+7. [`app/changeset/index.ts`](../app/changeset/index.ts): how the host turns
+   the Sandbox's proposed tree into a commit without giving the Sandbox a
+   write token.
+
 ## Directory overview
 
 ```text
@@ -65,15 +88,16 @@ app/
   gateway/
     index.ts                  Hono webhook application
     signature.ts, body.ts     Constant-time signature check and body limit
-    routes.ts                 Pure GitHub event-to-task routing table
+    routes.ts                 Pure GitHub event-to-task routing table and input validation
   workflows/
     triage/                   Triage, thread loading, spec drafting and revision
     spec-to-pr/               Approval, implementation, verify/repair, publishing
     pr-review/                Checkout, verify, PR review, review posting
+    run-verify.ts             Run the configured verify commands in a Sandbox
     cancel.ts                 Fence and cancel the current run
     refresh-snapshot.ts       Build a repository's named snapshot
   runs/
-    with-run.ts               Permission, claim, takeover, checkpoints, status
+    with-run.ts               Permission, claim, takeover, checkpoints, status, expected failures
     status.ts                 Status comment markers and working label
   agents/
     define.ts                 Typed agent definitions and prompt loading
@@ -83,13 +107,14 @@ app/
     main.ts, session.ts       Model loop inside the Sandbox
     protocol.ts               Runner input, tools, events, errors, usage
     tools.ts                  Read, list, shell, edit, and write implementations
+    shell-policy.ts           Read-only shell guard for agents without write tools
     submit.ts                 JSON Schema submission validation
-    keys.ts                   Provider-key mapping and credential removal
+    keys.ts                   Provider-key mapping and removal from the environment
     bundle.ts                 Self-contained Sandbox runner build
   sandbox/
     client.ts                 Paced, retrying Render Sandbox API client
     snapshot.ts               Build, verify, name, and prune snapshots
-    sandbox.ts                Restore, verify, fetch a ref, reinstall, terminate
+    sandbox.ts                Restore, verify, fetch a ref, reinstall; withSandbox closes it
     types.ts                  Sandbox, ref, and manifest contracts
   github/
     auth.ts                   App JWT and installation tokens
@@ -134,13 +159,14 @@ boundaries are especially important:
 2. verifies `x-hub-signature-256` with `GITHUB_WEBHOOK_SECRET` before parsing
    JSON;
 3. records the authenticated delivery as best-effort telemetry;
-4. calls the pure `route(event, payload, deliveryId)` function;
-5. validates the selected task input with Zod; and
-6. calls `startTask("<workflow-slug>/<task>", [input])` with the delivery ID
+4. calls the pure `route(event, payload, deliveryId)` function, which picks
+   the task and validates its input with that task's Zod schema; and
+5. calls `startTask("<workflow-slug>/<task>", [input])` with the delivery ID
    as the idempotency key.
 
-The gateway returns `202` with the task run ID. A start failure returns `502`
-so GitHub records a failed delivery that an operator can redeliver.
+The gateway returns `202` with the task run ID. An input that fails
+validation returns `422`, and a start failure returns `502`, so GitHub records
+a failed delivery that an operator can inspect and redeliver.
 
 The built-in routing table is:
 
@@ -186,10 +212,13 @@ Progress updates and durable writes are ownership checkpoints. A run replaced
 by a relabel can finish an in-flight model call, but it cannot remain current
 and publish afterwards.
 
-An expected `RunError` is safe to show on GitHub and lets the task complete
-with a failed stage outcome. Any other error produces a generic public
-message containing the run ID, emits a bounded diagnostic, and fails the
-Workflows task.
+An expected failure is safe to show on GitHub and lets the task complete with
+a failed stage outcome. Expected failures are a `RunError` thrown by stage
+code, or an `AgentError` whose code says the model stopped on its own
+(`max_turns`, `timeout`, `no_submission`, or an invalid submission), which
+becomes `agent_stopped`. Any other error, including a lost runner, produces a
+generic public message containing the run ID, emits a bounded diagnostic, and
+fails the Workflows task.
 
 The `cancel` task checks permission, appends its own claim first to fence the
 stage, then cancels the task ID from the status marker. Snapshot refresh does
@@ -247,8 +276,9 @@ the earlier snapshot available.
 For a pull request, the fetched head must equal the SHA from the webhook.
 PR Reviewer also fetches the configured base branch for diff context.
 
-Every stage closes its Sandbox in `finally`. The provider-side timeout handles
-the gap where a Workflows process dies before cleanup.
+Every stage opens its Sandbox through `withSandbox`, which closes it in
+`finally`. The provider-side timeout handles the gap where a Workflows process
+dies before cleanup.
 
 The Sandbox API client spaces calls by one second per process by default and
 retries transient `429` and `503` responses.
@@ -523,20 +553,9 @@ tree SHA before moving a ref. The Sandbox never receives a write token.
 
 ### Security invariants
 
-1. Verify a webhook signature before parsing its body.
-2. Check the triggering actor's live permission before stage work.
-3. Keep GitHub writes in trusted workflow code and make them marker-idempotent.
-4. Never put a write credential in a Sandbox.
-5. Run tools only in a Sandbox.
-6. Never let models select repositories, refs, or write targets.
-7. Publish only when GitHub reproduces the validated Sandbox tree.
-8. End automation at a draft PR and a COMMENT review.
-9. Implement the spec that existed at approval time.
-10. Give every Sandbox a provider timeout and close it in `finally`.
-11. Use Postgres strictly only for cross-task ownership; keep telemetry out
-    of control flow.
-
-Tests pin these boundaries, including every built-in agent's model and tools.
+The boundaries above enforce the eleven invariants listed in
+[AGENTS.md](../AGENTS.md#invariants), which every change must keep. Tests pin
+them, including every built-in agent's model and tools.
 
 ### Residual risks
 

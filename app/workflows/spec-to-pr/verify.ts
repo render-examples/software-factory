@@ -1,34 +1,6 @@
-import { codeSpan, type VerifyResult } from "../../format/index.js";
+import { codeSpan, fenced } from "../../format/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
-
-export const VERIFY_TIMEOUT_MS = 20 * 60 * 1000;
-/** How much of a command's output the repair run sees. */
-const OUTPUT_TAIL_CHARS = 4096;
-
-/** A verify command as the workflow ran it. */
-export interface VerifyRun extends VerifyResult {
-	/** null when the command didn't finish (timeout or a lost exec). */
-	exitCode: number | null;
-	/** The last OUTPUT_TAIL_CHARS of stdout and stderr. Repository output: send it to the model, never to GitHub. */
-	output: string;
-}
-
-/** Runs each verify command as the runner user, in order, and records every result. Never throws for a failing command. */
-export async function runVerify(sandbox: Sandbox, commands: readonly string[], now: () => number = Date.now): Promise<VerifyRun[]> {
-	const runs: VerifyRun[] = [];
-	for (const command of commands) {
-		const started = now();
-		try {
-			const res = await sandbox.exec(command, { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS });
-			const output = [res.stdout.trimEnd(), res.stderr.trimEnd()].filter(Boolean).join("\n");
-			runs.push({ command, passed: res.exitCode === 0, exitCode: res.exitCode, output: tail(output), durationMs: now() - started });
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			runs.push({ command, passed: false, exitCode: null, output: tail(`The command did not finish: ${message}`), durationMs: now() - started });
-		}
-	}
-	return runs;
-}
+import type { VerifyRun } from "../run-verify.js";
 
 /** Whether the working tree differs from the checkout, untracked files included. */
 export async function hasChanges(sandbox: Sandbox): Promise<boolean> {
@@ -42,7 +14,7 @@ export const allPassed = (runs: readonly VerifyRun[]): boolean => runs.every((r)
 /** The failing output, for a repair run's message. */
 export function failureReport(runs: readonly VerifyRun[]): string {
 	const failed = runs.filter((r) => !r.passed);
-	const sections = failed.map((r) => `### ${codeSpan(r.command)} (${exitText(r)})\n\n${fenced(r.output || "(no output)")}`);
+	const sections = failed.map((r) => `### ${codeSpan(r.command)} (${exitText(r)})\n\n${fenced(r.output || "(no output)", "text")}`);
 	return [
 		"## Failing verify output",
 		"",
@@ -64,15 +36,4 @@ export function failureSummary(runs: readonly VerifyRun[]): string {
 
 function exitText(run: VerifyRun): string {
 	return run.exitCode === null ? "did not finish" : `exit ${run.exitCode}`;
-}
-
-function tail(text: string): string {
-	return text.length > OUTPUT_TAIL_CHARS ? `…${text.slice(-OUTPUT_TAIL_CHARS)}` : text;
-}
-
-/** A fenced block that the text can't close early. */
-function fenced(text: string): string {
-	const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-	const fence = "`".repeat(longest + 1);
-	return `${fence}text\n${text}\n${fence}`;
 }

@@ -1,40 +1,20 @@
 import type { RepoContext } from "../../config/index.js";
 import type { PullRequest } from "../../github/index.js";
 import { RunError } from "../../runs/index.js";
-import { type OpenedSandbox, type SandboxRef, type Sandbox, shq } from "../../sandbox/index.js";
+import { type OpenedSandbox, type SandboxRef, type Sandbox, shq, withSandbox } from "../../sandbox/index.js";
 
 export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
 
 const HEAD_MOVED = "the PR changed after it was labeled; reapply the label";
 
 /** Opens one sandbox at the PR head with its base branch fetched, runs `fn`, and closes the sandbox whatever happens. */
-export async function withPullSandbox<T>(open: OpenSandbox, repo: RepoContext, pull: PullRequest, fn: (sandbox: Sandbox) => Promise<T>): Promise<T> {
-	let sandbox: OpenedSandbox;
-	try {
-		sandbox = await open(repo, {
-			kind: "pull",
-			number: pull.number,
-			headSha: pull.headSha,
-			baseBranch: pull.baseRef,
+export function withPullSandbox<T>(open: OpenSandbox, repo: RepoContext, pull: PullRequest, fn: (sandbox: Sandbox) => Promise<T>): Promise<T> {
+	const openPull = () =>
+		open(repo, { kind: "pull", number: pull.number, headSha: pull.headSha, baseBranch: pull.baseRef }).catch((err: unknown) => {
+			if (err instanceof Error && err.message.startsWith("head moved")) throw headMoved();
+			throw err;
 		});
-	} catch (err) {
-		if (err instanceof Error && err.message.startsWith("head moved")) throw headMoved();
-		throw err;
-	}
-	try {
-		return await fn(sandbox);
-	} finally {
-		await sandbox.close().catch((err: unknown) => {
-			console.error(
-				JSON.stringify({
-					level: "warn",
-					msg: "could not close sandbox",
-					sandbox: sandbox.id,
-					error: String(err),
-				}),
-			);
-		});
-	}
+	return withSandbox(openPull, fn);
 }
 
 export function headMoved(): RunError {

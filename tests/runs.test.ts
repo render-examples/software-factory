@@ -10,6 +10,7 @@ vi.mock("../app/events/index.js", () => ({
 	isCurrentRun: async () => true,
 }));
 
+const { AgentError } = await import("../app/agents/index.js");
 const { config, requireRepo } = await import("../app/config/index.js");
 const { renderMarker, parseMarker } = await import("../app/github/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -134,7 +135,7 @@ describe("withRun", () => {
 		const fn = vi.fn();
 		const outcome = await withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "reader", gh: gh.asClient(), runs }, fn);
 		expect(fn).not.toHaveBeenCalled();
-		expect(outcome).toMatchObject({ state: "rejected", outcome: "permission-denied", traceId: "trn-root", runId: "trn-run" });
+		expect(outcome).toMatchObject({ state: "rejected", outcome: "permission_denied", traceId: "trn-root", runId: "trn-run" });
 		expect(gh.comments[0]?.body).toContain("did not run: @reader needs `write` permission");
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.state).toBe("rejected");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
@@ -220,5 +221,25 @@ describe("withRun", () => {
 		expect(parseMarker(body, "status")?.state).toBe("failed");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.at(-1)).toMatchObject({ type: "run.finished", payload: { state: "failed", outcome: "error" } });
+	});
+
+	it("reports a model-side agent stop on GitHub, but fails the task for a platform-side agent error", async () => {
+		const run = (error: Error) => {
+			const gh = new FakeGitHub();
+			gh.permissions = { w: "write" };
+			const outcome = withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
+				throw error;
+			});
+			return { gh, outcome };
+		};
+
+		const stopped = run(new AgentError("triage", "max_turns", "turn limit (40) after reading /secret/path"));
+		expect(await stopped.outcome).toMatchObject({ state: "failed", outcome: "agent_stopped" });
+		const body = stopped.gh.comments[0]?.body ?? "";
+		expect(body).toContain("the triage agent ran out of turns");
+		expect(body).not.toContain("/secret/path");
+
+		const lost = new AgentError("triage", "runner_lost", "the runner ended without a result");
+		await expect(run(lost).outcome).rejects.toBe(lost);
 	});
 });

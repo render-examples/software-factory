@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { apiKeyFor, type Credentials, PROVIDER_KEY_ENV, secretsIn, takeCredentials } from "./keys.js";
+import { PROVIDER_KEY_ENV, scrubProviderKeys } from "./keys.js";
 import { RUNNER_EXIT } from "./protocol.js";
 import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
 import { defaultTestStub, type TestStub } from "./test-stub.js";
@@ -26,8 +26,8 @@ function useScratch(scratchDir: string): void {
 }
 
 /**
- * `runner.mjs [--key-file PATH | --key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL
- * on stdout. With `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
+ * `runner.mjs [--key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on stdout. With
+ * `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
  */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
@@ -38,12 +38,11 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
-	let args: { "key-file"?: string; "key-stdin"?: boolean; "self-test"?: boolean; "test-stub"?: boolean };
+	let args: { "key-stdin"?: boolean; "self-test"?: boolean; "test-stub"?: boolean };
 	try {
 		args = parseArgs({
 			args: argv,
 			options: {
-				"key-file": { type: "string" },
 				"key-stdin": { type: "boolean" },
 				"self-test": { type: "boolean" },
 				"test-stub": { type: "boolean" },
@@ -53,25 +52,18 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return fail("invalid_input", errorMessage(err));
 	}
 
-	let creds: Credentials;
-	try {
-		creds = takeCredentials(args["key-file"], process.env);
-	} catch (err) {
-		return fail("invalid_input", `cannot read --key-file: ${errorMessage(err)}`);
-	}
-	for (const secret of secretsIn(creds)) emit.redact(secret);
-	if (args["key-file"] !== undefined && args["key-stdin"]) return fail("invalid_input", "--key-file and --key-stdin are mutually exclusive");
+	for (const secret of scrubProviderKeys(process.env)) emit.redact(secret);
 	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
 
 	let stdin: string | undefined;
+	let apiKey: string | undefined;
 	if (args["key-stdin"]) {
 		const text = await readAll(io.stdin);
 		const newline = text.indexOf("\n");
-		const key = (newline === -1 ? text : text.slice(0, newline)).trim();
-		emit.redact(key);
-		if (!key) return fail("invalid_input", "--key-stdin: the first line of stdin is empty");
-		creds = { ...creds, key };
+		apiKey = (newline === -1 ? text : text.slice(0, newline)).trim();
+		emit.redact(apiKey);
+		if (!apiKey) return fail("invalid_input", "--key-stdin: the first line of stdin is empty");
 		stdin = newline === -1 ? "" : text.slice(newline + 1);
 	}
 
@@ -91,7 +83,7 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return await runSession({
 			input,
 			emit,
-			apiKey: apiKeyFor(creds, input.model_provider),
+			apiKey,
 			testStub: args["test-stub"] ? (io.testStub ?? defaultTestStub) : undefined,
 			startedAt,
 		});

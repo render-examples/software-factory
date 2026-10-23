@@ -1,6 +1,6 @@
-import { truncate } from "../../format/index.js";
+import { fenced, truncate } from "../../format/index.js";
 import type { PullFile, PullRequest } from "../../github/index.js";
-import type { VerifyRun } from "./verify.js";
+import type { VerifyRun } from "../run-verify.js";
 
 const BODY_MAX_CHARS = 20_000;
 const MAX_LISTED_FILES = 300;
@@ -46,14 +46,7 @@ function verifySection(verify: readonly VerifyRun[]): string {
 	const items = verify.map((v) => {
 		const status = v.passed ? "passed" : `failed (${v.exitCode === null ? "did not run" : `exit ${v.exitCode}`})`;
 		const seconds = ((v.durationMs ?? 0) / 1000).toFixed(1);
-		return `### \`${v.command}\`: ${status} in ${seconds}s\n\n${v.passed ? "" : fenced(v.outputTail || "(no output)")}`.trimEnd();
+		return `### \`${v.command}\`: ${status} in ${seconds}s\n\n${v.passed ? "" : fenced(v.output || "(no output)")}`.trimEnd();
 	});
 	return `## Verify results\n\n${items.join("\n\n")}`;
-}
-
-/** `text` in a fenced block whose fence is longer than any backtick run inside it, so it can't close early. */
-function fenced(text: string, lang = ""): string {
-	const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-	const fence = "`".repeat(longest + 1);
-	return `${fence}${lang}\n${text}\n${fence}`;
 }

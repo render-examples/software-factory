@@ -99,6 +99,19 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 	}
 }
 
+/**
+ * Opens a sandbox, runs `fn` with it, and closes it whatever happens. Every stage uses this, so no stage can forget
+ * to close one; the provider-side timeout covers a Workflows process that dies before `finally` runs.
+ */
+export async function withSandbox<S extends Sandbox, T>(open: () => Promise<S>, fn: (sandbox: S) => Promise<T>): Promise<T> {
+	const sandbox = await open();
+	try {
+		return await fn(sandbox);
+	} finally {
+		await sandbox.close().catch((err: unknown) => log("warn", "could not close sandbox", { sandbox: sandbox.id, error: errorMessage(err) }));
+	}
+}
+
 function checkRef(ref: SandboxRef): void {
 	if (ref.kind === "branch" && !SAFE_REF.test(ref.name)) throw new Error(`unsupported branch name ${JSON.stringify(ref.name)}`);
 	if (ref.kind === "pull") {

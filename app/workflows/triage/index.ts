@@ -6,7 +6,7 @@ import { TriageInput } from "../../schemas/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { type GitHubClient, renderMarker } from "../../github/index.js";
 import { type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
-import { openSandbox, type Sandbox, type SandboxRef } from "../../sandbox/index.js";
+import { openSandbox, type Sandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
 import { type AgentRunner, triageAgents } from "./agents.js";
 import { draftSpec, publishSpec } from "./spec.js";
 import { readThread, specWriterMessage, triageMessage } from "./thread.js";
@@ -41,15 +41,15 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 		const thread = readThread(issue, comments, bot);
 
 		await run.progress("opening a sandbox");
-		const sandbox = await (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
-		const agents = triageAgents(deps.runAgent ?? runAgent, {
-			sandbox,
-			traceId: run.traceId,
-			runId: run.runId,
-			repo: repo.fullName,
-			subject: subjectName(subject),
-		});
-		try {
+		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
+		return withSandbox(open, async (sandbox) => {
+			const agents = triageAgents(deps.runAgent ?? runAgent, {
+				sandbox,
+				traceId: run.traceId,
+				runId: run.runId,
+				repo: repo.fullName,
+				subject: subjectName(subject),
+			});
 			await run.progress("reading the issue and the repository");
 			const decision = await agents.triage(triageMessage(repo.fullName, thread));
 
@@ -78,11 +78,7 @@ export async function runTriage(ctx: Pick<TaskContext, "metadata">, raw: unknown
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
 			await run.progress("posting the spec");
 			return await publishSpec(gh, issue, thread.spec, drafted);
-		} finally {
-			await sandbox.close().catch((error: unknown) => {
-				console.error(JSON.stringify({ level: "warn", msg: "could not close sandbox", sandbox: sandbox.id, error: String(error) }));
-			});
-		}
+		});
 	});
 }
 

@@ -18,6 +18,7 @@ export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
 export class AgentError extends Error {
 	override readonly name = "AgentError";
 	constructor(
+		readonly agentId: string,
 		readonly code: AgentErrorCode,
 		message: string,
 	) {
@@ -78,8 +79,9 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 
 	record("agent.started", { agentId: agent.id, model: `${provider}/${model}`, tools: agent.tools });
 	let summary = emptySummary();
+	const failure = (code: AgentErrorCode, text: string) => new AgentError(agent.id, code, text);
 	try {
-		const runnerInput = checkInput({
+		const runnerInput = checkInput(agent.id, {
 			trace_id: base.traceId,
 			agent_id: agent.id,
 			system_prompt: agent.prompt,
@@ -95,36 +97,37 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			scratch_dir: SCRATCH_DIR,
 		});
 		const apiKey = providerApiKey(provider, process.env);
-		if (!apiKey) throw new AgentError("agent_error", `no API key for provider "${provider}" in the environment`);
+		if (!apiKey) throw failure("agent_error", `no API key for provider "${provider}" in the environment`);
 
 		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
 		summary = summarize(stdout.text);
 		const end = summary.terminal;
 		if (!end) {
-			throw new AgentError("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`);
+			throw failure("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`);
 		}
-		if (end.type === "error") throw new AgentError(end.code, end.message);
+		if (end.type === "error") throw failure(end.code, end.message);
 		const parsed = agent.output.safeParse(end.output);
 		if (!parsed.success) {
 			const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
-			throw new AgentError("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`);
+			throw failure("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`);
 		}
 		finish("ok", summary);
 		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns };
 	} catch (err) {
-		const error = err instanceof AgentError ? err : new AgentError("agent_error", errorMessage(err));
+		const error = err instanceof AgentError ? err : failure("agent_error", errorMessage(err));
 		finish(error.code, summary, error.message);
 		throw error;
 	}
 }
 
-function checkInput(raw: RunnerInput): RunnerInput {
+function checkInput(agentId: string, raw: RunnerInput): RunnerInput {
 	const parsed = RunnerInput.safeParse(raw);
 	if (!parsed.success) {
-		throw new AgentError("invalid_input", `invalid RunnerInput: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+		const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+		throw new AgentError(agentId, "invalid_input", `invalid RunnerInput: ${issues}`);
 	}
 	const problem = outputSchemaProblem(parsed.data.output_schema);
-	if (problem) throw new AgentError("invalid_input", problem);
+	if (problem) throw new AgentError(agentId, "invalid_input", problem);
 	return parsed.data;
 }
 

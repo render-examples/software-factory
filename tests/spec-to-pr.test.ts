@@ -14,7 +14,6 @@ const { AgentError } = await import("../app/agents/index.js");
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { runSpecToPr } = await import("../app/workflows/spec-to-pr/index.js");
-const { VERIFY_TIMEOUT_MS } = await import("../app/workflows/spec-to-pr/verify.js");
 type Spec = import("../app/schemas/index.js").Spec;
 type Implementation = import("../app/schemas/index.js").Implementation;
 type IssueComment = import("../app/github/index.js").IssueComment;
@@ -246,8 +245,8 @@ describe("implement, verify, and publish", () => {
 		expect(finished()).toMatchObject({ outcome: "pr_opened" });
 
 		expect(t.execs.filter((e) => !e.command.startsWith("git status"))).toEqual([
-			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
-			{ command: TEST_COMMAND, opts: { asRunner: true, timeoutMs: VERIFY_TIMEOUT_MS } },
+			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: expect.any(Number) } },
+			{ command: TEST_COMMAND, opts: { asRunner: true, timeoutMs: expect.any(Number) } },
 		]);
 		expect(t.publish).toHaveBeenCalledWith(
 			expect.objectContaining({ sandbox: t.sandbox, baseSha: BASE, branch: BRANCH, ownedCommits: [], gitData: t.git }),

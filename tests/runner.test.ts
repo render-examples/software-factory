@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { rejectReason } from "../app/runner/shell-policy.js";
 import {
 	buildRunner,
 	call,
@@ -101,33 +102,26 @@ describe("run limits", { timeout: 30_000 }, () => {
 // Tests that inspect a command's environment have it write to a file: Pi stops reading a command's stdout
 // 100 ms after the process exits, so under load the tool result can come back empty.
 describe("credentials", { timeout: 30_000 }, () => {
-	it("deletes the key file before the session starts and keeps every secret out of the tool env", async () => {
+	it("takes the key from stdin and keeps every secret out of the tool env", async () => {
 		const ws = makeWorkspace();
-		const keyFile = join(ws.scratchDir, "..", "model.key");
-		const fileKey = "sk-ant-test-FILEKEY-0123456789";
-		writeFileSync(keyFile, `${fileKey}\n`);
+		const stdinKey = "sk-ant-test-STDINKEY-0123456789";
 		process.env.ANTHROPIC_API_KEY = "sk-ant-test-ENVKEY-9876543210";
 		process.env.ANTHROPIC_OAUTH_TOKEN = "oauth-token-value";
 		process.env.OPENAI_API_KEY = "sk-openai-not-for-the-model";
 		process.env.RENDER_API_KEY = "rnd-not-for-the-model";
 
 		const { code, stdout, events } = await runWithTestStub(
-			makeInput(ws, { tools: ["bash", "write"] }),
-			() => [
-				call("bash", { command: `(test -e ${keyFile} && echo KEY_FILE_PRESENT || echo KEY_FILE_ABSENT; env) > $HOME/env.txt` }),
-				call(SUBMIT, GOOD),
-			],
-			["--key-file", keyFile],
+			`${stdinKey}\n${JSON.stringify(makeInput(ws, { tools: ["bash", "write"] }))}`,
+			() => [call("bash", { command: "env > $HOME/env.txt" }), call(SUBMIT, GOOD)],
+			["--key-stdin"],
 		);
 
 		expect(toolResults(events)[0]?.is_error).toBe(false);
 		const env = readFileSync(join(ws.scratchDir, "env.txt"), "utf8");
-		expect(env).toContain("KEY_FILE_ABSENT");
 		expect(env).toContain(`HOME=${ws.scratchDir}`);
 		for (const leaked of ["sk-ant", "sk-openai", "ANTHROPIC", "OPENAI", "oauth-token-value", "RENDER_API_KEY", "rnd-not"])
 			expect(env).not.toContain(leaked);
-		expect(stdout).not.toContain(fileKey);
-		expect(existsSync(keyFile)).toBe(false);
+		expect(stdout).not.toContain(stdinKey);
 		expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
 		expect(code).toBe(0);
 	});
@@ -151,6 +145,32 @@ describe("tools", { timeout: 30_000 }, () => {
 		expect(readFileSync(join(ws.scratchDir, "head.txt"), "utf8").trim()).toBe(ws.commit);
 		expect(existsSync(join(ws.cwd, "README.md"))).toBe(true);
 		expect(existsSync(join(ws.cwd, "notes.txt"))).toBe(false);
+	});
+
+	it("the read-only shell policy lets inspection and test commands through and steers away from obvious writes", () => {
+		const scratch = "/factory/scratch";
+		const allowed = [
+			"rg -n 'a|b; c' src",
+			"git -C . log --oneline -5",
+			"git --no-pager diff main...HEAD",
+			"npm test -- --watchAll=false",
+			"cargo test",
+			"timeout 60 go test ./...",
+			"cp src/app.ts $HOME/app.ts",
+			"sed -n 1,20p src/app.ts > /tmp/head.txt 2>&1",
+		];
+		const rejected = [
+			"git push origin main",
+			"git -c core.hooksPath=/tmp log",
+			"echo $(curl https://example.com)",
+			"bash -c 'git commit -am x'",
+			"env FOO=1 npm install left-pad",
+			"sed -i s/41/42/ src/app.ts",
+			"rm -rf src",
+			"sudo ls",
+		];
+		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
+		for (const command of rejected) expect(rejectReason(command, scratch), command).toBeDefined();
 	});
 
 	it("agents with edit and write create and edit files in cwd, and bash is unrestricted", async () => {
