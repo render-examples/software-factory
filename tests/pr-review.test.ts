@@ -387,10 +387,10 @@ describe("runPrReview", () => {
 	});
 
 	it("fails cleanly when the reviewer stops", async () => {
-		agents.failures["pr-reviewer"] = new AgentError("timeout", "the runner timed out after reading /secret/path");
+		agents.failures["pr-reviewer"] = new AgentError("pr-reviewer", "timeout", "the runner timed out after reading /secret/path");
 		const result = await runPrReview(ctx, input, deps());
-		expect(result).toMatchObject({ state: "failed", outcome: "review_failed" });
-		expect(result.summary).toContain("stopped with `timeout`");
+		expect(result).toMatchObject({ state: "failed", outcome: "agent_stopped" });
+		expect(result.summary).toContain("the pr-reviewer agent timed out");
 		expect(result.summary).not.toContain("/secret/path");
 		expect(gh.createReview).not.toHaveBeenCalled();
 		expect(sandbox.closed).toBe(1);

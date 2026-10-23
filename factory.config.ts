@@ -1,4 +1,4 @@
-export type ModelTier = "small" | "medium" | "large";
+export type ModelTier = "medium" | "large";
 
 export interface RepoConfig {
 	/** Branch that specs are implemented against and snapshots are built from. */
@@ -53,7 +53,6 @@ export default defineFactoryConfig({
 	commandPrefix: "/factory",
 	minimumPermission: "write",
 	models: {
-		small: "anthropic/claude-haiku-4-5",
 		medium: "anthropic/claude-sonnet-5",
 		large: "anthropic/claude-opus-5",
 	},

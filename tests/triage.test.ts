@@ -362,7 +362,7 @@ describe("triage task", () => {
 
 		const outcome = await runTriage(ctx, input, deps);
 
-		expect(outcome).toMatchObject({ state: "failed", outcome: "invalid-spec" });
+		expect(outcome).toMatchObject({ state: "failed", outcome: "spec_invalid" });
 		expect(outcome.summary).toContain("the spec failed validation twice: Duplicate acceptance criterion IDs: AC-1");
 		expect(calls.filter((c) => c.agent === "spec-writer")).toHaveLength(2);
 		expect(gh.written()).toEqual([]);

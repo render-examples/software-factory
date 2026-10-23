@@ -134,7 +134,7 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World; db?: 
 			sleep: async () => {},
 			services: ["gateway", "workflows"],
 			repos: ["acme/web"],
-			models: { small: "anthropic/haiku", medium: "anthropic/sonnet", large: "anthropic/opus" },
+			models: { medium: "anthropic/sonnet", large: "anthropic/opus" },
 			migrations: ["0001_events.sql"],
 			connectDb: (db ?? fakeDb()).connectDb,
 			...rest,

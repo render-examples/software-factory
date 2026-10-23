@@ -1,4 +1,5 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
+import { AgentError, type AgentErrorCode } from "../agents/index.js";
 import { config, type RepoContext } from "../config/index.js";
 import { claimRun, emit, isCurrentRun, type RunClaim, type RunClaimInput } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
@@ -49,6 +50,24 @@ export class RunError extends Error {
 
 /** Internal control flow: a newer run owns this issue or PR. */
 class SupersededRun extends Error {}
+
+/** Ways an agent stops that come from the model or its limits. Any other agent error is the platform's and fails the task. */
+const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
+	max_turns: "ran out of turns",
+	timeout: "timed out",
+	no_submission: "ended without submitting a result",
+	invalid_submission: "submitted an invalid result",
+	output_invalid: "submitted an invalid result",
+};
+
+/** An expected failure as a RunError. An agent's own message can quote repository output, so it stays in the logs. */
+function expectedFailure(error: unknown): { error: RunError; detail?: string } | null {
+	if (error instanceof RunError) return { error };
+	if (error instanceof AgentError && AGENT_STOPS[error.code]) {
+		return { error: new RunError(`the ${error.agentId} agent ${AGENT_STOPS[error.code]}.`, "agent_stopped"), detail: error.message };
+	}
+	return null;
+}
 
 export interface RunCoordination {
 	claim(input: RunClaimInput): Promise<RunClaim>;
@@ -110,7 +129,7 @@ export async function withRun(
 		if (!(await checkPermission(gh, actor))) {
 			const summary = `@${actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
 			await status("rejected", summary);
-			return await finished("rejected", "permission-denied", summary);
+			return await finished("rejected", "permission_denied", summary);
 		}
 		const claim = await coordination.claim({ ...base, stage, actor });
 		const checkpoint = async () => {
@@ -130,9 +149,11 @@ export async function withRun(
 		return await finished(state, result.outcome, result.summary);
 	} catch (error) {
 		if (error instanceof SupersededRun) return await superseded();
-		if (error instanceof RunError) {
-			await status("failed", error.message);
-			return await finished("failed", error.outcome, error.message);
+		const expected = expectedFailure(error);
+		if (expected) {
+			const { message, outcome } = expected.error;
+			await status("failed", message);
+			return await finished("failed", outcome, message, expected.detail ? { error: expected.detail.slice(0, 500) } : {});
 		}
 		const summary = `something went wrong. Run \`${runId}\` has the details in the Render Dashboard.`;
 		await status("failed", summary).catch(() => undefined);

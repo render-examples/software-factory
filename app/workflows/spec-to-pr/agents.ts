@@ -1,15 +1,8 @@
-import { AgentError } from "../../agents/index.js";
 import type { RepoContext } from "../../config/index.js";
 import type { Implementation, Spec } from "../../schemas/index.js";
 import { renderSpecSections } from "../../format/index.js";
-import { RunError } from "../../runs/index.js";
-import { failureReport, type VerifyRun } from "./verify.js";
-
-/** An agent that stopped before submitting is an expected failure; its message stays off GitHub. */
-export function agentStopped(err: unknown, who: string): RunError | null {
-	if (!(err instanceof AgentError)) return null;
-	return new RunError(`the ${who} stopped before finishing (\`${err.code}\`), so no PR was opened.`, "agent_failed");
-}
+import type { VerifyRun } from "../run-verify.js";
+import { failureReport } from "./verify.js";
 
 export interface IssueRef {
 	number: number;

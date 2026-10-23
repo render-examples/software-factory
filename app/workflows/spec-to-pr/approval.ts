@@ -39,7 +39,7 @@ export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, labele
 	if (!parsed.success) {
 		throw new RunError(
 			`the spec comment doesn't hold a valid spec. Add the \`${config.labels.triage}\` label to redraft it.`,
-			"invalid_spec",
+			"spec_unreadable",
 		);
 	}
 	return { spec: parsed.data, comment: found.comment, approvedAt };

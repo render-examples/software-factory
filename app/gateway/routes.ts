@@ -1,16 +1,20 @@
-import { z } from "zod";
+import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
+import { CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/tasks.js";
 
 export type Route =
 	| {
 			kind: "start";
 			task: TaskName;
-			input: Record<string, unknown>;
+			/** Already validated with the task's input schema. */
+			input: object;
 			idempotencyKey: string;
 			/** "issue#12" or "pr#34", for the delivery event. */
 			subject?: string;
 	  }
-	| { kind: "ignore"; reason: string };
+	| { kind: "ignore"; reason: string }
+	/** An authenticated delivery that maps to a task but not to a valid input for it: a bug worth a failed delivery. */
+	| { kind: "invalid"; task: TaskName; reason: string; subject?: string };
 
 const Envelope = z.object({
 	action: z.string().optional(),
@@ -71,13 +75,11 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 
 	const base = { repo: repo.fullName, installationId: repo.installationId };
 	const actor = sender?.login ?? "";
-	const start = (task: TaskName, input: Record<string, unknown>, subject?: string, idempotencyKey = deliveryId): Route => ({
-		kind: "start",
-		task,
-		input: { ...base, ...input },
-		idempotencyKey,
-		...(subject ? { subject } : {}),
-	});
+	const start = (task: TaskName, schema: ZodType, input: Record<string, unknown>, subject?: string, idempotencyKey = deliveryId): Route => {
+		const parsed = schema.safeParse({ ...base, ...input });
+		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, ...(subject ? { subject } : {}) };
+		return { kind: "start", task, input: parsed.data as object, idempotencyKey, ...(subject ? { subject } : {}) };
+	};
 
 	switch (event) {
 		case "issues": {
@@ -88,11 +90,11 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (isPullRequest(issue)) return ignore("pull request");
 			const subject = `issue#${issue.number}`;
 			if (label?.name === config.labels.triage) {
-				return start(TASKS.triage, { issue: issue.number, actor }, subject);
+				return start(TASKS.triage, TriageInput, { issue: issue.number, actor }, subject);
 			}
 			if (label?.name === config.labels.specApproved) {
 				// GitHub bumps updated_at when the label is applied.
-				return start(TASKS.specToPr, { issue: issue.number, actor, labeledAt: issue.updated_at }, subject);
+				return start(TASKS.specToPr, SpecToPrInput, { issue: issue.number, actor, labeledAt: issue.updated_at }, subject);
 			}
 			return ignore("unhandled label");
 		}
@@ -104,7 +106,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const { label, pull_request: pr } = parsed.data;
 			if (label?.name !== config.labels.prReview) return ignore("unhandled label");
 			if (pr.state !== "open") return ignore("pull request not open");
-			return start(TASKS.prReview, { pr: pr.number, headSha: pr.head.sha, actor }, `pr#${pr.number}`);
+			return start(TASKS.prReview, PrReviewInput, { pr: pr.number, headSha: pr.head.sha, actor }, `pr#${pr.number}`);
 		}
 
 		case "issue_comment": {
@@ -116,11 +118,11 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const subject = `${isPr ? "pr" : "issue"}#${issue.number}`;
 			const firstLine = (comment.body ?? "").split(/\r?\n/, 1)[0]?.trim();
 			if (firstLine === `${config.commandPrefix} cancel`) {
-				return start(TASKS.cancel, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
+				return start(TASKS.cancel, CancelInput, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
 			}
 			if (isPr) return ignore("comment on pull request");
 			if (!issue.labels.some((l) => l.name === config.labels.triage)) return ignore("issue not in triage");
-			return start(TASKS.triage, { issue: issue.number, actor, commentId: comment.id }, subject);
+			return start(TASKS.triage, TriageInput, { issue: issue.number, actor, commentId: comment.id }, subject);
 		}
 
 		case "push": {
@@ -130,7 +132,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (ref !== `refs/heads/${repo.config.baseBranch}`) return ignore("not base branch");
 			if (deleted) return ignore("branch deleted");
 			if (!SHA.test(after) || after === ZERO_SHA) return ignore("invalid sha");
-			return start(TASKS.refreshSnapshot, { sha: after }, undefined, `${repo.fullName}@${after}`);
+			return start(TASKS.refreshSnapshot, RefreshSnapshotInput, { sha: after }, undefined, `${repo.fullName}@${after}`);
 		}
 
 		default:

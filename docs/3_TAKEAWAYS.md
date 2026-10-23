@@ -222,9 +222,32 @@ This is a useful unit-of-isolation rule:
   checkout;
 - never reuse it across issues, PRs, or human approval boundaries.
 
+Every stage opens its Sandbox through `withSandbox`, which closes it however
+the stage ends. Cleanup is a property of the helper, not of each stage's
+`finally` block, and the provider-side timeout covers a process that dies
+first.
+
 Implementation:
-[`app/workflows/pr-review/index.ts`](../app/workflows/pr-review/index.ts) and
-[`app/workflows/pr-review/agents.ts`](../app/workflows/pr-review/agents.ts).
+[`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) and
+[`app/workflows/spec-to-pr/index.ts`](../app/workflows/spec-to-pr/index.ts).
+
+## Decide once which failures are expected
+
+Some failures belong to the work: a person lacks permission, a spec changed
+after approval, verification still fails after repairs, or the model runs out
+of turns. Others belong to the platform: a lost Sandbox, an unreachable API, a
+runner that died without a result. The first kind should end the run with a
+clear message on GitHub; the second should fail the Workflows task so an
+operator sees it.
+
+`withRun` makes that decision for every stage. Stage code throws `RunError`
+for its own expected outcomes, and `withRun` adds one rule for agents: a model
+that stops on its own is expected, any other agent error is not. When each
+stage decides separately, the same error ends up reported three different
+ways.
+
+Implementation:
+[`app/runs/with-run.ts`](../app/runs/with-run.ts).
 
 ## Keep write authority outside the agent environment
 
@@ -278,7 +301,7 @@ Naming which layer enforces a property prevents a convenient policy from
 quietly becoming the only defense.
 
 Implementation:
-[`app/runner/tools.ts`](../app/runner/tools.ts),
+[`app/runner/shell-policy.ts`](../app/runner/shell-policy.ts),
 [`sandbox/as-runner.sh`](../sandbox/as-runner.sh), and
 [`sandbox/verify.sh`](../sandbox/verify.sh).
 
@@ -358,18 +381,11 @@ become hidden workflow state.
 Implementation:
 [`app/events/index.ts`](../app/events/index.ts).
 
-## Residual risks
+## Name what you accept
 
 Layered controls reduce authority; they do not make arbitrary code and model
-execution perfectly safe.
-
-This project accepts and documents:
-
-- a model key in the hardened runner's memory during a call;
-- DNS as an exfiltration channel;
-- spend initiated by any collaborator meeting `minimumPermission`;
-- execution of labeled fork PR code during verification;
-- prompt injection through issues, comments, code, and diffs;
-- a Render API key whose authority may span the workspace;
-- Postgres availability on the run-ownership path; and
-- task inputs and results visible to Render Dashboard users.
+execution perfectly safe. Write down the risks the design accepts, such as a
+model key in memory during a call or labeled fork code running in
+verification, so an operator can decide whether they fit. This project lists
+its own in the architecture guide's
+[residual risks](2_ARCHITECTURE.md#residual-risks).

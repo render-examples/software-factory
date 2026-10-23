@@ -13,7 +13,7 @@ const ThinkingLevel = z.enum(["off", "minimal", "low", "medium", "high"]);
 export const RunnerInput = z.object({
 	trace_id: z.string().min(1),
 	agent_id: z.string().min(1),
-	/** The agent's prompt, after `{{name}}` substitution. */
+	/** The agent's prompt file, verbatim. */
 	system_prompt: z.string().min(1),
 	/** The task for this run. */
 	message: z.string().min(1),

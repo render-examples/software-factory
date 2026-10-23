@@ -4,14 +4,14 @@ import { runAgent } from "../../agents/index.js";
 import { requireRepo, TASKS } from "../../config/index.js";
 import { PrReviewInput } from "../../schemas/tasks.js";
 import { type GitHubClient, githubFor } from "../../github/index.js";
-import { RunError, type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
+import { type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";
-import { failureReason, reviewPull, type RunAgent } from "./agents.js";
+import { runVerify } from "../run-verify.js";
+import { reviewPull, type RunAgent } from "./agents.js";
 import { headMoved, mergeBase, type OpenSandbox, withPullSandbox } from "./checkout.js";
 import { commentable, pullDiffLines } from "./diff-lines.js";
 import { reviewerMessage } from "./messages.js";
 import { findReview, postReview } from "./post.js";
-import { runVerify } from "./verify.js";
 
 /** Test seams: everything that reaches GitHub, Sandboxes, or a model. */
 export interface PrReviewDeps {
@@ -77,16 +77,8 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			const verify = await runVerify(sandbox, repo.config.verify);
 
 			await progress("reviewing the pull request");
-			try {
-				const review = await reviewPull(run, {
-					sandbox,
-					message: reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify }),
-					base,
-				});
-				return { verify, review };
-			} catch (err) {
-				throw new RunError(`the PR reviewer ${failureReason(err)}, so no review was posted.`, "review_failed");
-			}
+			const review = await reviewPull(run, reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify }), { ...base, sandbox });
+			return { verify, review };
 		});
 
 		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.

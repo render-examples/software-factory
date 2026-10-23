@@ -98,7 +98,7 @@ describe("cancel task", () => {
 		add(BOT, renderMarker("status", { runId: "trn-1", stage: "triage", state: "running" }));
 		const runs = fakeRuns({ "trn-1": "running" });
 		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "bob" }, { gh, runs });
-		expect(result).toEqual({ cancelled: false, reason: "permission-denied" });
+		expect(result).toEqual({ cancelled: false, reason: "permission_denied" });
 		expect(runs.cancelTaskRun).not.toHaveBeenCalled();
 		expect(claims).toHaveLength(0);
 		expect(comments.at(-1)?.body).toContain("@bob needs `write` permission");
