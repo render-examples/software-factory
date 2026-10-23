@@ -20,19 +20,19 @@ Two processes deploy:
 ```text
 factory.config.ts   Repositories (base branch, install, verify), labels, permission, model tiers, publish and repair limits, sandbox timeout
 app/
+  entrypoints/      Gateway and Workflows process entry points
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
-  changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
-  schemas/        Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
-  entrypoints/       Gateway and Workflows process entry points
-  events/           Strict run claims and best-effort emit() over the events table
-  format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
-  gateway/          Hono app: signature check, body cap, the routing table (routes.ts)
-  github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
-  runner/           The agent runner: one Pi agent loop, tools, submit, key handling. Bundled into the snapshot
-  sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, verification
+  schemas/          Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
+  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs
+  workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts; run-verify.ts is shared
+  runs/             withRun lifecycle: permission, durable claim, takeover, checkpoints, status, expected failures
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
-  runs/             withRun lifecycle: permission, durable claim, takeover, ownership checkpoints, status
-  workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts
+  runner/           The agent runner: one Pi agent loop, tools, read-only shell policy, submit. Bundled into the snapshot
+  sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, withSandbox, verification
+  changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
+  github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
+  format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
+  events/           Strict run claims and best-effort emit() over the events table
   sql/              Migrations
 sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
 scripts/            setup-app, setup-github, doctor, migrate
@@ -42,16 +42,16 @@ tests/              Vitest unit tests; fakes in tests/helpers/
 Dependencies point one way, from entry points down to leaves:
 
 ```text
-src → gateway, workflows
-workflows → runs, changeset, agents, sandbox, github, format, events, contracts, config
+entrypoints → gateway, workflows
+workflows → runs, changeset, agents, sandbox, github, format, events, schemas, config
 runs → agents, github, events, config
-agents → sandbox, runner, events, contracts, config
+agents → sandbox, runner, events, schemas, config
 changeset → sandbox, github, config
 sandbox → runner (to bundle it), github (read tokens), config
-format → contracts, config
-gateway → contracts, events, config
+format → schemas, config
+gateway → schemas, events, config
 github → config
-runner, events, contracts, config → nothing in app/
+runner, events, schemas, config → nothing in app/
 ```
 
 Two edges must never appear:
@@ -67,7 +67,10 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 - Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
 - Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
 - Task inputs and results stay small and JSON-serializable. Each stage opens
-  one sandbox and closes it within the same task.
+  one sandbox with `withSandbox`, which closes it within the same task.
+- Throw `RunError` for an expected failure whose message is safe to show on GitHub. `withRun` also treats an agent
+  that stops on its own (turn limit, timeout, no or invalid submission) as expected; every other error fails the task.
+  Outcome names are snake_case.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
 - Stage implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
@@ -99,7 +102,7 @@ each is enforced):
 7. A PR opens only after GitHub's tree SHA equals the verified sandbox tree.
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
-10. Every sandbox is created with a timeout and terminated in `finally`.
+10. Every sandbox is created with a timeout and closed by `withSandbox` (in `finally`).
 11. Postgres decides only cross-task run ownership; best-effort telemetry never drives stage behavior.
 
 `tests/agents-catalog.test.ts` protects unique agent identities and tool authority. Change it only on purpose.

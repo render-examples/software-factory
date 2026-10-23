@@ -17,7 +17,7 @@ export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message:
 		({ errors, warnings } = validateSpec(draft.spec, existing));
 	}
 	if (errors.length > 0) {
-		throw new RunError(truncate(`the spec failed validation twice: ${errors.map(sanitizeInline).join("; ")}`, 1500), "invalid-spec");
+		throw new RunError(truncate(`the spec failed validation twice: ${errors.map(sanitizeInline).join("; ")}`, 1500), "spec_invalid");
 	}
 	return { draft, warnings };
 }

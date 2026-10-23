@@ -32,7 +32,6 @@ export default defineFactoryConfig({
   commandPrefix: "/factory",
   minimumPermission: "write",
   models: {
-    small: "anthropic/claude-haiku-4-5",
     medium: "anthropic/claude-sonnet-5",
     large: "anthropic/claude-opus-5",
   },
@@ -83,7 +82,6 @@ a new snapshot.
 | `labels.prReview` | `factory:pr-review` | Starts PR Reviewer |
 | `commandPrefix` | `/factory` | Prefix for comment commands; `<prefix> cancel` must be the first line |
 | `minimumPermission` | `write` | Live GitHub permission required to start or cancel: `triage`, `write`, `maintain`, or `admin` |
-| `models.small` | `anthropic/claude-haiku-4-5` | Small model tier; no built-in agent currently uses it |
 | `models.medium` | `anthropic/claude-sonnet-5` | Triage and PR reviewer |
 | `models.large` | `anthropic/claude-opus-5` | Spec writer and implementer |
 | `limits.repairRounds` | `2` | Implementer runs allowed after failed verification |
@@ -107,7 +105,7 @@ Agents select a tier; `factory.config.ts` maps each tier to a
 `provider/model` entry in Pi's model registry. This keeps model changes out of
 individual agent definitions.
 
-To change models within Anthropic, update the three mappings and redeploy the
+To change models within Anthropic, update the two mappings and redeploy the
 Workflows service. To use another provider:
 
 1. choose registered `provider/model` values;
@@ -157,7 +155,7 @@ export const implementer = defineAgent({
 |---|---|
 | `id` | Unique agent name, recorded on its events |
 | `prompt` | File relative to `app/agents/`, normally `<id>/prompt.md`, read verbatim |
-| `model` | `small`, `medium`, or `large` |
+| `model` | `medium` or `large` |
 | `tools` | Any of `read`, `ls`, `bash`, `edit`, `write` |
 | `output` | Zod object schema used for the `submit` tool and host validation |
 | `maxTurns` | Maximum model calls |
@@ -189,7 +187,8 @@ call.
 Every agent runs in a Sandbox: `runAgent` requires one, so model-directed
 tools never run beside service credentials in the Workflows process.
 
-An agent without `edit` or `write` gets an additional shell policy that
+An agent without `edit` or `write` gets an additional shell policy,
+[`app/runner/shell-policy.ts`](../app/runner/shell-policy.ts), that
 rejects obvious mutation and network commands. This is a behavioral guard,
 not the security boundary; Sandbox isolation and credential placement are the
 boundaries. Only the built-in implementer has write tools.
@@ -213,8 +212,14 @@ const result = await runAgent(
 
 `runAgent` returns output, usage, reported cost, and turns. It emits
 `agent.started` and `agent.finished`, which records usage and cost whether the
-call succeeded or not. Failures throw `AgentError` with a code. The default
-call timeout is 30 minutes.
+call succeeded or not. Failures throw `AgentError` with the agent's ID and a
+code. The default call timeout is 30 minutes.
+
+A stage doesn't catch agent errors. `withRun` reports an agent that stopped on
+its own (`max_turns`, `timeout`, `no_submission`, or an invalid submission) as
+an `agent_stopped` failure on GitHub, without the error's message, which can
+quote repository output. Any other code, such as `runner_lost`, is a platform
+failure and fails the Workflows task.
 
 ### Add an agent
 
@@ -248,14 +253,16 @@ and the working label.
    authenticated webhook.
 3. Implement the task under `app/workflows/<name>/`. Parse input, call
    `requireRepo`, identify the issue or PR, and wrap the body in `withRun`.
-4. Open a Sandbox only when needed and close it in `finally`.
+4. Open a Sandbox only when needed, with `withSandbox`, which closes it
+   whatever happens.
 5. Call `run.progress()` before major steps and `run.checkpoint()`
    immediately before any durable write not already adjacent to progress.
-6. Throw `RunError` only for expected messages safe to show on GitHub.
-   Unexpected errors produce a generic public message and fail the task.
+6. Throw `RunError` only for expected messages safe to show on GitHub, with
+   a snake_case outcome. Unexpected errors produce a generic public message
+   and fail the task.
 7. Export the task from `app/workflows/index.ts`.
-8. Route an authenticated webhook to it in `app/gateway/routes.ts`, register
-   its input in `app/gateway/index.ts`, and test the pure route.
+8. Route an authenticated webhook to it in `app/gateway/routes.ts`, passing
+   the input schema to `start()`, and test the pure route.
 9. Add labels, webhook events, or App permissions to
    `scripts/lib/requirements.ts` so setup and doctor share the requirement.
 10. Add stage tests with injected GitHub, Sandbox, agent, and run-control
@@ -273,20 +280,20 @@ cover the requirement.
 ## Add or change a GitHub trigger
 
 The gateway routing table is a pure mapping from `(event, payload)` to one
-task input or an ignore reason. It verifies the webhook signature before
-calling that table.
+validated task input or an ignore reason. The gateway verifies the webhook
+signature before calling that table.
 
 For another label, comment command, or GitHub event:
 
-1. update `route()` in `app/gateway/routes.ts`;
-2. add the task's Zod input to the gateway registry;
-3. update `REQUIRED_EVENTS`, `REQUIRED_PERMISSIONS`, or `LABELS` in
+1. update `route()` in `app/gateway/routes.ts`, passing the task's Zod
+   input schema to `start()`;
+2. update `REQUIRED_EVENTS`, `REQUIRED_PERMISSIONS`, or `LABELS` in
    `scripts/lib/requirements.ts`;
-4. update the existing GitHub App's permissions or event subscriptions when
+3. update the existing GitHub App's permissions or event subscriptions when
    needed;
-5. rerun `setup:github` for labels and webhook configuration;
-6. add route and setup/doctor tests; and
-7. run `doctor`.
+4. rerun `setup:github` for labels and webhook configuration;
+5. add route and setup/doctor tests; and
+6. run `doctor`.
 
 Use the GitHub delivery ID as the task idempotency key. Inputs must derive the
 repository, App installation, issue or PR, actor, and commit from the

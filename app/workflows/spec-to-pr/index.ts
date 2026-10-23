@@ -7,11 +7,12 @@ import { pullRequestBody, pullRequestTitle } from "../../format/index.js";
 import { type GitDataClient, type GitHubClient, gitData, githubFor } from "../../github/index.js";
 import { RunError, type RunOutcome, type RunResult, type RunControl, withRun } from "../../runs/index.js";
 import { publish } from "../../changeset/index.js";
-import { type OpenedSandbox, openSandbox, type SandboxRef } from "../../sandbox/index.js";
-import { agentStopped, implementMessage, mergeImplementation, repairMessage } from "./agents.js";
+import { type OpenedSandbox, openSandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
+import { runVerify, type VerifyRun } from "../run-verify.js";
+import { implementMessage, mergeImplementation, repairMessage } from "./agents.js";
 import { loadApprovedSpec } from "./approval.js";
 import { botIdentity, branchName, commitDate, commitMessage, ownedCommits, refusalSummary } from "./branch.js";
-import { allPassed, failureSummary, hasChanges, runVerify, type VerifyRun } from "./verify.js";
+import { allPassed, failureSummary, hasChanges } from "./verify.js";
 
 const TASK_TIMEOUT_SECONDS = 4 * 60 * 60;
 const IMPLEMENT_TIMEOUT_MS = 60 * 60 * 1000;
@@ -50,18 +51,13 @@ export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		const rounds = config.limits.repairRounds;
 
 		await run.progress("opening a sandbox");
-		const sandbox = await (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
-		const baseSha = sandbox.headSha;
-		const agentOpts = { sandbox, traceId: run.traceId, runId: run.runId, repo: repo.fullName, subject: `issue#${input.issue}` };
-		const noChanges = (): RunResult => ({
-			outcome: "no_changes",
-			summary: "the implementation agent made no changes, so there is nothing to open a PR for.",
-		});
+		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
+		return withSandbox(open, async (sandbox) => {
+			const baseSha = sandbox.headSha;
+			const agentOpts = { sandbox, traceId: run.traceId, runId: run.runId, repo: repo.fullName, subject: `issue#${input.issue}` };
+			const implement = async (message: string): Promise<Implementation> =>
+				(await runAgentFn(implementer, message, { ...agentOpts, timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
 
-		const implement = async (message: string): Promise<Implementation> =>
-			(await runAgentFn(implementer, message, { ...agentOpts, timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
-
-		try {
 			const owned = await ownedCommits(git, branch, baseSha, author);
 
 			await run.progress("implementing the spec");
@@ -110,18 +106,14 @@ export async function runSpecToPr(ctx: Pick<TaskContext, "metadata">, raw: unkno
 				summary: `opened draft PR #${pull.number}. Review it before marking it ready.`,
 				links: [{ label: `Draft PR #${pull.number}`, url: pull.htmlUrl }],
 			};
-		} catch (err) {
-			const expected = err instanceof RunError ? err : agentStopped(err, "implementation agent");
-			if (expected) return { outcome: expected.outcome, summary: expected.message, state: "failed" };
-			throw err;
-		} finally {
-			await sandbox.close().catch((err: unknown) => {
-				const message = err instanceof Error ? err.message : String(err);
-				console.error(JSON.stringify({ level: "warn", msg: "could not close sandbox", sandboxId: sandbox.id, error: message }));
-			});
-		}
+		});
 	});
 }
+
+const noChanges = (): RunResult => ({
+	outcome: "no_changes",
+	summary: "the implementation agent made no changes, so there is nothing to open a PR for.",
+});
 
 /** Not retried: a rerun is a relabel, and it replaces the earlier attempt's branch. */
 export const specToPr = task(

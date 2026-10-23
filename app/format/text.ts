@@ -45,6 +45,13 @@ export function codeSpan(text: string): string {
 	return longest > 0 || inner.startsWith(" ") ? `${fence} ${inner} ${fence}` : `${fence}${inner}${fence}`;
 }
 
+/** `text` verbatim in a fenced block whose fence is longer than any backtick run inside it, so it can't close early. */
+export function fenced(text: string, lang = ""): string {
+	const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+	const fence = "`".repeat(longest + 1);
+	return `${fence}${lang}\n${text}\n${fence}`;
+}
+
 /** Splits `text` into fenced code blocks and the prose between them, and maps only the prose. */
 function mapOutsideFences(text: string, fn: (prose: string) => string): string {
 	const lines = text.split("\n");

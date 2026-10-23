@@ -1,13 +1,5 @@
 import { Hono } from "hono";
-import type { ZodType } from "zod";
-import { TASKS, type TaskName } from "../config/index.js";
-import {
-	CancelInput,
-	PrReviewInput,
-	RefreshSnapshotInput,
-	SpecToPrInput,
-	TriageInput,
-} from "../schemas/tasks.js";
+import type { TaskName } from "../config/index.js";
 import { emit as defaultEmit } from "../events/index.js";
 import { readBody } from "./body.js";
 import { route } from "./routes.js";
@@ -20,14 +12,6 @@ export interface GatewayDeps {
 	emit?: typeof defaultEmit;
 	webhookSecret: string;
 }
-
-const INPUTS: Record<TaskName, ZodType> = {
-	[TASKS.triage]: TriageInput,
-	[TASKS.specToPr]: SpecToPrInput,
-	[TASKS.prReview]: PrReviewInput,
-	[TASKS.cancel]: CancelInput,
-	[TASKS.refreshSnapshot]: RefreshSnapshotInput,
-};
 
 export function createGateway(deps: GatewayDeps): Hono {
 	const emit = deps.emit ?? defaultEmit;
@@ -88,15 +72,15 @@ export function createGateway(deps: GatewayDeps): Hono {
 			return c.json({ ignored: decision.reason });
 		}
 
-		const { task, subject, idempotencyKey } = decision;
-		const parsed = INPUTS[task].safeParse(decision.input);
-		if (!parsed.success) {
-			delivered({ outcome: "invalid", reason: parsed.error.message, action, repo, subject, task });
+		if (decision.kind === "invalid") {
+			const { task, subject, reason } = decision;
+			delivered({ outcome: "invalid", reason, action, repo, subject, task });
 			return c.json({ error: "invalid task input", task }, 422);
 		}
 
+		const { task, subject, idempotencyKey, input } = decision;
 		try {
-			const run = await deps.startTask(task, parsed.data as object, idempotencyKey);
+			const run = await deps.startTask(task, input, idempotencyKey);
 			delivered({ outcome: "started", action, repo, subject, task, runId: run.id });
 			return c.json({ runId: run.id, task }, 202);
 		} catch (error) {

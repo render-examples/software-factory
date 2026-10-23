@@ -21,7 +21,7 @@ export type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
 export interface CancelResult {
 	cancelled: boolean;
 	runId?: string;
-	reason?: "permission-denied" | "nothing-running";
+	reason?: "permission_denied" | "nothing_running";
 }
 
 /** `/factory cancel`: cancels the run the status comment records, if it's still active. */
@@ -45,14 +45,14 @@ export async function cancelRun(
 				input.number,
 				`@${input.actor} needs \`${config.minimumPermission}\` permission on this repository to cancel factory runs.`,
 			);
-			return { cancelled: false, reason: "permission-denied" };
+			return { cancelled: false, reason: "permission_denied" };
 		}
 		await claimRun({ ...event, stage: TASKS.cancel, actor: input.actor });
 		const runs = deps.runs ?? workflowRuns();
 		const current = await readStatus(gh, input.number);
 		if (!current || !(await isRunActive(runs, current.data.runId))) {
 			await gh.createComment(input.number, `@${input.actor} no factory run is in progress here.`);
-			return { cancelled: false, reason: "nothing-running" };
+			return { cancelled: false, reason: "nothing_running" };
 		}
 		await cancelActiveRun(runs, current.data.runId);
 		await finishStatus({

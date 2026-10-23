@@ -6,6 +6,7 @@ export {
 	COMMENT_MAX_CHARS,
 	closeFences,
 	codeSpan,
+	fenced,
 	neutralizeMarkers,
 	neutralizeMentions,
 	sanitize,

@@ -1,5 +1,5 @@
 export { type SandboxApi, SandboxClient, type SandboxTimings, sandboxClient } from "./client.js";
-export { type OpenSandboxDeps, openSandbox } from "./sandbox.js";
+export { type OpenSandboxDeps, openSandbox, withSandbox } from "./sandbox.js";
 export { shq } from "./shell.js";
 export {
 	type BuiltSnapshot,
