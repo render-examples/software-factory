@@ -84,6 +84,18 @@ describe("submit", { timeout: 30_000 }, () => {
 		expect(terminal(events)).toMatchObject({ type: "result", output: GOOD, turns: 2 });
 		expect(code).toBe(0);
 	});
+
+	it("stops after the last rejected attempt and says what was wrong with it", async () => {
+		const ws = makeWorkspace();
+		const bad = call(SUBMIT, { summary: "ok summary", files: "README.md" });
+		const { code, events } = await runWithTestStub(makeInput(ws), () => [bad, bad, bad, call(SUBMIT, GOOD)]);
+		expect(terminal(events)).toMatchObject({
+			type: "error",
+			code: "invalid_submission",
+			message: expect.stringContaining("rejected 3 times; last: /files"),
+		});
+		expect(code).toBe(1);
+	});
 });
 
 describe("run limits", { timeout: 30_000 }, () => {

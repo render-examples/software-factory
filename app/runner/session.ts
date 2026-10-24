@@ -200,8 +200,11 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 					onAccepted: (output) => {
 						submission = { output };
 					},
-					onRejected: (attempts) => {
-						if (attempts >= MAX_SUBMIT_ATTEMPTS) stop({ code: "invalid_submission", message: `${SUBMIT_TOOL} was rejected ${attempts} times` });
+					onRejected: (attempts, problems) => {
+						if (attempts < MAX_SUBMIT_ATTEMPTS) return;
+						// Schema paths and messages only: TypeBox's errors don't quote the submitted values.
+						const last = problems.slice(0, 5).join("; ");
+						stop({ code: "invalid_submission", message: `${SUBMIT_TOOL} was rejected ${attempts} times; last: ${last}` });
 					},
 				}),
 			],

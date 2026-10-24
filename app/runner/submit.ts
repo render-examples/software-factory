@@ -40,8 +40,8 @@ function checkSubmission(schema: JsonOutputSchema, candidate: unknown): Verdict 
 
 interface SubmitHandlers {
 	onAccepted(output: unknown): void;
-	/** Called with the number of rejected attempts so far. */
-	onRejected(attempts: number): void;
+	/** Called with the number of rejected attempts so far and what was wrong with the latest one. */
+	onRejected(attempts: number, problems: readonly string[]): void;
 }
 
 /** The tool's parameters as the model sees them: the output schema without JSON Schema metadata. */
@@ -79,7 +79,7 @@ export function createSubmitTool(schema: JsonOutputSchema, handlers: SubmitHandl
 			}
 			rejected++;
 			const remaining = MAX_SUBMIT_ATTEMPTS - rejected;
-			handlers.onRejected(rejected);
+			handlers.onRejected(rejected, verdict.problems);
 			throw new Error(
 				`${SUBMIT_TOOL} rejected (attempt ${rejected} of ${MAX_SUBMIT_ATTEMPTS}); nothing was recorded. ` +
 					(remaining > 0 ? "Fix every problem below and call it again:\n" : "No attempts remain:\n") +
