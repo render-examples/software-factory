@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Runs · Software Factory</title>
+		<link rel="stylesheet" href="/runs/app.css">
+		<script src="/runs/app.js" defer></script>
+	</head>
+	<body>
+		<header>
+			<div class="bar">
+				<div class="title">
+					<p class="overline">Software Factory</p>
+					<h1>Runs</h1>
+				</div>
+				<button type="button" id="refresh" class="primary">Refresh</button>
+			</div>
+		</header>
+		<main>
+			<p id="notice" role="status" hidden></p>
+			<div class="table-scroll">
+				<table id="runs">
+					<thead>
+						<tr>
+							<th>Started</th>
+							<th>Task</th>
+							<th>Issue or PR</th>
+							<th>Actor</th>
+							<th>State</th>
+							<th>Outcome</th>
+							<th class="num">Duration</th>
+							<th class="num">Agent cost</th>
+						</tr>
+					</thead>
+					<tbody></tbody>
+				</table>
+			</div>
+			<button type="button" id="older" class="secondary" hidden>Load older runs</button>
+		</main>
+	</body>
+</html>

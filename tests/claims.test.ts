@@ -96,9 +96,18 @@ describe("takeOver", () => {
 		const gh = new FakeGitHub();
 		const existing = gh.addStatus("trn-old", "running", "sbx-old");
 		const runs = new FakeRuns({ "trn-old": "running" });
-		const result = await takeOver({ gh, subject, task: "triage", title: "Triage", runId: "trn-new", runs });
+		const result = await takeOver({ gh, repo: REPO.fullName, subject, task: "triage", title: "Triage", runId: "trn-new", runs });
 		expect(runs.cancelled).toEqual(["trn-old"]);
 		expect(runs.terminated).toEqual(["sbx-old"]);
+		// The stopped run is killed before it can record how it ended, so the takeover records it.
+		expect(events).toContainEqual({
+			traceId: "trn-old",
+			runId: "trn-old",
+			repo: REPO.fullName,
+			subject: "issue#12",
+			type: "run.finished",
+			payload: { stage: "triage", state: "cancelled", outcome: "superseded", stoppedBy: "trn-new" },
+		});
 		expect(result).toEqual({ commentId: existing.id, previousRunId: "trn-old", cancelledPrevious: true });
 		expect(gh.comments).toHaveLength(1);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-new", state: "running", stage: "triage" });
@@ -167,6 +176,7 @@ describe("withClaim", () => {
 				subject: "issue#12",
 				payload: { stage: "triage", actor: "maintainer" },
 			},
+			{ type: "run.finished", traceId: "trn-prev", payload: { state: "cancelled", outcome: "superseded", stoppedBy: "trn-run" } },
 			{ type: "run.finished", traceId: "trn-root", payload: { state: "done", outcome: "asked-questions" } },
 		]);
 	});

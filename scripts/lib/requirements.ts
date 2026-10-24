@@ -61,7 +61,13 @@ export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
 };
 
 /** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = ["DATABASE_URL", "GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];
+export const SECRET_ENV: readonly string[] = [
+	"DATABASE_URL",
+	"GITHUB_WEBHOOK_SECRET",
+	"RENDER_API_KEY",
+	"GITHUB_APP_PRIVATE_KEY",
+	"FACTORY_VIEWER_PASSWORD",
+];
 
 const LEVELS = ["none", "read", "write", "admin"];
 

@@ -33,6 +33,9 @@ services:
           type: workflow
           name: factory-workflows
           property: slug
+      # Password for the run viewer at /runs (user "factory"). Delete it to turn the viewer off.
+      - key: FACTORY_VIEWER_PASSWORD
+        generateValue: true
 
   - type: workflow
     name: factory-workflows

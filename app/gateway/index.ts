@@ -4,11 +4,16 @@ import { emit as defaultEmit } from "../events/index.js";
 import { readBody } from "./body.js";
 import { route } from "./routes.js";
 import { verifySignature } from "./signature.js";
+import { mountViewer, type ViewerDeps } from "./viewer/index.js";
+
+export { MIN_VIEWER_PASSWORD_CHARS, type ViewerDeps } from "./viewer/index.js";
 
 export interface GatewayDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	emit?: typeof defaultEmit;
 	webhookSecret: string;
+	/** Serves the run viewer at /runs when set. */
+	viewer?: ViewerDeps;
 }
 
 export function createGateway(deps: GatewayDeps): Hono {
@@ -17,6 +22,7 @@ export function createGateway(deps: GatewayDeps): Hono {
 
 	app.get("/health", (c) => c.json({ status: "ok" }));
 	app.get("/ready", (c) => c.json({ status: "ready" }));
+	if (deps.viewer) mountViewer(app, deps.viewer);
 
 	app.post("/webhooks/github", async (c) => {
 		const event = c.req.header("x-github-event") ?? "";

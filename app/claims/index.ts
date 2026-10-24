@@ -7,6 +7,7 @@ export {
 	type StatusGitHub,
 	type StatusLink,
 	type StatusUpdate,
+	type StopContext,
 	type Subject,
 	stopRun,
 	subjectName,

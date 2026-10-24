@@ -119,6 +119,7 @@ database and workflow references are wired by the Blueprint.
 | `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
+| `FACTORY_VIEWER_PASSWORD` | Optional: turns on the run viewer at `/runs` (user `factory`, at least 16 characters) |
 | `PORT` | HTTP port; defaults to `3000` |
 
 ### Workflows

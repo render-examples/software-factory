@@ -144,7 +144,9 @@ and pull request diffs as untrusted.
 ### Gateway
 
 The gateway verifies the webhook signature before parsing JSON. It holds no
-GitHub credential and runs no model or repository code.
+GitHub credential and runs no model or repository code. When
+`FACTORY_VIEWER_PASSWORD` is set, it also serves a read-only run viewer over
+the telemetry, behind HTTP Basic auth.
 
 ### Workflows host
 

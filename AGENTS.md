@@ -36,7 +36,7 @@ app/
   entrypoints/      Gateway and Workflows process entry points
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
   schemas/          Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
-  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs
+  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs; viewer/ is the read-only run viewer
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts; claiming-task.ts and run-verify.ts are shared
   claims/           withClaim lifecycle: permission, the status-comment claim, takeover and sandbox cleanup, checkpoints, expected failures
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime

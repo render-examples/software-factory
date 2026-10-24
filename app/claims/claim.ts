@@ -167,7 +167,7 @@ class ClaimedRun implements Claim {
 	/** Stops the previous run and rewrites the status comment to name this one, then confirms no other run's write landed after it. */
 	async acquire(): Promise<void> {
 		const { task, title, runs } = this.#opts;
-		await takeOver({ gh: this.gh, subject: this.subject, task, title, runId: this.runId, runs });
+		await takeOver({ gh: this.gh, repo: this.repo.fullName, subject: this.subject, task, title, runId: this.runId, runs });
 		await this.checkpoint();
 	}
 

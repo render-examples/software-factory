@@ -10,8 +10,21 @@ factory's status comment shows progress, the current run ID, and final links.
 Find that run under `factory-workflows` in the Render Dashboard to inspect
 logs, inputs, and its result.
 
-When `DATABASE_URL` is set, events are also appended to Postgres. To inspect
-one run:
+When `DATABASE_URL` is set, events are also appended to Postgres.
+
+### Run viewer
+
+The gateway serves a run viewer at `https://<gateway>/runs`. Sign in as
+`factory` with the gateway's `FACTORY_VIEWER_PASSWORD` (the Blueprint
+generates it; find it under the gateway's Environment settings). It lists
+runs newest first; click one to see its events. Remove the variable to turn
+the viewer off.
+
+### Query Postgres directly
+
+```bash
+render psql <factory-db id>
+```
 
 ```sql
 select created_at, type, subject, payload

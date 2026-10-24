@@ -100,3 +100,59 @@ describe("gateway", () => {
 		expect(event.payload).toMatchObject({ outcome: "start failed", reason: "render down" });
 	});
 });
+
+describe("run viewer", () => {
+	const PASSWORD = "viewer-password-0123456789";
+	const auth = (password = PASSWORD) => ({ authorization: `Basic ${Buffer.from(`factory:${password}`).toString("base64")}` });
+	const run = (id: number) => ({
+		id,
+		traceId: `trn-${id}`,
+		runId: `trn-${id}`,
+		repo: REPO,
+		subject: "issue#12",
+		task: "triage",
+		actor: "maintainer",
+		startedAt: "2026-10-24T20:18:54.000Z",
+		finishedAt: null,
+		state: null,
+		outcome: null,
+		costUsd: null,
+		agentRuns: 0,
+	});
+	const viewerApp = (viewer: Partial<NonNullable<GatewayDeps["viewer"]>> = {}) =>
+		createGateway({
+			startTask,
+			emit,
+			webhookSecret: SECRET,
+			viewer: { password: PASSWORD, listRuns: vi.fn(async () => []), listTraceEvents: vi.fn(async () => []), ...viewer },
+		});
+
+	it("is off unless configured, and requires the password for the page and the API", async () => {
+		expect((await app.request("/runs")).status).toBe(404);
+		const viewer = viewerApp();
+		for (const path of ["/runs", "/runs/app.js", "/api/runs", "/api/runs/trn-1/events"]) {
+			expect((await viewer.request(path)).status).toBe(401);
+			expect((await viewer.request(path, { headers: auth("wrong-password-0123456789") })).status).toBe(401);
+		}
+		const page = await viewer.request("/runs", { headers: auth() });
+		expect(page.status).toBe(200);
+		expect(await page.text()).toContain('<script src="/runs/app.js"');
+		expect(page.headers.get("cache-control")).toBe("no-store");
+		expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
+	});
+
+	it("pages runs with a cursor, validates input, and reports when telemetry is off", async () => {
+		const listRuns = vi.fn(async () => [run(9), run(8)]);
+		const viewer = viewerApp({ listRuns });
+		const res = await viewer.request("/api/runs?limit=2&before=10", { headers: auth() });
+		expect(res.status).toBe(200);
+		expect(listRuns).toHaveBeenCalledWith({ before: 10, limit: 2 });
+		expect(await res.json()).toMatchObject({ runs: [{ id: 9 }, { id: 8 }], next: 8 });
+		expect((await viewer.request("/api/runs?limit=0", { headers: auth() })).status).toBe(400);
+		expect((await viewer.request("/api/runs/not%20a%20trace/events", { headers: auth() })).status).toBe(400);
+
+		const off = viewerApp({ listRuns: vi.fn(async () => null), listTraceEvents: vi.fn(async () => null) });
+		expect((await off.request("/api/runs", { headers: auth() })).status).toBe(503);
+		expect((await off.request("/api/runs/trn-1/events", { headers: auth() })).status).toBe(503);
+	});
+});

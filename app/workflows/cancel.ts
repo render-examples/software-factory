@@ -36,7 +36,8 @@ export async function cancelRun(
 			return { cancelled: false, reason: "permission_denied" };
 		}
 		const current = await readStatus(gh, input.number);
-		if (!current || !(await stopRun(deps.runs ?? workflowRuns(), current.data))) {
+		const stop = { repo: repo.fullName, subject: event.subject, by: runId, outcome: "cancelled" } as const;
+		if (!current || !(await stopRun(deps.runs ?? workflowRuns(), current.data, stop))) {
 			await gh.createComment(input.number, `@${input.actor} no factory run is in progress here.`);
 			return { cancelled: false, reason: "nothing_running" };
 		}

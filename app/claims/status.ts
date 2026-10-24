@@ -1,4 +1,5 @@
 import { ClientError, Render } from "@renderinc/sdk";
+import { emit } from "../events/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment, type RunState, renderMarker, type StatusMarker } from "../github/index.js";
 import { sandboxClient } from "../sandbox/index.js";
 
@@ -52,14 +53,32 @@ export async function readStatus(gh: StatusGitHub, number: number): Promise<{ co
 	return findMarkedComment(await gh.listIssueComments(number), "status", await gh.botLogin());
 }
 
+/** Who stops a run and why, for the `run.finished` event recorded on the stopped run's behalf. */
+export interface StopContext {
+	/** "owner/name" */
+	repo: string;
+	/** "issue#12" or "pr#34" */
+	subject: string;
+	/** The task run doing the stopping. */
+	by: string;
+	outcome: "superseded" | "cancelled";
+}
+
 /**
  * Stops the run a status marker records: cancels it if it's still active, then terminates the sandbox it recorded.
  * Render kills a cancelled task without running its `finally`, so the sandbox would otherwise live until its
- * timeout. Returns whether the run was still active.
+ * timeout, and the run never records how it ended; this records `run.finished` for it. Returns whether the run
+ * was still active.
  */
-export async function stopRun(runs: RunControl, status: StatusMarker): Promise<boolean> {
+export async function stopRun(runs: RunControl, status: StatusMarker, context: StopContext): Promise<boolean> {
 	const active = await isRunActive(runs, status.runId);
-	if (active) await cancelActiveRun(runs, status.runId);
+	if (active) {
+		await cancelActiveRun(runs, status.runId);
+		const { repo, subject, by, outcome } = context;
+		// Claiming tasks are started by the gateway, so each is its own root task run and its run ID is its trace ID.
+		const payload = { stage: status.stage, state: "cancelled", outcome, stoppedBy: by };
+		await emit({ traceId: status.runId, runId: status.runId, repo, subject, type: "run.finished", payload });
+	}
 	if (status.sandboxId) {
 		const { sandboxId } = status;
 		await runs.terminateSandbox(sandboxId).catch((error) => warn("could not terminate the stopped run's sandbox", error, { sandboxId }));
@@ -94,16 +113,19 @@ async function cancelActiveRun(runs: RunControl, taskRunId: string): Promise<voi
  */
 export async function takeOver(opts: {
 	gh: StatusGitHub;
+	/** "owner/name" */
+	repo: string;
 	subject: Subject;
 	task: string;
 	title: string;
 	runId: string;
 	runs?: RunControl;
 }): Promise<{ commentId: number; previousRunId: string | null; cancelledPrevious: boolean }> {
-	const { gh, subject, task, title, runId } = opts;
+	const { gh, repo, subject, task, title, runId } = opts;
 	const current = await readStatus(gh, subject.number);
 	const previous = current && current.data.runId !== runId ? current.data : null;
-	const cancelledPrevious = previous ? await stopRun(opts.runs ?? workflowRuns(), previous) : false;
+	const stop = { repo, subject: subjectName(subject), by: runId, outcome: "superseded" } as const;
+	const cancelledPrevious = previous ? await stopRun(opts.runs ?? workflowRuns(), previous, stop) : false;
 	const body = statusBody({ task, title, runId, state: "running" });
 	const comment = current ? await gh.updateComment(current.comment.id, body) : await gh.createComment(subject.number, body);
 	await addWorkingLabel(gh, subject.number);
