@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { Spec, type SpecDraft, SpecNotes, type TriageDecision } from "../../schemas/index.js";
 import { findMarkedComment, type Issue, type IssueComment, parseMarker } from "../../github/index.js";
 
@@ -12,21 +11,19 @@ export interface CurrentSpec {
 	notes: SpecNotes | null;
 }
 
-export interface CurrentQuestions {
+interface CurrentQuestions {
 	comment: IssueComment;
 	round: number;
 }
 
 /** What the agents read about an issue, and the factory's own comments on it. */
-export interface Thread {
+interface Thread {
 	issue: Issue;
 	/** The issue and its comments, oldest first, each in a tagged block. */
 	conversation: string;
 	spec: CurrentSpec | null;
 	questions: CurrentQuestions | null;
 }
-
-const QuestionsMarker = z.object({ round: z.number().int().positive(), questions: z.array(z.string()) });
 
 export function readThread(issue: Issue, comments: readonly IssueComment[], botLogin: string): Thread {
 	const foundSpec = findMarkedComment(comments, "spec", botLogin);
@@ -38,7 +35,7 @@ export function readThread(issue: Issue, comments: readonly IssueComment[], botL
 		spec: Spec.safeParse(foundSpec.data.spec).data ?? null,
 		notes: SpecNotes.safeParse(foundSpec.data.notes).data ?? null,
 	};
-	const round = QuestionsMarker.safeParse(foundQuestions?.data).data?.round ?? 1;
+	const round = foundQuestions?.data.round ?? 1;
 	const questions = foundQuestions && { comment: foundQuestions.comment, round };
 
 	const bot = botLogin.toLowerCase();
@@ -47,10 +44,13 @@ export function readThread(issue: Issue, comments: readonly IssueComment[], botL
 	];
 	for (const comment of comments) {
 		if (comment.author.login.toLowerCase() === bot) {
-			const asked = QuestionsMarker.safeParse(parseMarker(comment.body, "questions")).data;
+			const asked = parseMarker(comment.body, "questions");
 			if (asked) blocks.push(block("factory-questions", { round: asked.round }, asked.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")));
 			const posted = parseMarker(comment.body, "spec");
-			if (posted) blocks.push(block("factory-spec", { version: posted.version }, "The factory posted its spec here. Its current text is under \"Current spec\"."));
+			if (posted)
+				blocks.push(
+					block("factory-spec", { version: posted.version }, 'The factory posted its spec here. Its current text is under "Current spec".'),
+				);
 		} else if (comment.author.type !== "Bot") {
 			blocks.push(block("comment", { author: comment.author.login }, comment.body));
 		}

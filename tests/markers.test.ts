@@ -8,7 +8,6 @@ function comment(id: number, login: string, body: string): IssueComment {
 		id,
 		body,
 		author: { login, type: login.endsWith("[bot]") ? "Bot" : "User" },
-		performedViaApp: null,
 		createdAt: "2026-01-01T00:00:00Z",
 		updatedAt: "2026-01-01T00:00:00Z",
 		htmlUrl: "",
@@ -21,6 +20,18 @@ describe("markers", () => {
 		expect(contentHash(spec)).toBe(contentHash({ meta: { a: 2, b: 1 }, criteria: ["toggle", "persists"], title: "Add dark mode" }));
 		const marker = renderMarker("spec", { spec, hash: contentHash(spec), version: 2 });
 		expect(parseMarker(marker, "spec")).toEqual({ spec, hash: contentHash(spec), version: 2 });
+	});
+
+	it("validates question and review marker data", () => {
+		const questions = renderMarker("questions", { round: 2, questions: ["Which API should this use?"] });
+		const review = renderMarker("review", { headSha: "a".repeat(40), runId: "trn-2" });
+		expect(parseMarker(questions, "questions")).toEqual({ round: 2, questions: ["Which API should this use?"] });
+		expect(parseMarker(review, "review")).toEqual({ headSha: "a".repeat(40), runId: "trn-2" });
+
+		const invalidQuestions = Buffer.from(JSON.stringify({ round: 2 })).toString("base64url");
+		const invalidReview = Buffer.from(JSON.stringify({ headSha: "short", runId: "trn-2" })).toString("base64url");
+		expect(parseMarker(`<!-- software-factory:questions ${invalidQuestions} -->`, "questions")).toBeNull();
+		expect(parseMarker(`<!-- software-factory:review ${invalidReview} -->`, "review")).toBeNull();
 	});
 
 	it("returns null for missing, other-kind, corrupted, or invalid markers", () => {

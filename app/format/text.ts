@@ -11,7 +11,7 @@ const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
  * Breaks every `<!--` so model text can't open an HTML comment that hides content or looks like a factory
  * marker. Applies inside code too: marker lookups scan the raw body.
  */
-export function neutralizeMarkers(text: string): string {
+function neutralizeMarkers(text: string): string {
 	return text.replaceAll("<!--", `<${ZERO_WIDTH_SPACE}!--`);
 }
 
@@ -23,7 +23,7 @@ const MENTION = /(?<![A-Za-z0-9_.\-/@])@(?=[A-Za-z0-9])/g;
  * anyone. Fenced code blocks are left alone (GitHub doesn't mention from them, and code is copied from them);
  * inline code is neutralized too, since a stray backtick elsewhere can change where a span ends.
  */
-export function neutralizeMentions(text: string): string {
+function neutralizeMentions(text: string): string {
 	return mapOutsideFences(text, (prose) => prose.replace(MENTION, `@${ZERO_WIDTH_JOINER}`));
 }
 
@@ -37,12 +37,16 @@ export function sanitizeInline(text: string): string {
 	return neutralizeMarkers(text.replace(/\s+/g, " ").trim()).replace(MENTION, `@${ZERO_WIDTH_JOINER}`);
 }
 
-/** `text` as an inline code span, with a delimiter longer than any backtick run inside it. Markers and mentions neutralized. */
-export function codeSpan(text: string): string {
-	const inner = sanitizeInline(text);
-	const longest = Math.max(0, ...(inner.match(/`+/g) ?? []).map((run) => run.length));
+/** `text` verbatim as an inline code span, with a delimiter longer than any backtick run inside it. For model input. */
+export function verbatimCodeSpan(text: string): string {
+	const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
 	const fence = "`".repeat(longest + 1);
-	return longest > 0 || inner.startsWith(" ") ? `${fence} ${inner} ${fence}` : `${fence}${inner}${fence}`;
+	return longest > 0 || text.startsWith(" ") ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
+}
+
+/** `text` as an inline code span for GitHub, with markers and mentions neutralized. */
+export function codeSpan(text: string): string {
+	return verbatimCodeSpan(sanitizeInline(text));
 }
 
 /** `text` verbatim in a fenced block whose fence is longer than any backtick run inside it, so it can't close early. */
@@ -68,10 +72,9 @@ function mapOutsideFences(text: string, fn: (prose: string) => string): string {
 			if (closesFence(line, fence)) fence = undefined;
 			continue;
 		}
-		const open = FENCE_OPEN.exec(line);
-		if (open && !(open[1]?.startsWith("`") && line.slice(open[0].length).includes("`"))) {
+		fence = opensFence(line);
+		if (fence) {
 			flush();
-			fence = open[1];
 			out.push(line);
 		} else {
 			prose.push(line);
@@ -79,6 +82,13 @@ function mapOutsideFences(text: string, fn: (prose: string) => string): string {
 	}
 	flush();
 	return out.join("\n");
+}
+
+/** The fence `line` opens, if any. A backtick fence's info string can't contain a backtick. */
+function opensFence(line: string): string | undefined {
+	const open = FENCE_OPEN.exec(line);
+	if (!open?.[1] || (open[1].startsWith("`") && line.slice(open[0].length).includes("`"))) return undefined;
+	return open[1];
 }
 
 function closesFence(line: string, fence: string): boolean {
@@ -90,18 +100,14 @@ function closesFence(line: string, fence: string): boolean {
 function openFence(text: string): string | undefined {
 	let fence: string | undefined;
 	for (const line of text.split("\n")) {
-		if (fence) {
-			if (closesFence(line, fence)) fence = undefined;
-			continue;
-		}
-		const open = FENCE_OPEN.exec(line);
-		if (open && !(open[1]?.startsWith("`") && line.slice(open[0].length).includes("`"))) fence = open[1];
+		if (!fence) fence = opensFence(line);
+		else if (closesFence(line, fence)) fence = undefined;
 	}
 	return fence;
 }
 
 /** Closes a fenced code block left open at the end, so it can't swallow what follows. */
-export function closeFences(text: string): string {
+function closeFences(text: string): string {
 	const fence = openFence(text);
 	return fence ? `${text}\n${fence}` : text;
 }

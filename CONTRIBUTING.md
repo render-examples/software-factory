@@ -118,33 +118,40 @@ To add an agent:
 1. add its prompt and definition under `app/agents/<id>/`;
 2. export it from `app/agents/index.ts`;
 3. add or reuse a bounded schema in `app/schemas/`;
-4. call it from a stage with that stage's Sandbox;
+4. call it from a task with that task's Sandbox and `claim.agentOptions(sandbox)`;
 5. add it to `tests/agents-catalog.test.ts`; and
 6. run `npm run check`.
 
 Prompt changes require a Workflows deploy. Changes under `app/runner/` or
 `sandbox/` also require repository snapshot refreshes.
 
-## Add a stage
+## Add a claiming task
 
-A stage is a named Workflows task whose body runs inside `withRun`. That
-shared lifecycle provides permission checks, run claims, takeover,
-checkpoints, status updates, and failure reporting.
+A claiming task acts on one issue or PR while it holds a claim on it.
+Triage, Spec-to-PR, and PR Reviewer are claiming tasks. The claim is the
+status comment: the run it names holds it. Declare a claiming task with
+`claimingTask()` (`app/workflows/claiming-task.ts`). It registers the
+Workflows task, validates the input, resolves the repository, and runs your
+work inside `withClaim` (`app/claims/claim.ts`). `withClaim` checks the
+actor's permission, stops the previous run and takes over the status comment,
+keeps the comment current, and reports how the run ended.
 
 1. Add the task name to `TASKS` in `app/config/index.ts`.
-2. Add its stage title in `app/runs/status.ts`.
-3. Add a bounded input schema in `app/schemas/tasks.ts`.
-4. Implement the task under `app/workflows/<name>/`.
-5. Resolve the configured repository and wrap the body in `withRun`.
-6. Open Sandboxes through `withSandbox`.
-7. Call `run.progress()` before major steps and `run.checkpoint()` before
+2. Add a bounded input schema in `app/schemas/tasks.ts`.
+3. Declare the task under `app/workflows/<name>/` with
+   `claimingTask({ name, title, input, subject, timeoutSeconds }, work)`.
+   `title` is how the status comment names the task.
+4. Open Sandboxes through `withSandbox`, and call
+   `claim.recordSandbox(sandbox)` first thing, so a run that replaces yours
+   can terminate its Sandbox.
+5. Call `claim.progress()` before major steps and `claim.checkpoint()` before
    durable writes.
-8. Throw `RunError` only for expected messages safe to show on GitHub.
-9. Export the task from `app/workflows/index.ts`.
-10. Route an authenticated webhook to it in `app/gateway/routes.ts`.
-11. Update setup requirements and add boundary-focused tests.
+6. Throw `ExpectedFailure` only for expected messages safe to show on GitHub.
+7. Import the task module from `app/workflows/index.ts`.
+8. Route an authenticated webhook to it in `app/gateway/routes.ts`.
+9. Update setup requirements and add boundary-focused tests.
 
-Built-in stages disable automatic retries because a retry can repeat model
+Claiming tasks never retry automatically, because a retry can repeat model
 spend and durable work. A person reapplies a label to start a fresh run.
 
 ## Add or change a GitHub trigger
@@ -173,13 +180,13 @@ app/
   entrypoints/  Gateway and Workflows process entry points
   gateway/      Webhook authentication and routing
   workflows/    Triage, Spec-to-PR, PR Reviewer, cancel, snapshots
-  runs/         Permission, claim, takeover, status, failure lifecycle
+  claims/       withClaim: permission, status-comment claim, takeover, failure reporting
   agents/       Agent definitions and host-side execution
   runner/       Self-contained agent runtime bundled into snapshots
   sandbox/      Sandbox and snapshot lifecycle
   changeset/    Candidate-tree validation and publishing
   github/       App authentication, REST, Git Data, and markers
-  events/       Strict claims and best-effort telemetry
+  events/       Optional best-effort telemetry
   schemas/      Cross-process Zod contracts
 sandbox/        Runtime scripts copied into snapshots
 scripts/        Setup, doctor, and migrations

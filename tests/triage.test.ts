@@ -6,13 +6,11 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
-	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
-	isCurrentRun: async () => true,
 }));
 
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
-const { WORKING_LABEL } = await import("../app/runs/index.js");
+const { WORKING_LABEL } = await import("../app/claims/index.js");
 const { runTriage } = await import("../app/workflows/triage/index.js");
 type AgentRunner = import("../app/workflows/triage/agents.js").AgentRunner;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -72,7 +70,6 @@ class FakeGitHub {
 			id,
 			body,
 			author: { login, type: login.endsWith("[bot]") ? "Bot" : "User" },
-			performedViaApp: null,
 			createdAt: "2026-10-01T00:00:00Z",
 			updatedAt: "2026-10-01T00:00:00Z",
 			htmlUrl: `https://github.test/c/${id}`,
@@ -81,7 +78,7 @@ class FakeGitHub {
 		return { ...comment };
 	}
 
-	/** Comments other than the status comment withRun keeps. */
+	/** Comments other than the status comment withClaim keeps. */
 	written(): IssueComment[] {
 		return this.comments.filter((c) => !parseMarker(c.body, "status"));
 	}
@@ -123,11 +120,7 @@ const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_w
 
 function fakeRunner(steps: Record<string, Step[]>) {
 	const calls: AgentCall[] = [];
-	const run = (async (
-		agent: { id: string },
-		message: string,
-		opts: { sandbox?: unknown; traceId: string },
-	) => {
+	const run = (async (agent: { id: string }, message: string, opts: { sandbox?: unknown; traceId: string }) => {
 		calls.push({
 			agent: agent.id,
 			message,
@@ -190,7 +183,7 @@ function setup(steps: Record<string, Step[]>, files = ["src/theme.ts", "package.
 		return sandbox;
 	});
 	const runner = fakeRunner(steps);
-	const runs = { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {} };
+	const runs = { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {}, terminateSandbox: async () => {} };
 	const deps = { gh: gh.asClient(), runs, openSandbox, runAgent: runner.run };
 	return { gh, sandbox, opened, openSandbox, calls: runner.calls, deps };
 }
@@ -208,9 +201,7 @@ beforeEach(() => {
 describe("triage task", () => {
 	it("asks questions in a marked comment, from a sandbox at the base branch", async () => {
 		const { gh, sandbox, opened, calls, deps } = setup({
-			triage: [
-				{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) },
-			],
+			triage: [{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) }],
 		});
 		gh.add("reporter", "Ideally it remembers my choice.");
 
@@ -354,7 +345,7 @@ describe("triage task", () => {
 		expect(parseMarker(gh.written()[0]?.body ?? "", "spec")?.spec).toEqual(spec());
 	});
 
-	it("fails the stage when the spec is still invalid, posting no spec and closing the sandbox", async () => {
+	it("fails the task when the spec is still invalid, posting no spec and closing the sandbox", async () => {
 		const { gh, sandbox, calls, deps } = setup({
 			triage: [{ output: decision({}) }],
 			"spec-writer": [{ output: draft(invalidSpec()) }, { output: draft(invalidSpec()) }],

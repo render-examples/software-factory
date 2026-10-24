@@ -1,6 +1,6 @@
 /** GitHub App access for the setup scripts and doctor, from injected env and fetch rather than process globals. */
 import { createPrivateKey } from "node:crypto";
-import { appJwt, normalizePrivateKey } from "../../app/github/auth.js";
+import { appJwt, githubApiUrl, normalizePrivateKey } from "../../app/github/auth.js";
 import { GitHubHttp } from "../../app/github/request.js";
 import { GitHubError } from "../../app/github/types.js";
 
@@ -49,10 +49,6 @@ export interface RepoLabel {
 	description: string | null;
 }
 
-export function githubApiUrlFrom(env: Env): string {
-	return (env.GITHUB_API_URL?.trim() || "https://api.github.com").replace(/\/+$/, "");
-}
-
 /** github.com for the public API; for GitHub Enterprise Server, the host the `/api/v3` API is served from. */
 export function githubWebUrl(apiUrl: string): string {
 	const url = new URL(apiUrl);
@@ -84,7 +80,7 @@ export class GitHubApp {
 
 	constructor(private readonly deps: ScriptDeps) {
 		const credentials = appCredentialsFrom(deps.env);
-		this.apiUrl = githubApiUrlFrom(deps.env);
+		this.apiUrl = githubApiUrl(deps.env);
 		this.http = this.client(() => appJwt(credentials));
 	}
 
@@ -108,10 +104,7 @@ export class GitHubApp {
 	/** The App's installation on a repository, or null when it isn't installed there. */
 	async repoInstallation(owner: string, repo: string): Promise<Installation | null> {
 		try {
-			return await this.http.json<Installation>(
-				"GET",
-				`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
-			);
+			return await this.http.json<Installation>("GET", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`);
 		} catch (error) {
 			if (error instanceof GitHubError && error.status === 404) return null;
 			throw error;
@@ -130,7 +123,11 @@ export class GitHubApp {
 
 	/** A client for one repository, authenticated with an installation token. */
 	repo(owner: string, name: string, token: string): RepoClient {
-		return new RepoClient(owner, name, this.client(() => token));
+		return new RepoClient(
+			owner,
+			name,
+			this.client(() => token),
+		);
 	}
 
 	private client(token: () => string): GitHubHttp {

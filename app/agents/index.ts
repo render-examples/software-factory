@@ -1,5 +1,4 @@
-export type { Usage } from "../runner/protocol.js";
-export { type Agent, type AgentSpec, defineAgent, type OutputSchema, type ThinkingLevel } from "./define.js";
+export { type Agent, type AgentSpec, defineAgent, type OutputSchema } from "./define.js";
 export { implementer } from "./implementer/index.js";
 export { prReviewer } from "./pr-reviewer/index.js";
 export { AgentError, type AgentErrorCode, type AgentRun, type RunAgentOptions, runAgent } from "./run.js";

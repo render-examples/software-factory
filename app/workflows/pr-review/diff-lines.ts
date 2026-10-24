@@ -10,7 +10,7 @@ const HUNK = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
  * where a hunk ends, so a removed line that reads `-- x` (shown as `--- x`) is never taken for a file header.
  * Deleted files have no right side; renames are keyed by their new path.
  */
-export function parseDiffLines(diff: string): DiffLines {
+function parseDiffLines(diff: string): DiffLines {
 	const files: DiffLines = new Map();
 	let lines: Set<number> | undefined;
 	let oldLeft = 0;
@@ -51,7 +51,7 @@ export function parseDiffLines(diff: string): DiffLines {
 }
 
 /** The same, from the per-file patches of the list-files API (hunks without file headers), for diffs too large to fetch whole. */
-export function patchLines(files: readonly PullFile[]): DiffLines {
+function patchLines(files: readonly PullFile[]): DiffLines {
 	const lines: DiffLines = new Map();
 	for (const file of files) {
 		if (file.patch === undefined || file.status === "removed") continue;

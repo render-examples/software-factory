@@ -1,15 +1,6 @@
 import { ClientError, Render } from "@renderinc/sdk";
-import { TASKS } from "../config/index.js";
-import {
-	findMarkedComment,
-	type GitHubClient,
-	type IssueComment,
-	type RunState,
-	renderMarker,
-	type StatusMarker,
-} from "../github/index.js";
-
-export type Stage = typeof TASKS.triage | typeof TASKS.specToPr | typeof TASKS.prReview;
+import { findMarkedComment, type GitHubClient, type IssueComment, type RunState, renderMarker, type StatusMarker } from "../github/index.js";
+import { sandboxClient } from "../sandbox/index.js";
 
 export interface Subject {
 	kind: "issue" | "pr";
@@ -21,7 +12,7 @@ export interface StatusLink {
 	url: string;
 }
 
-/** On the issue or PR while a stage runs. */
+/** On the issue or PR while a claiming task runs. */
 export const WORKING_LABEL = "factory:working";
 
 export type StatusGitHub = Pick<
@@ -29,46 +20,55 @@ export type StatusGitHub = Pick<
 	"botLogin" | "listIssueComments" | "createComment" | "updateComment" | "ensureLabel" | "addLabels" | "removeLabel"
 >;
 
-/** The two Workflows calls latest-wins needs, injectable for tests. */
+/** The Render calls that stop a previous run, injectable for tests. */
 export interface RunControl {
 	getTaskRun(taskRunId: string): Promise<{ status: string }>;
 	cancelTaskRun(taskRunId: string): Promise<void>;
+	/** Idempotent: a sandbox that no longer exists counts as terminated. */
+	terminateSandbox(sandboxId: string): Promise<void>;
 }
 
 let defaultRuns: RunControl | undefined;
 
-/** The Workflows API via the SDK. Reads RENDER_API_KEY. */
+/** The Workflows and Sandbox APIs via the SDK. Reads RENDER_API_KEY and RENDER_WORKSPACE_ID. */
 export function workflowRuns(): RunControl {
 	if (!defaultRuns) {
 		const workflows = new Render().workflows;
 		defaultRuns = {
 			getTaskRun: (id) => workflows.getTaskRun(id),
 			cancelTaskRun: (id) => workflows.cancelTaskRun(id),
+			terminateSandbox: (id) => sandboxClient().terminate(id),
 		};
 	}
 	return defaultRuns;
 }
-
-const STAGE_TITLES: Record<string, string> = {
-	[TASKS.triage]: "Triage",
-	[TASKS.specToPr]: "Spec-to-PR",
-	[TASKS.prReview]: "PR Reviewer",
-};
 
 export function subjectName(subject: Subject): string {
 	return `${subject.kind}#${subject.number}`;
 }
 
 /** The bot's status comment on the issue or PR, and the run it records. */
-export async function readStatus(
-	gh: StatusGitHub,
-	number: number,
-): Promise<{ comment: IssueComment; data: StatusMarker } | null> {
+export async function readStatus(gh: StatusGitHub, number: number): Promise<{ comment: IssueComment; data: StatusMarker } | null> {
 	return findMarkedComment(await gh.listIssueComments(number), "status", await gh.botLogin());
 }
 
+/**
+ * Stops the run a status marker records: cancels it if it's still active, then terminates the sandbox it recorded.
+ * Render kills a cancelled task without running its `finally`, so the sandbox would otherwise live until its
+ * timeout. Returns whether the run was still active.
+ */
+export async function stopRun(runs: RunControl, status: StatusMarker): Promise<boolean> {
+	const active = await isRunActive(runs, status.runId);
+	if (active) await cancelActiveRun(runs, status.runId);
+	if (status.sandboxId) {
+		const { sandboxId } = status;
+		await runs.terminateSandbox(sandboxId).catch((error) => warn("could not terminate the stopped run's sandbox", error, { sandboxId }));
+	}
+	return active;
+}
+
 /** Whether a task run is pending or running. A confirmed 404 is finished; unknown state fails closed. */
-export async function isRunActive(runs: RunControl, taskRunId: string): Promise<boolean> {
+async function isRunActive(runs: RunControl, taskRunId: string): Promise<boolean> {
 	try {
 		const { status } = await runs.getTaskRun(taskRunId);
 		return status === "pending" || status === "running";
@@ -80,7 +80,7 @@ export async function isRunActive(runs: RunControl, taskRunId: string): Promise<
 }
 
 /** Cancels a run. A cancel that fails because the run just finished is fine; one that leaves it running throws. */
-export async function cancelActiveRun(runs: RunControl, taskRunId: string): Promise<void> {
+async function cancelActiveRun(runs: RunControl, taskRunId: string): Promise<void> {
 	try {
 		await runs.cancelTaskRun(taskRunId);
 	} catch (error) {
@@ -89,43 +89,40 @@ export async function cancelActiveRun(runs: RunControl, taskRunId: string): Prom
 }
 
 /**
- * Reconciles GitHub after a durable claim: cancels the run the status comment records if it is still active,
- * then records this run for people to see. Postgres claim order, not the comment, decides ownership.
+ * Claims the issue or PR for this run: stops the run the status comment names, then rewrites the comment to name
+ * this run. The comment is the claim, so the caller must confirm it still names this run before relying on it.
  */
 export async function takeOver(opts: {
 	gh: StatusGitHub;
 	subject: Subject;
-	stage: Stage;
+	task: string;
+	title: string;
 	runId: string;
 	runs?: RunControl;
 }): Promise<{ commentId: number; previousRunId: string | null; cancelledPrevious: boolean }> {
-	const { gh, subject, stage, runId } = opts;
+	const { gh, subject, task, title, runId } = opts;
 	const current = await readStatus(gh, subject.number);
-	const previousRunId = current && current.data.runId !== runId ? current.data.runId : null;
-	let cancelledPrevious = false;
-	if (previousRunId) {
-		const runs = opts.runs ?? workflowRuns();
-		if (await isRunActive(runs, previousRunId)) {
-			await cancelActiveRun(runs, previousRunId);
-			cancelledPrevious = true;
-		}
-	}
-	const body = statusBody({ stage, runId, state: "running" });
-	const comment = current
-		? await gh.updateComment(current.comment.id, body)
-		: await gh.createComment(subject.number, body);
+	const previous = current && current.data.runId !== runId ? current.data : null;
+	const cancelledPrevious = previous ? await stopRun(opts.runs ?? workflowRuns(), previous) : false;
+	const body = statusBody({ task, title, runId, state: "running" });
+	const comment = current ? await gh.updateComment(current.comment.id, body) : await gh.createComment(subject.number, body);
 	await addWorkingLabel(gh, subject.number);
-	return { commentId: comment.id, previousRunId, cancelledPrevious };
+	return { commentId: comment.id, previousRunId: previous?.runId ?? null, cancelledPrevious };
 }
 
 export interface StatusUpdate {
 	gh: StatusGitHub;
 	number: number;
 	runId: string;
-	stage: string;
+	/** The task's registered name. */
+	task: string;
+	/** The task's name in the comment, such as "PR Reviewer". */
+	title: string;
 	state: RunState;
 	summary?: string;
 	links?: StatusLink[];
+	/** The run's open sandbox, recorded while it's running so a run that stops this one can terminate it. */
+	sandboxId?: string;
 }
 
 /**
@@ -154,19 +151,19 @@ export async function finishStatus(update: StatusUpdate & { state: Exclude<RunSt
 	return wrote;
 }
 
-function statusBody(s: { stage: string; runId: string; state: RunState; summary?: string; links?: StatusLink[] }): string {
-	const title = STAGE_TITLES[s.stage] ?? s.stage;
+function statusBody(s: Omit<StatusUpdate, "gh" | "number">): string {
 	const detail = s.summary ? `: ${s.summary}` : "";
 	const line = {
-		running: `**${title}** is running (run \`${s.runId}\`)${detail}`,
-		done: `**${title}** finished${detail}`,
-		failed: `**${title}** failed${detail}`,
-		cancelled: `**${title}** was cancelled${detail}`,
-		rejected: `**${title}** did not run${detail}`,
+		running: `**${s.title}** is running (run \`${s.runId}\`)${detail}`,
+		done: `**${s.title}** finished${detail}`,
+		failed: `**${s.title}** failed${detail}`,
+		cancelled: `**${s.title}** was cancelled${detail}`,
+		rejected: `**${s.title}** did not run${detail}`,
 	}[s.state];
 	const links = (s.links ?? []).map((link) => `- [${link.label}](${link.url})`);
 	const footer = s.state === "running" ? [] : [`<sub>run \`${s.runId}\`</sub>`];
-	const marker = renderMarker("status", { runId: s.runId, stage: s.stage, state: s.state, at: new Date().toISOString() });
+	const sandboxId = s.state === "running" ? s.sandboxId : undefined;
+	const marker = renderMarker("status", { runId: s.runId, stage: s.task, title: s.title, state: s.state, at: new Date().toISOString(), sandboxId });
 	return [line, ...(links.length ? ["", ...links] : []), ...(footer.length ? ["", ...footer] : []), "", marker].join("\n");
 }
 

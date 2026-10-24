@@ -145,7 +145,7 @@ export class GitHubHttp {
  * How long to wait before retrying, or null when the response isn't worth retrying. Retries 5xx, 429, and
  * rate-limited 403s (retry-after, x-ratelimit-remaining: 0, or a secondary rate limit message).
  */
-export function retryDelay(response: Response, body: string, attempt: number, now = Date.now()): number | null {
+function retryDelay(response: Response, body: string, attempt: number, now = Date.now()): number | null {
 	const { status, headers } = response;
 	const retryAfter = parseRetryAfter(headers.get("retry-after"), now);
 	const exhausted = headers.get("x-ratelimit-remaining") === "0";

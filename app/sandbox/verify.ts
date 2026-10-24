@@ -3,27 +3,22 @@ import type { SandboxApi, SandboxClient } from "./client.js";
 import { errorMessage } from "./shell.js";
 import { APP_DIR } from "./types.js";
 
-/** Early access supports only these two policies. */
-export type NetworkPolicyType = "allow-all" | "deny-all";
-
-type WirePolicy = NonNullable<NonNullable<Parameters<SandboxApi["create"]>[0]>["networkPolicy"]>;
+type NetworkPolicy = NonNullable<NonNullable<Parameters<SandboxApi["create"]>[0]>["networkPolicy"]>;
 
 /**
- * The policy in the shape the API accepts, `{ type }`. SDK 1.2.0's types still describe the older
- * `{ default, allowedDomains }` shape.
+ * Allow-all egress for every sandbox, in the shape the API accepts, `{ type }`. SDK 1.2.0's types still describe
+ * the older `{ default, allowedDomains }` shape.
  */
-export function wirePolicy(type: NetworkPolicyType): WirePolicy {
-	return { type } as unknown as WirePolicy;
-}
+export const ALLOW_ALL_EGRESS = { type: "allow-all" } as unknown as NetworkPolicy;
 
-export const SandboxInfo = z.object({
+const SandboxInfo = z.object({
 	runAs: z.string().min(1),
 	uid: z.number().int(),
 	node: z.string(),
 	runnerNonDumpable: z.boolean(),
 	selfTest: z.looseObject({ ok: z.literal(true) }),
 });
-export type SandboxInfo = z.infer<typeof SandboxInfo>;
+type SandboxInfo = z.infer<typeof SandboxInfo>;
 
 /** Runs verify.sh, which fails unless the sandbox is as built, and parses the JSON line it prints last. */
 export async function verifySandbox(client: SandboxClient, id: string, opts: { waitReady?: boolean } = {}): Promise<SandboxInfo> {

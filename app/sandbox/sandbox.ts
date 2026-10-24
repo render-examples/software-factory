@@ -17,17 +17,8 @@ import {
 	type SnapshotDeps,
 	snapshotName,
 } from "./snapshot.js";
-import {
-	APP_DIR,
-	type OpenedSandbox,
-	REPO_DIR,
-	RUN_AS,
-	type Sandbox,
-	type SandboxRef,
-	SCRATCH_DIR,
-	type SnapshotManifest,
-} from "./types.js";
-import { verifySandbox, wirePolicy } from "./verify.js";
+import { APP_DIR, type OpenedSandbox, REPO_DIR, RUN_AS, type Sandbox, type SandboxRef, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
+import { ALLOW_ALL_EGRESS, verifySandbox } from "./verify.js";
 
 const SnapshotManifestSchema = z.object({
 	repo: z.string(),
@@ -100,7 +91,7 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 }
 
 /**
- * Opens a sandbox, runs `fn` with it, and closes it whatever happens. Every stage uses this, so no stage can forget
+ * Opens a sandbox, runs `fn` with it, and closes it whatever happens. Every task uses this, so no task can forget
  * to close one; the provider-side timeout covers a Workflows process that dies before `finally` runs.
  */
 export async function withSandbox<S extends Sandbox, T>(open: () => Promise<S>, fn: (sandbox: S) => Promise<T>): Promise<T> {
@@ -134,7 +125,7 @@ async function createFromSnapshot(client: SandboxClient, repo: RepoContext, deps
 			await client.call(() =>
 				client.api.create({
 					snapshotName: name,
-					networkPolicy: wirePolicy("allow-all"),
+					networkPolicy: ALLOW_ALL_EGRESS,
 					timeoutSeconds: config.sandbox.timeoutSeconds,
 				}),
 			)

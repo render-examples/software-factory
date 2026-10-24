@@ -4,7 +4,7 @@ import { errorMessage, type Reporter } from "./output.js";
 import { LABELS, WEBHOOK_PATH } from "./requirements.js";
 
 /** `<gateway>/webhooks/github` from the gateway's base URL (a pasted full webhook URL is accepted too). */
-export function webhookUrl(gatewayUrl: string): string {
+function webhookUrl(gatewayUrl: string): string {
 	let url: URL;
 	try {
 		url = new URL(gatewayUrl.trim());

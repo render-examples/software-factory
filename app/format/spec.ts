@@ -14,10 +14,7 @@ export function renderSpecSections(spec: Spec): string {
 	section("Problem", sanitize(spec.problem));
 	section("Goals", bullets(spec.goals));
 	section("Non-goals", bullets(spec.nonGoals));
-	section(
-		"Acceptance criteria",
-		spec.acceptanceCriteria.map((c) => `- [ ] **${sanitizeInline(c.id)}**: ${sanitizeInline(c.text)} _(${c.verification})_`).join("\n"),
-	);
+	section("Acceptance criteria", acceptanceChecklist(spec));
 	section("Approach", sanitize(spec.approach));
 	section("Affected areas", spec.affectedAreas.map((a) => `- ${codeSpan(a.path)}: ${sanitizeInline(a.change)}`).join("\n"));
 	section("Test plan", sanitize(spec.testPlan));
@@ -25,6 +22,11 @@ export function renderSpecSections(spec: Spec): string {
 	section("Assumptions", bullets(spec.assumptions));
 	section("Open questions", bullets(spec.openQuestions));
 	return sections.join("\n\n");
+}
+
+/** The acceptance criteria as a Markdown task list. */
+export function acceptanceChecklist(spec: Spec): string {
+	return spec.acceptanceCriteria.map((c) => `- [ ] **${sanitizeInline(c.id)}**: ${sanitizeInline(c.text)} _(${c.verification})_`).join("\n");
 }
 
 export interface RenderSpecOptions {
@@ -36,7 +38,6 @@ export interface RenderSpecOptions {
 	changeSummary?: string;
 	/** Set when a revision removed the approval label, so the maintainer knows to reapply it. */
 	approvalRemoved?: boolean;
-	maxChars?: number;
 }
 
 /** The spec comment's visible body. The caller appends the hidden marker that carries the spec as JSON. */
@@ -46,7 +47,8 @@ export function renderSpec(spec: Spec, opts: RenderSpecOptions = {}): string {
 
 	const extras: string[] = [];
 	if (opts.warnings && opts.warnings.length > 0) extras.push(`### Warnings\n\n${truncate(bullets(opts.warnings), 4000)}`);
-	if (opts.changeSummary?.trim()) extras.push(`### Changes${opts.version ? ` in v${opts.version}` : ""}\n\n${truncate(sanitize(opts.changeSummary), 4000)}`);
+	if (opts.changeSummary?.trim())
+		extras.push(`### Changes${opts.version ? ` in v${opts.version}` : ""}\n\n${truncate(sanitize(opts.changeSummary), 4000)}`);
 	if (opts.approvalRemoved) extras.push(`> **Note:** the ${approve} label was removed because the spec changed. Reapply it to approve this version.`);
 	const tail = [
 		"",
@@ -55,5 +57,5 @@ export function renderSpec(spec: Spec, opts: RenderSpecOptions = {}): string {
 		`**Next step:** reply to this issue with feedback, or apply the ${approve} label to approve this version.`,
 	].join("\n\n");
 
-	return fitAround(head, renderSpecSections(spec), tail, opts.maxChars ?? SPEC_BODY_MAX_CHARS);
+	return fitAround(head, renderSpecSections(spec), tail, SPEC_BODY_MAX_CHARS);
 }

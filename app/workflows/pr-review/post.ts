@@ -1,11 +1,11 @@
 import type { Review } from "../../schemas/index.js";
 import { type RenderReviewOptions, renderReview } from "../../format/index.js";
-import { type GitHubClient, GitHubError, parseMarker, type Review as PostedReview, renderMarker } from "../../github/index.js";
+import { type GitHubClient, GitHubError, parseMarker, type PullRequestReview, renderMarker } from "../../github/index.js";
 
-export type ReviewGitHub = Pick<GitHubClient, "botLogin" | "listReviews" | "createReview">;
+type ReviewGitHub = Pick<GitHubClient, "botLogin" | "listReviews" | "createReview">;
 
 /** The bot's earlier review of this head commit, found by its marker. Anyone can paste a marker, so only the bot's count. */
-export async function findReview(gh: ReviewGitHub, pr: number, headSha: string): Promise<PostedReview | null> {
+export async function findReview(gh: ReviewGitHub, pr: number, headSha: string): Promise<PullRequestReview | null> {
 	const bot = (await gh.botLogin()).toLowerCase();
 	const reviews = await gh.listReviews(pr);
 	return reviews.find((r) => r.author.login.toLowerCase() === bot && parseMarker(r.body, "review")?.headSha === headSha) ?? null;
@@ -24,7 +24,7 @@ export async function postReview(
 		review: Review;
 		render: RenderReviewOptions;
 	},
-): Promise<{ posted: PostedReview; inlineComments: number }> {
+): Promise<{ posted: PullRequestReview; inlineComments: number }> {
 	const marker = renderMarker("review", {
 		headSha: args.headSha,
 		runId: args.runId,

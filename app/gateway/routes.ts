@@ -1,6 +1,6 @@
 import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
-import { CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/tasks.js";
+import { CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
 
 export type Route =
 	| {
@@ -77,8 +77,8 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 	const actor = sender?.login ?? "";
 	const start = (task: TaskName, schema: ZodType, input: Record<string, unknown>, subject?: string, idempotencyKey = deliveryId): Route => {
 		const parsed = schema.safeParse({ ...base, ...input });
-		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, ...(subject ? { subject } : {}) };
-		return { kind: "start", task, input: parsed.data as object, idempotencyKey, ...(subject ? { subject } : {}) };
+		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, subject };
+		return { kind: "start", task, input: parsed.data as object, idempotencyKey, subject };
 	};
 
 	switch (event) {

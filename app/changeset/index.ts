@@ -1,24 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { config, type RepoContext } from "../config/index.js";
-import {
-	type GitDataClient,
-	GitDataError,
-	type GitIdentity,
-	gitData as gitDataClient,
-	type TreeEntry,
-} from "../github/git-data.js";
+import { type GitDataClient, GitHubError, type GitIdentity, gitData as gitDataClient, type TreeEntry } from "../github/index.js";
 import { SAFE_REF, shq } from "../sandbox/shell.js";
 import { APP_DIR, REPO_DIR, type Sandbox } from "../sandbox/types.js";
 import { type ChangedFile, checkChanges, type PublishLimits, parseChangesFile, type RefusalReason } from "./changes.js";
 
-export {
-	blobSha,
-	type ChangedFile,
-	type ChangeStatus,
-	type ChangesFile,
-	type PublishLimits,
-	type RefusalReason,
-} from "./changes.js";
+export { blobSha, type ChangedFile, type RefusalReason } from "./changes.js";
 
 /** `bash ${COLLECT_CHANGES_SCRIPT} <repo_dir> <base_sha> <out_file> <max_changed_files> <max_file_bytes>`; see the script. */
 const COLLECT_CHANGES_SCRIPT = `${APP_DIR}/collect-changes.sh`;
@@ -122,8 +109,7 @@ async function collect(sandbox: Sandbox, baseSha: string, limits: PublishLimits,
 		throw new Error(`collect-changes.sh failed (exit ${result.exitCode}): ${result.stderr.trim().slice(-500)}`);
 	}
 	const reported = result.stdout.trim();
-	if (!/^\d{1,15}$/.test(reported))
-		throw new Error(`collect-changes.sh printed "${reported.slice(0, 80)}", not a size`);
+	if (!/^\d{1,15}$/.test(reported)) throw new Error(`collect-changes.sh printed "${reported.slice(0, 80)}", not a size`);
 	const bytes = Number(reported);
 	const maxBytes = limits.maxChangedFiles * (limits.maxFileBytes + PER_FILE_OVERHEAD) + 4096;
 	if (bytes > maxBytes) throw new Error(`Changes file is ${bytes} bytes, more than the ${maxBytes} the limits allow`);
@@ -142,17 +128,9 @@ function treeEntries(files: ChangedFile[]): TreeEntry[] {
 	const deletions = files.filter((f) => f.sha === null).sort(byPath);
 	const writes = files.filter((f) => f.sha !== null).sort(byPath);
 	return [
-		...deletions.map(
-			(f): TreeEntry => ({
-				path: f.path,
-				mode: "100644",
-				type: "blob",
-				sha: null,
-			}),
-		),
+		...deletions.map((f): TreeEntry => ({ path: f.path, mode: "100644", type: "blob", sha: null })),
 		...writes.map((f): TreeEntry => {
-			if (f.mode !== "100644" && f.mode !== "100755")
-				throw new Error(`Refusing to write ${f.path} with mode ${f.mode}`);
+			if (f.mode !== "100644" && f.mode !== "100755") throw new Error(`Refusing to write ${f.path} with mode ${f.mode}`);
 			return { path: f.path, mode: f.mode, type: "blob", sha: f.sha };
 		}),
 	];
@@ -176,7 +154,7 @@ async function moveBranch(
 			try {
 				await git.createRef(branch, commitSha);
 			} catch (err) {
-				if (err instanceof GitDataError && err.status === 422) continue;
+				if (err instanceof GitHubError && err.status === 422) continue;
 				throw err;
 			}
 		} else if (base.has(current)) {
@@ -194,7 +172,7 @@ async function moveBranch(
 }
 
 /** A branch name git and GitHub both accept, with nothing that reads as a refspec, option, or revision. */
-export function isSafeBranch(branch: string): boolean {
+function isSafeBranch(branch: string): boolean {
 	return (
 		SAFE_REF.test(branch) &&
 		branch.length <= 200 &&

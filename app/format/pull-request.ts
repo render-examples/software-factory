@@ -1,4 +1,5 @@
 import type { Implementation, Spec } from "../schemas/index.js";
+import { acceptanceChecklist } from "./spec.js";
 import { BODY_MAX_CHARS, bullets, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
 /** GitHub's limit on a pull request title. */
@@ -24,17 +25,12 @@ export interface PullRequestBodyInput {
 	verification?: readonly VerifyResult[];
 	/** Link to the spec comment. */
 	specUrl?: string;
-	maxChars?: number;
 }
 
 /** The draft PR's body. The caller appends its hidden marker. */
 export function pullRequestBody(input: PullRequestBodyInput): string {
 	const { spec, implementation } = input;
-	const sections: string[] = [`## Summary\n\n${sanitize(implementation.summary)}`];
-
-	sections.push(
-		`## Acceptance criteria\n\n${spec.acceptanceCriteria.map((c) => `- [ ] **${sanitizeInline(c.id)}**: ${sanitizeInline(c.text)} _(${c.verification})_`).join("\n")}`,
-	);
+	const sections: string[] = [`## Summary\n\n${sanitize(implementation.summary)}`, `## Acceptance criteria\n\n${acceptanceChecklist(spec)}`];
 
 	if (input.verification) {
 		sections.push(`## Verification\n\n${verificationTable(input.verification)}`);
@@ -52,7 +48,7 @@ export function pullRequestBody(input: PullRequestBodyInput): string {
 		`Closes #${input.issue}.\n\n`,
 		sections.join("\n\n"),
 		`${links}\n\n---\n\n_Opened as a draft by the factory. Review it before marking it ready._`,
-		input.maxChars ?? BODY_MAX_CHARS,
+		BODY_MAX_CHARS,
 	);
 }
 

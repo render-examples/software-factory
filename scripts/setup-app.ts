@@ -9,16 +9,10 @@
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";
+import { githubApiUrl } from "../app/github/auth.js";
 import { writeEnvFile } from "./lib/env-file.js";
-import { githubApiUrlFrom, githubWebUrl } from "./lib/github.js";
-import {
-	buildManifest,
-	exchangeManifestCode,
-	formPage,
-	newState,
-	registrationUrl,
-	startCallbackServer,
-} from "./lib/manifest.js";
+import { githubWebUrl } from "./lib/github.js";
+import { buildManifest, exchangeManifestCode, formPage, newState, registrationUrl, startCallbackServer } from "./lib/manifest.js";
 import { bold, dim, errorMessage, green, yellow } from "./lib/output.js";
 
 const { values } = parseArgs({
@@ -36,7 +30,7 @@ const name = values.name?.trim() || `software-factory-${randomBytes(3).toString(
 const port = values.port ? Number(values.port) : 0;
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
 
-const apiUrl = githubApiUrlFrom(process.env);
+const apiUrl = githubApiUrl();
 const repos = Object.keys(config.repos);
 const state = newState();
 const action = registrationUrl(githubWebUrl(apiUrl), state, org);

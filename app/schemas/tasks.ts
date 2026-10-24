@@ -6,18 +6,18 @@ const RepoInput = z.object({
 	installationId: z.number().int().positive(),
 });
 
-const Actor = z.string().min(1);
+const ActorLogin = z.string().min(1);
 
 export const TriageInput = RepoInput.extend({
 	issue: z.number().int().positive(),
-	actor: Actor,
+	actor: ActorLogin,
 	/** Set when a human reply started this round. */
 	commentId: z.number().int().positive().optional(),
 });
 
 export const SpecToPrInput = RepoInput.extend({
 	issue: z.number().int().positive(),
-	actor: Actor,
+	actor: ActorLogin,
 	/** When the approval label was applied (ISO 8601); the spec must not have changed after it. */
 	labeledAt: z.iso.datetime({ offset: true }),
 });
@@ -25,14 +25,14 @@ export const SpecToPrInput = RepoInput.extend({
 export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
 	headSha: z.string().regex(/^[0-9a-f]{40}$/),
-	actor: Actor,
+	actor: ActorLogin,
 });
 
 export const CancelInput = RepoInput.extend({
 	/** Issue or PR number. */
 	number: z.number().int().positive(),
 	kind: z.enum(["issue", "pr"]),
-	actor: Actor,
+	actor: ActorLogin,
 });
 
 export const RefreshSnapshotInput = RepoInput.extend({

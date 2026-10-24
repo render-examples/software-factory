@@ -6,8 +6,6 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
-	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
-	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
@@ -70,7 +68,6 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 			id: nextId++,
 			body,
 			author: { login, type: "Bot" },
-			performedViaApp: null,
 			createdAt: updatedAt,
 			updatedAt,
 			htmlUrl: `https://github.com/${REPO}/issues/${ISSUE}#c${nextId}`,
@@ -151,15 +148,13 @@ function fakeAgents(steps: { implementer?: AgentStep[] }) {
 	const queues: Record<string, AgentStep[]> = {
 		implementer: steps.implementer ?? [{ output: implementation() }],
 	};
-	const runAgent = vi.fn(
-		async (agent: { id: string }, message: string, opts: Record<string, unknown>) => {
-			calls.push({ agent: agent.id, message, opts });
-			const step = queues[agent.id]?.shift();
-			if (!step) throw new Error(`unexpected ${agent.id} call`);
-			if (step instanceof AgentError) throw step;
-			return { output: step.output, costUsd: 0, usage: {}, turns: 1 };
-		},
-	);
+	const runAgent = vi.fn(async (agent: { id: string }, message: string, opts: Record<string, unknown>) => {
+		calls.push({ agent: agent.id, message, opts });
+		const step = queues[agent.id]?.shift();
+		if (!step) throw new Error(`unexpected ${agent.id} call`);
+		if (step instanceof AgentError) throw step;
+		return { output: step.output, costUsd: 0, usage: {}, turns: 1 };
+	});
 	return { runAgent: runAgent as unknown as SpecToPrDeps["runAgent"], calls };
 }
 
@@ -193,7 +188,7 @@ function setup(
 	});
 	const deps: SpecToPrDeps = {
 		gh: github.gh as unknown as GitHubClient,
-		runs: { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {} },
+		runs: { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {}, terminateSandbox: async () => {} },
 		gitData: git,
 		openSandbox,
 		runAgent: agents.runAgent,

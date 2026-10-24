@@ -11,7 +11,7 @@ flowchart LR
   GitHub -->|signed webhook| Gateway
   Gateway -->|start task| Workflows
   Gateway -.->|delivery telemetry| Postgres
-  Workflows -->|run claim| Postgres
+  Workflows -.->|run telemetry| Postgres
   Workflows -->|restore and execute| Sandbox
   Sandbox -->|proposed result| Workflows
   Workflows -->|validated writes| GitHub
@@ -22,11 +22,12 @@ flowchart LR
 The Blueprint creates three persistent resources:
 
 - **Gateway** verifies GitHub webhooks and maps each delivery to one task.
-- **Workflows** runs stages, agents, cancellation, snapshot refresh, and
+- **Workflows** runs the claiming tasks, agents, cancellation, snapshot refresh, and
   GitHub publishing.
-- **Postgres** orders competing runs and stores best-effort telemetry.
+- **Postgres** stores best-effort telemetry. It's optional: without
+  `DATABASE_URL`, events are dropped and nothing else changes.
 
-Each stage receives a fresh Sandbox restored from a repository snapshot.
+Each claiming task receives a fresh Sandbox restored from a repository snapshot.
 Render Workflows owns task state and timeouts. GitHub owns the human
 conversation and artifacts. The application has no custom queue, dispatcher,
 heartbeat loop, or maintenance cron.
@@ -39,7 +40,7 @@ specification --factory:spec-approved--> verified draft PR
 pull request --factory:pr-review--> COMMENT review
 ```
 
-The stages never chain automatically. The factory cannot approve, request
+The tasks never chain automatically. The factory cannot approve, request
 changes, mark ready, or merge.
 
 ### Triage
@@ -67,31 +68,35 @@ tests.
 |---|---|
 | Task status, timing, input, and result | Render Workflows |
 | Issues, labels, specifications, PRs, and reviews | GitHub |
-| Current run for an issue or PR | Latest Postgres `run.claimed` event |
-| User-visible run status | App-authored GitHub marker and working label |
+| Current run for an issue or PR, and its Sandbox | App-authored status comment marker |
+| User-visible run status | The same status comment, and the working label |
 | Prepared repository filesystem | Render Sandbox snapshot |
-| Delivery, run, agent, and cost history | Postgres events |
+| Delivery, run, agent, and cost history | Postgres events (optional) |
 
-Only `run.claimed` is control state in Postgres. Failure to append or check a
-claim stops a stage. Other events are best-effort telemetry and never drive
-stage behavior.
+Nothing reads Postgres back to decide what a task does.
 
 ## Idempotency and competing runs
 
 The system handles retries and overlap at three levels:
 
 1. GitHub's delivery ID is the Workflows idempotency key.
-2. The newest append-only `run.claimed` event is a fencing token.
+2. The status comment is the claim: a claiming task works only while the
+   comment names its run.
 3. App-authored markers let writes update or reuse existing artifacts.
 
-A replaced task may finish an in-flight model call, but it rechecks ownership
-before progress updates and durable writes. Publishing also uses a
-deterministic branch and refuses to overwrite human commits.
+A new trigger takes over by cancelling the run the status comment names,
+terminating that run's Sandbox, and rewriting the comment to name itself.
+Render kills a cancelled task run's process within about a second, so a
+replaced run can't keep writing. Two triggers that arrive together both take
+over; the run whose status write lands last keeps the claim, and the other
+stops at its next checkpoint. Every claiming task checks the claim before
+progress updates and durable writes. Publishing also uses a deterministic
+branch and refuses to overwrite human commits.
 
 ## Sandbox lifecycle
 
 A base-branch push builds a repository snapshot containing runtime tools, a
-base checkout, and installed dependencies. Every stage:
+base checkout, and installed dependencies. Every claiming task:
 
 1. restores the newest snapshot;
 2. verifies its permissions and process hardening;
@@ -101,8 +106,10 @@ base checkout, and installed dependencies. Every stage:
 6. runs agents and repository commands as an unprivileged user; and
 7. closes the Sandbox in `finally`.
 
-The provider-side timeout is a backstop if the Workflows process dies before
-cleanup.
+A cancelled task run is killed without reaching `finally`, so each claiming
+task records its Sandbox in the status comment, and the run or `/factory cancel`
+that stops it terminates the Sandbox. The provider-side timeout is the backstop
+for anything else that dies before cleanup.
 
 ## Agent contract
 
@@ -169,7 +176,7 @@ Changes must preserve these properties:
 7. End automation at a draft PR and COMMENT review.
 8. Implement the exact specification that was approved.
 9. Put a timeout and `finally` cleanup around every Sandbox.
-10. Use Postgres only for cross-task ownership, never as a copy of GitHub state.
+10. Keep Postgres telemetry-only: no task behavior may depend on it.
 
 Tests pin these invariants and each built-in agent's tool authority.
 
@@ -181,7 +188,8 @@ Tests pin these invariants and each built-in agent's tool authority.
 - PR Reviewer executes configured verification against the labeled PR code.
 - Prompt injection can influence specs, code, and reviews.
 - The Render API key may have workspace-wide authority.
-- Stages cannot proceed safely while Postgres ownership checks are unavailable.
+- The claim relies on reading the status comment back right after writing it.
+  Two triggers within a second of each other can both do work before one stops.
 - Workflows inputs and results are visible to users with access to the service.
 
 Use a dedicated Render workspace and spend-capped model key when stronger
@@ -192,8 +200,8 @@ isolation is required.
 Start with these files:
 
 1. [`app/gateway/routes.ts`](../app/gateway/routes.ts) — event routing.
-2. [`app/runs/with-run.ts`](../app/runs/with-run.ts) — shared run lifecycle.
-3. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts) — one complete stage.
+2. [`app/claims/claim.ts`](../app/claims/claim.ts) — the claim lifecycle every claiming task shares.
+3. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts) — one complete claiming task.
 4. [`app/agents/run.ts`](../app/agents/run.ts) — Sandbox agent execution.
 5. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
 6. [`app/workflows/spec-to-pr/index.ts`](../app/workflows/spec-to-pr/index.ts) — implementation and verification.

@@ -225,7 +225,7 @@ describe("buildSnapshot", () => {
 		});
 		expect(built.manifest.sha).toBe(BASE_SHA);
 
-		// Stage archive: scripts plus the runner bundle, uploaded as an opaque .tgz.
+		// Staging archive: scripts plus the runner bundle, uploaded as an opaque .tgz.
 		const stage = fake.calls.find((c) => c.op === "upload" && c.path === "/tmp/factory-stage/stage.tgz") as {
 			data: Buffer;
 			contentType?: string;

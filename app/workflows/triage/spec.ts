@@ -2,7 +2,7 @@ import { config } from "../../config/index.js";
 import { type SpecDraft, validateSpec } from "../../schemas/index.js";
 import { renderSpec, sanitizeInline, truncate } from "../../format/index.js";
 import { contentHash, type GitHubClient, type Issue, renderMarker } from "../../github/index.js";
-import { RunError, type RunResult } from "../../runs/index.js";
+import { ExpectedFailure, type Outcome } from "../../claims/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
 import type { TriageAgents } from "./agents.js";
 import { type CurrentSpec, retryMessage } from "./thread.js";
@@ -17,7 +17,7 @@ export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message:
 		({ errors, warnings } = validateSpec(draft.spec, existing));
 	}
 	if (errors.length > 0) {
-		throw new RunError(truncate(`the spec failed validation twice: ${errors.map(sanitizeInline).join("; ")}`, 1500), "spec_invalid");
+		throw new ExpectedFailure(truncate(`the spec failed validation twice: ${errors.map(sanitizeInline).join("; ")}`, 1500), "spec_invalid");
 	}
 	return { draft, warnings };
 }
@@ -38,10 +38,14 @@ export async function publishSpec(
 	issue: Issue,
 	current: CurrentSpec | null,
 	{ draft, warnings }: { draft: SpecDraft; warnings: string[] },
-): Promise<RunResult> {
+): Promise<Outcome> {
 	const hash = contentHash(draft.spec);
 	if (current && current.hash === hash) {
-		return { outcome: "unchanged", summary: `the spec is unchanged (v${current.version}).`, links: [specLink(current.version, current.comment.htmlUrl)] };
+		return {
+			outcome: "unchanged",
+			summary: `the spec is unchanged (v${current.version}).`,
+			links: [specLink(current.version, current.comment.htmlUrl)],
+		};
 	}
 	const version = (current?.version ?? 0) + 1;
 	const approvalRemoved = issue.labels.includes(config.labels.specApproved);

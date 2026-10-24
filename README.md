@@ -27,8 +27,8 @@ pull request --factory:pr-review--> COMMENT review
   performance, and tests.
 
 GitHub remains where people discuss and approve work. Render Workflows owns
-durable execution. Postgres orders competing runs. Sandboxes contain
-model-directed tools and repository code.
+durable execution. Sandboxes contain model-directed tools and repository
+code. Postgres is optional and only records telemetry.
 
 ## Deploy
 
@@ -73,7 +73,7 @@ before deploying against private code.
 
 ## Limits
 
-- Stages never chain automatically.
+- Tasks never chain automatically.
 - Verification is command-based; browser testing is not built in.
 - Turn limits and timeouts bound agents, but the factory has no hard dollar
   budget.
@@ -88,7 +88,7 @@ before deploying against private code.
 - [Configuration](docs/configuration.md) — repositories, labels, models, and limits.
 - [Operations](docs/operations.md) — logs, cancellation, snapshots, and failures.
 - [Architecture](docs/architecture.md) — state ownership and trust boundaries.
-- [Contributing](CONTRIBUTING.md) — local development, agents, stages, and triggers.
+- [Contributing](CONTRIBUTING.md) — local development, agents, tasks, and triggers.
 - [Design notes](docs/design-notes.md) — reusable patterns behind the system.
 
 ## License

@@ -67,10 +67,7 @@ export class SandboxClient {
 	}
 
 	/** Paces every API call and retries the given statuses (429 by default, which is never processed server-side). */
-	async call<T>(
-		fn: () => Promise<T>,
-		opts: { retryOn?: readonly number[]; attempts?: number; signal?: AbortSignal } = {},
-	): Promise<T> {
+	async call<T>(fn: () => Promise<T>, opts: { retryOn?: readonly number[]; attempts?: number; signal?: AbortSignal } = {}): Promise<T> {
 		const retryOn = opts.retryOn ?? [429];
 		const attempts = opts.attempts ?? 5;
 		for (let attempt = 1; ; attempt++) {

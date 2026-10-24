@@ -6,8 +6,6 @@ vi.mock("../app/events/index.js", () => ({
 	emit: async (event: FactoryEvent) => {
 		events.push(event);
 	},
-	claimRun: async (input: { runId: string; repo: string; subject: string }) => ({ id: "1", ...input }),
-	isCurrentRun: async () => true,
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
@@ -16,7 +14,7 @@ const { renderMarker, parseMarker } = await import("../app/github/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type IssueComment = import("../app/github/index.js").IssueComment;
 type Permission = import("../app/github/index.js").Permission;
-const { finishStatus, readStatus, takeOver, WORKING_LABEL, withRun } = await import("../app/runs/index.js");
+const { finishStatus, readStatus, takeOver, WORKING_LABEL, withClaim } = await import("../app/claims/index.js");
 
 const BOT = "software-factory[bot]";
 const REPO_NAME = Object.keys(config.repos)[0];
@@ -52,7 +50,6 @@ class FakeGitHub {
 			id: this.nextId++,
 			body,
 			author: { login, type: login.endsWith("[bot]") ? "Bot" : "User" },
-			performedViaApp: null,
 			createdAt: "2026-01-01T00:00:00Z",
 			updatedAt: "2026-01-01T00:00:00Z",
 			htmlUrl: "",
@@ -61,8 +58,8 @@ class FakeGitHub {
 		return { ...comment };
 	}
 
-	addStatus(runId: string, state: "running" | "done" | "rejected" = "running", login = BOT): IssueComment {
-		return this.add(login, `status\n\n${renderMarker("status", { runId, stage: "triage", state })}`);
+	addStatus(runId: string, state: "running" | "done" | "rejected" = "running", sandboxId?: string): IssueComment {
+		return this.add(BOT, `status\n\n${renderMarker("status", { runId, stage: "triage", state, sandboxId })}`);
 	}
 
 	asClient(): GitHubClient {
@@ -82,16 +79,10 @@ class FakeRuns {
 		this.cancelled.push(id);
 		this.statuses[id] = "canceled";
 	});
-}
-
-class FakeCoordination {
-	current = true;
-	private nextId = 1;
-	claim = vi.fn(async (input: { runId: string; repo: string; subject: string }) => ({
-		id: String(this.nextId++),
-		...input,
-	}));
-	isCurrent = vi.fn(async () => this.current);
+	terminated: string[] = [];
+	terminateSandbox = vi.fn(async (id: string) => {
+		this.terminated.push(id);
+	});
 }
 
 const subject = { kind: "issue" as const, number: 12 };
@@ -101,12 +92,13 @@ beforeEach(() => {
 });
 
 describe("takeOver", () => {
-	it("cancels an active previous run and records the new run in the same comment", async () => {
+	it("cancels an active previous run, terminates its sandbox, and records the new run in the same comment", async () => {
 		const gh = new FakeGitHub();
-		const existing = gh.addStatus("trn-old");
+		const existing = gh.addStatus("trn-old", "running", "sbx-old");
 		const runs = new FakeRuns({ "trn-old": "running" });
-		const result = await takeOver({ gh, subject, stage: "triage", runId: "trn-new", runs });
+		const result = await takeOver({ gh, subject, task: "triage", title: "Triage", runId: "trn-new", runs });
 		expect(runs.cancelled).toEqual(["trn-old"]);
+		expect(runs.terminated).toEqual(["sbx-old"]);
 		expect(result).toEqual({ commentId: existing.id, previousRunId: "trn-old", cancelledPrevious: true });
 		expect(gh.comments).toHaveLength(1);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-new", state: "running", stage: "triage" });
@@ -119,13 +111,13 @@ describe("setStatus and finishStatus", () => {
 		const gh = new FakeGitHub();
 		gh.addStatus("trn-new");
 		gh.labels.add(WORKING_LABEL);
-		expect(await finishStatus({ gh, number: 12, runId: "trn-old", stage: "triage", state: "failed", summary: "x" })).toBe(false);
+		expect(await finishStatus({ gh, number: 12, runId: "trn-old", task: "triage", title: "Triage", state: "failed", summary: "x" })).toBe(false);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.runId).toBe("trn-new");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
 	});
 });
 
-describe("withRun", () => {
+describe("withClaim", () => {
 	const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-root" } };
 
 	it("rejects an actor without permission before taking over", async () => {
@@ -133,7 +125,7 @@ describe("withRun", () => {
 		gh.permissions = { reader: "read" };
 		const runs = new FakeRuns();
 		const fn = vi.fn();
-		const outcome = await withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "reader", gh: gh.asClient(), runs }, fn);
+		const outcome = await withClaim(ctx, { repo: REPO, subject, task: "triage", title: "Triage", actor: "reader", gh: gh.asClient(), runs }, fn);
 		expect(fn).not.toHaveBeenCalled();
 		expect(outcome).toMatchObject({ state: "rejected", outcome: "permission_denied", traceId: "trn-root", runId: "trn-run" });
 		expect(gh.comments[0]?.body).toContain("did not run: @reader needs `write` permission");
@@ -143,31 +135,25 @@ describe("withRun", () => {
 		expect(events.at(-1)?.payload).toMatchObject({ state: "rejected" });
 	});
 
-	it("runs the stage and records events with the trace id and outcome", async () => {
+	it("runs the work and records events with the trace id and outcome", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { maintainer: "maintain" };
 		gh.addStatus("trn-prev");
 		const runs = new FakeRuns({ "trn-prev": "running" });
-		const coordination = new FakeCoordination();
-		const outcome = await withRun(
+		const outcome = await withClaim(
 			ctx,
-			{ repo: REPO, subject, stage: "triage", actor: "maintainer", gh: gh.asClient(), runs, coordination },
+			{ repo: REPO, subject, task: "triage", title: "Triage", actor: "maintainer", gh: gh.asClient(), runs },
 			async (run) => {
 				expect(run.runId).toBe("trn-run");
 				expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+				await run.recordSandbox({ id: "sbx-run" } as never);
+				expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-run", state: "running", sandboxId: "sbx-run" });
 				await run.progress("reading the issue");
 				return { outcome: "asked-questions", summary: "asked 2 questions" };
 			},
 		);
 		expect(runs.cancelled).toEqual(["trn-prev"]);
-		expect(coordination.claim).toHaveBeenCalledWith({
-			traceId: "trn-root",
-			runId: "trn-run",
-			repo: REPO.fullName,
-			subject: "issue#12",
-			stage: "triage",
-			actor: "maintainer",
-		});
+		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.sandboxId).toBeUndefined();
 		expect(outcome).toEqual({ state: "done", outcome: "asked-questions", summary: "asked 2 questions", traceId: "trn-root", runId: "trn-run" });
 		expect(gh.comments).toHaveLength(1);
 		expect(gh.comments[0]?.body).toContain("**Triage** finished: asked 2 questions");
@@ -188,16 +174,14 @@ describe("withRun", () => {
 	it("stops at a checkpoint after a newer run claims the subject", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { w: "write" };
-		const coordination = new FakeCoordination();
-		const body = vi.fn(async (run: import("../app/runs/index.js").RunContext) => {
+		const body = vi.fn(async (run: import("../app/claims/index.js").Claim) => {
 			gh.addStatus("trn-new");
-			coordination.current = false;
 			await run.progress("doing expensive work");
 			return { outcome: "done", summary: "done" };
 		});
-		const outcome = await withRun(
+		const outcome = await withClaim(
 			ctx,
-			{ repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns(), coordination },
+			{ repo: REPO, subject, task: "triage", title: "Triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() },
 			body,
 		);
 		expect(outcome).toMatchObject({ state: "cancelled", outcome: "superseded" });
@@ -210,7 +194,7 @@ describe("withRun", () => {
 		gh.permissions = { w: "write" };
 		const boom = new Error("connect ECONNREFUSED token=ghs_secret");
 		await expect(
-			withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
+			withClaim(ctx, { repo: REPO, subject, task: "triage", title: "Triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
 				throw boom;
 			}),
 		).rejects.toBe(boom);
@@ -227,9 +211,13 @@ describe("withRun", () => {
 		const run = (error: Error) => {
 			const gh = new FakeGitHub();
 			gh.permissions = { w: "write" };
-			const outcome = withRun(ctx, { repo: REPO, subject, stage: "triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() }, async () => {
-				throw error;
-			});
+			const outcome = withClaim(
+				ctx,
+				{ repo: REPO, subject, task: "triage", title: "Triage", actor: "w", gh: gh.asClient(), runs: new FakeRuns() },
+				async () => {
+					throw error;
+				},
+			);
 			return { gh, outcome };
 		};
 

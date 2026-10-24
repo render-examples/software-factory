@@ -21,8 +21,8 @@ interface AppCredentials {
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-export function githubApiUrl(): string {
-	return (process.env.GITHUB_API_URL?.trim() || "https://api.github.com").replace(/\/+$/, "");
+export function githubApiUrl(env: Readonly<Record<string, string | undefined>> = process.env): string {
+	return (env.GITHUB_API_URL?.trim() || "https://api.github.com").replace(/\/+$/, "");
 }
 
 function appCredentials(): AppCredentials {
@@ -45,9 +45,7 @@ export function normalizePrivateKey(value: string): string {
 export function appJwt(credentials: AppCredentials = appCredentials()): string {
 	const now = Math.floor(Date.now() / 1000);
 	const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-	const payload = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 540, iss: credentials.appId })).toString(
-		"base64url",
-	);
+	const payload = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 540, iss: credentials.appId })).toString("base64url");
 	const signer = createSign("RSA-SHA256");
 	signer.update(`${header}.${payload}`);
 	return `${header}.${payload}.${signer.sign(credentials.privateKey, "base64url")}`;
@@ -75,21 +73,18 @@ export async function githubToken(opts: GitHubTokenOptions): Promise<string> {
 	const credentials = appCredentials();
 	const body: Record<string, unknown> = { repositories: [opts.repo] };
 	if (opts.permissions) body.permissions = opts.permissions;
-	const response = await (opts.fetch ?? fetch)(
-		`${githubApiUrl()}/app/installations/${opts.installationId}/access_tokens`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${appJwt(credentials)}`,
-				Accept: "application/vnd.github+json",
-				"X-GitHub-Api-Version": "2022-11-28",
-				"User-Agent": "software-factory",
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(15_000),
+	const response = await (opts.fetch ?? fetch)(`${githubApiUrl()}/app/installations/${opts.installationId}/access_tokens`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${appJwt(credentials)}`,
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+			"User-Agent": "software-factory",
+			"Content-Type": "application/json",
 		},
-	);
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(15_000),
+	});
 	if (!response.ok) {
 		const text = await response.text().catch(() => "");
 		throw new Error(`GitHub App token exchange failed (${response.status}): ${text.slice(0, 300)}`);

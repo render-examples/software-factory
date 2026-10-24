@@ -46,13 +46,8 @@ export interface ManifestConversion {
 	owner?: { login: string; type: string } | null;
 }
 
-export function escapeHtml(value: string): string {
-	return value
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#39;");
+function escapeHtml(value: string): string {
+	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 export function newState(): string {
@@ -97,7 +92,7 @@ export function formPage(manifest: Manifest, action: string, repos: readonly str
 	);
 }
 
-export function successPage(app: ManifestConversion): string {
+function successPage(app: ManifestConversion): string {
 	return page(
 		`${app.name} created`,
 		`<h1><code>${escapeHtml(app.slug)}</code> created</h1>` +
@@ -171,10 +166,7 @@ export async function startCallbackServer(opts: CallbackServerOptions): Promise<
 	const url = `http://127.0.0.1:${port}`;
 	redirectUrl = `${url}/callback`;
 
-	const timer = setTimeout(
-		() => settle.reject(new Error("Timed out waiting for GitHub's callback")),
-		opts.timeoutMs ?? 60 * 60_000,
-	);
+	const timer = setTimeout(() => settle.reject(new Error("Timed out waiting for GitHub's callback")), opts.timeoutMs ?? 60 * 60_000);
 	timer.unref();
 	const close = () =>
 		new Promise<void>((resolve) => {
@@ -186,11 +178,7 @@ export async function startCallbackServer(opts: CallbackServerOptions): Promise<
 }
 
 /** POST /app-manifests/{code}/conversions: unauthenticated; the code is the credential. */
-export async function exchangeManifestCode(
-	code: string,
-	apiUrl: string,
-	fetchImpl: typeof fetch = fetch,
-): Promise<ManifestConversion> {
+export async function exchangeManifestCode(code: string, apiUrl: string, fetchImpl: typeof fetch = fetch): Promise<ManifestConversion> {
 	const response = await fetchImpl(`${apiUrl}/app-manifests/${encodeURIComponent(code)}/conversions`, {
 		method: "POST",
 		headers: {

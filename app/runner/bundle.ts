@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -26,12 +24,4 @@ export async function bundleRunner(): Promise<string> {
 	const [file] = result.outputFiles;
 	if (!file) throw new Error("esbuild produced no output for the runner bundle");
 	return file.text;
-}
-
-/** Writes the bundle to `dir/runner.mjs` and returns that path. */
-export async function writeRunnerBundle(dir: string): Promise<string> {
-	const path = join(dir, "runner.mjs");
-	await mkdir(dir, { recursive: true });
-	await writeFile(path, await bundleRunner());
-	return path;
 }

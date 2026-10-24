@@ -38,9 +38,7 @@ const toolUse = { stopReason: "toolUse" } as const;
 export const defaultTestStub: TestStub = (input) => {
 	const responses: TestStubResponse[] = [];
 	if (input.tools.includes("ls")) {
-		responses.push(
-			testStubAssistantMessage([testStubText("[test-stub] Listing the working directory."), testStubToolCall("ls", {})], toolUse),
-		);
+		responses.push(testStubAssistantMessage([testStubText("[test-stub] Listing the working directory."), testStubToolCall("ls", {})], toolUse));
 	}
 	const output = sampleFromSchema(input.output_schema) as Record<string, unknown>;
 	responses.push(testStubAssistantMessage(testStubToolCall(SUBMIT_TOOL, output), toolUse));
@@ -48,7 +46,7 @@ export const defaultTestStub: TestStub = (input) => {
 };
 
 /** A small value that satisfies common JSON Schema keywords (enough for test-stub runs, not a general generator). */
-export function sampleFromSchema(schema: unknown): unknown {
+function sampleFromSchema(schema: unknown): unknown {
 	if (typeof schema !== "object" || schema === null) return null;
 	const s = schema as Record<string, unknown>;
 	if ("const" in s) return s.const;

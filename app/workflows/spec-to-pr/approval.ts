@@ -1,15 +1,13 @@
 import { config } from "../../config/index.js";
 import { Spec } from "../../schemas/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment } from "../../github/index.js";
-import { RunError } from "../../runs/index.js";
+import { ExpectedFailure } from "../../claims/index.js";
 
-export type ApprovalGitHub = Pick<GitHubClient, "botLogin" | "listIssueComments" | "getLabelEvents">;
+type ApprovalGitHub = Pick<GitHubClient, "botLogin" | "listIssueComments" | "getLabelEvents">;
 
-export interface ApprovedSpec {
+interface ApprovedSpec {
 	spec: Spec;
 	comment: IssueComment;
-	/** When the approval label was applied (ISO 8601). */
-	approvedAt: string;
 }
 
 /**
@@ -20,7 +18,7 @@ export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, labele
 	const label = config.labels.specApproved;
 	const found = findMarkedComment(await gh.listIssueComments(issue), "spec", await gh.botLogin());
 	if (!found) {
-		throw new RunError(
+		throw new ExpectedFailure(
 			`there is no spec on this issue. Add the \`${config.labels.triage}\` label to draft one, then approve it with \`${label}\`.`,
 			"no_spec",
 		);
@@ -29,18 +27,15 @@ export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, labele
 	const events = await gh.getLabelEvents(issue, label);
 	const approvedAt = events.at(-1)?.createdAt ?? labeledAt;
 	if (Date.parse(found.comment.updatedAt) > Date.parse(approvedAt)) {
-		throw new RunError(
-			`the spec changed after it was approved. Review it and reapply the \`${label}\` label.`,
-			"spec_changed",
-		);
+		throw new ExpectedFailure(`the spec changed after it was approved. Review it and reapply the \`${label}\` label.`, "spec_changed");
 	}
 
 	const parsed = Spec.safeParse(found.data.spec);
 	if (!parsed.success) {
-		throw new RunError(
+		throw new ExpectedFailure(
 			`the spec comment doesn't hold a valid spec. Add the \`${config.labels.triage}\` label to redraft it.`,
 			"spec_unreadable",
 		);
 	}
-	return { spec: parsed.data, comment: found.comment, approvedAt };
+	return { spec: parsed.data, comment: found.comment };
 }

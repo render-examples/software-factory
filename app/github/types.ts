@@ -24,8 +24,6 @@ export interface IssueComment {
 	id: number;
 	body: string;
 	author: Actor;
-	/** Slug of the GitHub App that posted the comment, when one did. */
-	performedViaApp: string | null;
 	createdAt: string;
 	updatedAt: string;
 	htmlUrl: string;
@@ -40,16 +38,12 @@ export interface LabelEvent {
 export interface PullRequest {
 	number: number;
 	state: string;
-	draft: boolean;
 	merged: boolean;
 	title: string;
 	body: string;
 	headSha: string;
 	headRef: string;
-	/** "owner/name" of the head repository; differs from the base for forks, null when the fork was deleted. */
-	headRepo: string | null;
 	baseRef: string;
-	baseSha: string;
 	htmlUrl: string;
 }
 
@@ -71,7 +65,7 @@ export interface ReviewComment {
 	body: string;
 }
 
-export interface Review {
+export interface PullRequestReview {
 	id: number;
 	body: string;
 	author: Actor;

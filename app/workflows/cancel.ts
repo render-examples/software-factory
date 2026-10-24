@@ -1,30 +1,20 @@
-import { task } from "@renderinc/sdk/workflows";
 import type { TaskContext } from "@renderinc/sdk/workflows";
+import { task } from "@renderinc/sdk/workflows";
+import { checkPermission, finishStatus, type RunControl, readStatus, type StatusGitHub, stopRun, traceIds, workflowRuns } from "../claims/index.js";
 import { config, requireRepo, TASKS } from "../config/index.js";
-import { CancelInput } from "../schemas/tasks.js";
-import { claimRun, emit } from "../events/index.js";
+import { emit } from "../events/index.js";
 import { type GitHubClient, githubFor } from "../github/index.js";
-import {
-	cancelActiveRun,
-	checkPermission,
-	finishStatus,
-	isRunActive,
-	type RunControl,
-	readStatus,
-	type StatusGitHub,
-	traceIds,
-	workflowRuns,
-} from "../runs/index.js";
+import { CancelInput } from "../schemas/index.js";
 
-export type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
+type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
 
-export interface CancelResult {
+interface CancelResult {
 	cancelled: boolean;
 	runId?: string;
 	reason?: "permission_denied" | "nothing_running";
 }
 
-/** `/factory cancel`: cancels the run the status comment records, if it's still active. */
+/** `/factory cancel`: stops the run the status comment names, if it's still active, and terminates its sandbox. */
 export async function cancelRun(
 	ctx: Pick<TaskContext, "metadata">,
 	raw: unknown,
@@ -33,9 +23,7 @@ export async function cancelRun(
 	const input = CancelInput.parse(raw);
 	const repo = requireRepo(input.repo, input.installationId);
 	const gh = deps.gh ?? githubFor(repo);
-	const ids = traceIds(ctx);
-	const traceId = ids.traceId;
-	const runId = ids.runId ?? traceId;
+	const { traceId, runId } = traceIds(ctx);
 	const event = { traceId, runId, repo: repo.fullName, subject: `${input.kind}#${input.number}` };
 	await emit({ ...event, type: "run.started", payload: { stage: TASKS.cancel, actor: input.actor } });
 
@@ -47,23 +35,15 @@ export async function cancelRun(
 			);
 			return { cancelled: false, reason: "permission_denied" };
 		}
-		await claimRun({ ...event, stage: TASKS.cancel, actor: input.actor });
-		const runs = deps.runs ?? workflowRuns();
 		const current = await readStatus(gh, input.number);
-		if (!current || !(await isRunActive(runs, current.data.runId))) {
+		if (!current || !(await stopRun(deps.runs ?? workflowRuns(), current.data))) {
 			await gh.createComment(input.number, `@${input.actor} no factory run is in progress here.`);
 			return { cancelled: false, reason: "nothing_running" };
 		}
-		await cancelActiveRun(runs, current.data.runId);
-		await finishStatus({
-			gh,
-			number: input.number,
-			runId: current.data.runId,
-			stage: current.data.stage,
-			state: "cancelled",
-			summary: `cancelled by @${input.actor}.`,
-		});
-		return { cancelled: true, runId: current.data.runId };
+		const { runId: cancelled, stage, title } = current.data;
+		const summary = `cancelled by @${input.actor}.`;
+		await finishStatus({ gh, number: input.number, runId: cancelled, task: stage, title: title ?? stage, state: "cancelled", summary });
+		return { cancelled: true, runId: cancelled };
 	})();
 
 	await emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });

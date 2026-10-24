@@ -101,7 +101,9 @@ function createTextReadTool(context: ExecutionToolContext, { cwd }: ToolOptions)
 }
 
 const LsParams = Type.Object({
-	path: Type.Optional(Type.String({ description: "Directory to list, relative to the working directory or absolute (default: the working directory)" })),
+	path: Type.Optional(
+		Type.String({ description: "Directory to list, relative to the working directory or absolute (default: the working directory)" }),
+	),
 	limit: Type.Optional(Type.Integer({ description: `Maximum entries to return (default ${LS_DEFAULT_LIMIT})` })),
 });
 

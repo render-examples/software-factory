@@ -20,18 +20,8 @@ export interface ChangedFile {
 export type RefusalReason =
 	| { kind: "no_changes"; detail: string }
 	| { kind: "too_many_files"; detail: string; count: number; limit: number }
-	| {
-			kind: "file_too_large";
-			detail: string;
-			path: string;
-			bytes: number;
-			limit: number;
-	  }
-	| {
-			kind: "symlink" | "gitlink" | "workflow_file" | "unsafe_path";
-			detail: string;
-			path: string;
-	  };
+	| { kind: "file_too_large"; detail: string; path: string; bytes: number; limit: number }
+	| { kind: "symlink" | "gitlink" | "workflow_file" | "unsafe_path"; detail: string; path: string };
 
 export interface PublishLimits {
 	maxChangedFiles: number;
@@ -48,9 +38,7 @@ export interface ChangesFile {
 	blobs: Buffer;
 }
 
-export type CheckedChanges =
-	| { refused: RefusalReason[] }
-	| { treeSha: string; files: ChangedFile[]; blobs: Map<string, Buffer> };
+export type CheckedChanges = { refused: RefusalReason[] } | { treeSha: string; files: ChangedFile[]; blobs: Map<string, Buffer> };
 
 /** Git's object ID for a blob: sha1("blob <size>\0<content>"). */
 export function blobSha(content: Buffer): string {
@@ -79,8 +67,7 @@ export function parseChangesFile(buf: Buffer): ChangesFile {
 	};
 	const section = (name: string): Buffer => {
 		const length = count(name);
-		if (pos + length + 1 > buf.length || buf[pos + length] !== 0x0a)
-			throw new Error(`Changes file: ${name} is truncated`);
+		if (pos + length + 1 > buf.length || buf[pos + length] !== 0x0a) throw new Error(`Changes file: ${name} is truncated`);
 		const data = buf.subarray(pos, pos + length);
 		pos += length + 1;
 		return data;
@@ -116,14 +103,7 @@ function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
 		const rawPath = field();
 		const match = RAW_HEADER.exec(header);
 		if (!match) throw new Error(`Malformed diff header "${header.slice(0, 120)}"`);
-		const [, oldMode, newMode, oldSha, newSha, status] = match as unknown as [
-			string,
-			string,
-			string,
-			string,
-			string,
-			ChangeStatus,
-		];
+		const [, oldMode, newMode, oldSha, newSha, status] = match as unknown as [string, string, string, string, string, ChangeStatus];
 		if (rawPath.length === 0) throw new Error("Diff record with an empty path");
 		if (status === "D") {
 			if (newMode !== "000000" || newSha !== ZERO_SHA) throw new Error(`Malformed deletion "${header}"`);
@@ -131,16 +111,9 @@ function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
 			if (!["100644", "100755", "120000", "160000"].includes(newMode) || newSha === ZERO_SHA) {
 				throw new Error(`Malformed diff record "${header}"`);
 			}
-			if (status === "A" && (oldMode !== "000000" || oldSha !== ZERO_SHA))
-				throw new Error(`Malformed addition "${header}"`);
+			if (status === "A" && (oldMode !== "000000" || oldSha !== ZERO_SHA)) throw new Error(`Malformed addition "${header}"`);
 		}
-		files.push({
-			status,
-			path: rawPath.toString("utf8"),
-			rawPath,
-			mode: newMode,
-			sha: status === "D" ? null : newSha,
-		});
+		files.push({ status, path: rawPath.toString("utf8"), rawPath, mode: newMode, sha: status === "D" ? null : newSha });
 	}
 	return files;
 }
@@ -204,78 +177,35 @@ function unsafePath(path: string, rawPath: Buffer): string | null {
 export function checkChanges(file: ChangesFile, limits: PublishLimits): CheckedChanges {
 	if (file.count > limits.maxChangedFiles) {
 		const detail = `${file.count} files changed; the limit is ${limits.maxChangedFiles}`;
-		return {
-			refused: [
-				{
-					kind: "too_many_files",
-					detail,
-					count: file.count,
-					limit: limits.maxChangedFiles,
-				},
-			],
-		};
+		return { refused: [{ kind: "too_many_files", detail, count: file.count, limit: limits.maxChangedFiles }] };
 	}
 	const files = parseRawDiff(file.diff);
-	if (files.length !== file.count)
-		throw new Error(`Diff has ${files.length} records but the sandbox counted ${file.count}`);
-	if (files.length === 0)
-		return {
-			refused: [
-				{
-					kind: "no_changes",
-					detail: "Nothing changed against the base commit",
-				},
-			],
-		};
+	if (files.length !== file.count) throw new Error(`Diff has ${files.length} records but the sandbox counted ${file.count}`);
+	if (files.length === 0) return { refused: [{ kind: "no_changes", detail: "Nothing changed against the base commit" }] };
 
 	const sizes = parseSizes(file.sizes);
 	const needed = new Map<string, number>();
 	const refused: RefusalReason[] = [];
 	const seen = new Set<string>();
 	for (const f of files) {
-		if (seen.has(f.path)) throw new Error(`Diff lists ${f.path} twice`);
-		seen.add(f.path);
-		const unsafe = unsafePath(f.path, f.rawPath);
+		const { path } = f;
+		if (seen.has(path)) throw new Error(`Diff lists ${path} twice`);
+		seen.add(path);
+		const unsafe = unsafePath(path, f.rawPath);
 		if (unsafe) {
-			refused.push({
-				kind: "unsafe_path",
-				detail: `Path ${JSON.stringify(f.path)} ${unsafe}`,
-				path: f.path,
-			});
+			refused.push({ kind: "unsafe_path", detail: `Path ${JSON.stringify(path)} ${unsafe}`, path });
 			continue;
 		}
-		if (f.path.startsWith(WORKFLOWS_DIR)) {
-			refused.push({
-				kind: "workflow_file",
-				detail: `Changes to ${f.path} are not published`,
-				path: f.path,
-			});
-		}
+		if (path.startsWith(WORKFLOWS_DIR)) refused.push({ kind: "workflow_file", detail: `Changes to ${path} are not published`, path });
 		if (f.sha === null) continue;
-		if (f.mode === "120000")
-			refused.push({
-				kind: "symlink",
-				detail: `${f.path} is a symlink`,
-				path: f.path,
-			});
-		if (f.mode === "160000")
-			refused.push({
-				kind: "gitlink",
-				detail: `${f.path} is a submodule`,
-				path: f.path,
-			});
+		if (f.mode === "120000") refused.push({ kind: "symlink", detail: `${path} is a symlink`, path });
+		if (f.mode === "160000") refused.push({ kind: "gitlink", detail: `${path} is a submodule`, path });
 		if (f.mode !== "100644" && f.mode !== "100755") continue;
 		const size = sizes.get(f.sha);
-		if (size === undefined) throw new Error(`Sandbox reported no size for ${f.path}`);
+		if (size === undefined) throw new Error(`Sandbox reported no size for ${path}`);
 		if (size > limits.maxFileBytes) {
-			const detail = `${f.path} is ${size} bytes; the limit is ${limits.maxFileBytes}`;
-			refused.push({
-				kind: "file_too_large",
-				detail,
-				path: f.path,
-				bytes: size,
-				limit: limits.maxFileBytes,
-			});
+			const detail = `${path} is ${size} bytes; the limit is ${limits.maxFileBytes}`;
+			refused.push({ kind: "file_too_large", detail, path, bytes: size, limit: limits.maxFileBytes });
 		}
 		needed.set(f.sha, size);
 	}

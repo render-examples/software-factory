@@ -13,7 +13,7 @@ import { bundleRunner } from "../runner/bundle.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
 import { errorMessage, log, SAFE_REF, shq } from "./shell.js";
 import { APP_DIR, REPO_DIR, RUN_AS, SANDBOX_ROOT, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
-import { verifySandbox, wirePolicy } from "./verify.js";
+import { ALLOW_ALL_EGRESS, verifySandbox } from "./verify.js";
 
 /** The one named snapshot per repository: `factory-<owner>-<name>`, restricted to [A-Za-z0-9_.-]. */
 export function snapshotName(repo: Pick<RepoContext, "owner" | "name">): string {
@@ -38,8 +38,8 @@ const RUNTIME_SCRIPTS = [
 	"build/scrub-credentials.sh",
 ] as const;
 
-const STAGE = "/tmp/factory-stage";
-const STAGE_CREDS = `${STAGE}/creds`;
+const STAGING_DIR = "/tmp/factory-stage";
+const STAGING_CREDS = `${STAGING_DIR}/creds`;
 const SANDBOX_GITCONFIG = "[core]\n\tfsmonitor = false\n[advice]\n\tdetachedHead = false\n";
 /** Username GitHub expects alongside an installation token. */
 const GITHUB_TOKEN_USER = "x-access-token";
@@ -85,12 +85,7 @@ export function credentialFile(token: string): string {
 //   4. Manifest, lockdown, verify.sh, named snapshot, prune
 
 /** Builds the repository's named snapshot at `sha` and prunes older ones, keeping the newest two. */
-export async function buildSnapshot(
-	client: SandboxClient,
-	repo: RepoContext,
-	sha: string,
-	deps: SnapshotDeps = {},
-): Promise<BuiltSnapshot> {
+export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sha: string, deps: SnapshotDeps = {}): Promise<BuiltSnapshot> {
 	if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`refusing to build ${repo.fullName} at ${JSON.stringify(sha)}: not a commit SHA`);
 	const branch = repo.config.baseBranch;
 	if (!SAFE_REF.test(branch)) throw new Error(`${repo.fullName}: unsupported base branch ${JSON.stringify(branch)}`);
@@ -101,23 +96,21 @@ export async function buildSnapshot(
 	const started = Date.now();
 	log("info", "snapshot build started", { repo: repo.fullName, sha, snapshot: name });
 
-	const { id } = await client.call(() =>
-		client.api.create({ timeoutSeconds: BUILDER_TIMEOUT_SECONDS, networkPolicy: wirePolicy("allow-all") }),
-	);
+	const { id } = await client.call(() => client.api.create({ timeoutSeconds: BUILDER_TIMEOUT_SECONDS, networkPolicy: ALLOW_ALL_EGRESS }));
 	try {
 		await client.waitRunning(id);
 
-		// ── 1. Stage, tools, runner user, self-test ─────────────────────
-		await client.check(id, `mkdir -p -m 700 ${STAGE}`, { ...boot, waitReady: true });
+		// ── 1. Scripts, tools, runner user, self-test ───────────────────
+		await client.check(id, `mkdir -p -m 700 ${STAGING_DIR}`, { ...boot, waitReady: true });
 		// Uploaded as an opaque .tgz and extracted in the sandbox: the upload endpoint rejects an
 		// uncompressed tar of the bundled runner's JavaScript, and doesn't accept application/gzip.
-		await client.upload(id, `${STAGE}/stage.tgz`, await stageArchive());
-		await client.check(id, `tar -xzf ${STAGE}/stage.tgz -C ${STAGE} && rm ${STAGE}/stage.tgz`, boot);
+		await client.upload(id, `${STAGING_DIR}/stage.tgz`, await stagingArchive());
+		await client.check(id, `tar -xzf ${STAGING_DIR}/stage.tgz -C ${STAGING_DIR} && rm ${STAGING_DIR}/stage.tgz`, boot);
 		await client.check(
 			id,
 			`mkdir -p ${APP_DIR}/runner ${APP_DIR}/build ${REPO_DIR} ${SCRATCH_DIR}` +
-				` && cp ${STAGE}/*.sh ${APP_DIR}/ && cp ${STAGE}/build/*.sh ${APP_DIR}/build/` +
-				` && cp ${STAGE}/runner/runner.mjs ${APP_DIR}/runner/`,
+				` && cp ${STAGING_DIR}/*.sh ${APP_DIR}/ && cp ${STAGING_DIR}/build/*.sh ${APP_DIR}/build/` +
+				` && cp ${STAGING_DIR}/runner/runner.mjs ${APP_DIR}/runner/`,
 			boot,
 		);
 		await client.check(id, `bash ${APP_DIR}/install-tools.sh`, prepare);
@@ -140,14 +133,10 @@ export async function buildSnapshot(
 
 		// ── 2. Token, clone, scrub ───────────────────────────────────────
 		const token = await (deps.readToken ?? readToken)(repo);
-		await client.check(id, `mkdir -p -m 700 ${STAGE_CREDS}`, boot);
-		await client.upload(id, `${STAGE_CREDS}/github.com`, credentialFile(token));
+		await client.check(id, `mkdir -p -m 700 ${STAGING_CREDS}`, boot);
+		await client.upload(id, `${STAGING_CREDS}/github.com`, credentialFile(token));
 		await client.check(id, cloneCommand(repo, sha), prepare);
-		const scrub = await client.exec(
-			id,
-			`bash ${APP_DIR}/build/scrub-credentials.sh ${STAGE_CREDS} ${REPO_DIR} ${SCRATCH_DIR}/home`,
-			prepare,
-		);
+		const scrub = await client.exec(id, `bash ${APP_DIR}/build/scrub-credentials.sh ${STAGING_CREDS} ${REPO_DIR} ${SCRATCH_DIR}/home`, prepare);
 		if (scrub.exitCode !== 0) throw new Error(`credential scrub failed: ${(scrub.stderr || scrub.stdout).trim().slice(-2000)}`);
 
 		// ── 3. Runner-owned checkout, install as the runner ──────────────
@@ -212,7 +201,7 @@ function envFileContent(nodePath: string): string {
 function cloneCommand(repo: RepoContext, sha: string): string {
 	const url = `https://github.com/${repo.owner}/${repo.name}.git`;
 	const branch = repo.config.baseBranch;
-	const auth = credentialHelperArgs(STAGE_CREDS).map(shq).join(" ");
+	const auth = credentialHelperArgs(STAGING_CREDS).map(shq).join(" ");
 	return [
 		`GIT_TERMINAL_PROMPT=0 git ${auth} clone --quiet --single-branch --branch ${shq(branch)} --no-tags -- ${shq(url)} ${REPO_DIR}`,
 		`git -C ${REPO_DIR} checkout --quiet -B ${shq(branch)} ${sha}`,
@@ -259,7 +248,7 @@ function lockdownCommand(nodePath: string): string {
 		`chown ${RUN_AS}: ${SCRATCH_DIR}`,
 		`chmod 700 ${SCRATCH_DIR}`,
 		`install -o root -g root -m 0711 ${shq(nodePath)} ${APP_DIR}/node-runner`,
-		`rm -rf ${STAGE}`,
+		`rm -rf ${STAGING_DIR}`,
 	].join(" && ");
 }
 
@@ -277,7 +266,7 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 }
 
 /** A gzipped tar of the runtime scripts and a freshly built, self-contained runner bundle. */
-async function stageArchive(): Promise<Buffer> {
+async function stagingArchive(): Promise<Buffer> {
 	const bundle = await bundleRunner();
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
@@ -296,13 +285,11 @@ async function stageArchive(): Promise<Buffer> {
 // ── Prune ───────────────────────────────────────────────────────────────
 
 /** Deletes older available/failed snapshots with this name, keeping the newest `keep`. Logs instead of throwing. */
-export async function pruneSnapshots(client: SandboxClient, sandboxGroupId: string, name: string, keep: number): Promise<void> {
+async function pruneSnapshots(client: SandboxClient, sandboxGroupId: string, name: string, keep: number): Promise<void> {
 	try {
 		const list: Awaited<ReturnType<SandboxApi["snapshots"]["list"]>> = [];
 		for (let cursor: string | undefined; ; ) {
-			const page = await client.call(() =>
-				client.api.snapshots.list({ sandboxGroupId, status: ["available", "failed"], cursor, limit: 100 }),
-			);
+			const page = await client.call(() => client.api.snapshots.list({ sandboxGroupId, status: ["available", "failed"], cursor, limit: 100 }));
 			list.push(...page);
 			cursor = page.at(-1)?.cursor;
 			if (page.length < 100 || !cursor) break;
@@ -350,7 +337,7 @@ export async function resolveBaseHead(repo: RepoContext, deps: SnapshotDeps = {}
 	return sha;
 }
 
-export function parseLsRemote(out: string, branch: string): string | null {
+function parseLsRemote(out: string, branch: string): string | null {
 	for (const line of out.split("\n")) {
 		const m = /^([0-9a-f]{40})\t(\S+)$/.exec(line.trim());
 		if (m?.[2] === `refs/heads/${branch}`) return m[1] ?? null;

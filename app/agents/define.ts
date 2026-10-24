@@ -2,10 +2,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { ModelTier } from "../config/index.js";
-import type { RunnerInput, ToolName } from "../runner/protocol.js";
+import type { ThinkingLevel, ToolName } from "../runner/protocol.js";
 import { outputSchemaProblem } from "../runner/submit.js";
 
-export type ThinkingLevel = RunnerInput["thinking_level"];
 export type OutputSchema = z.ZodObject;
 
 export interface AgentSpec<Tools extends readonly ToolName[], Output extends OutputSchema> {

@@ -1,11 +1,5 @@
 node_modules
-dist
 .env
 .env.localdev
-*.tsbuildinfo
-.turbo
-.smoke
-.pgtest
-.pnpm-store/*
 tmp/
 .DS_Store

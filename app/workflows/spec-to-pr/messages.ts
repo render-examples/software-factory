@@ -1,30 +1,23 @@
 import type { RepoContext } from "../../config/index.js";
 import type { Implementation, Spec } from "../../schemas/index.js";
-import { renderSpecSections } from "../../format/index.js";
+import { renderSpecSections, verbatimCodeSpan } from "../../format/index.js";
 import type { VerifyRun } from "../run-verify.js";
 import { failureReport } from "./verify.js";
 
-export interface IssueRef {
+interface IssueRef {
 	number: number;
 	title: string;
 }
 
 export function implementMessage(repo: RepoContext, issue: IssueRef, spec: Spec): string {
 	const verify = repo.config.verify.length
-		? repo.config.verify.map((command) => `- ${codeSpan(command)}`).join("\n")
+		? repo.config.verify.map((command) => `- ${verbatimCodeSpan(command)}`).join("\n")
 		: "- (none configured: check your work by reading it and running the relevant tests)";
 	return [
 		`Implement the approved spec for issue #${issue.number} in ${repo.fullName}: ${issue.title}`,
 		renderSpecSections(spec),
 		`## Verify commands\n\n${verify}`,
 	].join("\n\n");
-}
-
-/** A Markdown code span that shows `text` verbatim, whatever backticks it contains. */
-function codeSpan(text: string): string {
-	const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-	const fence = "`".repeat(longestRun + 1);
-	return longestRun > 0 ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
 }
 
 export function repairMessage(repo: RepoContext, issue: IssueRef, spec: Spec, runs: readonly VerifyRun[], round: number, rounds: number): string {

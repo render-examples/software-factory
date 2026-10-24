@@ -79,6 +79,9 @@ After adding a repository:
 | `limits.maxFileBytes` | `1000000` | Maximum size of one changed file |
 | `sandbox.timeoutSeconds` | `14400` | Provider-side Sandbox lifetime |
 
+`setup:github` also creates `factory:working`, which marks an active run. It
+is operational state rather than a configurable trigger label.
+
 After renaming a label, deploy both services and rerun
 `npm run setup:github`. Existing labels are not removed automatically.
 
@@ -112,7 +115,7 @@ database and workflow references are wired by the Blueprint.
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Database migrations and delivery telemetry |
+| `DATABASE_URL` | Optional: migrations and delivery telemetry |
 | `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
@@ -122,13 +125,17 @@ database and workflow references are wired by the Blueprint.
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Strict run claims and telemetry |
+| `DATABASE_URL` | Optional: run and agent telemetry |
 | `RENDER_API_KEY` | Manage Sandboxes, snapshots, and task cancellation |
 | `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Authenticate the GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
 | `ANTHROPIC_API_KEY` | Call the default models |
 | `GITHUB_API_URL` | Optional GitHub API base URL |
+
+`GITHUB_API_URL` is not declared by the Blueprint. GitHub Enterprise Server
+users must set it in local `.env` for setup commands and manually on
+`factory-workflows` in the Render Dashboard.
 
 The gateway must bind to `0.0.0.0:$PORT` when deployed. Never commit `.env`
 or provider keys.

@@ -5,15 +5,7 @@ import { PROVIDER_KEY_ENV } from "../../app/runner/keys.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
-import {
-	LABELS,
-	missingEvents,
-	missingPermissions,
-	SECRET_ENV,
-	SERVICE_ENV,
-	type Service,
-	WEBHOOK_PATH,
-} from "./requirements.js";
+import { LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
 export interface DbClient {
@@ -191,10 +183,7 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 		out.pass(`installed (installation ${installation.id})`);
 		const perms = missingPermissions(installation.permissions);
 		if (perms.length) {
-			out.warn(
-				`installation hasn't granted: ${perms.join(", ")}`,
-				"An owner must accept the App's updated permissions in the installation settings",
-			);
+			out.warn(`installation hasn't granted: ${perms.join(", ")}`, "An owner must accept the App's updated permissions in the installation settings");
 		}
 		const events = missingEvents(installation.events);
 		if (events.length) out.warn(`installation isn't receiving: ${events.join(", ")}`, "Accept the App's updated events");
@@ -216,10 +205,10 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 }
 
 async function checkDatabase(opts: DoctorOptions, out: Reporter): Promise<void> {
-	out.heading("Postgres");
+	out.heading("Postgres (optional telemetry)");
 	const url = opts.env.DATABASE_URL?.trim();
 	if (!url) {
-		out.skip("database checks: DATABASE_URL is not set");
+		out.skip("database checks: DATABASE_URL is not set, so telemetry is off");
 		return;
 	}
 	let client: DbClient;
@@ -241,9 +230,7 @@ async function checkDatabase(opts: DoctorOptions, out: Reporter): Promise<void> 
 			out.fail("schema_migrations table is missing", "Run `npm run db:migrate`");
 			return;
 		}
-		const applied = new Set(
-			(await client.query<{ filename: string }>("select filename from schema_migrations")).rows.map((r) => r.filename),
-		);
+		const applied = new Set((await client.query<{ filename: string }>("select filename from schema_migrations")).rows.map((r) => r.filename));
 		const pending = opts.migrations.filter((file) => !applied.has(file));
 		if (pending.length) out.fail(`migrations not applied: ${pending.join(", ")}`, "Run `npm run db:migrate`");
 		else out.pass(`all ${opts.migrations.length} migration(s) applied`);
@@ -303,10 +290,7 @@ async function checkTasks(opts: DoctorOptions, out: Reporter): Promise<void> {
 	const found = new Set(rows.map((row) => row.task?.name).filter((name): name is string => !!name));
 	const missing = expected.filter((task) => !found.has(task));
 	if (found.size === 0) {
-		out.warn(
-			`no tasks found for workflow ${slug}`,
-			"Deploy factory-workflows; on the gateway, RENDER_WORKFLOW_SLUG must be its slug",
-		);
+		out.warn(`no tasks found for workflow ${slug}`, "Deploy factory-workflows; on the gateway, RENDER_WORKFLOW_SLUG must be its slug");
 	} else if (missing.length) {
 		out.fail(`tasks not registered on ${slug}: ${missing.join(", ")}`, "Redeploy factory-workflows");
 	} else {

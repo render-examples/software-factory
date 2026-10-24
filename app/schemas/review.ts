@@ -11,16 +11,13 @@ export const ReviewComment = z.object({
 	body: z.string().min(1).max(4000),
 });
 
-export const RISK_TIERS = ["trivial", "low", "medium", "high"] as const;
-
 /** The PR reviewer's submission. It summarizes and assesses risk; it never approves or requests changes. */
 export const Review = z.object({
 	summary: z.string().min(1).max(8000).describe("Markdown overview of the review, including findings that don't fit an inline comment."),
-	riskTier: z.enum(RISK_TIERS).describe("The overall assessment."),
+	riskTier: z.enum(["trivial", "low", "medium", "high"]).describe("The overall assessment."),
 	comments: z.array(ReviewComment).max(50).describe("Actionable inline comments, most important first."),
 });
 
 export type Severity = z.infer<typeof Severity>;
 export type ReviewComment = z.infer<typeof ReviewComment>;
-export type RiskTier = (typeof RISK_TIERS)[number];
 export type Review = z.infer<typeof Review>;

@@ -3,9 +3,8 @@ import type { z } from "zod";
 import { modelFor } from "../config/index.js";
 import { emit } from "../events/index.js";
 import { providerApiKey } from "../runner/keys.js";
-import { type RunnerErrorCode, RunnerEvent, RunnerInput, type ToolName, type Usage } from "../runner/protocol.js";
+import { type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/protocol.js";
 import { errorMessage } from "../runner/session.js";
-import { outputSchemaProblem } from "../runner/submit.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
 
@@ -29,7 +28,7 @@ export class AgentError extends Error {
 export interface RunAgentOptions {
 	/** Tools run only here, never in a Workflows task. */
 	sandbox: Sandbox;
-	/** Root task run of the stage; every event this run emits carries it. */
+	/** Root task run of the claiming task; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
 	repo?: string;
@@ -58,13 +57,8 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const { sandbox, ...base } = opts;
 	const { provider, model } = modelFor(agent.model);
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	const record = (type: string, payload: Record<string, unknown>) => {
-		try {
-			void emit({ traceId: base.traceId, runId: base.runId, repo: base.repo, subject: base.subject, type, payload }).catch(() => {});
-		} catch {
-			// Events never affect a run.
-		}
-	};
+	const record = (type: string, payload: Record<string, unknown>) =>
+		void emit({ traceId: base.traceId, runId: base.runId, repo: base.repo, subject: base.subject, type, payload });
 	const finish = (outcome: string, summary: Summary, message?: string) =>
 		record("agent.finished", {
 			agentId: agent.id,
@@ -81,7 +75,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	let summary = emptySummary();
 	const failure = (code: AgentErrorCode, text: string) => new AgentError(agent.id, code, text);
 	try {
-		const runnerInput = checkInput(agent.id, {
+		const runnerInput: RunnerInput = {
 			trace_id: base.traceId,
 			agent_id: agent.id,
 			system_prompt: agent.prompt,
@@ -95,7 +89,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			timeout_ms: timeoutMs,
 			cwd: REPO_DIR,
 			scratch_dir: SCRATCH_DIR,
-		});
+		};
 		const apiKey = providerApiKey(provider, process.env);
 		if (!apiKey) throw failure("agent_error", `no API key for provider "${provider}" in the environment`);
 
@@ -118,17 +112,6 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 		finish(error.code, summary, error.message);
 		throw error;
 	}
-}
-
-function checkInput(agentId: string, raw: RunnerInput): RunnerInput {
-	const parsed = RunnerInput.safeParse(raw);
-	if (!parsed.success) {
-		const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-		throw new AgentError(agentId, "invalid_input", `invalid RunnerInput: ${issues}`);
-	}
-	const problem = outputSchemaProblem(parsed.data.output_schema);
-	if (problem) throw new AgentError(agentId, "invalid_input", problem);
-	return parsed.data;
 }
 
 interface RunnerOutput {

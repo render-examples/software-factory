@@ -2,16 +2,21 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { requireEnv } from "../app/config/index.js";
 
 const LOCK_ID = 0x736f66747761; // "softwa": stable advisory lock key for migrations
 
 const sqlDir = join(dirname(fileURLToPath(import.meta.url)), "..", "app", "sql");
 const files = (await readdir(sqlDir)).filter((name) => name.endsWith(".sql")).sort();
 
+const connectionString = process.env.DATABASE_URL?.trim();
+if (!connectionString) {
+	console.log("DATABASE_URL is not set: telemetry is off and there is nothing to migrate");
+	process.exit(0);
+}
+
 // A dedicated client with no statement timeout: migrations may legitimately run long.
 const client = new pg.Client({
-	connectionString: requireEnv("DATABASE_URL"),
+	connectionString,
 	application_name: "software-factory-migrate",
 	connectionTimeoutMillis: 10_000,
 });

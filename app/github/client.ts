@@ -1,6 +1,6 @@
 import type { RepoContext } from "../config/index.js";
 import { appJwt, githubToken } from "./auth.js";
-import { encodePath, GitHubHttp, type GitHubHttpOptions, type TokenProvider } from "./request.js";
+import { GitHubHttp, type GitHubHttpOptions, type TokenProvider } from "./request.js";
 import {
 	type Actor,
 	GitHubError,
@@ -11,7 +11,7 @@ import {
 	type Permission,
 	type PullFile,
 	type PullRequest,
-	type Review,
+	type PullRequestReview,
 	type ReviewComment,
 } from "./types.js";
 
@@ -21,20 +21,12 @@ export interface GitHubForOptions extends GitHubHttpOptions {
 }
 
 /** A GitHub client for one repository, acting as the App installation that delivered the webhook. */
-export function githubFor(
-	repo: Pick<RepoContext, "owner" | "name" | "installationId">,
-	opts: GitHubForOptions = {},
-): GitHubClient {
+export function githubFor(repo: Pick<RepoContext, "owner" | "name" | "installationId">, opts: GitHubForOptions = {}): GitHubClient {
 	const token = opts.token ?? (() => githubToken({ installationId: repo.installationId, repo: repo.name, fetch: opts.fetch }));
 	return new GitHubClient(repo.owner, repo.name, new GitHubHttp(token, opts), opts);
 }
 
 const botLogins = new Map<string, Promise<string>>();
-
-/** Test seam. */
-export function resetBotLoginCache(): void {
-	botLogins.clear();
-}
 
 /** Workflow-owned GitHub operations. Agents never get this. */
 export class GitHubClient {
@@ -115,10 +107,7 @@ export class GitHubClient {
 	 */
 	async getPermission(login: string): Promise<Permission> {
 		try {
-			const raw = await this.http.json<RawPermission>(
-				"GET",
-				`${this.base}/collaborators/${encodeURIComponent(login)}/permission`,
-			);
+			const raw = await this.http.json<RawPermission>("GET", `${this.base}/collaborators/${encodeURIComponent(login)}/permission`);
 			return toPermission(raw);
 		} catch (error) {
 			if (error instanceof GitHubError && error.status === 404) return "none";
@@ -151,12 +140,12 @@ export class GitHubClient {
 			additions: file.additions,
 			deletions: file.deletions,
 			changes: file.changes,
-			...(file.patch === undefined ? {} : { patch: file.patch }),
-			...(file.previous_filename === undefined ? {} : { previousFilename: file.previous_filename }),
+			patch: file.patch,
+			previousFilename: file.previous_filename,
 		}));
 	}
 
-	async listReviews(pr: number): Promise<Review[]> {
+	async listReviews(pr: number): Promise<PullRequestReview[]> {
 		return (await this.http.paginate<RawReview>(`${this.base}/pulls/${pr}/reviews`)).map(toReview);
 	}
 
@@ -164,7 +153,7 @@ export class GitHubClient {
 	async createReview(
 		pr: number,
 		review: { commitId: string; body: string; event: "COMMENT"; comments: ReviewComment[] },
-	): Promise<Review> {
+	): Promise<PullRequestReview> {
 		return toReview(
 			await this.http.json<RawReview>("POST", `${this.base}/pulls/${pr}/reviews`, {
 				body: { commit_id: review.commitId, body: review.body, event: "COMMENT", comments: review.comments },
@@ -196,17 +185,6 @@ export class GitHubClient {
 				const raced = await this.findOpenPull(args.head);
 				if (raced) return { pull: raced, created: false };
 			}
-			throw error;
-		}
-	}
-
-	/** A branch's tip commit, or null when the branch doesn't exist. */
-	async getBranchSha(branch: string): Promise<string | null> {
-		try {
-			const ref = await this.http.json<{ object: { sha: string } }>("GET", `${this.base}/git/ref/heads/${encodePath(branch)}`);
-			return ref.object.sha;
-		} catch (error) {
-			if (error instanceof GitHubError && error.status === 404) return null;
 			throw error;
 		}
 	}
@@ -244,7 +222,6 @@ interface RawComment {
 	id: number;
 	body?: string | null;
 	user: RawUser | null;
-	performed_via_github_app?: { slug?: string } | null;
 	created_at: string;
 	updated_at: string;
 	html_url: string;
@@ -266,12 +243,11 @@ interface RawIssueEvent {
 interface RawPull {
 	number: number;
 	state: string;
-	draft?: boolean;
 	merged?: boolean;
 	title: string;
 	body: string | null;
-	head: { sha: string; ref: string; repo: { full_name: string } | null };
-	base: { sha: string; ref: string };
+	head: { sha: string; ref: string };
+	base: { ref: string };
 	html_url: string;
 }
 
@@ -318,7 +294,6 @@ function toComment(raw: RawComment): IssueComment {
 		id: raw.id,
 		body: raw.body ?? "",
 		author: toActor(raw.user),
-		performedViaApp: raw.performed_via_github_app?.slug ?? null,
 		createdAt: raw.created_at,
 		updatedAt: raw.updated_at,
 		htmlUrl: raw.html_url,
@@ -342,20 +317,17 @@ function toPull(raw: RawPull): PullRequest {
 	return {
 		number: raw.number,
 		state: raw.state,
-		draft: raw.draft ?? false,
 		merged: raw.merged ?? false,
 		title: raw.title,
 		body: raw.body ?? "",
 		headSha: raw.head.sha,
 		headRef: raw.head.ref,
-		headRepo: raw.head.repo?.full_name ?? null,
 		baseRef: raw.base.ref,
-		baseSha: raw.base.sha,
 		htmlUrl: raw.html_url,
 	};
 }
 
-function toReview(raw: RawReview): Review {
+function toReview(raw: RawReview): PullRequestReview {
 	return {
 		id: raw.id,
 		body: raw.body ?? "",

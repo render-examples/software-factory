@@ -5,30 +5,31 @@ not required for deployment or operation.
 
 ## Let existing systems own their state
 
-Render Workflows owns task execution. GitHub owns collaboration artifacts.
-Postgres adds only the ordering guarantee neither provides: which run is
-current for an issue or pull request. Every additional source of truth creates
-reconciliation work.
+Render Workflows owns task execution. GitHub owns collaboration artifacts,
+including the status comment that says which run currently works on an issue
+or pull request. Postgres only records telemetry, so the factory runs without
+it. Every additional source of truth creates reconciliation work.
 
 ## Make approval an explicit transition
 
-Each label authorizes one bounded stage. Triage cannot start implementation,
+Each label authorizes one bounded task. Triage cannot start implementation,
 and implementation cannot start review. Native GitHub actions make these
 gates visible and auditable without a separate control plane.
 
 ## Design for overlapping execution
 
-Webhook redelivery, cooperative cancellation, and in-flight model calls make
-“exactly once” execution unrealistic. The factory combines task-start
-idempotency, append-only claims that fence older runs, and artifact markers
-that make effects repeatable.
+Webhook redelivery, relabels, and near-simultaneous comments make “exactly
+once” execution unrealistic. The factory combines task-start idempotency, a
+claim held in the status comment, and artifact markers that make effects
+repeatable.
 
-Correctness comes from checking authority immediately before durable effects,
-not from assuming cancellation was instantaneous.
+A new run stops the old one (Render kills a cancelled task run) and terminates
+its Sandbox, then checks that it still holds the claim immediately before each
+durable effect.
 
 ## Prepare expensive state, verify current state
 
-Snapshots avoid reinstalling tools and dependencies for every stage. A
+Snapshots avoid reinstalling tools and dependencies for every task. A
 restored Sandbox still fetches the requested ref, checks its manifest, and
 reinstalls when lockfiles or configuration changed.
 

@@ -5,7 +5,7 @@ const COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
 /** How much of a command's output an agent sees. */
 const OUTPUT_TAIL_CHARS = 4096;
 
-/** A configured verify command as a stage ran it. */
+/** A configured verify command as a task ran it. */
 export interface VerifyRun extends VerifyResult {
 	/** null when the command didn't finish (timeout or a lost exec). */
 	exitCode: number | null;

@@ -32,10 +32,7 @@ const migrations = (await readdir(sqlDir)).filter((name) => name.endsWith(".sql"
 
 const out = new Reporter();
 try {
-	process.exitCode = await runDoctor(
-		{ env: process.env, services, repos: Object.keys(config.repos), models: config.models, migrations },
-		out,
-	);
+	process.exitCode = await runDoctor({ env: process.env, services, repos: Object.keys(config.repos), models: config.models, migrations }, out);
 } catch (error) {
 	out.fail(`doctor crashed: ${errorMessage(error)}`);
 	process.exitCode = 1;

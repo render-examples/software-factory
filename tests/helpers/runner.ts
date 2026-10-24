@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fauxAssistantMessage as testStubAssistantMessage, fauxToolCall as testStubToolCall } from "@earendil-works/pi-ai";
-import { writeRunnerBundle } from "../../app/runner/bundle.js";
+import { bundleRunner } from "../../app/runner/bundle.js";
 import { main } from "../../app/runner/main.js";
 import { RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/protocol.js";
 import type { TestStub } from "../../app/runner/test-stub.js";
@@ -13,7 +13,7 @@ import type { TestStub } from "../../app/runner/test-stub.js";
 export const SUBMIT = "submit";
 
 /** The output schema most runner tests use: what `z.toJSONSchema` emits for a small object. */
-export const OUTPUT_SCHEMA = {
+const OUTPUT_SCHEMA = {
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	type: "object",
 	properties: {
@@ -103,19 +103,14 @@ export async function runWithTestStub(input: unknown, testStub: TestStub, extraA
 }
 
 const toolUse = { stopReason: "toolUse" } as const;
-export const say = (text: string) => testStubAssistantMessage(text);
 export const call = (name: string, args: Record<string, unknown>) => testStubAssistantMessage(testStubToolCall(name, args), toolUse);
-export const calls = (...c: Array<[string, Record<string, unknown>]>) =>
-	testStubAssistantMessage(
-		c.map(([name, args]) => testStubToolCall(name, args)),
-		toolUse,
-	);
 
 let runnerPath: string | undefined;
 
 /** Bundles the runner into a fresh temp dir, outside the repo, so no node_modules is reachable from it. */
 export async function buildRunner(): Promise<string> {
-	runnerPath = await writeRunnerBundle(mkdtempSync(join(tmpdir(), "runner-bundle-")));
+	runnerPath = join(mkdtempSync(join(tmpdir(), "runner-bundle-")), "runner.mjs");
+	writeFileSync(runnerPath, await bundleRunner());
 	return runnerPath;
 }
 

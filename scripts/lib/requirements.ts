@@ -1,6 +1,6 @@
 /** What the factory needs from GitHub and from each service's environment, in one place for setup and doctor. */
 import { config } from "../../app/config/index.js";
-import { WORKING_LABEL } from "../../app/runs/status.js";
+import { WORKING_LABEL } from "../../app/claims/status.js";
 
 /**
  * Repository permissions the App requests. Each is used by app/:
@@ -54,26 +54,14 @@ export const LABELS: readonly LabelSpec[] = [
 
 export type Service = "gateway" | "workflows";
 
-/** Each service's env vars, exactly as render.yaml declares them. */
+/** The env vars each service requires, as render.yaml declares them. DATABASE_URL is optional: it only enables telemetry. */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
-	gateway: ["DATABASE_URL", "GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
-	workflows: [
-		"DATABASE_URL",
-		"RENDER_API_KEY",
-		"RENDER_WORKSPACE_ID",
-		"GITHUB_APP_ID",
-		"GITHUB_APP_PRIVATE_KEY",
-		"ANTHROPIC_API_KEY",
-	],
+	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
+	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
 };
 
 /** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = [
-	"DATABASE_URL",
-	"GITHUB_WEBHOOK_SECRET",
-	"RENDER_API_KEY",
-	"GITHUB_APP_PRIVATE_KEY",
-];
+export const SECRET_ENV: readonly string[] = ["DATABASE_URL", "GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];
 
 const LEVELS = ["none", "read", "write", "admin"];
 

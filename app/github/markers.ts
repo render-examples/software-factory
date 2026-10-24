@@ -13,9 +13,13 @@ export type RunState = (typeof RUN_STATES)[number];
 const StatusMarker = z.object({
 	runId: z.string().min(1),
 	stage: z.string().min(1),
+	/** The task's name as the comment shows it. Comments written before it existed lack it. */
+	title: z.string().min(1).optional(),
 	state: z.enum(RUN_STATES),
 	/** ISO 8601 */
 	at: z.string().optional(),
+	/** The running run's sandbox, so the run that stops it can terminate it. */
+	sandboxId: z.string().min(1).optional(),
 });
 
 const SpecMarker = z.object({
@@ -27,9 +31,17 @@ const SpecMarker = z.object({
 	notes: z.unknown().optional(),
 });
 
-const OpenMarker = z.record(z.string(), z.unknown());
+const QuestionsMarker = z.object({
+	round: z.number().int().positive(),
+	questions: z.array(z.string()),
+});
 
-const SCHEMAS = { status: StatusMarker, spec: SpecMarker, questions: OpenMarker, review: OpenMarker } as const;
+const ReviewMarker = z.object({
+	headSha: z.string().regex(/^[0-9a-f]{40}$/),
+	runId: z.string().min(1),
+});
+
+const SCHEMAS = { status: StatusMarker, spec: SpecMarker, questions: QuestionsMarker, review: ReviewMarker } as const;
 
 export type MarkerKind = keyof typeof SCHEMAS;
 export type MarkerData = { [K in MarkerKind]: z.infer<(typeof SCHEMAS)[K]> };

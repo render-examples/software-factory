@@ -1,10 +1,9 @@
 import type { RepoContext } from "../config/index.js";
-import { githubApiUrl, githubToken } from "./auth.js";
+import { githubToken } from "./auth.js";
+import { encodePath, GitHubHttp } from "./request.js";
+import { GitHubError } from "./types.js";
 
 const SHA = /^[0-9a-f]{40}$/;
-const MAX_ATTEMPTS = 5;
-const MAX_RETRY_AFTER_MS = 60_000;
-const REQUEST_TIMEOUT_MS = 30_000;
 
 export type FileMode = "100644" | "100755";
 
@@ -49,7 +48,7 @@ export interface GitDataClient {
 	createCommit(input: CreateCommitInput): Promise<string>;
 	/** The commit a branch points at, or null when the branch doesn't exist. */
 	getRef(branch: string): Promise<string | null>;
-	/** Throws GitDataError with status 422 when the branch already exists. */
+	/** Throws GitHubError with status 422 when the branch already exists. */
 	createRef(branch: string, sha: string): Promise<void>;
 	/** Without force, GitHub refuses (422) unless the move is a fast-forward. */
 	updateRef(branch: string, sha: string, opts?: { force?: boolean }): Promise<void>;
@@ -63,66 +62,15 @@ export interface GitDataOptions {
 	sleep?: (ms: number) => Promise<void>;
 }
 
-export class GitDataError extends Error {
-	constructor(
-		readonly status: number,
-		readonly method: string,
-		readonly path: string,
-		readonly body: string,
-	) {
-		super(`GitHub ${method} ${path} failed (${status}): ${body.slice(0, 300)}`);
-		this.name = "GitDataError";
-	}
-}
-
-/** `heads/<branch>` with each segment encoded, so slashes in the branch name stay path separators. */
-export function headsPath(branch: string): string {
-	return `heads/${branch.split("/").map(encodeURIComponent).join("/")}`;
-}
-
 export function gitData(repo: RepoContext, opts: GitDataOptions = {}): GitDataClient {
-	const fetchImpl = opts.fetch ?? fetch;
-	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 	const token =
 		opts.token ??
-		(() =>
-			githubToken({
-				installationId: repo.installationId,
-				repo: repo.name,
-				permissions: { contents: "write" },
-				fetch: opts.fetch,
-			}));
+		(() => githubToken({ installationId: repo.installationId, repo: repo.name, permissions: { contents: "write" }, fetch: opts.fetch }));
+	const http = new GitHubHttp(token, { fetch: opts.fetch, sleep: opts.sleep, timeoutMs: 30_000, maxAttempts: 5 });
 	const prefix = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/git`;
-
-	async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const url = `${githubApiUrl()}${prefix}${path}`;
-		for (let attempt = 1; ; attempt++) {
-			let response: Response;
-			try {
-				response = await fetchImpl(url, {
-					method,
-					headers: {
-						Authorization: `Bearer ${await token()}`,
-						Accept: "application/vnd.github+json",
-						"X-GitHub-Api-Version": "2022-11-28",
-						"User-Agent": "software-factory",
-						...(body === undefined ? {} : { "Content-Type": "application/json" }),
-					},
-					body: body === undefined ? undefined : JSON.stringify(body),
-					signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-				});
-			} catch (err) {
-				if (attempt >= MAX_ATTEMPTS) throw err;
-				await sleep(backoffMs(attempt));
-				continue;
-			}
-			if (response.ok) return (response.status === 204 ? undefined : await response.json()) as T;
-			const text = await response.text().catch(() => "");
-			const delay = retryDelayMs(response, text, attempt);
-			if (delay === null || attempt >= MAX_ATTEMPTS) throw new GitDataError(response.status, method, path, text);
-			await sleep(delay);
-		}
-	}
+	// Blobs, trees, and commits are content-addressed and ref moves are compare-and-set, so every call is safe to retry.
+	const request = <T>(method: string, path: string, body?: unknown) => http.json<T>(method, `${prefix}${path}`, { body, idempotent: true });
+	const heads = (branch: string) => `heads/${encodePath(branch)}`;
 
 	return {
 		async getCommit(sha) {
@@ -133,33 +81,24 @@ export function gitData(repo: RepoContext, opts: GitDataOptions = {}): GitDataCl
 				author?: RawIdentity;
 				committer?: RawIdentity;
 			}>("GET", `/commits/${requireSha(sha, "commit")}`);
-			const parents = (result.parents ?? []).map((p) => requireSha(p.sha, "parent"));
-			const author = toIdentity(result.author);
-			const committer = toIdentity(result.committer);
 			const commit: GitCommit = {
 				sha: requireSha(result.sha, "commit"),
 				treeSha: requireSha(result.tree?.sha, "tree"),
-				parents,
-				...(author ? { author } : {}),
-				...(committer ? { committer } : {}),
+				parents: (result.parents ?? []).map((p) => requireSha(p.sha, "parent")),
+				author: toIdentity(result.author),
+				committer: toIdentity(result.committer),
 			};
 			if (commit.sha !== sha) throw new Error(`GitHub returned commit ${commit.sha} for ${sha}`);
 			return commit;
 		},
 
 		async createBlob(content) {
-			const result = await request<{ sha?: string }>("POST", "/blobs", {
-				content: content.toString("base64"),
-				encoding: "base64",
-			});
+			const result = await request<{ sha?: string }>("POST", "/blobs", { content: content.toString("base64"), encoding: "base64" });
 			return requireSha(result.sha, "blob");
 		},
 
 		async createTree(baseTree, entries) {
-			const result = await request<{ sha?: string }>("POST", "/trees", {
-				base_tree: requireSha(baseTree, "base tree"),
-				tree: entries,
-			});
+			const result = await request<{ sha?: string }>("POST", "/trees", { base_tree: requireSha(baseTree, "base tree"), tree: entries });
 			return requireSha(result.sha, "tree");
 		},
 
@@ -175,34 +114,24 @@ export function gitData(repo: RepoContext, opts: GitDataOptions = {}): GitDataCl
 		},
 
 		async getRef(branch) {
+			let result: { ref?: string; object?: { sha?: string; type?: string } };
 			try {
-				const result = await request<{
-					ref?: string;
-					object?: { sha?: string; type?: string };
-				}>("GET", `/ref/${headsPath(branch)}`);
-				if (result.ref !== `refs/heads/${branch}`)
-					throw new Error(`GitHub returned ${result.ref} for refs/heads/${branch}`);
-				if (result.object?.type !== "commit")
-					throw new Error(`refs/heads/${branch} points at a ${result.object?.type}`);
-				return requireSha(result.object.sha, "ref target");
+				result = await request("GET", `/ref/${heads(branch)}`);
 			} catch (err) {
-				if (err instanceof GitDataError && err.status === 404) return null;
+				if (err instanceof GitHubError && err.status === 404) return null;
 				throw err;
 			}
+			if (result.ref !== `refs/heads/${branch}`) throw new Error(`GitHub returned ${result.ref} for refs/heads/${branch}`);
+			if (result.object?.type !== "commit") throw new Error(`refs/heads/${branch} points at a ${result.object?.type}`);
+			return requireSha(result.object.sha, "ref target");
 		},
 
 		async createRef(branch, sha) {
-			await request("POST", "/refs", {
-				ref: `refs/heads/${branch}`,
-				sha: requireSha(sha, "commit"),
-			});
+			await request("POST", "/refs", { ref: `refs/heads/${branch}`, sha: requireSha(sha, "commit") });
 		},
 
 		async updateRef(branch, sha, { force = false } = {}) {
-			await request("PATCH", `/refs/${headsPath(branch)}`, {
-				sha: requireSha(sha, "commit"),
-				force,
-			});
+			await request("PATCH", `/refs/${heads(branch)}`, { sha: requireSha(sha, "commit"), force });
 		},
 	};
 }
@@ -215,34 +144,10 @@ interface RawIdentity {
 
 function toIdentity(raw: RawIdentity | undefined): GitIdentity | undefined {
 	if (typeof raw?.name !== "string" || typeof raw.email !== "string") return undefined;
-	return { name: raw.name, email: raw.email, ...(typeof raw.date === "string" ? { date: raw.date } : {}) };
+	return { name: raw.name, email: raw.email, date: typeof raw.date === "string" ? raw.date : undefined };
 }
 
 function requireSha(value: unknown, what: string): string {
 	if (typeof value !== "string" || !SHA.test(value)) throw new Error(`Invalid ${what} SHA: ${String(value)}`);
 	return value;
-}
-
-function backoffMs(attempt: number): number {
-	return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_AFTER_MS);
-}
-
-/** Milliseconds to wait before retrying, or null when the response isn't retryable. */
-function retryDelayMs(response: Response, body: string, attempt: number): number | null {
-	const rateLimited =
-		response.status === 429 ||
-		(response.status === 403 &&
-			(response.headers.has("retry-after") ||
-				response.headers.get("x-ratelimit-remaining") === "0" ||
-				/secondary rate limit/i.test(body)));
-	if (!rateLimited && response.status < 500) return null;
-
-	const retryAfter = Number(response.headers.get("retry-after"));
-	if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS);
-	const reset = Number(response.headers.get("x-ratelimit-reset"));
-	if (response.headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) && reset > 0) {
-		return Math.min(Math.max(reset * 1000 - Date.now(), 1000), MAX_RETRY_AFTER_MS);
-	}
-	// GitHub asks for at least a minute after a secondary rate limit that names no wait.
-	return rateLimited ? MAX_RETRY_AFTER_MS : backoffMs(attempt);
 }

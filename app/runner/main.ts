@@ -6,7 +6,7 @@ import { RUNNER_EXIT } from "./protocol.js";
 import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
 import { defaultTestStub, type TestStub } from "./test-stub.js";
 
-export interface MainIO {
+interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
 	/** Resolves once `chunk` is flushed. */
 	write(chunk: string): Promise<void>;

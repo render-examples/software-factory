@@ -5,8 +5,6 @@ import { readBody } from "./body.js";
 import { route } from "./routes.js";
 import { verifySignature } from "./signature.js";
 
-export type { Route } from "./routes.js";
-
 export interface GatewayDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	emit?: typeof defaultEmit;
@@ -18,7 +16,6 @@ export function createGateway(deps: GatewayDeps): Hono {
 	const app = new Hono();
 
 	app.get("/health", (c) => c.json({ status: "ok" }));
-	// Gateway readiness does not touch Postgres; stage tasks perform the strict coordination check.
 	app.get("/ready", (c) => c.json({ status: "ready" }));
 
 	app.post("/webhooks/github", async (c) => {

@@ -14,12 +14,12 @@ This file applies to the whole repository. Read
   [docs/configuration.md](docs/configuration.md).
 - **Diagnose a live deployment:** use
   [docs/operations.md](docs/operations.md).
-- **Add an agent, stage, or trigger:** use
+- **Add an agent, claiming task, or trigger:** use
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What this is
 
-software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three stages (Triage, Spec-to-PR, PR Reviewer) run as Render Workflows tasks. Agents run in Render Sandboxes restored from a per-repository snapshot. Postgres keeps an append-only `events` table; strict `run.claimed` rows coordinate stage ownership, while every other event is telemetry.
+software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three claiming tasks (Triage, Spec-to-PR, PR Reviewer) run on Render Workflows, each holding a claim on its issue or PR while it works. Agents run in Render Sandboxes restored from a per-repository snapshot. The status comment on the issue or PR names the run that holds the claim. Postgres is optional and keeps an append-only `events` table for telemetry only.
 
 Two processes deploy:
 
@@ -37,15 +37,15 @@ app/
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
   schemas/          Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
   gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs
-  workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts; run-verify.ts is shared
-  runs/             withRun lifecycle: permission, durable claim, takeover, checkpoints, status, expected failures
+  workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts; claiming-task.ts and run-verify.ts are shared
+  claims/           withClaim lifecycle: permission, the status-comment claim, takeover and sandbox cleanup, checkpoints, expected failures
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
   runner/           The agent runner: one Pi agent loop, tools, read-only shell policy, submit. Bundled into the snapshot
   sandbox/          Sandbox API client with pacing and retries; snapshot build, openSandbox, withSandbox, verification
   changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
   github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
   format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
-  events/           Strict run claims and best-effort emit() over the events table
+  events/           Optional best-effort emit() over the events table
   sql/              Migrations
 sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
 scripts/            setup-app, setup-github, doctor, migrate
@@ -56,8 +56,8 @@ Dependencies point one way, from entry points down to leaves:
 
 ```text
 entrypoints → gateway, workflows
-workflows → runs, changeset, agents, sandbox, github, format, events, schemas, config
-runs → agents, github, events, config
+workflows → claims, changeset, agents, sandbox, github, format, events, schemas, config
+claims → agents, sandbox, github, events, config
 agents → sandbox, runner, events, schemas, config
 changeset → sandbox, github, config
 sandbox → runner (to bundle it), github (read tokens), config
@@ -77,17 +77,17 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 ## Conventions
 
 - Strict TypeScript, ESM, NodeNext. Relative imports end in `.js`. No path aliases.
-- Biome formats with tabs and a line width of 150 (`biome.json`). `npm run lint` must pass with no warnings.
+- Biome is configured for tabs and a line width of 150 (`biome.json`); CI runs `biome lint`, which must pass with no warnings.
 - Validate every external or cross-process input with Zod at the boundary: webhook payloads, task inputs, agent output, markers, sandbox output, environment.
-- Task inputs and results stay small and JSON-serializable. Each stage opens
+- Task inputs and results stay small and JSON-serializable. Each task opens
   one sandbox with `withSandbox`, which closes it within the same task.
-- Throw `RunError` for an expected failure whose message is safe to show on GitHub. `withRun` also treats an agent
+- Throw `ExpectedFailure` for an expected failure whose message is safe to show on GitHub. `withClaim` also treats an agent
   that stops on its own (turn limit, timeout, no or invalid submission) as expected; every other error fails the task.
   Outcome names are snake_case.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
-- Stage implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
-- Keep the suite near 100 tests. Test durable behavior at process and trust
+- Task implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
+- Keep the suite focused; it currently has 100+ tests. Test durable behavior at process and trust
   boundaries: authenticated inputs, user-visible outcomes, authority,
   cleanup, and security invariants. Prefer one end-to-end happy path and the
   meaningful failure modes over helper permutations. Do not assert private
@@ -115,15 +115,16 @@ each is enforced):
 7. A PR opens only after GitHub's tree SHA equals the verified sandbox tree.
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
-10. Every sandbox is created with a timeout and closed by `withSandbox` (in `finally`).
-11. Postgres decides only cross-task run ownership; best-effort telemetry never drives stage behavior.
+10. Every sandbox is created with a timeout and closed by `withSandbox` (in `finally`). A claiming task records its sandbox in the status comment, so the run or `/factory cancel` that stops it can terminate the sandbox: Render kills a cancelled task without running `finally`.
+11. Postgres is telemetry only; no task behavior depends on it.
 
 `tests/agents-catalog.test.ts` protects unique agent identities and tool authority. Change it only on purpose.
 
 ## Common changes
 
-- **An agent or a stage:** follow
-  [CONTRIBUTING.md](CONTRIBUTING.md#customize-an-agent).
+- **An agent or a claiming task:** follow
+  [CONTRIBUTING.md](CONTRIBUTING.md#customize-an-agent) or
+  [CONTRIBUTING.md](CONTRIBUTING.md#add-a-claiming-task).
 - **A configuration key:** add it to `FactoryConfig` in `factory.config.ts`
   with a doc comment, and to
   [docs/configuration.md](docs/configuration.md#behavior-and-limits).
@@ -142,4 +143,5 @@ render blueprints validate render.yaml   # when render.yaml changes
 npm audit --omit=dev --audit-level=high
 ```
 
-For one test file: `npx vitest run tests/gateway.test.ts`. `npm run doctor` checks a live deployment and is read-only.
+For one test file: `npx vitest run tests/gateway.test.ts`. `npm run doctor` is read-only; see
+[Operations](docs/operations.md#check-a-deployment) for local and deployed usage.

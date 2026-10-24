@@ -408,7 +408,7 @@ snapshot.
 ### Pass condition
 
 - The issue receives an App-authored status comment.
-- `factory:working` appears while the stage is active.
+- `factory:working` appears while the task is running.
 - Triage ends with questions, a specification, or an intentional decline.
 - The status comment includes the final outcome or a useful failure.
 
@@ -446,5 +446,5 @@ After setup:
 - diagnose live behavior through [Operations](../operations.md);
 - read [Architecture](../architecture.md) before changing authority,
   credentials, coordination, or publishing; and
-- use [Contributing](../../CONTRIBUTING.md) to add agents, stages, and GitHub
+- use [Contributing](../../CONTRIBUTING.md) to add agents, tasks, and GitHub
   triggers.

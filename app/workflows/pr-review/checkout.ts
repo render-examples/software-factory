@@ -1,6 +1,6 @@
 import type { RepoContext } from "../../config/index.js";
 import type { PullRequest } from "../../github/index.js";
-import { RunError } from "../../runs/index.js";
+import { ExpectedFailure } from "../../claims/index.js";
 import { type OpenedSandbox, type SandboxRef, type Sandbox, shq, withSandbox } from "../../sandbox/index.js";
 
 export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
@@ -17,8 +17,8 @@ export function withPullSandbox<T>(open: OpenSandbox, repo: RepoContext, pull: P
 	return withSandbox(openPull, fn);
 }
 
-export function headMoved(): RunError {
-	return new RunError(HEAD_MOVED, "head_moved");
+export function headMoved(): ExpectedFailure {
+	return new ExpectedFailure(HEAD_MOVED, "head_moved");
 }
 
 /**
@@ -29,7 +29,7 @@ export async function mergeBase(sandbox: Sandbox, baseBranch: string): Promise<s
 	const res = await sandbox.exec(`git merge-base ${shq(`refs/remotes/origin/${baseBranch}`)} HEAD`, { asRunner: true });
 	const sha = res.stdout.trim();
 	if (res.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(sha)) {
-		throw new RunError(`couldn't find where this PR branched from \`${baseBranch}\`, so there's no diff to review.`, "no_merge_base");
+		throw new ExpectedFailure(`couldn't find where this PR branched from \`${baseBranch}\`, so there's no diff to review.`, "no_merge_base");
 	}
 	return sha;
 }

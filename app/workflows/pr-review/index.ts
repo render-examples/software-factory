@@ -1,61 +1,40 @@
-import type { TaskContext } from "@renderinc/sdk/workflows";
-import { task } from "@renderinc/sdk/workflows";
-import { runAgent } from "../../agents/index.js";
-import { requireRepo, TASKS } from "../../config/index.js";
-import { PrReviewInput } from "../../schemas/tasks.js";
-import { type GitHubClient, githubFor } from "../../github/index.js";
-import { type RunOutcome, type RunResult, type RunControl, subjectName, withRun } from "../../runs/index.js";
+import { prReviewer, runAgent } from "../../agents/index.js";
+import type { Outcome } from "../../claims/index.js";
+import { TASKS } from "../../config/index.js";
 import { openSandbox } from "../../sandbox/index.js";
+import { PrReviewInput } from "../../schemas/index.js";
+import { type ClaimDeps, claimingTask } from "../claiming-task.js";
 import { runVerify } from "../run-verify.js";
-import { reviewPull, type RunAgent } from "./agents.js";
 import { headMoved, mergeBase, type OpenSandbox, withPullSandbox } from "./checkout.js";
 import { commentable, pullDiffLines } from "./diff-lines.js";
 import { reviewerMessage } from "./messages.js";
 import { findReview, postReview } from "./post.js";
 
 /** Test seams: everything that reaches GitHub, Sandboxes, or a model. */
-export interface PrReviewDeps {
-	gh?: GitHubClient;
-	runs?: RunControl;
+export interface PrReviewDeps extends ClaimDeps {
 	openSandbox?: OpenSandbox;
-	runAgent?: RunAgent;
+	runAgent?: typeof runAgent;
 }
 
 /**
  * PR Reviewer: verify the PR head, review it in one sandbox, and post one COMMENT review.
  * It never approves or requests changes.
  */
-export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unknown, deps: PrReviewDeps = {}): Promise<RunOutcome> {
-	const input = PrReviewInput.parse(raw);
-	const repo = requireRepo(input.repo, input.installationId);
-	const gh = deps.gh ?? githubFor(repo);
-	const open = deps.openSandbox ?? ((r, ref) => openSandbox(r, ref));
-	const run = deps.runAgent ?? runAgent;
-	const subject = { kind: "pr", number: input.pr } as const;
-	const stage = {
-		repo,
-		subject,
-		stage: TASKS.prReview,
-		actor: input.actor,
-		gh,
-		runs: deps.runs,
-	};
-
-	return withRun(ctx, stage, async ({ traceId, runId, progress }): Promise<RunResult> => {
-		const base = {
-			traceId,
-			runId,
-			repo: repo.fullName,
-			subject: subjectName(subject),
-		};
+export const runPrReview = claimingTask(
+	{
+		name: TASKS.prReview,
+		title: "PR Reviewer",
+		input: PrReviewInput,
+		subject: (input) => ({ kind: "pr", number: input.pr }),
+		timeoutSeconds: 2 * 60 * 60,
+	},
+	async (claim, input, deps: PrReviewDeps): Promise<Outcome> => {
+		const { gh, repo } = claim;
 
 		// 1. The PR must be open, still at the labeled commit, and not yet reviewed there.
 		const pull = await gh.getPull(input.pr);
 		if (pull.state !== "open" || pull.merged) {
-			return {
-				outcome: "pr_closed",
-				summary: "the pull request is closed, so there's nothing to review.",
-			};
+			return { outcome: "pr_closed", summary: "the pull request is closed, so there's nothing to review." };
 		}
 		if (pull.headSha !== input.headSha) throw headMoved();
 		const existing = await findReview(gh, input.pr, input.headSha);
@@ -70,28 +49,27 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
 		// 2. One sandbox at the PR head: verify, then review the complete change.
-		await progress("opening a sandbox");
-		const { verify, review } = await withPullSandbox(open, repo, pull, async (sandbox) => {
+		await claim.progress("opening a sandbox");
+		const { verify, review } = await withPullSandbox(deps.openSandbox ?? openSandbox, repo, pull, async (sandbox) => {
+			await claim.recordSandbox(sandbox);
 			const baseRef = await mergeBase(sandbox, pull.baseRef);
-			await progress("running the verify commands");
+			await claim.progress("running the verify commands");
 			const verify = await runVerify(sandbox, repo.config.verify);
 
-			await progress("reviewing the pull request");
-			const review = await reviewPull(run, reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify }), { ...base, sandbox });
+			await claim.progress("reviewing the pull request");
+			const message = reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify });
+			const { output: review } = await (deps.runAgent ?? runAgent)(prReviewer, message, claim.agentOptions(sandbox));
 			return { verify, review };
 		});
 
 		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
-		await progress("posting the review");
+		await claim.progress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,
 			headSha: input.headSha,
-			runId,
+			runId: claim.runId,
 			review,
-			render: {
-				verification: verify,
-				isCommentable: commentable(diffLines),
-			},
+			render: { verification: verify, isCommentable: commentable(diffLines) },
 		});
 
 		const failedVerify = verify.filter((v) => !v.passed).length;
@@ -100,20 +78,6 @@ export async function runPrReview(ctx: Pick<TaskContext, "metadata">, raw: unkno
 			`${inlineComments} inline comment${inlineComments === 1 ? "" : "s"}`,
 			...(failedVerify > 0 ? [`${failedVerify} of ${verify.length} verify commands failed`] : []),
 		];
-		return {
-			outcome: "reviewed",
-			summary: `posted a COMMENT review: ${notes.join(", ")}.`,
-			links: [{ label: "Review", url: posted.htmlUrl }],
-		};
-	});
-}
-
-/** Not retried: review costs real money, and a relabel starts a fresh review. */
-export const prReview = task(
-	{
-		name: TASKS.prReview,
-		timeoutSeconds: 2 * 60 * 60,
-		retry: { maxRetries: 0, waitDurationMs: 5_000, backoffScaling: 1 },
+		return { outcome: "reviewed", summary: `posted a COMMENT review: ${notes.join(", ")}.`, links: [{ label: "Review", url: posted.htmlUrl }] };
 	},
-	(ctx, raw: unknown) => runPrReview(ctx, raw),
 );

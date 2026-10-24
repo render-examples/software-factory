@@ -5,13 +5,13 @@ import { Value } from "typebox/value";
 export const SUBMIT_TOOL = "submit";
 export const MAX_SUBMIT_ATTEMPTS = 3;
 
-export type OutputSchema = Record<string, unknown>;
+type JsonOutputSchema = Record<string, unknown>;
 
 /**
  * Why `schema` can't be a submit tool's parameters, or undefined if it can. Pi's Anthropic adapter sends only
  * the top-level `properties` and `required`, so the root must be a plain object schema, not a union or a ref.
  */
-export function outputSchemaProblem(schema: OutputSchema): string | undefined {
+export function outputSchemaProblem(schema: JsonOutputSchema): string | undefined {
 	if (schema.type !== "object") return 'output_schema must have type "object" at its root';
 	const props = schema.properties;
 	if (typeof props !== "object" || props === null || Array.isArray(props)) {
@@ -25,27 +25,27 @@ export function outputSchemaProblem(schema: OutputSchema): string | undefined {
 	return undefined;
 }
 
-export type Verdict = { ok: true } | { ok: false; problems: string[] };
+type Verdict = { ok: true } | { ok: false; problems: string[] };
 
 /**
  * Checks a submission against the output JSON Schema with TypeBox, which validates plain JSON Schema (including
  * what `z.toJSONSchema` emits). A usability check so the model can fix its submission: the host revalidates
  * the accepted output with the agent's Zod schema, and that check is authoritative.
  */
-export function checkSubmission(schema: OutputSchema, candidate: unknown): Verdict {
+function checkSubmission(schema: JsonOutputSchema, candidate: unknown): Verdict {
 	if (Value.Check(schema as TSchema, candidate)) return { ok: true };
 	const problems = [...Value.Errors(schema as TSchema, candidate)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
 	return { ok: false, problems: problems.length > 0 ? [...new Set(problems)] : ["(root): does not match the output schema"] };
 }
 
-export interface SubmitHandlers {
+interface SubmitHandlers {
 	onAccepted(output: unknown): void;
 	/** Called with the number of rejected attempts so far. */
 	onRejected(attempts: number): void;
 }
 
 /** The tool's parameters as the model sees them: the output schema without JSON Schema metadata. */
-function toolParameters(schema: OutputSchema): TSchema {
+function toolParameters(schema: JsonOutputSchema): TSchema {
 	const { $schema: _schema, $id: _id, ...rest } = schema;
 	return rest as TSchema;
 }
@@ -55,7 +55,7 @@ function toolParameters(schema: OutputSchema): TSchema {
  * `prepareArguments`, which runs before Pi's own argument validation (which would otherwise reject a call
  * without counting it, and coerce values the host's Zod schema would refuse).
  */
-export function createSubmitTool(schema: OutputSchema, handlers: SubmitHandlers): AgentTool<TSchema, unknown> {
+export function createSubmitTool(schema: JsonOutputSchema, handlers: SubmitHandlers): AgentTool<TSchema, unknown> {
 	let accepted: { output: unknown } | undefined;
 	/** The arguments as checked, before Pi's validation coerces them; calls run one at a time (sequential). */
 	let checked: unknown;

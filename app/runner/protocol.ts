@@ -9,8 +9,10 @@ export const ToolName = z.enum(TOOL_NAMES);
 export type ToolName = z.infer<typeof ToolName>;
 
 const ThinkingLevel = z.enum(["off", "minimal", "low", "medium", "high"]);
+export type ThinkingLevel = z.infer<typeof ThinkingLevel>;
 
 export const RunnerInput = z.object({
+	/** Correlates host-side events; the sandbox runner validates but does not emit it. */
 	trace_id: z.string().min(1),
 	agent_id: z.string().min(1),
 	/** The agent's prompt file, verbatim. */
@@ -41,14 +43,7 @@ export const Usage = z.object({
 });
 export type Usage = z.infer<typeof Usage>;
 
-export const RUNNER_ERROR_CODES = [
-	"timeout",
-	"no_submission",
-	"invalid_input",
-	"invalid_submission",
-	"max_turns",
-	"agent_error",
-] as const;
+const RUNNER_ERROR_CODES = ["timeout", "no_submission", "invalid_input", "invalid_submission", "max_turns", "agent_error"] as const;
 export type RunnerErrorCode = (typeof RUNNER_ERROR_CODES)[number];
 
 /** One JSON object per line on the runner's stdout. Exactly one `result` or `error` ends the stream. */

@@ -13,15 +13,13 @@ import {
 	type Usage as PiUsage,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { RUNNER_EXIT, type RunnerErrorCode, type RunnerEvent, RunnerInput, type Usage } from "./protocol.js";
+import { RUNNER_EXIT, type RunnerErrorCode, type RunnerEvent, RunnerInput, type ThinkingLevel, type Usage } from "./protocol.js";
 import { createSubmitTool, MAX_SUBMIT_ATTEMPTS, outputSchemaProblem, SUBMIT_TOOL } from "./submit.js";
 import { registerTestStubModel, type TestStub } from "./test-stub.js";
 import { createTools } from "./tools.js";
 
 /** Reported in `started` and `--self-test`. */
 export const PI_VERSION: string = agentCorePackage.version;
-
-export type ThinkingLevel = RunnerInput["thinking_level"];
 
 const MAX_OUTPUT_TOKENS = 16_384;
 /** Passed to the agent so the max_tokens cap below stays in step with Pi's thinking budget. */
@@ -35,18 +33,16 @@ const ABORT_GRACE_MS = 5_000;
 const MAX_MODEL_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 2_000;
 
-const SUBMIT_REMINDER =
-	`You stopped without calling ${SUBMIT_TOOL}. Call it now, exactly once, with your final output built from ` +
-	"what you have found so far.";
+const SUBMIT_REMINDER = `You stopped without calling ${SUBMIT_TOOL}. Call it now, exactly once, with your final output built from what you have found so far.`;
 
 export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 // ── events ──────────────────────────────────────────────────────────────
 
 type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;
-export type EventBody = WithoutAt<RunnerEvent>;
+type EventBody = WithoutAt<RunnerEvent>;
 
-export interface Emitter {
+interface Emitter {
 	(event: EventBody): void;
 	readonly terminated: boolean;
 	/** Replaces `secret` with `[REDACTED]` in every later line. */
@@ -85,9 +81,7 @@ const TRUNCATED = "…[truncated]";
 function outputPreview(result: unknown): string {
 	const content = (result as { content?: unknown } | undefined)?.content;
 	if (!Array.isArray(content)) return "";
-	const text = content
-		.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`))
-		.join("\n");
+	const text = content.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`)).join("\n");
 	return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS - TRUNCATED.length) + TRUNCATED : text;
 }
 
@@ -154,7 +148,7 @@ function isDirectory(path: string): boolean {
 
 type Failure = { code: RunnerErrorCode; message: string };
 
-export interface SessionOptions {
+interface SessionOptions {
 	/** Already validated with parseInput. */
 	input: RunnerInput;
 	emit: Emitter;
@@ -185,15 +179,15 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	if (!opts.testStub && !opts.apiKey) {
 		return fail("agent_error", `no API key for provider "${input.model_provider}": pass it with --key-stdin`);
 	}
-	const model = capMaxTokens(
-		opts.testStub ? registerTestStubModel(models, opts.testStub(input), requested) : requested,
-		input.thinking_level,
-	);
+	const model = capMaxTokens(opts.testStub ? registerTestStubModel(models, opts.testStub(input), requested) : requested, input.thinking_level);
 
 	let submission: { output: unknown } | undefined;
 	let failure: Failure | undefined;
 	const stopped = new AbortController();
-	const tools = input.tools.length > 0 && input.cwd && input.scratch_dir ? createTools({ tools: input.tools, cwd: input.cwd, scratchDir: input.scratch_dir }) : [];
+	const tools =
+		input.tools.length > 0 && input.cwd && input.scratch_dir
+			? createTools({ tools: input.tools, cwd: input.cwd, scratchDir: input.scratch_dir })
+			: [];
 
 	const agent = new Agent({
 		initialState: {
@@ -321,7 +315,9 @@ function forward(event: AgentEvent, emit: Emitter, model: Model<Api>) {
 }
 
 function callsSubmit(message: { role: string; content?: unknown }): boolean {
-	return message.role === "assistant" && Array.isArray(message.content) && message.content.some((c) => c?.type === "toolCall" && c.name === SUBMIT_TOOL);
+	return (
+		message.role === "assistant" && Array.isArray(message.content) && message.content.some((c) => c?.type === "toolCall" && c.name === SUBMIT_TOOL)
+	);
 }
 
 /**
