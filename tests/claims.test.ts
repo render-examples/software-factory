@@ -3,7 +3,7 @@ import type { FactoryEvent } from "../app/events/index.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
-	emit: async (event: FactoryEvent) => {
+	emit: (event: FactoryEvent) => {
 		events.push(event);
 	},
 }));
@@ -140,8 +140,7 @@ describe("withClaim", () => {
 		expect(gh.comments[0]?.body).toContain("did not run: @reader needs `write` permission");
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.state).toBe("rejected");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
-		expect(events.map((e) => e.type)).toEqual(["run.started", "run.finished"]);
-		expect(events.at(-1)?.payload).toMatchObject({ state: "rejected" });
+		expect(events).toMatchObject([{ type: "run.finished", traceId: "trn-root", runId: "trn-run", payload: { state: "rejected" } }]);
 	});
 
 	it("runs the work and records events with the trace id and outcome", async () => {
@@ -168,16 +167,15 @@ describe("withClaim", () => {
 		expect(gh.comments[0]?.body).toContain("**Triage** finished: asked 2 questions");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(events).toMatchObject([
+			{ type: "run.finished", traceId: "trn-prev", payload: { state: "cancelled", outcome: "superseded", stoppedBy: "trn-run" } },
 			{
-				type: "run.started",
+				type: "run.finished",
 				traceId: "trn-root",
 				runId: "trn-run",
 				repo: REPO.fullName,
 				subject: "issue#12",
-				payload: { stage: "triage", actor: "maintainer" },
+				payload: { stage: "triage", state: "done", outcome: "asked-questions" },
 			},
-			{ type: "run.finished", traceId: "trn-prev", payload: { state: "cancelled", outcome: "superseded", stoppedBy: "trn-run" } },
-			{ type: "run.finished", traceId: "trn-root", payload: { state: "done", outcome: "asked-questions" } },
 		]);
 	});
 

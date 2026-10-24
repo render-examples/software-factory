@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type DbClient, type DoctorOptions, runDoctor } from "../scripts/lib/doctor.js";
+import { type DoctorOptions, runDoctor } from "../scripts/lib/doctor.js";
 import { type CheckResult, Reporter } from "../scripts/lib/output.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
@@ -12,7 +12,6 @@ const PRIVATE_KEY_B64 = Buffer.from(privateKey).toString("base64");
 
 const TOKEN = "ghs_installationTOKEN123";
 const SECRETS = {
-	DATABASE_URL: "postgresql://factory:pgSECRETpw@db.internal:5432/factory",
 	GITHUB_WEBHOOK_SECRET: "whsec-super-secret-value",
 	RENDER_API_KEY: "rnd_renderSECRETkey",
 	ANTHROPIC_API_KEY: "sk-ant-SECRET-model-key",
@@ -94,36 +93,8 @@ function fakeFetch(world: World = {}) {
 	return { fetch, calls };
 }
 
-function fakeDb(opts: { events?: boolean; migrations?: string[] | null; unreachable?: boolean } = {}) {
-	const queries: string[] = [];
-	const connectDb = async (): Promise<DbClient> => {
-		if (opts.unreachable) throw new Error("connect ECONNREFUSED 10.0.0.1:5432");
-		return {
-			async query<T>(sql: string) {
-				queries.push(sql);
-				if (sql.includes("to_regclass")) {
-					return {
-						rows: [
-							{
-								events: opts.events === false ? null : "events",
-								migrations: opts.migrations === null ? null : "schema_migrations",
-							},
-						] as T[],
-					};
-				}
-				if (sql.includes("from schema_migrations")) {
-					return { rows: (opts.migrations ?? ["0001_events.sql"]).map((filename) => ({ filename })) as T[] };
-				}
-				throw new Error(`unexpected query: ${sql}`);
-			},
-			async end() {},
-		};
-	};
-	return { connectDb, queries };
-}
-
-async function doctor(overrides: Partial<DoctorOptions> & { world?: World; db?: ReturnType<typeof fakeDb> } = {}) {
-	const { world, db, ...rest } = overrides;
+async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}) {
+	const { world, ...rest } = overrides;
 	const fake = fakeFetch(world);
 	const lines: string[] = [];
 	const out = new Reporter((line) => lines.push(line));
@@ -135,8 +106,6 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World; db?: 
 			services: ["gateway", "workflows"],
 			repos: ["acme/web"],
 			models: { medium: "anthropic/sonnet", large: "anthropic/opus" },
-			migrations: ["0001_events.sql"],
-			connectDb: (db ?? fakeDb()).connectDb,
 			...rest,
 		},
 		out,
@@ -147,7 +116,7 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World; db?: 
 }
 
 function expectNoSecrets(output: string) {
-	for (const value of [...Object.values(SECRETS), TOKEN, "pgSECRETpw", privateKey.split("\n")[1] ?? ""]) {
+	for (const value of [...Object.values(SECRETS), TOKEN, privateKey.split("\n")[1] ?? ""]) {
 		expect(output).not.toContain(value);
 	}
 }
@@ -179,7 +148,6 @@ describe("doctor", () => {
 				labels: [],
 				tasksStatus: 500,
 			},
-			db: fakeDb({ unreachable: true }),
 		});
 		expectNoSecrets(output);
 	});

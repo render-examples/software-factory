@@ -1,5 +1,4 @@
-/** doctor: read-only checks of one or both services' environment, the GitHub App, Postgres, and Workflows tasks. */
-import pg from "pg";
+/** doctor: read-only checks of one or both services' environment, the GitHub App, and Workflows tasks. */
 import { TASKS } from "../../app/config/index.js";
 import { PROVIDER_KEY_ENV } from "../../app/runner/keys.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
@@ -8,31 +7,21 @@ import { errorMessage, type Reporter } from "./output.js";
 import { LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
-export interface DbClient {
-	query<T extends pg.QueryResultRow>(sql: string): Promise<{ rows: T[] }>;
-	end(): Promise<void>;
-}
-
 export interface DoctorOptions extends ScriptDeps {
 	services: readonly Service[];
 	repos: readonly string[];
 	/** config.models: "provider/model" per tier. */
 	models: Readonly<Record<string, string>>;
-	/** Migration filenames in app/sql. */
-	migrations: readonly string[];
-	connectDb?: (connectionString: string) => Promise<DbClient>;
 	renderApiUrl?: string;
 }
 
 export async function runDoctor(opts: DoctorOptions, out: Reporter): Promise<number> {
 	const { env } = opts;
 	out.addSecrets(...SECRET_ENV.map((name) => env[name]), ...modelKeys(opts.models).map((name) => env[name]));
-	out.addSecrets(databasePassword(env.DATABASE_URL));
 
 	checkEnv(opts, out);
 	if (opts.services.includes("workflows")) checkModels(opts, out);
 	await checkGitHub(opts, out);
-	await checkDatabase(opts, out);
 	await checkTasks(opts, out);
 	return out.summary();
 }
@@ -204,54 +193,6 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 	}
 }
 
-async function checkDatabase(opts: DoctorOptions, out: Reporter): Promise<void> {
-	out.heading("Postgres (optional telemetry)");
-	const url = opts.env.DATABASE_URL?.trim();
-	if (!url) {
-		out.skip("database checks: DATABASE_URL is not set, so telemetry is off");
-		return;
-	}
-	let client: DbClient;
-	try {
-		client = await (opts.connectDb ?? connectPg)(url);
-	} catch (error) {
-		out.fail(`DATABASE_URL is unreachable: ${errorMessage(error)}`, "Use the internal URL on Render, the external one locally");
-		return;
-	}
-	try {
-		out.pass("DATABASE_URL is reachable");
-		const { rows } = await client.query<{ events: string | null; migrations: string | null }>(
-			"select to_regclass('public.events')::text as events, to_regclass('public.schema_migrations')::text as migrations",
-		);
-		const tables = rows[0];
-		if (tables?.events) out.pass("events table exists");
-		else out.fail("events table is missing", "Run `npm run db:migrate` (the gateway's preDeployCommand)");
-		if (!tables?.migrations) {
-			out.fail("schema_migrations table is missing", "Run `npm run db:migrate`");
-			return;
-		}
-		const applied = new Set((await client.query<{ filename: string }>("select filename from schema_migrations")).rows.map((r) => r.filename));
-		const pending = opts.migrations.filter((file) => !applied.has(file));
-		if (pending.length) out.fail(`migrations not applied: ${pending.join(", ")}`, "Run `npm run db:migrate`");
-		else out.pass(`all ${opts.migrations.length} migration(s) applied`);
-	} catch (error) {
-		out.fail(`database query failed: ${errorMessage(error)}`);
-	} finally {
-		await client.end().catch(() => {});
-	}
-}
-
-async function connectPg(connectionString: string): Promise<DbClient> {
-	const client = new pg.Client({
-		connectionString,
-		application_name: "software-factory-doctor",
-		connectionTimeoutMillis: 5_000,
-		statement_timeout: 5_000,
-	});
-	await client.connect();
-	return client;
-}
-
 /**
  * The Render API's GET /v1/tasks, filtered by slug, for each task the gateway starts. The SDK's workflows client
  * has no list-tasks method, so this is a plain request. A non-auth API error skips rather than fails.
@@ -304,9 +245,4 @@ function safeUrl(value: string): URL | null {
 	} catch {
 		return null;
 	}
-}
-
-function databasePassword(url: string | undefined): string | undefined {
-	const parsed = url ? safeUrl(url.trim()) : null;
-	return parsed?.password ? decodeURIComponent(parsed.password) : undefined;
 }

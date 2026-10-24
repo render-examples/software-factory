@@ -54,20 +54,14 @@ export const LABELS: readonly LabelSpec[] = [
 
 export type Service = "gateway" | "workflows";
 
-/** The env vars each service requires, as render.yaml declares them. DATABASE_URL is optional: it only enables telemetry. */
+/** Each service's env vars, exactly as render.yaml declares them. */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
 	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
 	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
 };
 
 /** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = [
-	"DATABASE_URL",
-	"GITHUB_WEBHOOK_SECRET",
-	"RENDER_API_KEY",
-	"GITHUB_APP_PRIVATE_KEY",
-	"FACTORY_VIEWER_PASSWORD",
-];
+export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];
 
 const LEVELS = ["none", "read", "write", "admin"];
 

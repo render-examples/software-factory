@@ -5,7 +5,7 @@ a verified draft pull request, and an automated code review. People approve
 every transition; the factory never approves or merges changes.
 
 It runs in your Render workspace using one web service, one Workflows
-service, Postgres, and Render Sandboxes.
+service, and Render Sandboxes.
 
 **Start by [forking this repository](https://github.com/render-examples/software-factory/fork).**
 The factory must deploy from your fork because `factory.config.ts` defines
@@ -28,7 +28,7 @@ pull request --factory:pr-review--> COMMENT review
 
 GitHub remains where people discuss and approve work. Render Workflows owns
 durable execution. Sandboxes contain model-directed tools and repository
-code. Postgres is optional and only records telemetry.
+code.
 
 ## Deploy
 

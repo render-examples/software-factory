@@ -85,7 +85,6 @@ export async function withClaim(
 	work: (claim: Claim) => Promise<Outcome>,
 ): Promise<TaskResult> {
 	const run = new ClaimedRun(ctx, opts);
-	await run.recordStart();
 	try {
 		if (!(await run.authorized())) return await run.reject();
 		await run.acquire();
@@ -149,10 +148,6 @@ class ClaimedRun implements Claim {
 		return { sandbox, ...this.#event };
 	}
 
-	async recordStart(): Promise<void> {
-		await emit({ ...this.#event, type: "run.started", payload: { stage: this.#opts.task, actor: this.#opts.actor } });
-	}
-
 	authorized(): Promise<boolean> {
 		return checkPermission(this.gh, this.#opts.actor);
 	}
@@ -161,7 +156,7 @@ class ClaimedRun implements Claim {
 	async reject(): Promise<TaskResult> {
 		const summary = `@${this.#opts.actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
 		await finishStatus(this.#status("rejected", summary));
-		return await this.#record("rejected", "permission_denied", summary);
+		return this.#record("rejected", "permission_denied", summary);
 	}
 
 	/** Stops the previous run and rewrites the status comment to name this one, then confirms no other run's write landed after it. */
@@ -174,7 +169,7 @@ class ClaimedRun implements Claim {
 	async finish(outcome: Outcome): Promise<TaskResult> {
 		const state = outcome.state ?? "done";
 		if (!(await this.#publish(state, outcome.summary, outcome.links))) throw new Superseded();
-		return await this.#record(state, outcome.outcome, outcome.summary);
+		return this.#record(state, outcome.outcome, outcome.summary);
 	}
 
 	/**
@@ -182,21 +177,21 @@ class ClaimedRun implements Claim {
 	 * its message, which can hold secrets or repository output, and rethrown so the task fails.
 	 */
 	async fail(error: unknown): Promise<TaskResult> {
-		if (error instanceof Superseded) return await this.#record("cancelled", "superseded", "a newer run took over.");
+		if (error instanceof Superseded) return this.#record("cancelled", "superseded", "a newer run took over.");
 		if (error instanceof ExpectedFailure) {
 			await this.#publish("failed", error.message);
-			return await this.#record("failed", error.outcome, error.message);
+			return this.#record("failed", error.outcome, error.message);
 		}
 		if (error instanceof AgentError && AGENT_STOPS[error.code]) {
 			// The agent's own message can quote repository output, so it goes to the event, not GitHub.
 			const summary = `the ${error.agentId} agent ${AGENT_STOPS[error.code]}.`;
 			await this.#publish("failed", summary);
-			return await this.#record("failed", "agent_stopped", summary, { error: error.message.slice(0, 500) });
+			return this.#record("failed", "agent_stopped", summary, { error: error.message.slice(0, 500) });
 		}
 		const summary = `something went wrong. Run \`${this.runId}\` has the details in the Render Dashboard.`;
 		await this.#publish("failed", summary).catch(() => undefined);
 		const message = error instanceof Error ? error.message : String(error);
-		await this.#record("failed", "error", summary, { error: message.slice(0, 500) });
+		this.#record("failed", "error", summary, { error: message.slice(0, 500) });
 		throw error;
 	}
 
@@ -215,9 +210,9 @@ class ClaimedRun implements Claim {
 		return await finishStatus(this.#status(state, summary, links));
 	}
 
-	async #record(state: TaskResult["state"], outcome: string, summary: string, extra: Record<string, unknown> = {}): Promise<TaskResult> {
+	#record(state: TaskResult["state"], outcome: string, summary: string, extra: Record<string, unknown> = {}): TaskResult {
 		const durationMs = Date.now() - this.#startedAt;
-		await emit({ ...this.#event, type: "run.finished", payload: { stage: this.#opts.task, state, outcome, durationMs, ...extra } });
+		emit({ ...this.#event, type: "run.finished", payload: { stage: this.#opts.task, state, outcome, durationMs, ...extra } });
 		return { state, outcome, summary, traceId: this.traceId, runId: this.runId };
 	}
 }

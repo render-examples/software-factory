@@ -3,7 +3,7 @@ import type { FactoryEvent } from "../app/events/index.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
-	emit: async (event: FactoryEvent) => {
+	emit: (event: FactoryEvent) => {
 		events.push(event);
 	},
 }));

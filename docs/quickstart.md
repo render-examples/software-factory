@@ -14,9 +14,8 @@ only you should take.
 - admin access to each target GitHub repository; and
 - the Node.js version in [`.node-version`](../.node-version).
 
-The Blueprint creates paid Render resources: a Starter web service, a
-Workflows service, and a Basic-256mb Postgres database. Sandbox and model
-usage are charged separately.
+The Blueprint creates paid Render resources: a Starter web service and a
+Workflows service. Sandbox and model usage are charged separately.
 
 ## What the setup agent will do
 

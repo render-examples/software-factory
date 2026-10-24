@@ -57,21 +57,25 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const { sandbox, ...base } = opts;
 	const { provider, model } = modelFor(agent.model);
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	const record = (type: string, payload: Record<string, unknown>) =>
-		void emit({ traceId: base.traceId, runId: base.runId, repo: base.repo, subject: base.subject, type, payload });
 	const finish = (outcome: string, summary: Summary, message?: string) =>
-		record("agent.finished", {
-			agentId: agent.id,
-			model: `${provider}/${model}`,
-			outcome,
-			turns: summary.turns,
-			usage: summary.usage,
-			costUsd: summary.costUsd,
-			...(summary.invalidLines ? { invalidLines: summary.invalidLines } : {}),
-			...(message ? { message } : {}),
+		emit({
+			traceId: base.traceId,
+			runId: base.runId,
+			repo: base.repo,
+			subject: base.subject,
+			type: "agent.finished",
+			payload: {
+				agentId: agent.id,
+				model: `${provider}/${model}`,
+				outcome,
+				turns: summary.turns,
+				usage: summary.usage,
+				costUsd: summary.costUsd,
+				...(summary.invalidLines ? { invalidLines: summary.invalidLines } : {}),
+				...(message ? { message } : {}),
+			},
 		});
 
-	record("agent.started", { agentId: agent.id, model: `${provider}/${model}`, tools: agent.tools });
 	let summary = emptySummary();
 	const failure = (code: AgentErrorCode, text: string) => new AgentError(agent.id, code, text);
 	try {

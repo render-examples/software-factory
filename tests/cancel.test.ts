@@ -3,7 +3,7 @@ import type { FactoryEvent } from "../app/events/index.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
-	emit: async (event: FactoryEvent) => {
+	emit: (event: FactoryEvent) => {
 		events.push(event);
 	},
 }));
@@ -84,12 +84,11 @@ describe("cancel task", () => {
 		expect(parseMarker(comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-1", state: "cancelled" });
 		expect(labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => [e.type, e.runId])).toEqual([
-			["run.started", "trn-cancel"],
 			["run.finished", "trn-1"],
 			["run.finished", "trn-cancel"],
 		]);
-		expect(events[1]?.payload).toMatchObject({ state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel" });
-		expect(events[0]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
+		expect(events[0]?.payload).toMatchObject({ state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel" });
+		expect(events[1]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
 	});
 
 	it("refuses an actor without permission and leaves the run alone", async () => {

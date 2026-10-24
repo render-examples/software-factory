@@ -85,8 +85,8 @@ describe("runAgent in a sandbox", () => {
 		for (const { command } of sandbox.execs) expect(command).not.toContain(HOST_KEY);
 		expect(sandbox.uploads.get(`${runDir}/input.json`)).not.toContain(HOST_KEY);
 
-		expect(emitted()[0]).toMatchObject({ type: "agent.started", payload: { agentId: "reviewer" } });
-		expect(emitted()[1]).toMatchObject({
+		expect(emitted()).toHaveLength(1);
+		expect(emitted()[0]).toMatchObject({
 			type: "agent.finished",
 			traceId: "trace-2",
 			payload: { outcome: "ok", turns: 2, model: "anthropic/claude-opus-5", costUsd: run.costUsd, usage: run.usage },

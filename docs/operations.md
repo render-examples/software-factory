@@ -10,31 +10,19 @@ factory's status comment shows progress, the current run ID, and final links.
 Find that run under `factory-workflows` in the Render Dashboard to inspect
 logs, inputs, and its result.
 
-When `DATABASE_URL` is set, events are also appended to Postgres.
-
-### Run viewer
-
-The gateway serves a run viewer at `https://<gateway>/runs`. Sign in as
-`factory` with the gateway's `FACTORY_VIEWER_PASSWORD` (the Blueprint
-generates it; find it under the gateway's Environment settings). It lists
-runs newest first; click one to see its events. Remove the variable to turn
-the viewer off.
-
-### Query Postgres directly
+Every task run ends with a `run.finished` JSON line, and every agent run with
+an `agent.finished` line, in the `factory-workflows` logs. Search for them, or
+send them to a log stream:
 
 ```bash
-render psql <factory-db id>
+render logs -r <factory-workflows id> --text agent.finished
 ```
 
-```sql
-select created_at, type, subject, payload
-from events
-where trace_id = '<run id>'
-order by id;
-```
-
-Telemetry includes task outcomes and agent model, turns, token usage, and
-reported cost. Task state remains in Render Workflows; GitHub remains the
+`run.finished` carries the task, state, outcome, and duration. `agent.finished`
+carries the agent, model, turns, token usage, reported cost, and, when an agent
+is stopped, why. A run stopped by a newer run or by `/factory cancel` gets its
+`run.finished` line from whatever stopped it, because Render kills a cancelled
+run before it can write one. Task state remains in Render Workflows; GitHub remains the
 source of truth for issues, specifications, pull requests, and reviews.
 
 ## Cancel or restart
@@ -146,7 +134,7 @@ mismatch.
 - PR Reviewer executes the labeled PR's configured verification commands.
 - Sandboxes use allow-all egress.
 - Local filesystem writes on Render services are ephemeral; durable state
-  belongs in GitHub, Workflows, Postgres, or Sandbox snapshots.
+  belongs in GitHub, Workflows, or Sandbox snapshots.
 
 Review [Architecture](architecture.md#residual-risks) before using private
 code or untrusted pull requests.

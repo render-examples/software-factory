@@ -13,7 +13,7 @@ repository, and complete one Triage run.
 
 Setup is complete only when:
 
-- `factory-gateway`, `factory-workflows`, and `factory-db` are live;
+- `factory-gateway` and `factory-workflows` are live;
 - the GitHub App is installed on every configured repository;
 - the App webhook is active and points to the gateway;
 - the factory labels exist;
@@ -239,9 +239,8 @@ The user confirms installation on every exact configured repository.
 Explain that [`render.yaml`](../../render.yaml) creates paid resources in
 Oregon:
 
-- `factory-gateway`, a Starter web service;
-- `factory-workflows`, a Workflows service; and
-- `factory-db`, a Basic-256mb Postgres database.
+- `factory-gateway`, a Starter web service; and
+- `factory-workflows`, a Workflows service.
 
 The user should create the Blueprint from the configured fork and deployment
 branch.
@@ -269,7 +268,7 @@ into chat. The Render workspace ID starts with `tea-`.
 
 ### Pass condition
 
-All three resources are created, the gateway reports live, and the Workflows
+Both services are created, the gateway reports live, and the Workflows
 service has deployed successfully.
 
 ### Recovery
@@ -277,8 +276,6 @@ service has deployed successfully.
 - Blank `sync: false` field: set the missing value and redeploy.
 - Build failure: inspect the failing service's build log before changing
   configuration.
-- Pre-deploy migration failure: verify the Blueprint's `DATABASE_URL` wiring
-  and database health.
 - Port or health failure: confirm the gateway binds to `0.0.0.0:$PORT` and
   serves `/ready`.
 
@@ -362,10 +359,9 @@ Both commands exit successfully with every required check passing.
 
 ### Recovery
 
-- Gateway failure: check webhook secret, Render API key, workflow slug, and
-  database connection.
+- Gateway failure: check webhook secret, Render API key, and workflow slug.
 - Workflows failure: check Render workspace ID, Render API key, GitHub App
-  credentials, provider key, database, and registered tasks.
+  credentials, provider key, and registered tasks.
 - App failure: compare required permissions and events with Phase 4.
 - Label or installation failure: rerun `npm run setup:github` after fixing
   App access.

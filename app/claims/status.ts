@@ -77,7 +77,7 @@ export async function stopRun(runs: RunControl, status: StatusMarker, context: S
 		const { repo, subject, by, outcome } = context;
 		// Claiming tasks are started by the gateway, so each is its own root task run and its run ID is its trace ID.
 		const payload = { stage: status.stage, state: "cancelled", outcome, stoppedBy: by };
-		await emit({ traceId: status.runId, runId: status.runId, repo, subject, type: "run.finished", payload });
+		emit({ traceId: status.runId, runId: status.runId, repo, subject, type: "run.finished", payload });
 	}
 	if (status.sandboxId) {
 		const { sandboxId } = status;

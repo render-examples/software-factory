@@ -19,14 +19,13 @@ This file applies to the whole repository. Read
 
 ## What this is
 
-software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three claiming tasks (Triage, Spec-to-PR, PR Reviewer) run on Render Workflows, each holding a claim on its issue or PR while it works. Agents run in Render Sandboxes restored from a per-repository snapshot. The status comment on the issue or PR names the run that holds the claim. Postgres is optional and keeps an append-only `events` table for telemetry only.
+software-factory turns a labeled GitHub issue into a spec, a draft PR, and a COMMENT review. Three claiming tasks (Triage, Spec-to-PR, PR Reviewer) run on Render Workflows, each holding a claim on its issue or PR while it works. Agents run in Render Sandboxes restored from a per-repository snapshot. The status comment on the issue or PR names the run that holds the claim. There is no database: GitHub and Workflows hold all state, and run telemetry is logged as JSON lines.
 
 Two processes deploy:
 
 - `app/entrypoints/gateway.ts`: the gateway web service. Verifies webhooks, routes each to one task, and calls `startTask` with the delivery ID as the idempotency key.
 - `app/entrypoints/workflows.ts`: the Workflows service. Importing `app/workflows/index.ts` registers every task.
 
-`app/sql/` holds the migrations, applied by `npm run db:migrate` as the gateway's pre-deploy command.
 
 ## Module map
 
@@ -36,7 +35,7 @@ app/
   entrypoints/      Gateway and Workflows process entry points
   config/           Loads factory.config.ts; RepoContext and resolveRepo; TASKS names; modelFor; requireEnv
   schemas/          Zod schemas: task inputs (tasks.ts) and agent outputs (triage, spec, implementation, review)
-  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs; viewer/ is the read-only run viewer
+  gateway/          Hono app: signature check, body cap, the routing table (routes.ts), which validates task inputs
   workflows/        The tasks: triage/, spec-to-pr/, pr-review/, cancel.ts, refresh-snapshot.ts; claiming-task.ts and run-verify.ts are shared
   claims/           withClaim lifecycle: permission, the status-comment claim, takeover and sandbox cleanup, checkpoints, expected failures
   agents/           One directory with index.ts and prompt.md per agent; shared defineAgent/runAgent runtime
@@ -45,10 +44,9 @@ app/
   changeset/        Collects, validates, and publishes sandbox changes through the Git Data API
   github/           REST client, App JWT and installation tokens, Git Data API, hidden comment markers
   format/           Renders specs, questions, PR bodies, and reviews as GitHub markdown; sanitizes model text
-  events/           Optional best-effort emit() over the events table
-  sql/              Migrations
+  events/           emit(): run.finished and agent.finished as JSON lines on stdout
 sandbox/            Shell scripts copied into the snapshot (run-agent, as-runner, verify, collect-changes, ...)
-scripts/            setup-app, setup-github, doctor, migrate
+scripts/            setup-app, setup-github, doctor
 tests/              Vitest unit tests; fakes in tests/helpers/
 ```
 
@@ -86,7 +84,7 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
   Outcome names are snake_case.
 - Quote every shell argument you build with `shq` (`app/sandbox/shell.ts`). Anything long or security-sensitive that runs in a sandbox belongs in a script in `sandbox/`, which CI checks with shellcheck.
 - Model text that reaches GitHub goes through the helpers in `app/format/`.
-- Task implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, Postgres, or model APIs.
+- Task implementations take GitHub, sandboxes, `runAgent`, and run control as injectable dependencies. Tests never call live Render, GitHub, or model APIs.
 - Keep the suite focused; it currently has 100+ tests. Test durable behavior at process and trust
   boundaries: authenticated inputs, user-visible outcomes, authority,
   cleanup, and security invariants. Prefer one end-to-end happy path and the
@@ -116,7 +114,6 @@ each is enforced):
 8. Automation ends at a draft PR and a COMMENT review. It never approves, requests changes, marks a PR ready, or merges.
 9. Spec-to-PR implements the spec as it stood when the approval label was applied.
 10. Every sandbox is created with a timeout and closed by `withSandbox` (in `finally`). A claiming task records its sandbox in the status comment, so the run or `/factory cancel` that stops it can terminate the sandbox: Render kills a cancelled task without running `finally`.
-11. Postgres is telemetry only; no task behavior depends on it.
 
 `tests/agents-catalog.test.ts` protects unique agent identities and tool authority. Change it only on purpose.
 

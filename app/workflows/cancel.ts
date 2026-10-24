@@ -25,7 +25,6 @@ export async function cancelRun(
 	const gh = deps.gh ?? githubFor(repo);
 	const { traceId, runId } = traceIds(ctx);
 	const event = { traceId, runId, repo: repo.fullName, subject: `${input.kind}#${input.number}` };
-	await emit({ ...event, type: "run.started", payload: { stage: TASKS.cancel, actor: input.actor } });
 
 	const result = await (async (): Promise<CancelResult> => {
 		if (!(await checkPermission(gh, input.actor))) {
@@ -47,7 +46,7 @@ export async function cancelRun(
 		return { cancelled: true, runId: cancelled };
 	})();
 
-	await emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });
+	emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });
 	return result;
 }
 

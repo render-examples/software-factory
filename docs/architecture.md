@@ -10,8 +10,6 @@ decides what may be written to GitHub.
 flowchart LR
   GitHub -->|signed webhook| Gateway
   Gateway -->|start task| Workflows
-  Gateway -.->|delivery telemetry| Postgres
-  Workflows -.->|run telemetry| Postgres
   Workflows -->|restore and execute| Sandbox
   Sandbox -->|proposed result| Workflows
   Workflows -->|validated writes| GitHub
@@ -19,13 +17,11 @@ flowchart LR
   Snapshot -.->|restore| Sandbox
 ```
 
-The Blueprint creates three persistent resources:
+The Blueprint creates two services:
 
 - **Gateway** verifies GitHub webhooks and maps each delivery to one task.
 - **Workflows** runs the claiming tasks, agents, cancellation, snapshot refresh, and
   GitHub publishing.
-- **Postgres** stores best-effort telemetry. It's optional: without
-  `DATABASE_URL`, events are dropped and nothing else changes.
 
 Each claiming task receives a fresh Sandbox restored from a repository snapshot.
 Render Workflows owns task state and timeouts. GitHub owns the human
@@ -71,9 +67,9 @@ tests.
 | Current run for an issue or PR, and its Sandbox | App-authored status comment marker |
 | User-visible run status | The same status comment, and the working label |
 | Prepared repository filesystem | Render Sandbox snapshot |
-| Delivery, run, agent, and cost history | Postgres events (optional) |
+| Run and agent outcomes, usage, and cost | JSON lines in the service logs |
 
-Nothing reads Postgres back to decide what a task does.
+Telemetry is write-only: nothing reads it back to decide what a task does.
 
 ## Idempotency and competing runs
 
@@ -144,9 +140,7 @@ and pull request diffs as untrusted.
 ### Gateway
 
 The gateway verifies the webhook signature before parsing JSON. It holds no
-GitHub credential and runs no model or repository code. When
-`FACTORY_VIEWER_PASSWORD` is set, it also serves a read-only run viewer over
-the telemetry, behind HTTP Basic auth.
+GitHub credential and runs no model or repository code.
 
 ### Workflows host
 
@@ -178,7 +172,6 @@ Changes must preserve these properties:
 7. End automation at a draft PR and COMMENT review.
 8. Implement the exact specification that was approved.
 9. Put a timeout and `finally` cleanup around every Sandbox.
-10. Keep Postgres telemetry-only: no task behavior may depend on it.
 
 Tests pin these invariants and each built-in agent's tool authority.
 

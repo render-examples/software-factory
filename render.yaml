@@ -1,13 +1,8 @@
-# Software Factory: three resources.
-# - factory-db: optional Postgres holding the append-only events table, used only for telemetry.
-# - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task. Migrations run before each deploy.
-# - factory-workflows: runs every task (stages, agents, snapshot refresh, cancel). It has no `repo` field, so it
+# Software Factory: two services.
+# - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task.
+# - factory-workflows: runs every task (agents, snapshot refresh, cancel). It has no `repo` field, so it
 #   deploys from the same repository as this Blueprint, including forks.
-
-databases:
-  - name: factory-db
-    region: oregon
-    plan: basic-256mb
+# Run and agent telemetry is logged as JSON lines; find it in each service's logs or a log stream.
 
 services:
   - type: web
@@ -17,13 +12,8 @@ services:
     plan: starter
     buildCommand: npm ci
     startCommand: npm run start:gateway
-    preDeployCommand: npm run db:migrate
     healthCheckPath: /ready
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: factory-db
-          property: connectionString
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
       - key: RENDER_API_KEY
@@ -33,9 +23,6 @@ services:
           type: workflow
           name: factory-workflows
           property: slug
-      # Password for the run viewer at /runs (user "factory"). Delete it to turn the viewer off.
-      - key: FACTORY_VIEWER_PASSWORD
-        generateValue: true
 
   - type: workflow
     name: factory-workflows
@@ -44,10 +31,6 @@ services:
     buildCommand: npm ci
     startCommand: npm run start:workflows
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: factory-db
-          property: connectionString
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_WORKSPACE_ID

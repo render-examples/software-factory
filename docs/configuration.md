@@ -108,25 +108,22 @@ budget.
 
 ## Environment variables
 
-Every local variable appears in [`.env.example`](../.env.example). Deployed
-database and workflow references are wired by the Blueprint.
+Every local variable appears in [`.env.example`](../.env.example). The
+Blueprint wires the gateway's reference to the Workflows service.
 
 ### Gateway
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Optional: migrations and delivery telemetry |
 | `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
-| `FACTORY_VIEWER_PASSWORD` | Optional: turns on the run viewer at `/runs` (user `factory`, at least 16 characters) |
 | `PORT` | HTTP port; defaults to `3000` |
 
 ### Workflows
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Optional: run and agent telemetry |
 | `RENDER_API_KEY` | Manage Sandboxes, snapshots, and task cancellation |
 | `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Authenticate the GitHub App |

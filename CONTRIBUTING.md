@@ -5,7 +5,7 @@ Sandbox boundaries, credentials, or publishing.
 
 ## Local development
 
-Local development requires Docker and Render CLI 2.29 or later. It still uses
+Local development requires Render CLI 2.29 or later. It still uses
 real Render Sandboxes, a real GitHub App, and a real model. Use a separate
 test repository and preferably a separate App.
 
@@ -18,15 +18,9 @@ Fill `.env`, then start each process in its own terminal:
 
 ```bash
 # Terminal 1
-npm run dev:postgres
-
-# Terminal 2
-npm run db:migrate
-
-# Terminal 3
 npm run dev:workflows
 
-# Terminal 4
+# Terminal 2
 RENDER_USE_LOCAL_DEV=true npm run dev:gateway
 ```
 
@@ -58,8 +52,8 @@ Task input schemas are in
 npm run check
 ```
 
-This runs Biome, TypeScript, and Vitest. Tests fake GitHub, Render, Postgres,
-and model calls.
+This runs Biome, TypeScript, and Vitest. Tests fake GitHub, Render, and model
+calls.
 
 When relevant, also run:
 
@@ -173,6 +167,21 @@ Never accept write destinations from model output.
 Every GitHub write should update or reuse an App-authored artifact marker.
 Workflows idempotency alone has a finite scope and is not sufficient.
 
+## Add persistent state
+
+The factory keeps no database: GitHub and Render Workflows hold the state it
+needs, and telemetry goes to logs. When a feature needs its own data, such as
+a spec library, budgets, or run history you query:
+
+1. Add a Render Postgres database to `render.yaml` and wire `DATABASE_URL`
+   into the services that need it with `fromDatabase`.
+2. Run migrations from the gateway's `preDeployCommand`, so each deploy
+   migrates before new code starts.
+3. Use the internal connection string on Render. The external one is for
+   local tools and requires TLS.
+4. Keep run coordination in the status comment. A database that also decides
+   who owns an issue becomes a second source of truth to reconcile.
+
 ## Code structure
 
 ```text
@@ -186,10 +195,10 @@ app/
   sandbox/      Sandbox and snapshot lifecycle
   changeset/    Candidate-tree validation and publishing
   github/       App authentication, REST, Git Data, and markers
-  events/       Optional best-effort telemetry
+  events/       Run and agent telemetry as JSON log lines
   schemas/      Cross-process Zod contracts
 sandbox/        Runtime scripts copied into snapshots
-scripts/        Setup, doctor, and migrations
+scripts/        Setup and doctor
 tests/          Unit and boundary tests with fakes
 ```
 

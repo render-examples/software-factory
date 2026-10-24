@@ -7,8 +7,8 @@ not required for deployment or operation.
 
 Render Workflows owns task execution. GitHub owns collaboration artifacts,
 including the status comment that says which run currently works on an issue
-or pull request. Postgres only records telemetry, so the factory runs without
-it. Every additional source of truth creates reconciliation work.
+or pull request. There is no database; telemetry goes to logs. Every
+additional source of truth creates reconciliation work.
 
 ## Make approval an explicit transition
 
