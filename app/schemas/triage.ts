@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** The triage agent's submission: whether a competent engineer would know what to build. */
 export const TriageDecision = z
-	.object({
+	.strictObject({
 		decision: z
 			.enum(["ask", "draft", "decline"])
 			.describe('"draft" by default; "ask" only when the intent is unclear; "decline" for spam, duplicates, or out of scope.'),

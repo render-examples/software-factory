@@ -3,19 +3,19 @@ import { z } from "zod";
 const Item = z.string().min(1).max(1000);
 const Items = (max: number) => z.array(Item).max(max);
 
-export const AcceptanceCriterion = z.object({
+export const AcceptanceCriterion = z.strictObject({
 	id: z.string().regex(/^AC-[1-9]\d*$/, 'criterion IDs look like "AC-1"'),
 	text: z.string().min(1).max(1000),
 	/** No browser testing at launch: a criterion is checked by tests or the build, or by a person. */
 	verification: z.enum(["automated", "manual"]),
 });
 
-export const AffectedArea = z.object({
+export const AffectedArea = z.strictObject({
 	path: z.string().min(1).max(300).describe("Repository-relative path. New files are fine; say so in change."),
 	change: z.string().min(1).max(1000),
 });
 
-export const Spec = z.object({
+export const Spec = z.strictObject({
 	title: z.string().min(1).max(200),
 	summary: z.string().min(1).max(2000),
 	problem: z.string().max(4000),
@@ -31,13 +31,13 @@ export const Spec = z.object({
 });
 
 /** What the spec writer learned, kept with the spec so later rounds skip the research. */
-export const SpecNotes = z.object({
+export const SpecNotes = z.strictObject({
 	findings: z.string().max(8000),
 	relevantPaths: z.array(z.string().min(1)).max(50),
 });
 
 /** The spec writer's submission. */
-export const SpecDraft = z.object({
+export const SpecDraft = z.strictObject({
 	spec: Spec,
 	notes: SpecNotes,
 	changeSummary: z.string().max(2000).optional().describe("Only when revising a previous version: what changed and why."),

@@ -89,11 +89,12 @@ describe("submit", { timeout: 30_000 }, () => {
 		const ws = makeWorkspace();
 		const bad = call(SUBMIT, { summary: "ok summary", files: "README.md" });
 		const { code, events } = await runWithTestStub(makeInput(ws), () => [bad, bad, bad, call(SUBMIT, GOOD)]);
-		expect(terminal(events)).toMatchObject({
-			type: "error",
-			code: "invalid_submission",
-			message: expect.stringContaining("rejected 3 times; last: /files"),
-		});
+		const end = terminal(events);
+		expect(end).toMatchObject({ type: "error", code: "invalid_submission" });
+		const message = end.type === "error" ? end.message : "";
+		expect(message).toContain("rejected 3 times; last: /files");
+		expect(message).toContain("submitted fields: summary, files");
+		expect(message).not.toContain("ok summary");
 		expect(code).toBe(1);
 	});
 });
