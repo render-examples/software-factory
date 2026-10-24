@@ -1,8 +1,21 @@
 # Repository guide for agents
 
 This file applies to the whole repository. Read
-[docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md) for how the system works and
-[docs/3_TAKEAWAYS.md](docs/3_TAKEAWAYS.md) for why it is built this way.
+[docs/architecture.md](docs/architecture.md) for how the system works and
+[docs/design-notes.md](docs/design-notes.md) for why it is built this way.
+
+## Task routing
+
+- **Set up or deploy the factory:** follow
+  [docs/runbooks/setup.md](docs/runbooks/setup.md) in order. Do not skip its
+  human checkpoints or claim completion before both deployed `doctor` checks
+  and the Triage smoke test pass.
+- **Change repositories, labels, models, or limits:** use
+  [docs/configuration.md](docs/configuration.md).
+- **Diagnose a live deployment:** use
+  [docs/operations.md](docs/operations.md).
+- **Add an agent, stage, or trigger:** use
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What this is
 
@@ -90,7 +103,7 @@ Import another module through its `index.ts` barrel where one exists. A barrel e
 ## Invariants
 
 Don't weaken these without an explicit change to the security model
-([docs/2_ARCHITECTURE.md](docs/2_ARCHITECTURE.md#trust-boundaries) says where
+([docs/architecture.md](docs/architecture.md#trust-boundaries) says where
 each is enforced):
 
 1. The gateway verifies the webhook signature before parsing the body.
@@ -110,13 +123,13 @@ each is enforced):
 ## Common changes
 
 - **An agent or a stage:** follow
-  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#customize-an-agent).
+  [CONTRIBUTING.md](CONTRIBUTING.md#customize-an-agent).
 - **A configuration key:** add it to `FactoryConfig` in `factory.config.ts`
   with a doc comment, and to
-  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#configure-behavior-and-limits).
+  [docs/configuration.md](docs/configuration.md#behavior-and-limits).
 - **An environment variable:** add it to `render.yaml`, `.env.example`,
   `SERVICE_ENV` in `scripts/lib/requirements.ts` (so `doctor` checks it), and
-  [docs/1_EXTENSION.md](docs/1_EXTENSION.md#environment-reference).
+  [docs/configuration.md](docs/configuration.md#environment-variables).
 - **A webhook event, label, or App permission:** update `scripts/lib/requirements.ts`, which `setup:app`, `setup:github`, and `doctor` all read.
 - **The runner or `sandbox/`:** these are baked into each snapshot, so they reach sandboxes only after a rebuild (the next push to each base branch, or a `refresh-snapshot` run).
 
