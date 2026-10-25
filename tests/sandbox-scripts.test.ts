@@ -50,9 +50,14 @@ let scratch: string;
 let commit: string;
 
 function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {}) {
-	return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+	return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
 		const child = execFile(cmd, args, { cwd: opts.cwd, env: { ...env, ...opts.env } }, (err, stdout, stderr) => {
 			resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout, stderr });
+		});
+		child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+			// Some failure cases exit before reading stdin. The process callback
+			// carries the result; a closed pipe is not a separate test failure.
+			if (error.code !== "EPIPE") reject(error);
 		});
 		child.stdin?.end(opts.input ?? "");
 	});

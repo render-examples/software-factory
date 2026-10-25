@@ -9,7 +9,7 @@ export const TriageDecision = z
 		questions: z.array(z.string().min(1).max(1000)).max(5).describe('Questions for the maintainer. Non-empty exactly when decision is "ask".'),
 		rationale: z.string().min(1).max(4000).describe("Why you decided this. Shown to the maintainer when you decline."),
 		findings: z.string().max(8000).describe("What you learned from the repository, kept for the spec writer and later rounds."),
-		relevantPaths: z.array(z.string().min(1)).max(50).describe("Repository-relative paths that matter for the change."),
+		relevantPaths: z.array(z.string().min(1)).max(50).default([]).describe("Repository-relative paths that matter for the change, when any."),
 	})
 	.superRefine((value, ctx) => {
 		if (value.decision === "ask" && value.questions.length === 0) {

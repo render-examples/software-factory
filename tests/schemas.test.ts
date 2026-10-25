@@ -43,9 +43,12 @@ describe("TriageDecision", () => {
 	it("rejects a misspelled field by name, so the agent can fix it", () => {
 		const { relevantPaths, ...rest } = base;
 		const misspelled = { ...rest, decision: "draft", questions: [], relevant_paths: relevantPaths };
-		expect(issues(TriageDecision.safeParse(misspelled))).toEqual(
-			expect.arrayContaining(["relevantPaths: Invalid input: expected array, received undefined", ': Unrecognized key: "relevant_paths"']),
-		);
+		expect(issues(TriageDecision.safeParse(misspelled))).toEqual([': Unrecognized key: "relevant_paths"']);
+	});
+
+	it("defaults advisory relevant paths when the model omits them", () => {
+		const { relevantPaths: _relevantPaths, ...withoutPaths } = base;
+		expect(TriageDecision.parse({ ...withoutPaths, decision: "draft", questions: [] }).relevantPaths).toEqual([]);
 	});
 });
 
