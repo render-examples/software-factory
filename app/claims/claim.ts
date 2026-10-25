@@ -160,7 +160,7 @@ class ClaimedRun implements Claim {
 	/** A rejected trigger never held the claim; setStatus keeps its record from replacing a real run's. */
 	async reject<Data>(): Promise<TaskResult<Data>> {
 		const summary = `@${this.#opts.actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
-		await finishStatus(this.#status("rejected", summary), { rootFinished: this.#opts.mode !== "continue" });
+		await finishStatus(this.#status("rejected", summary));
 		return this.#record("rejected", "permission_denied", summary);
 	}
 
@@ -235,7 +235,7 @@ class ClaimedRun implements Claim {
 	/** Writes a final state while this run still holds the claim; false once another run's status is showing. */
 	async #publish(state: TaskResult["state"], summary: string, links?: StatusLink[]): Promise<boolean> {
 		if (!(await this.#holdsClaim())) return false;
-		return await finishStatus(this.#status(state, summary, links), { rootFinished: this.#opts.mode !== "continue" });
+		return await finishStatus(this.#status(state, summary, links));
 	}
 
 	#record<Data = undefined>(

@@ -239,7 +239,7 @@ describe("setStatus and finishStatus", () => {
 });
 
 describe("withClaim", () => {
-	const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-root" } };
+	const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-run" } };
 
 	it("rejects an actor without permission before taking over", async () => {
 		const gh = new FakeGitHub();
@@ -248,11 +248,11 @@ describe("withClaim", () => {
 		const fn = vi.fn();
 		const outcome = await withClaim(ctx, { repo: REPO, subject, task: "triage", title: "Triage", actor: "reader", gh: gh.asClient(), runs }, fn);
 		expect(fn).not.toHaveBeenCalled();
-		expect(outcome).toMatchObject({ state: "rejected", outcome: "permission_denied", traceId: "trn-root", runId: "trn-run" });
+		expect(outcome).toMatchObject({ state: "rejected", outcome: "permission_denied", traceId: "trn-run", runId: "trn-run" });
 		expect(gh.comments[0]?.body).toContain("did not run: @reader needs `write` permission");
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.state).toBe("rejected");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
-		expect(events).toMatchObject([{ type: "run.finished", traceId: "trn-root", runId: "trn-run", payload: { state: "rejected" } }]);
+		expect(events).toMatchObject([{ type: "run.finished", traceId: "trn-run", runId: "trn-run", payload: { state: "rejected" } }]);
 	});
 
 	it("runs the work and records events with the trace id and outcome", async () => {
@@ -274,7 +274,7 @@ describe("withClaim", () => {
 		);
 		expect(runs.cancelled).toEqual(["trn-prev"]);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.sandboxId).toBeUndefined();
-		expect(outcome).toEqual({ state: "done", outcome: "asked-questions", summary: "asked 2 questions", traceId: "trn-root", runId: "trn-run" });
+		expect(outcome).toEqual({ state: "done", outcome: "asked-questions", summary: "asked 2 questions", traceId: "trn-run", runId: "trn-run" });
 		expect(gh.comments).toHaveLength(1);
 		expect(gh.comments[0]?.body).toContain("**Triage** finished: asked 2 questions");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
@@ -282,7 +282,7 @@ describe("withClaim", () => {
 			{ type: "run.finished", traceId: "trn-prev", payload: { state: "cancelled", outcome: "superseded", stoppedBy: "trn-run" } },
 			{
 				type: "run.finished",
-				traceId: "trn-root",
+				traceId: "trn-run",
 				runId: "trn-run",
 				repo: REPO.fullName,
 				subject: "issue#12",
