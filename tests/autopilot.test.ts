@@ -106,7 +106,9 @@ describe("autopilot", () => {
 		const names: string[] = [];
 		const workflowCtx = {
 			metadata: ctx.metadata,
-			run: vi.fn(async (definition: { name: string }, stageInput: unknown) => {
+			bound: true,
+			async run(this: { bound: boolean }, definition: { name: string }, stageInput: unknown) {
+				expect(this.bound).toBe(true);
 				names.push(definition.name);
 				if (definition.name === "triage") {
 					return result<TriageHandoff>("trn-triage", "drafted", {
@@ -123,7 +125,7 @@ describe("autopilot", () => {
 				}
 				expect(stageInput).toMatchObject({ pr: 34, workflowIssue: 12 });
 				return result("trn-review", "reviewed");
-			}),
+			},
 		} as unknown as Pick<TaskContext, "metadata" | "run">;
 
 		const output = await runAutopilot(workflowCtx, input, { gh: asClient(gh) });

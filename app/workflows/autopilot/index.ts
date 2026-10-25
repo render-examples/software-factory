@@ -57,9 +57,8 @@ async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, 
 		workflow: { task: TaskDefinition<[raw: unknown], TaskResult<Data>> },
 	): ((input: Input) => Promise<TaskResult<Data>>) => {
 		if (override) return override;
-		const run = ctx.run;
-		if (!run) throw new Error("autopilot requires a Workflows task context");
-		return (stageInput) => run(workflow.task, stageInput);
+		if (!ctx.run) throw new Error("autopilot requires a Workflows task context");
+		return (stageInput) => ctx.run?.(workflow.task, stageInput) as Promise<TaskResult<Data>>;
 	};
 
 	const runTriage = child(deps.triage, triageWorkflow);
