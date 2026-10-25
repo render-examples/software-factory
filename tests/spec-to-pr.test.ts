@@ -20,6 +20,7 @@ type GitDataClient = import("../app/github/index.js").GitDataClient;
 type GitCommit = import("../app/github/index.js").GitCommit;
 type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type ExecResult = import("../app/sandbox/index.js").ExecResult;
+type SpecToPrInput = import("../app/schemas/index.js").SpecToPrInput;
 type SpecToPrDeps = import("../app/workflows/spec-to-pr/index.js").SpecToPrDeps;
 type PublishResult = import("../app/changeset/index.js").PublishResult;
 
@@ -30,12 +31,19 @@ if (!REPO) throw new Error("factory.config.ts must configure at least one reposi
 const [BUILD_COMMAND, TEST_COMMAND] = config.repos[REPO].verify;
 if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two verify commands");
 const BASE = "b".repeat(40);
+const PR_HEAD = "c".repeat(40);
 const ISSUE = 12;
 const BRANCH = `factory/issue-${ISSUE}`;
 const ctx = { metadata: { taskRunId: "trn-spec" } };
 const NOW = new Date("2026-10-18T23:37:05.123Z");
 const LABELED_AT = "2026-10-18T20:00:00Z";
-const input = { repo: REPO, installationId: 5, issue: ISSUE, actor: "alice", labeledAt: LABELED_AT };
+const input = {
+	repo: REPO,
+	installationId: 5,
+	issue: ISSUE,
+	actor: "alice",
+	approval: { kind: "label" as const, labeledAt: LABELED_AT },
+};
 
 const SPEC: Spec = {
 	title: "Add a health endpoint",
@@ -105,7 +113,7 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 		getLabelEvents: vi.fn(async (_n: number, label: string) => (opts.labelEvents ?? []).map((createdAt) => ({ label, createdAt, actor: null }))),
 		http: { json: vi.fn(async (_method: string, path: string) => (path === `/users/${encodeURIComponent(BOT)}` ? { id: BOT_ID } : undefined)) },
 		findOrCreatePull: vi.fn(async (_args: { head: string; base: string; title: string; body: string; draft?: boolean }) => ({
-			pull: { number: 34, htmlUrl: `https://github.com/${REPO}/pull/34` },
+			pull: { number: 34, headSha: PR_HEAD, htmlUrl: `https://github.com/${REPO}/pull/34` },
 			created: true,
 		})),
 	};
@@ -175,6 +183,7 @@ function setup(
 		agents?: Parameters<typeof fakeAgents>[0];
 		branch?: Parameters<typeof fakeGitData>[0];
 		publish?: PublishResult | Error;
+		input?: SpecToPrInput;
 	} = {},
 ) {
 	const github = fakeGitHub(opts.gh);
@@ -195,7 +204,7 @@ function setup(
 		publish: publish as unknown as SpecToPrDeps["publish"],
 		now: () => NOW,
 	};
-	const run = () => runSpecToPr(ctx, input, deps);
+	const run = () => runSpecToPr(ctx, opts.input ?? input, deps);
 	return { ...github, ...box, ...agents, git, openSandbox, publish, run };
 }
 
@@ -222,6 +231,30 @@ describe("approval", () => {
 		expect(t.status().body).toContain("the spec changed after it was approved");
 		expect(t.openSandbox).not.toHaveBeenCalled();
 	});
+
+	it("accepts the exact spec handed off by an autopilot Triage child", async () => {
+		const t = setup({
+			input: {
+				...input,
+				approval: { kind: "autopilot", commentId: 1, hash: contentHash(SPEC), version: 1 },
+			},
+		});
+		const outcome = await t.run();
+		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
+		expect(t.gh.getLabelEvents).not.toHaveBeenCalled();
+	});
+
+	it("refuses an autopilot handoff when the current spec does not match it", async () => {
+		const t = setup({
+			input: {
+				...input,
+				approval: { kind: "autopilot", commentId: 1, hash: "f".repeat(64), version: 1 },
+			},
+		});
+		const outcome = await t.run();
+		expect(outcome).toMatchObject({ state: "failed", outcome: "spec_changed" });
+		expect(t.openSandbox).not.toHaveBeenCalled();
+	});
 });
 
 describe("implement, verify, and publish", () => {
@@ -229,7 +262,11 @@ describe("implement, verify, and publish", () => {
 		const t = setup();
 		const outcome = await t.run();
 
-		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
+		expect(outcome).toMatchObject({
+			state: "done",
+			outcome: "pr_opened",
+			data: { kind: "pull_request", pr: 34, headSha: PR_HEAD },
+		});
 		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: REPO }), { kind: "branch", name: "main" });
 		expect(t.calls.map((c) => c.agent)).toEqual(["implementer"]);
 		const [impl] = t.calls;

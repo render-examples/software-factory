@@ -5,22 +5,43 @@ workflows on Render. It includes a complete issue-to-PR workflow that you can
 run as-is, change one agent at a time, or use as the foundation for different
 automations.
 
-The template provides the infrastructure common to agent workflows:
+Start by [forking this repository](https://github.com/render-examples/software-factory/fork).
+Deploy from your fork: its `factory.config.ts` defines the repositories the
+factory may access.
 
-- a signed-webhook gateway;
-- durable Render Workflows tasks with cancellation and run ownership;
-- short-lived Render Sandboxes for repository code and model-directed tools;
-- typed agent inputs and outputs;
-- GitHub App authentication and artifact markers; and
-- validated publishing that keeps write credentials outside Sandboxes.
+The recommended setup is agent-guided:
+
+1. Check the prerequisites in the [Quickstart](docs/quickstart.md).
+2. Ask a coding agent to follow the [Setup runbook](docs/runbooks/setup.md).
+3. Complete the GitHub, secret, and paid-resource checkpoints when the agent
+   asks.
+
+The runbook configures the fork before deployment, creates a GitHub App,
+deploys the Render Blueprint, connects the webhook, verifies both services,
+and runs one Triage smoke test.
+
+**What software-factory solves for you:**
+1. Authenticating GitHub events and routing them to durable Render Workflows tasks.
+2. Running agents and repository tools inside short-lived, isolated Render Sandboxes.
+3. Handling overlapping runs, cancellation, cleanup, and idempotency.
+4. Validating typed agent output and safely publishing proposed code to GitHub.
+5. Providing deployment configuration, setup scripts, health checks, and structured telemetry.
+
+**What software-factory leaves for you:**
+1. The agents, prompts, and workflow logic for your use case.
+2. Repository-specific install and verification commands.
+3. The GitHub triggers, approval gates, and permissions your workflow needs.
+4. Model selection, budgets, and evaluation strategy.
+5. Channel integrations.
+6. Persistent data store.
 
 ## Included workflow
 
-- **Triage** reads the issue, discussion, and repository. It asks questions,
+- **Triage:** reads the issue, discussion, and repository. It asks questions,
   writes a specification, or declines the request.
-- **Spec-to-PR** implements the approved specification, runs your verification
+- **Spec-to-PR:** implements the approved specification, runs your verification
   commands, and opens a draft pull request.
-- **PR Reviewer** runs verification and reviews security, correctness,
+- **PR Reviewer:** runs verification and reviews security, correctness,
   performance, and tests. It posts a non-approving GitHub COMMENT review.
 
 GitHub holds the discussion, labels, specifications, pull requests, and
@@ -28,13 +49,19 @@ reviews. Render Workflows runs the tasks. Sandboxes contain the checkout,
 agent loop, and model-directed tools. The included workflow never approves or
 merges code.
 
+The three labels above keep each transition human-gated. Apply
+`factory:autopilot` to an issue to grant upfront approval for the same stages:
+Triage drafts the spec, Spec-to-PR opens a draft pull request, and PR Reviewer
+posts its review as child tasks in one Render Workflow. If Triage asks
+questions, the workflow stops and continues when a person replies.
+
 ## Extend the template
 
 The built-in agents and tasks are examples of the template's extension model:
 
 - Add or replace an agent with a Markdown prompt, a model tier, a bounded Zod
   output schema, and the minimum tools it needs.
-- Add a claiming task for work attached to an issue or pull request.
+- Define a GitHub task for work attached to an issue or pull request.
 - Add a plain Workflows task for maintenance or other work without a GitHub
   claim.
 - Route new GitHub events, labels, or commands through the authenticated
@@ -47,29 +74,9 @@ publishing boundary are reusable building blocks. Start with the
 [extension runbook](docs/runbooks/extend.md), which covers the required files,
 tests, authority rules, deploys, and snapshot refreshes.
 
-## Set up
-
-Start by
-[forking this repository](https://github.com/render-examples/software-factory/fork).
-Deploy from your fork: its `factory.config.ts` defines the repositories the
-factory may access.
-
-The recommended setup is agent-guided:
-
-1. Check the prerequisites in the [Quickstart](docs/quickstart.md).
-2. Ask a coding agent to follow the
-   [Setup runbook](docs/runbooks/setup.md).
-3. Complete the GitHub, secret, and paid-resource checkpoints when the agent
-   asks.
-
-The runbook configures the fork before deployment, creates a GitHub App,
-deploys the Render Blueprint, connects the webhook, verifies both services,
-and runs one Triage smoke test.
-
 ## Security
 
-- Model-directed code and tools run inside Sandboxes, not on the Workflows
-  host.
+- Model-directed code and tools run inside Sandboxes, not on the Workflow task.
 - GitHub write credentials never enter a Sandbox.
 - Clone and fetch credentials are read-only and removed before repository code
   or agents run.
@@ -87,9 +94,7 @@ code or untrusted pull requests.
 
 ## Limits
 
-- Main tasks do not chain. Labels, comments, commands, and base-branch pushes
-  start work through the gateway.
-- Verification runs shell commands; browser testing is not built in.
+- Verification runs shell commands. Browser testing is not included.
 - Turn limits and timeouts bound execution, but the factory has no hard dollar
   budget.
 - Anyone with `minimumPermission` can start model spend.

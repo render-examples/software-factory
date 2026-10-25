@@ -27,6 +27,7 @@ export default defineFactoryConfig({
     triage: "factory:triage",
     specApproved: "factory:spec-approved",
     prReview: "factory:pr-review",
+    autopilot: "factory:autopilot",
   },
   commandPrefix: "/factory",
   minimumPermission: "write",
@@ -75,6 +76,7 @@ After adding a repository:
 | `labels.triage` | `factory:triage` | Starts or continues Triage |
 | `labels.specApproved` | `factory:spec-approved` | Starts Spec-to-PR |
 | `labels.prReview` | `factory:pr-review` | Starts PR Reviewer |
+| `labels.autopilot` | `factory:autopilot` | Runs all three stages through a reviewed draft PR |
 | `commandPrefix` | `/factory` | Prefix for commands such as `/factory cancel` |
 | `minimumPermission` | `write` | Live repository permission required to start work |
 | `models.medium` | `anthropic/claude-sonnet-5` | Triage and PR Reviewer model |
@@ -86,9 +88,9 @@ After adding a repository:
 
 `minimumPermission` accepts `triage`, `write`, `maintain`, or `admin`. The
 factory checks the triggering actor's current permission at the start of
-every claiming task.
+every GitHub task.
 
-`setup:gibthub` also creates `factory:working`. This label records an active
+`setup:github` also creates `factory:working`. This label records an active
 run; it is not a trigger.
 
 If you rename a trigger label, deploy both services and rerun
@@ -165,7 +167,7 @@ Organization installations use the equivalent organization settings URL.
 
 ## Follow and control runs
 
-While a claiming task runs, the issue or pull request has `factory:working`.
+While a GitHub task runs, the issue or pull request has `factory:working`.
 The App-authored status comment shows progress, the run ID, and the final
 result. Its hidden marker records the current Sandbox for cancellation.
 
@@ -197,6 +199,14 @@ the status comment and terminates its recorded Sandbox. It also clears a stale
 `running` status when the task has already stopped.
 
 To restart work, remove the trigger label and apply it again.
+
+`factory:autopilot` grants upfront approval to draft a spec, implement it,
+open a draft pull request, and post a COMMENT review. It never approves or
+merges the pull request, and it does not apply the three manual transition
+labels. Triage may still clear a stale spec-approval label when it revises the
+spec. The trigger label is removed when a run starts. If Triage asks questions,
+the factory adds it back so a human reply can start the continuation. Use
+`/factory cancel` to stop an active root workflow.
 
 ## Check a deployment
 

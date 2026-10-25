@@ -3,7 +3,7 @@ import type { Outcome } from "../../claims/index.js";
 import { TASKS } from "../../config/index.js";
 import { openSandbox } from "../../sandbox/index.js";
 import { PrReviewInput } from "../../schemas/index.js";
-import { type ClaimDeps, claimingTask } from "../claiming-task.js";
+import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
 import { runVerify } from "../run-verify.js";
 import { headMoved, mergeBase, type OpenSandbox, withPullSandbox } from "./checkout.js";
 import { commentable, pullDiffLines } from "./diff-lines.js";
@@ -11,7 +11,7 @@ import { reviewerMessage } from "./messages.js";
 import { findReview, postReview } from "./post.js";
 
 /** Test seams: everything that reaches GitHub, Sandboxes, or a model. */
-export interface PrReviewDeps extends ClaimDeps {
+export interface PrReviewDeps extends GitHubTaskDeps {
 	openSandbox?: OpenSandbox;
 	runAgent?: typeof runAgent;
 }
@@ -20,12 +20,15 @@ export interface PrReviewDeps extends ClaimDeps {
  * PR Reviewer: verify the PR head, review it in one sandbox, and post one COMMENT review.
  * It never approves or requests changes.
  */
-export const runPrReview = claimingTask(
+export const prReviewWorkflow = defineGitHubTask(
 	{
 		name: TASKS.prReview,
 		title: "PR Reviewer",
 		input: PrReviewInput,
-		subject: (input) => ({ kind: "pr", number: input.pr }),
+		subject: (input, ctx) => {
+			if (input.workflowIssue && !ctx.metadata.parentTaskRunId) throw new Error("workflowIssue is valid only in a parent workflow");
+			return input.workflowIssue ? { kind: "issue", number: input.workflowIssue } : { kind: "pr", number: input.pr };
+		},
 		timeoutSeconds: 2 * 60 * 60,
 	},
 	async (claim, input, deps: PrReviewDeps): Promise<Outcome> => {
@@ -81,3 +84,5 @@ export const runPrReview = claimingTask(
 		return { outcome: "reviewed", summary: `posted a COMMENT review: ${notes.join(", ")}.`, links: [{ label: "Review", url: posted.htmlUrl }] };
 	},
 );
+
+export const runPrReview = prReviewWorkflow.run;

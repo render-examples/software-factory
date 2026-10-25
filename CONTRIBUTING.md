@@ -83,7 +83,7 @@ npx vitest run tests/gateway.test.ts
 Follow [docs/runbooks/extend.md](docs/runbooks/extend.md) to:
 
 - add a typed agent and prompt;
-- add a claiming or maintenance task;
+- add a GitHub or maintenance task;
 - route a GitHub event, label, or command;
 - update GitHub App requirements;
 - test authority and user-visible behavior; and

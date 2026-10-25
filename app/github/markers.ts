@@ -12,6 +12,10 @@ export type RunState = (typeof RUN_STATES)[number];
 
 const StatusMarker = z.object({
 	runId: z.string().min(1),
+	/** Root Workflows run. Differs from runId when this task is a subtask. */
+	traceId: z.string().min(1).optional(),
+	/** Registered name of the root task, for cancellation telemetry. */
+	rootStage: z.string().min(1).optional(),
 	stage: z.string().min(1),
 	/** The task's name as the comment shows it. Comments written before it existed lack it. */
 	title: z.string().min(1).optional(),

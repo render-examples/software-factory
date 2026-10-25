@@ -1,6 +1,6 @@
 import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
-import { CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
+import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
 
 export type Route =
 	| {
@@ -94,7 +94,15 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			}
 			if (label?.name === config.labels.specApproved) {
 				// GitHub bumps updated_at when the label is applied.
-				return start(TASKS.specToPr, SpecToPrInput, { issue: issue.number, actor, labeledAt: issue.updated_at }, subject);
+				return start(
+					TASKS.specToPr,
+					SpecToPrInput,
+					{ issue: issue.number, actor, approval: { kind: "label", labeledAt: issue.updated_at } },
+					subject,
+				);
+			}
+			if (label?.name === config.labels.autopilot) {
+				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor }, subject);
 			}
 			return ignore("unhandled label");
 		}
@@ -121,6 +129,9 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 				return start(TASKS.cancel, CancelInput, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
 			}
 			if (isPr) return ignore("comment on pull request");
+			if (issue.labels.some((l) => l.name === config.labels.autopilot)) {
+				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor, commentId: comment.id }, subject);
+			}
 			if (!issue.labels.some((l) => l.name === config.labels.triage)) return ignore("issue not in triage");
 			return start(TASKS.triage, TriageInput, { issue: issue.number, actor, commentId: comment.id }, subject);
 		}

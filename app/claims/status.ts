@@ -13,7 +13,7 @@ export interface StatusLink {
 	url: string;
 }
 
-/** On the issue or PR while a claiming task runs. */
+/** On the issue or PR while a GitHub task runs. */
 export const WORKING_LABEL = "factory:working";
 
 export type StatusGitHub = Pick<
@@ -71,15 +71,27 @@ export interface StopContext {
  * was still active.
  */
 export async function stopRun(runs: RunControl, status: StatusMarker, context: StopContext): Promise<boolean> {
-	const active = await isRunActive(runs, status.runId);
+	const rootRunId = status.traceId ?? status.runId;
+	const active = await isRunActive(runs, rootRunId);
 	if (active) {
-		await cancelActiveRun(runs, status.runId);
+		await cancelActiveRun(runs, rootRunId);
 		const { repo, subject, by, outcome } = context;
-		// Claiming tasks are started by the gateway, so each is its own root task run and its run ID is its trace ID.
-		const payload = { stage: status.stage, state: "cancelled", outcome, stoppedBy: by };
-		emit({ traceId: status.runId, runId: status.runId, repo, subject, type: "run.finished", payload });
+		if (status.state === "running") {
+			const payload = { stage: status.stage, state: "cancelled", outcome, stoppedBy: by };
+			emit({ traceId: rootRunId, runId: status.runId, repo, subject, type: "run.finished", payload });
+		}
+		if (rootRunId !== status.runId) {
+			emit({
+				traceId: rootRunId,
+				runId: rootRunId,
+				repo,
+				subject,
+				type: "run.finished",
+				payload: { stage: status.rootStage ?? "workflow", state: "cancelled", outcome, stoppedBy: by, currentRunId: status.runId },
+			});
+		}
 	}
-	if (status.sandboxId) {
+	if (status.state === "running" && status.sandboxId) {
 		const { sandboxId } = status;
 		await runs.terminateSandbox(sandboxId).catch((error) => warn("could not terminate the stopped run's sandbox", error, { sandboxId }));
 	}
@@ -118,24 +130,37 @@ export async function takeOver(opts: {
 	subject: Subject;
 	task: string;
 	title: string;
+	traceId: string;
 	runId: string;
+	/** A subtask may continue only the root workflow that already owns the subject. */
+	mode?: "replace" | "continue";
 	runs?: RunControl;
-}): Promise<{ commentId: number; previousRunId: string | null; cancelledPrevious: boolean }> {
-	const { gh, repo, subject, task, title, runId } = opts;
+}): Promise<{ acquired: boolean; commentId: number | null; previousRunId: string | null; cancelledPrevious: boolean }> {
+	const { gh, repo, subject, task, title, traceId, runId, mode = "replace" } = opts;
 	const current = await readStatus(gh, subject.number);
+	const currentTraceId = current ? (current.data.traceId ?? current.data.runId) : null;
+	if (mode === "continue" && currentTraceId !== traceId) {
+		return { acquired: false, commentId: current?.comment.id ?? null, previousRunId: current?.data.runId ?? null, cancelledPrevious: false };
+	}
 	const previous = current && current.data.runId !== runId ? current.data : null;
 	const stop = { repo, subject: subjectName(subject), by: runId, outcome: "superseded" } as const;
-	const cancelledPrevious = previous ? await stopRun(opts.runs ?? workflowRuns(), previous, stop) : false;
-	const body = statusBody({ task, title, runId, state: "running" });
+	const previousTraceId = previous ? (previous.traceId ?? previous.runId) : null;
+	const cancelledPrevious = previous && previousTraceId !== traceId ? await stopRun(opts.runs ?? workflowRuns(), previous, stop) : false;
+	const rootStage = currentTraceId === traceId ? (current?.data.rootStage ?? current?.data.stage ?? task) : task;
+	const body = statusBody({ task, title, traceId, rootStage, runId, state: "running" });
 	const comment = current ? await gh.updateComment(current.comment.id, body) : await gh.createComment(subject.number, body);
 	await addWorkingLabel(gh, subject.number);
-	return { commentId: comment.id, previousRunId: previous?.runId ?? null, cancelledPrevious };
+	return { acquired: true, commentId: comment.id, previousRunId: previous?.runId ?? null, cancelledPrevious };
 }
 
 export interface StatusUpdate {
 	gh: StatusGitHub;
 	number: number;
 	runId: string;
+	/** Root Workflows run. Differs from runId when this task is a subtask. */
+	traceId?: string;
+	/** Registered name of the root task. */
+	rootStage?: string;
 	/** The task's registered name. */
 	task: string;
 	/** The task's name in the comment, such as "PR Reviewer". */
@@ -153,23 +178,28 @@ export interface StatusUpdate {
  */
 export async function setStatus(update: StatusUpdate): Promise<boolean> {
 	const current = await readStatus(update.gh, update.number);
-	const body = statusBody(update);
 	if (!current) {
-		await update.gh.createComment(update.number, body);
+		await update.gh.createComment(update.number, statusBody(update));
 		return true;
 	}
 	const ours = current.data.runId === update.runId;
 	if (!ours && (current.data.state === "running" || (update.state === "rejected" && current.data.state !== "rejected"))) {
 		return false;
 	}
-	await update.gh.updateComment(current.comment.id, body);
+	const currentTraceId = current.data.traceId ?? current.data.runId;
+	const rootStage = update.rootStage ?? (currentTraceId === update.traceId ? current.data.rootStage : undefined);
+	await update.gh.updateComment(current.comment.id, statusBody({ ...update, rootStage }));
 	return true;
 }
 
 /** Records a terminal state and removes the working label. */
-export async function finishStatus(update: StatusUpdate & { state: Exclude<RunState, "running"> }): Promise<boolean> {
+export async function finishStatus(
+	update: StatusUpdate & { state: Exclude<RunState, "running"> },
+	opts: { rootFinished?: boolean } = {},
+): Promise<boolean> {
 	const wrote = await setStatus(update);
-	if (wrote) await removeWorkingLabel(update.gh, update.number);
+	const isRoot = !update.traceId || update.traceId === update.runId;
+	if (wrote && (isRoot || opts.rootFinished)) await removeWorkingLabel(update.gh, update.number);
 	return wrote;
 }
 
@@ -185,7 +215,16 @@ function statusBody(s: Omit<StatusUpdate, "gh" | "number">): string {
 	const links = (s.links ?? []).map((link) => `- [${link.label}](${link.url})`);
 	const footer = s.state === "running" ? [] : [`<sub>run \`${s.runId}\`</sub>`];
 	const sandboxId = s.state === "running" ? s.sandboxId : undefined;
-	const marker = renderMarker("status", { runId: s.runId, stage: s.task, title: s.title, state: s.state, at: new Date().toISOString(), sandboxId });
+	const marker = renderMarker("status", {
+		runId: s.runId,
+		traceId: s.traceId,
+		rootStage: s.rootStage,
+		stage: s.task,
+		title: s.title,
+		state: s.state,
+		at: new Date().toISOString(),
+		sandboxId,
+	});
 	return [line, ...(links.length ? ["", ...links] : []), ...(footer.length ? ["", ...footer] : []), "", marker].join("\n");
 }
 

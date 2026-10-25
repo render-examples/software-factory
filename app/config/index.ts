@@ -47,6 +47,7 @@ export const TASKS = {
 	triage: "triage",
 	specToPr: "spec-to-pr",
 	prReview: "pr-review",
+	autopilot: "autopilot",
 	cancel: "cancel",
 	refreshSnapshot: "refresh-snapshot",
 } as const;

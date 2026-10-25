@@ -7,6 +7,14 @@ import type { Sandbox } from "../../sandbox/index.js";
 import type { TriageAgents } from "./agents.js";
 import { type CurrentSpec, retryMessage } from "./thread.js";
 
+/** The spec a parent task may pass to its next stage. */
+export interface TriageHandoff {
+	kind: "spec";
+	commentId: number;
+	hash: string;
+	version: number;
+}
+
 /** Drafts the spec, and redrafts once if validation rejects it. */
 export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message: string): Promise<{ draft: SpecDraft; warnings: string[] }> {
 	const existing = await trackedPaths(sandbox);
@@ -38,13 +46,14 @@ export async function publishSpec(
 	issue: Issue,
 	current: CurrentSpec | null,
 	{ draft, warnings }: { draft: SpecDraft; warnings: string[] },
-): Promise<Outcome> {
+): Promise<Outcome<TriageHandoff>> {
 	const hash = contentHash(draft.spec);
 	if (current && current.hash === hash) {
 		return {
 			outcome: "unchanged",
 			summary: `the spec is unchanged (v${current.version}).`,
 			links: [specLink(current.version, current.comment.htmlUrl)],
+			data: { kind: "spec", commentId: current.comment.id, hash, version: current.version },
 		};
 	}
 	const version = (current?.version ?? 0) + 1;
@@ -60,6 +69,7 @@ export async function publishSpec(
 		outcome: current ? "revised" : "drafted",
 		summary: `${current ? "revised the spec to" : "drafted spec"} v${version}${note}.`,
 		links: [specLink(version, comment.htmlUrl)],
+		data: { kind: "spec", commentId: comment.id, hash, version },
 	};
 }
 

@@ -12,7 +12,7 @@ export interface RepoConfig {
 export interface FactoryConfig {
 	/** Repositories the factory acts on, keyed by "owner/name". Webhooks from any other repository are ignored. */
 	repos: Record<string, RepoConfig>;
-	labels: { triage: string; specApproved: string; prReview: string };
+	labels: { triage: string; specApproved: string; prReview: string; autopilot: string };
 	/** Prefix for comment commands, such as `/factory cancel`. */
 	commandPrefix: string;
 	/** GitHub permission the triggering actor needs on the repository. */
@@ -49,6 +49,7 @@ export default defineFactoryConfig({
 		triage: "factory:triage",
 		specApproved: "factory:spec-approved",
 		prReview: "factory:pr-review",
+		autopilot: "factory:autopilot",
 	},
 	commandPrefix: "/factory",
 	minimumPermission: "write",

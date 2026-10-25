@@ -50,7 +50,7 @@ changing credentials, claims, Sandboxes, publishing, or GitHub writes.
 - Validate every external or cross-process input with Zod at its boundary.
 - Build agent output objects with `z.strictObject`. Bound strings and arrays.
 - Keep task inputs and results small and JSON-serializable.
-- Open Sandboxes through `withSandbox`. In claiming tasks, call
+- Open Sandboxes through `withSandbox`. In GitHub tasks, call
   `claim.recordSandbox()` immediately after opening one.
 - Use `ExpectedFailure` only for expected messages safe to publish on GitHub.
   Keep outcome names in snake_case.

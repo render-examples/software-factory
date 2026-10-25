@@ -34,8 +34,8 @@ const APP = {
 	permissions: { contents: "write", issues: "write", pull_requests: "write", metadata: "read" },
 	events: ["issues", "issue_comment", "pull_request", "push"],
 };
-const LABEL_NAMES = ["factory:triage", "factory:spec-approved", "factory:pr-review", "factory:working"];
-const TASK_NAMES = ["triage", "spec-to-pr", "pr-review", "cancel", "refresh-snapshot"];
+const LABEL_NAMES = ["factory:triage", "factory:spec-approved", "factory:pr-review", "factory:autopilot", "factory:working"];
+const TASK_NAMES = ["triage", "spec-to-pr", "pr-review", "autopilot", "cancel", "refresh-snapshot"];
 
 interface Call {
 	method: string;

@@ -6,7 +6,7 @@ import { pullRequestBody, pullRequestTitle } from "../../format/index.js";
 import { type GitDataClient, gitData } from "../../github/index.js";
 import { type OpenedSandbox, openSandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
 import { type Implementation, SpecToPrInput } from "../../schemas/index.js";
-import { type ClaimDeps, claimingTask } from "../claiming-task.js";
+import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
 import { runVerify, type VerifyRun } from "../run-verify.js";
 import { loadApprovedSpec } from "./approval.js";
 import { botIdentity, branchName, commitDate, commitMessage, ownedCommits, refusalSummary } from "./branch.js";
@@ -15,8 +15,15 @@ import { allPassed, failureSummary, hasChanges } from "./verify.js";
 
 const IMPLEMENT_TIMEOUT_MS = 60 * 60 * 1000;
 
+/** The draft pull request a parent task may pass to its next stage. */
+export interface SpecToPrHandoff {
+	kind: "pull_request";
+	pr: number;
+	headSha: string;
+}
+
 /** Test seams; each defaults to the real thing. */
-export interface SpecToPrDeps extends ClaimDeps {
+export interface SpecToPrDeps extends GitHubTaskDeps {
 	gitData?: GitDataClient;
 	openSandbox?: (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
 	runAgent?: typeof runAgent;
@@ -28,7 +35,7 @@ export interface SpecToPrDeps extends ClaimDeps {
  * Approved spec to draft PR: implement in one sandbox, verify with up to `limits.repairRounds` repair runs, then
  * publish through the Git Data API and open a draft PR. A rerun (a relabel) replaces the earlier attempt's branch.
  */
-export const runSpecToPr = claimingTask(
+export const specToPrWorkflow = defineGitHubTask(
 	{
 		name: TASKS.specToPr,
 		title: "Spec-to-PR",
@@ -36,11 +43,11 @@ export const runSpecToPr = claimingTask(
 		subject: (input) => ({ kind: "issue", number: input.issue }),
 		timeoutSeconds: 4 * 60 * 60,
 	},
-	async (claim, input, deps: SpecToPrDeps): Promise<Outcome> => {
+	async (claim, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {
 		const { gh, repo } = claim;
 		// Fixed for the whole run, so publishing the same tree twice produces the same commit.
 		const date = commitDate((deps.now ?? (() => new Date()))());
-		const { spec, comment } = await loadApprovedSpec(gh, input.issue, input.labeledAt);
+		const { spec, comment } = await loadApprovedSpec(gh, input.issue, input.approval);
 		const issue = await gh.getIssue(input.issue);
 		if (issue.isPull) throw new ExpectedFailure("Spec-to-PR runs on issues, not pull requests.", "not_an_issue");
 		const author = await botIdentity(gh, date);
@@ -103,12 +110,15 @@ export const runSpecToPr = claimingTask(
 				outcome: "pr_opened",
 				summary: `opened draft PR #${pull.number}. Review it before marking it ready.`,
 				links: [{ label: `Draft PR #${pull.number}`, url: pull.htmlUrl }],
+				data: { kind: "pull_request", pr: pull.number, headSha: pull.headSha },
 			};
 		});
 	},
 );
 
-const noChanges = (): Outcome => ({
+export const runSpecToPr = specToPrWorkflow.run;
+
+const noChanges = (): Outcome<SpecToPrHandoff> => ({
 	outcome: "no_changes",
 	summary: "the implementation agent made no changes, so there is nothing to open a PR for.",
 });

@@ -49,6 +49,12 @@ export const LABELS: readonly LabelSpec[] = [
 		description: "software-factory: review this pull request",
 		trigger: true,
 	},
+	{
+		name: config.labels.autopilot,
+		color: "c5def5",
+		description: "software-factory: run through a reviewed draft pull request",
+		trigger: true,
+	},
 	{ name: WORKING_LABEL, color: "fbca04", description: "software-factory is working on this", trigger: false },
 ];
 

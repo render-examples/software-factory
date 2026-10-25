@@ -266,7 +266,12 @@ describe("triage task", () => {
 
 		const outcome = await runTriage(ctx, input, deps);
 
-		expect(outcome).toMatchObject({ state: "done", outcome: "drafted", summary: "drafted spec v1." });
+		expect(outcome).toMatchObject({
+			state: "done",
+			outcome: "drafted",
+			summary: "drafted spec v1.",
+			data: { kind: "spec", commentId: expect.any(Number), hash: expect.any(String), version: 1 },
+		});
 		expect(calls.map((c) => c.agent)).toEqual(["triage", "spec-writer"]);
 		expect(calls[1]).toMatchObject({ sandbox });
 		expect(calls[1]?.message).toContain(`in ${REPO}`);

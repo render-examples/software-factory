@@ -35,20 +35,23 @@ export interface Claim {
 }
 
 /** How the work ended. `summary` is shown on GitHub, so it must be safe to publish. */
-export interface Outcome {
+export interface Outcome<Data = undefined> {
 	outcome: string;
 	summary: string;
 	state?: "done" | "failed";
 	links?: StatusLink[];
+	/** Typed data for a parent task. It is returned to Workflows, never rendered on GitHub. */
+	data?: Data;
 }
 
-/** What a claiming task returns to Render Workflows. */
-export interface TaskResult {
+/** What a GitHub task returns to Render Workflows. */
+export interface TaskResult<Data = undefined> {
 	state: Exclude<RunState, "running">;
 	outcome: string;
 	summary: string;
 	traceId: string;
 	runId: string;
+	data?: Data;
 }
 
 /** An expected failure: its message is shown on GitHub and the task succeeds. Anything else fails the task. */
@@ -70,6 +73,8 @@ export interface ClaimOptions {
 	/** The task's name in the status comment, such as "PR Reviewer". */
 	title: string;
 	actor: string;
+	/** Root tasks may replace another root; subtasks may only continue their own root. */
+	mode?: "replace" | "continue";
 	gh?: GitHubClient;
 	runs?: RunControl;
 }
@@ -79,18 +84,18 @@ export interface ClaimOptions {
  * it. withClaim checks the actor's permission, stops the previous run and takes over the comment, keeps it
  * current, and records how the run ended.
  */
-export async function withClaim(
+export async function withClaim<Data = undefined>(
 	ctx: Pick<TaskContext, "metadata">,
 	opts: ClaimOptions,
-	work: (claim: Claim) => Promise<Outcome>,
-): Promise<TaskResult> {
+	work: (claim: Claim) => Promise<Outcome<Data>>,
+): Promise<TaskResult<Data>> {
 	const run = new ClaimedRun(ctx, opts);
 	try {
-		if (!(await run.authorized())) return await run.reject();
+		if (!(await run.authorized())) return await run.reject<Data>();
 		await run.acquire();
 		return await run.finish(await work(run));
 	} catch (error) {
-		return await run.fail(error);
+		return await run.fail<Data>(error);
 	}
 }
 
@@ -153,30 +158,41 @@ class ClaimedRun implements Claim {
 	}
 
 	/** A rejected trigger never held the claim; setStatus keeps its record from replacing a real run's. */
-	async reject(): Promise<TaskResult> {
+	async reject<Data>(): Promise<TaskResult<Data>> {
 		const summary = `@${this.#opts.actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
-		await finishStatus(this.#status("rejected", summary));
+		await finishStatus(this.#status("rejected", summary), { rootFinished: this.#opts.mode !== "continue" });
 		return this.#record("rejected", "permission_denied", summary);
 	}
 
 	/** Stops the previous run and rewrites the status comment to name this one, then confirms no other run's write landed after it. */
 	async acquire(): Promise<void> {
 		const { task, title, runs } = this.#opts;
-		await takeOver({ gh: this.gh, repo: this.repo.fullName, subject: this.subject, task, title, runId: this.runId, runs });
+		const acquired = await takeOver({
+			gh: this.gh,
+			repo: this.repo.fullName,
+			subject: this.subject,
+			task,
+			title,
+			traceId: this.traceId,
+			runId: this.runId,
+			mode: this.#opts.mode,
+			runs,
+		});
+		if (!acquired.acquired) throw new Superseded();
 		await this.checkpoint();
 	}
 
-	async finish(outcome: Outcome): Promise<TaskResult> {
+	async finish<Data>(outcome: Outcome<Data>): Promise<TaskResult<Data>> {
 		const state = outcome.state ?? "done";
 		if (!(await this.#publish(state, outcome.summary, outcome.links))) throw new Superseded();
-		return this.#record(state, outcome.outcome, outcome.summary);
+		return this.#record(state, outcome.outcome, outcome.summary, {}, outcome.data);
 	}
 
 	/**
 	 * A superseded run and an expected failure end the task normally. Anything else is reported on GitHub without
 	 * its message, which can hold secrets or repository output, and rethrown so the task fails.
 	 */
-	async fail(error: unknown): Promise<TaskResult> {
+	async fail<Data>(error: unknown): Promise<TaskResult<Data>> {
 		if (error instanceof Superseded) return this.#record("cancelled", "superseded", "a newer run took over.");
 		if (error instanceof ExpectedFailure) {
 			await this.#publish("failed", error.message);
@@ -196,23 +212,41 @@ class ClaimedRun implements Claim {
 	}
 
 	async #holdsClaim(): Promise<boolean> {
-		return (await readStatus(this.gh, this.subject.number))?.data.runId === this.runId;
+		const status = (await readStatus(this.gh, this.subject.number))?.data;
+		return status !== undefined && (status.traceId ?? status.runId) === this.traceId;
 	}
 
 	#status<S extends StatusUpdate["state"]>(state: S, summary: string, links?: StatusLink[]): StatusUpdate & { state: S } {
 		const { task, title } = this.#opts;
-		return { gh: this.gh, number: this.subject.number, runId: this.runId, task, title, state, summary, links, sandboxId: this.#sandboxId };
+		return {
+			gh: this.gh,
+			number: this.subject.number,
+			traceId: this.traceId,
+			runId: this.runId,
+			task,
+			title,
+			state,
+			summary,
+			links,
+			sandboxId: this.#sandboxId,
+		};
 	}
 
 	/** Writes a final state while this run still holds the claim; false once another run's status is showing. */
 	async #publish(state: TaskResult["state"], summary: string, links?: StatusLink[]): Promise<boolean> {
 		if (!(await this.#holdsClaim())) return false;
-		return await finishStatus(this.#status(state, summary, links));
+		return await finishStatus(this.#status(state, summary, links), { rootFinished: this.#opts.mode !== "continue" });
 	}
 
-	#record(state: TaskResult["state"], outcome: string, summary: string, extra: Record<string, unknown> = {}): TaskResult {
+	#record<Data = undefined>(
+		state: TaskResult["state"],
+		outcome: string,
+		summary: string,
+		extra: Record<string, unknown> = {},
+		data?: Data,
+	): TaskResult<Data> {
 		const durationMs = Date.now() - this.#startedAt;
 		emit({ ...this.#event, type: "run.finished", payload: { stage: this.#opts.task, state, outcome, durationMs, ...extra } });
-		return { state, outcome, summary, traceId: this.traceId, runId: this.runId };
+		return { state, outcome, summary, traceId: this.traceId, runId: this.runId, ...(data === undefined ? {} : { data }) };
 	}
 }

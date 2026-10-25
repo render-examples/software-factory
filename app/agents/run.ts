@@ -28,7 +28,7 @@ export class AgentError extends Error {
 export interface RunAgentOptions {
 	/** Tools run only here, never in a Workflows task. */
 	sandbox: Sandbox;
-	/** Root task run of the claiming task; every event this run emits carries it. */
+	/** Root task run of the GitHub task; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
 	repo?: string;

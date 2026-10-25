@@ -122,11 +122,11 @@ list only if write tools are intentional.
 Add task-level tests for the user-visible result and meaningful failures. Use
 fakes; tests must not call GitHub, Render, or a model provider.
 
-## Add a claiming task
+## Add a GitHub task
 
-Use a claiming task for work on one issue or pull request. The status comment
-records the run that owns the subject and the Sandbox that cancellation must
-terminate.
+Use `defineGitHubTask()` for work attached to one issue or pull request. It
+keeps run ownership, permission checks, status updates, and cancellation out
+of the task body.
 
 ### 1. Define the task contract
 
@@ -143,7 +143,7 @@ must pin. Do not accept these values from agent output.
 Create `app/workflows/<task-name>/index.ts`:
 
 ```typescript
-export const runExample = claimingTask(
+export const exampleWorkflow = defineGitHubTask(
   {
     name: TASKS.example,
     title: "Example",
@@ -156,13 +156,18 @@ export const runExample = claimingTask(
     return { outcome: "completed", summary: "completed the example task." };
   },
 );
+
+export const runExample = exampleWorkflow.run;
 ```
 
-`claimingTask()` validates input, resolves the configured repository, checks
-the actor's permission, acquires the status-comment claim, and records the
-final outcome.
+`defineGitHubTask()` returns two explicit entry points:
 
-Claiming tasks do not retry automatically. A retry can repeat model spend or
+- `exampleWorkflow.task` is the registered Render task definition. Pass it to
+  `ctx.run()` from a parent workflow.
+- `exampleWorkflow.run` calls the same body in-process with injectable
+  dependencies for tests.
+
+GitHub tasks do not retry automatically. A retry can repeat model spend or
 durable writes; a person starts a fresh run instead.
 
 ### 3. Use the claim correctly
@@ -187,6 +192,43 @@ Import the task module from `app/workflows/index.ts`. Render registers tasks
 when the module loads.
 
 Keep task inputs and results small and JSON-serializable.
+
+## Compose tasks
+
+Use a GitHub-task parent to run registered child tasks in order:
+
+```typescript
+export const pipeline = defineGitHubTask(
+  {
+    name: "pipeline",
+    title: "Pipeline",
+    input: PipelineInput,
+    subject: input => ({ kind: "issue", number: input.issue }),
+    timeoutSeconds: 3600,
+  },
+  async (_claim, input, _deps, ctx) => {
+    if (!ctx.run) throw new Error("pipeline requires a Workflows context");
+    const first = await ctx.run(firstWorkflow.task, input);
+    if (first.state !== "done" || !first.data) {
+      return { state: "failed", outcome: "stopped", summary: first.summary };
+    }
+    const second = await ctx.run(secondWorkflow.task, first.data);
+    return { outcome: "completed", summary: second.summary };
+  },
+);
+```
+
+Each `ctx.run()` starts a child task on separate compute and waits for its
+typed result. The parent owns the subject's root claim; its children continue
+that claim, update the current stage and Sandbox, and run their own permission
+checks.
+
+Keep parent retries disabled. Retrying a parent can create new child runs and
+repeat model spend. Return immediately after a child is cancelled, rejected,
+or fails.
+
+[`app/workflows/autopilot/index.ts`](../../app/workflows/autopilot/index.ts)
+is the complete example.
 
 ## Add a plain Workflows task
 
@@ -246,7 +288,7 @@ Before handing off, confirm:
 - model output cannot select an external write target;
 - the gateway still imports no GitHub auth, Sandbox, agent, or workflow code;
 - `app/runner/` still imports nothing from the rest of `app/`;
-- claiming tasks record their Sandbox before running an agent;
+- GitHub tasks record their Sandbox before running an agent;
 - tests cover the user-visible success and important failures; and
 - documentation and setup requirements changed when the App contract changed.
 

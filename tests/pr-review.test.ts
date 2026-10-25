@@ -33,6 +33,7 @@ if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two 
 const HEAD = "a".repeat(40);
 const MERGE_BASE = "b".repeat(40);
 const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-root" } };
+const childCtx = { metadata: { ...ctx.metadata, parentTaskRunId: "trn-parent" } };
 const input = {
 	repo: REPO,
 	installationId: 5,
@@ -64,6 +65,7 @@ class FakeGitHub {
 		comments: ReviewComment[];
 	}> = [];
 	createReviewErrors: Error[] = [];
+	statusNumbers: number[] = [];
 	pull: PullRequest = {
 		number: 34,
 		state: "open",
@@ -81,7 +83,8 @@ class FakeGitHub {
 	botLogin = async () => BOT;
 	getPermission = async (login: string) => (login === "alice" ? "write" : "none");
 	listIssueComments = async () => this.comments.map((c) => ({ ...c }));
-	createComment = async (_n: number, body: string) => {
+	createComment = async (number: number, body: string) => {
+		this.statusNumbers.push(number);
 		const comment = {
 			id: this.nextId++,
 			body,
@@ -379,6 +382,29 @@ describe("runPrReview", () => {
 			runId: "trn-run",
 		});
 		expect(gh.status()).toContain("pullrequestreview-9");
+	});
+
+	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {
+		await gh.createComment(
+			12,
+			renderMarker("status", {
+				runId: "trn-root",
+				traceId: "trn-root",
+				rootStage: "autopilot",
+				stage: "autopilot",
+				title: "Autopilot",
+				state: "running",
+			}),
+		);
+		const result = await runPrReview(childCtx, { ...input, workflowIssue: 12 }, deps());
+		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
+		expect(gh.statusNumbers).toEqual([12]);
+	});
+
+	it("rejects workflowIssue on a directly started PR Reviewer task", async () => {
+		expect(() => runPrReview(ctx, { ...input, workflowIssue: 12 }, deps())).toThrow("valid only in a parent workflow");
+		expect(gh.comments).toEqual([]);
+		expect(opened).toEqual([]);
 	});
 
 	it("fails cleanly when the reviewer stops", async () => {

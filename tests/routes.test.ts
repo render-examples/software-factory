@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { config } from "../app/config/index.js";
-import { PrReviewInput, SpecToPrInput, TriageInput } from "../app/schemas/tasks.js";
+import { AutopilotInput, PrReviewInput, SpecToPrInput, TriageInput } from "../app/schemas/tasks.js";
 import { route } from "../app/gateway/routes.js";
 
 const REPO = Object.keys(config.repos)[0] as string;
@@ -47,15 +47,48 @@ describe("route: starts", () => {
 		if (r.kind === "start") expect(TriageInput.safeParse(r.input).success).toBe(true);
 	});
 
-	it("spec-approved label starts spec-to-pr with labeledAt from updated_at", () => {
+	it("spec-approved label starts spec-to-pr with a label approval", () => {
 		const r = route("issues", issueLabeled(config.labels.specApproved), DELIVERY);
 		expect(r).toMatchObject({
 			kind: "start",
 			task: "spec-to-pr",
-			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer", labeledAt: "2026-10-18T10:00:00Z" },
+			input: {
+				repo: REPO,
+				installationId: 7,
+				issue: 12,
+				actor: "maintainer",
+				approval: { kind: "label", labeledAt: "2026-10-18T10:00:00Z" },
+			},
 			idempotencyKey: DELIVERY,
 		});
 		if (r.kind === "start") expect(SpecToPrInput.safeParse(r.input).success).toBe(true);
+	});
+
+	it("autopilot label on an issue starts autopilot", () => {
+		const r = route("issues", issueLabeled(config.labels.autopilot), DELIVERY);
+		expect(r).toEqual({
+			kind: "start",
+			task: "autopilot",
+			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer" },
+			idempotencyKey: DELIVERY,
+			subject: "issue#12",
+		});
+		if (r.kind === "start") expect(AutopilotInput.safeParse(r.input).success).toBe(true);
+	});
+
+	it("a human reply continues autopilot while its label remains", () => {
+		const r = route("issue_comment", comment("Here are the details.", { labels: [{ name: config.labels.autopilot }] }), DELIVERY);
+		expect(r).toMatchObject({
+			kind: "start",
+			task: "autopilot",
+			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
+			subject: "issue#12",
+		});
+	});
+
+	it("does not restart autopilot for comments after its trigger label was consumed", () => {
+		const r = route("issue_comment", comment("Unrelated note.", { labels: [] }), DELIVERY);
+		expect(r).toEqual({ kind: "ignore", reason: "issue not in triage" });
 	});
 
 	it("pr-review label on an open PR starts pr-review", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Review, Spec, SpecDraft, TriageDecision, validateSpec } from "../app/schemas/index.js";
+import { AutopilotInput, Review, Spec, SpecDraft, SpecToPrInput, TriageDecision, validateSpec } from "../app/schemas/index.js";
 
 const spec = (overrides: Partial<Spec> = {}): Spec => ({
 	title: "Add a dark mode toggle",
@@ -46,6 +46,25 @@ describe("TriageDecision", () => {
 		expect(issues(TriageDecision.safeParse(misspelled))).toEqual(
 			expect.arrayContaining(["relevantPaths: Invalid input: expected array, received undefined", ': Unrecognized key: "relevant_paths"']),
 		);
+	});
+});
+
+describe("task inputs", () => {
+	it("accepts an autopilot start and an optional human reply", () => {
+		const base = { repo: "acme/web", installationId: 7, issue: 12, actor: "maintainer" };
+		expect(AutopilotInput.safeParse(base).success).toBe(true);
+		expect(AutopilotInput.safeParse({ ...base, commentId: 99 }).success).toBe(true);
+	});
+
+	it("distinguishes manual and autopilot spec approval", () => {
+		const base = { repo: "acme/web", installationId: 7, issue: 12, actor: "maintainer" };
+		expect(SpecToPrInput.safeParse({ ...base, approval: { kind: "label", labeledAt: "2026-10-25T12:00:00Z" } }).success).toBe(true);
+		expect(
+			SpecToPrInput.safeParse({
+				...base,
+				approval: { kind: "autopilot", commentId: 100, hash: "a".repeat(64), version: 1 },
+			}).success,
+		).toBe(true);
 	});
 });
 

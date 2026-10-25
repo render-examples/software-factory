@@ -53,6 +53,21 @@ PR Reviewer checks out the labeled pull request commit, runs the configured
 verification commands, and posts one COMMENT review. The review covers
 security, correctness, performance, and tests.
 
+### Autopilot
+
+Applying `factory:autopilot` grants upfront approval for Triage, Spec-to-PR, and PR Reviewer.
+The parent starts each GitHub task with `ctx.run`, so every stage has its own compute, claim,
+status, and Sandbox.
+
+Autopilot does not apply the manual transition labels. Triage can still remove
+a stale `factory:spec-approved` label when it revises a spec. Triage returns
+the exact App-authored spec comment and content hash to Spec-to-PR, which
+verifies that the current spec still matches. Spec-to-PR returns the pull
+request number and head commit directly to PR Reviewer. If Triage asks
+questions, the parent adds `factory:autopilot` back before it ends; a human
+reply starts a new parent run. At other times the trigger label is absent, so
+unrelated comments do not restart the workflow.
+
 ## State
 
 Each system owns the state it already manages:
@@ -80,12 +95,16 @@ at three boundaries:
 3. Hidden markers identify App-authored specifications, pull requests, and
    reviews so writes can update or reuse them.
 
-A new claiming run cancels the run named in the status comment, terminates
+For a composed workflow, the status marker records both the root workflow run
+and the current child task. Cancellation stops the root; the child ID still
+identifies the current stage and Sandbox.
+
+A new GitHub task run cancels the run named in the status comment, terminates
 its recorded Sandbox, and writes its own run ID to the comment. The run whose
 write remains visible holds the claim. Other runs stop when they next check
 the comment.
 
-Claiming tasks check ownership before progress updates and durable writes.
+GitHub tasks check ownership before progress updates and durable writes.
 Publishing also uses a deterministic branch and refuses to overwrite human
 commits.
 
@@ -95,7 +114,7 @@ database would create a second owner for the same claim.
 ## Sandboxes and snapshots
 
 A base-branch push builds a repository snapshot with the runner, a base
-checkout, and installed dependencies. A claiming task then:
+checkout, and installed dependencies. A GitHub task then:
 
 1. restores the newest snapshot;
 2. verifies runtime permissions and process hardening;
@@ -106,7 +125,7 @@ checkout, and installed dependencies. A claiming task then:
 7. closes the Sandbox in `finally`.
 
 Render terminates a cancelled task without running `finally`. For that case,
-each claiming task records its Sandbox ID in the status comment. A replacement
+each GitHub task records its Sandbox ID in the status comment. A replacement
 run or `/factory cancel` terminates the recorded Sandbox. The provider timeout
 is the final cleanup backstop.
 
@@ -178,7 +197,7 @@ Changes must preserve these properties:
 
 1. Verify a webhook signature before parsing its body.
 2. Check the triggering actor's current repository permission for every
-   claiming run.
+   GitHub task run.
 3. Let only code in the Workflows service write to GitHub.
 4. Keep GitHub write credentials out of Sandboxes.
 5. Run every model-directed tool inside a Sandbox.
@@ -187,7 +206,7 @@ Changes must preserve these properties:
 8. Stop automation at a draft pull request and a COMMENT review.
 9. Implement the specification as it existed when approved.
 10. Give every Sandbox a provider timeout and `finally` cleanup. Record a
-    claiming task's Sandbox so cancellation can terminate it.
+    GitHub task's Sandbox so cancellation can terminate it.
 
 Tests pin these invariants and the tool authority of every built-in agent.
 
@@ -223,16 +242,18 @@ Start with:
 
 1. [`app/gateway/routes.ts`](../app/gateway/routes.ts) — webhook-to-task
    routing.
-2. [`app/workflows/claiming-task.ts`](../app/workflows/claiming-task.ts) —
-   claiming task declaration.
+2. [`app/workflows/github-task.ts`](../app/workflows/github-task.ts) —
+   GitHub task declaration.
 3. [`app/claims/claim.ts`](../app/claims/claim.ts) — permission, ownership,
    progress, and completion.
 4. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts) — one
-   complete claiming task.
-5. [`app/agents/run.ts`](../app/agents/run.ts) — host-side agent execution.
-6. [`app/runner/main.ts`](../app/runner/main.ts) — Sandbox runner entry point.
-7. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
-8. [`app/changeset/index.ts`](../app/changeset/index.ts) — validated
+   complete GitHub task.
+5. [`app/workflows/autopilot/index.ts`](../app/workflows/autopilot/index.ts) —
+   parent/subtask orchestration.
+6. [`app/agents/run.ts`](../app/agents/run.ts) — host-side agent execution.
+7. [`app/runner/main.ts`](../app/runner/main.ts) — Sandbox runner entry point.
+8. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
+9. [`app/changeset/index.ts`](../app/changeset/index.ts) — validated
    publishing.
 
 Use the [extension runbook](runbooks/extend.md) to add agents, tasks, or

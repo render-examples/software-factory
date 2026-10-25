@@ -5,13 +5,13 @@ import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { renderMarker } from "../../github/index.js";
 import { openSandbox, type Sandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
 import { TriageInput } from "../../schemas/index.js";
-import { type ClaimDeps, claimingTask } from "../claiming-task.js";
+import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
 import { type AgentRunner, triageAgents } from "./agents.js";
-import { draftSpec, publishSpec } from "./spec.js";
+import { draftSpec, publishSpec, type TriageHandoff } from "./spec.js";
 import { readThread, specWriterMessage, triageMessage } from "./thread.js";
 
 /** Test seams; production uses the real GitHub client, sandboxes, and runAgent. */
-export interface TriageDeps extends ClaimDeps {
+export interface TriageDeps extends GitHubTaskDeps {
 	openSandbox?: (repo: RepoContext, ref: SandboxRef) => Promise<Sandbox>;
 	runAgent?: AgentRunner;
 }
@@ -20,9 +20,9 @@ export interface TriageDeps extends ClaimDeps {
  * Triage one issue: the triage agent reads the issue and the repository and decides to ask questions, draft
  * (or revise) the spec, or decline. Every GitHub write goes through the format helpers and carries a marker.
  */
-export const runTriage = claimingTask(
+export const triageWorkflow = defineGitHubTask(
 	{ name: TASKS.triage, title: "Triage", input: TriageInput, subject: (input) => ({ kind: "issue", number: input.issue }), timeoutSeconds: 3600 },
-	async (claim, input, deps: TriageDeps): Promise<Outcome> => {
+	async (claim, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
 		const { gh, repo } = claim;
 		const [issue, comments, bot] = await Promise.all([gh.getIssue(input.issue), gh.listIssueComments(input.issue), gh.botLogin()]);
 		if (input.commentId !== undefined) {
@@ -63,3 +63,5 @@ export const runTriage = claimingTask(
 		});
 	},
 );
+
+export const runTriage = triageWorkflow.run;

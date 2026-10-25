@@ -1,5 +1,5 @@
 import { config } from "../../config/index.js";
-import { Spec } from "../../schemas/index.js";
+import { Spec, type SpecApproval } from "../../schemas/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment } from "../../github/index.js";
 import { ExpectedFailure } from "../../claims/index.js";
 
@@ -11,10 +11,10 @@ interface ApprovedSpec {
 }
 
 /**
- * The spec as it stood when the approval label was applied (invariant 9). The approval time is the newest
- * `labeled` event for the label, or the time the webhook reported when the timeline doesn't have it yet.
+ * Loads the exact approved spec. Manual runs use the approval label's timestamp;
+ * autopilot names the App-authored spec comment and marker it received from Triage.
  */
-export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, labeledAt: string): Promise<ApprovedSpec> {
+export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, approval: SpecApproval): Promise<ApprovedSpec> {
 	const label = config.labels.specApproved;
 	const found = findMarkedComment(await gh.listIssueComments(issue), "spec", await gh.botLogin());
 	if (!found) {
@@ -24,10 +24,14 @@ export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, labele
 		);
 	}
 
-	const events = await gh.getLabelEvents(issue, label);
-	const approvedAt = events.at(-1)?.createdAt ?? labeledAt;
-	if (Date.parse(found.comment.updatedAt) > Date.parse(approvedAt)) {
-		throw new ExpectedFailure(`the spec changed after it was approved. Review it and reapply the \`${label}\` label.`, "spec_changed");
+	if (approval.kind === "label") {
+		const events = await gh.getLabelEvents(issue, label);
+		const approvedAt = events.at(-1)?.createdAt ?? approval.labeledAt;
+		if (Date.parse(found.comment.updatedAt) > Date.parse(approvedAt)) {
+			throw new ExpectedFailure(`the spec changed after it was approved. Review it and reapply the \`${label}\` label.`, "spec_changed");
+		}
+	} else if (found.comment.id !== approval.commentId || found.data.hash !== approval.hash || found.data.version !== approval.version) {
+		throw new ExpectedFailure("the spec changed after Triage returned it to autopilot.", "spec_changed");
 	}
 
 	const parsed = Spec.safeParse(found.data.spec);

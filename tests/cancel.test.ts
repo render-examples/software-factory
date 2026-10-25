@@ -72,12 +72,20 @@ beforeEach(() => {
 describe("cancel task", () => {
 	it("cancels the active run recorded in the status comment, terminates its sandbox, and says who cancelled it", async () => {
 		const { gh, comments, labels, add } = fakeGitHub("write");
-		const marker = renderMarker("status", { runId: "trn-1", stage: "spec-to-pr", title: "Spec-to-PR", state: "running", sandboxId: "sbx-1" });
+		const marker = renderMarker("status", {
+			runId: "trn-1",
+			traceId: "trn-root",
+			rootStage: "autopilot",
+			stage: "spec-to-pr",
+			title: "Spec-to-PR",
+			state: "running",
+			sandboxId: "sbx-1",
+		});
 		add(BOT, `running\n\n${marker}`);
-		const runs = fakeRuns({ "trn-1": "running" });
+		const runs = fakeRuns({ "trn-root": "running" });
 		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
-		expect(result).toEqual({ cancelled: true, runId: "trn-1" });
-		expect(runs.cancelTaskRun).toHaveBeenCalledWith("trn-1");
+		expect(result).toEqual({ cancelled: true, runId: "trn-root", currentRunId: "trn-1" });
+		expect(runs.cancelTaskRun).toHaveBeenCalledWith("trn-root");
 		expect(runs.terminateSandbox).toHaveBeenCalledWith("sbx-1");
 		expect(comments).toHaveLength(1);
 		expect(comments[0]?.body).toContain("**Spec-to-PR** was cancelled: cancelled by @alice.");
@@ -85,10 +93,17 @@ describe("cancel task", () => {
 		expect(labels.has(WORKING_LABEL)).toBe(false);
 		expect(events.map((e) => [e.type, e.runId])).toEqual([
 			["run.finished", "trn-1"],
+			["run.finished", "trn-root"],
 			["run.finished", "trn-cancel"],
 		]);
 		expect(events[0]?.payload).toMatchObject({ state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel" });
-		expect(events[1]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
+		expect(events[0]).toMatchObject({ traceId: "trn-root", runId: "trn-1" });
+		expect(events[1]).toMatchObject({
+			traceId: "trn-root",
+			runId: "trn-root",
+			payload: { stage: "autopilot", state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel", currentRunId: "trn-1" },
+		});
+		expect(events[2]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
 	});
 
 	it("clears a status left running by a run that already stopped, and terminates its leftover sandbox", async () => {
@@ -103,6 +118,32 @@ describe("cancel task", () => {
 		expect(comments).toHaveLength(1);
 		expect(comments[0]?.body).toContain("**Triage** was cancelled: cleared by @alice; the run had already stopped without finishing.");
 		expect(labels.has(WORKING_LABEL)).toBe(false);
+	});
+
+	it("cancels the root without reclassifying a child that already finished", async () => {
+		const { gh, comments, labels, add } = fakeGitHub("write");
+		const marker = renderMarker("status", {
+			runId: "trn-child",
+			traceId: "trn-root",
+			rootStage: "autopilot",
+			stage: "triage",
+			title: "Triage",
+			state: "done",
+		});
+		add(BOT, `done\n\n${marker}`);
+		const runs = fakeRuns({ "trn-root": "running" });
+		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
+
+		expect(result).toEqual({ cancelled: true, runId: "trn-root" });
+		expect(runs.cancelTaskRun).toHaveBeenCalledWith("trn-root");
+		expect(parseMarker(comments[0]?.body ?? "", "status")).toMatchObject({
+			runId: "trn-root",
+			traceId: "trn-root",
+			stage: "autopilot",
+			state: "cancelled",
+		});
+		expect(labels.has(WORKING_LABEL)).toBe(false);
+		expect(events.map((event) => event.runId)).toEqual(["trn-root", "trn-cancel"]);
 	});
 
 	it("refuses an actor without permission and leaves the run alone", async () => {

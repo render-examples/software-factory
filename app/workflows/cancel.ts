@@ -10,7 +10,10 @@ type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
 
 interface CancelResult {
 	cancelled: boolean;
+	/** Root workflow run that was cancelled. */
 	runId?: string;
+	/** Child task that was active when the root was cancelled. */
+	currentRunId?: string;
 	reason?: "permission_denied" | "nothing_running" | "already_stopped";
 }
 
@@ -45,10 +48,29 @@ export async function cancelRun(
 			await gh.createComment(input.number, `@${input.actor} no factory run is in progress here.`);
 			return { cancelled: false, reason: "nothing_running" };
 		}
-		const { runId: stopped, stage, title } = current.data;
+		const { runId: currentRunId, traceId: stoppedTrace, rootStage, stage, title } = current.data;
+		const rootRunId = stoppedTrace ?? currentRunId;
+		const childWasRunning = current.data.state === "running";
+		const displayedRunId = childWasRunning ? currentRunId : rootRunId;
+		const displayedStage = childWasRunning ? stage : (rootStage ?? stage);
+		const displayedTitle = childWasRunning ? (title ?? stage) : (rootStage ?? title ?? stage);
 		const summary = active ? `cancelled by @${input.actor}.` : `cleared by @${input.actor}; the run had already stopped without finishing.`;
-		await finishStatus({ gh, number: input.number, runId: stopped, task: stage, title: title ?? stage, state: "cancelled", summary });
-		return active ? { cancelled: true, runId: stopped } : { cancelled: false, runId: stopped, reason: "already_stopped" };
+		await finishStatus(
+			{
+				gh,
+				number: input.number,
+				runId: displayedRunId,
+				traceId: rootRunId,
+				rootStage,
+				task: displayedStage,
+				title: displayedTitle,
+				state: "cancelled",
+				summary,
+			},
+			{ rootFinished: true },
+		);
+		const child = childWasRunning && rootRunId !== currentRunId ? { currentRunId } : {};
+		return active ? { cancelled: true, runId: rootRunId, ...child } : { cancelled: false, runId: rootRunId, ...child, reason: "already_stopped" };
 	})();
 
 	emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });

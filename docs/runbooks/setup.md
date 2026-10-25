@@ -213,7 +213,7 @@ The command:
   `https://<gateway>.onrender.com/webhooks/github`;
 - preserves the generated webhook secret; and
 - creates `factory:triage`, `factory:spec-approved`,
-  `factory:pr-review`, and `factory:working`.
+  `factory:pr-review`, `factory:autopilot`, and `factory:working`.
 
 It is safe to rerun. Continue only when it reports no failed repository or
 webhook operation.

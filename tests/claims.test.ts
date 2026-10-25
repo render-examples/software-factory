@@ -58,8 +58,14 @@ class FakeGitHub {
 		return { ...comment };
 	}
 
-	addStatus(runId: string, state: "running" | "done" | "rejected" = "running", sandboxId?: string): IssueComment {
-		return this.add(BOT, `status\n\n${renderMarker("status", { runId, stage: "triage", state, sandboxId })}`);
+	addStatus(
+		runId: string,
+		state: "running" | "done" | "rejected" = "running",
+		sandboxId?: string,
+		traceId?: string,
+		rootStage?: string,
+	): IssueComment {
+		return this.add(BOT, `status\n\n${renderMarker("status", { runId, traceId, rootStage, stage: "triage", state, sandboxId })}`);
 	}
 
 	asClient(): GitHubClient {
@@ -96,7 +102,16 @@ describe("takeOver", () => {
 		const gh = new FakeGitHub();
 		const existing = gh.addStatus("trn-old", "running", "sbx-old");
 		const runs = new FakeRuns({ "trn-old": "running" });
-		const result = await takeOver({ gh, repo: REPO.fullName, subject, task: "triage", title: "Triage", runId: "trn-new", runs });
+		const result = await takeOver({
+			gh,
+			repo: REPO.fullName,
+			subject,
+			task: "triage",
+			title: "Triage",
+			traceId: "trn-new",
+			runId: "trn-new",
+			runs,
+		});
 		expect(runs.cancelled).toEqual(["trn-old"]);
 		expect(runs.terminated).toEqual(["sbx-old"]);
 		// The stopped run is killed before it can record how it ended, so the takeover records it.
@@ -108,11 +123,78 @@ describe("takeOver", () => {
 			type: "run.finished",
 			payload: { stage: "triage", state: "cancelled", outcome: "superseded", stoppedBy: "trn-new" },
 		});
-		expect(result).toEqual({ commentId: existing.id, previousRunId: "trn-old", cancelledPrevious: true });
+		expect(result).toEqual({ acquired: true, commentId: existing.id, previousRunId: "trn-old", cancelledPrevious: true });
 		expect(gh.comments).toHaveLength(1);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-new", state: "running", stage: "triage" });
 		expect(gh.comments[0]?.body).toContain("is running (run `trn-new`)");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+	});
+
+	it("cancels the previous root when the recorded task was its child", async () => {
+		const gh = new FakeGitHub();
+		gh.addStatus("trn-child-old", "running", "sbx-old", "trn-root-old");
+		const runs = new FakeRuns({ "trn-root-old": "running" });
+		await takeOver({
+			gh,
+			repo: REPO.fullName,
+			subject,
+			task: "triage",
+			title: "Triage",
+			traceId: "trn-root-new",
+			runId: "trn-child-new",
+			runs,
+		});
+
+		expect(runs.cancelled).toEqual(["trn-root-old"]);
+		expect(events).toContainEqual(
+			expect.objectContaining({ traceId: "trn-root-old", runId: "trn-child-old", payload: expect.objectContaining({ outcome: "superseded" }) }),
+		);
+	});
+
+	it("moves to another child of the same root without cancelling the parent", async () => {
+		const gh = new FakeGitHub();
+		gh.addStatus("trn-triage", "done", undefined, "trn-root", "autopilot");
+		const runs = new FakeRuns({ "trn-root": "running" });
+		await takeOver({
+			gh,
+			repo: REPO.fullName,
+			subject,
+			task: "spec-to-pr",
+			title: "Spec-to-PR",
+			traceId: "trn-root",
+			runId: "trn-spec",
+			runs,
+		});
+
+		expect(runs.getTaskRun).not.toHaveBeenCalled();
+		expect(runs.cancelled).toEqual([]);
+		expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({
+			traceId: "trn-root",
+			rootStage: "autopilot",
+			runId: "trn-spec",
+			stage: "spec-to-pr",
+		});
+	});
+
+	it("refuses a late child instead of taking over from a newer root", async () => {
+		const gh = new FakeGitHub();
+		const existing = gh.addStatus("trn-new-child", "running", undefined, "trn-new-root");
+		const runs = new FakeRuns({ "trn-new-root": "running" });
+		const result = await takeOver({
+			gh,
+			repo: REPO.fullName,
+			subject,
+			task: "spec-to-pr",
+			title: "Spec-to-PR",
+			traceId: "trn-old-root",
+			runId: "trn-late-child",
+			mode: "continue",
+			runs,
+		});
+
+		expect(result).toEqual({ acquired: false, commentId: existing.id, previousRunId: "trn-new-child", cancelledPrevious: false });
+		expect(runs.getTaskRun).not.toHaveBeenCalled();
+		expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ traceId: "trn-new-root", runId: "trn-new-child" });
 	});
 });
 describe("setStatus and finishStatus", () => {
@@ -123,6 +205,36 @@ describe("setStatus and finishStatus", () => {
 		expect(await finishStatus({ gh, number: 12, runId: "trn-old", task: "triage", title: "Triage", state: "failed", summary: "x" })).toBe(false);
 		expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.runId).toBe("trn-new");
 		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+	});
+
+	it("keeps the working label between child stages and removes it when the root finishes", async () => {
+		const gh = new FakeGitHub();
+		gh.addStatus("trn-child", "running", undefined, "trn-root");
+		gh.labels.add(WORKING_LABEL);
+
+		await finishStatus({
+			gh,
+			number: 12,
+			traceId: "trn-root",
+			runId: "trn-child",
+			task: "triage",
+			title: "Triage",
+			state: "done",
+			summary: "done",
+		});
+		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+
+		await finishStatus({
+			gh,
+			number: 12,
+			traceId: "trn-root",
+			runId: "trn-root",
+			task: "autopilot",
+			title: "Autopilot",
+			state: "done",
+			summary: "complete",
+		});
+		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 	});
 });
 
