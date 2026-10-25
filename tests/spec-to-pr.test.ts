@@ -112,7 +112,7 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 		}),
 		getLabelEvents: vi.fn(async (_n: number, label: string) => (opts.labelEvents ?? []).map((createdAt) => ({ label, createdAt, actor: null }))),
 		http: { json: vi.fn(async (_method: string, path: string) => (path === `/users/${encodeURIComponent(BOT)}` ? { id: BOT_ID } : undefined)) },
-		findOrCreatePull: vi.fn(async (_args: { head: string; base: string; title: string; body: string; draft?: boolean }) => ({
+		ensurePull: vi.fn(async (_args: { head: string; base: string; title: string; body: string; draft?: boolean }) => ({
 			pull: { number: 34, headSha: PR_HEAD, htmlUrl: `https://github.com/${REPO}/pull/34` },
 			created: true,
 		})),
@@ -283,7 +283,7 @@ describe("implement, verify, and publish", () => {
 		expect(t.publish).toHaveBeenCalledWith(
 			expect.objectContaining({ sandbox: t.sandbox, baseSha: BASE, branch: BRANCH, ownedCommits: [], gitData: t.git }),
 		);
-		const pr = t.gh.findOrCreatePull.mock.calls[0]?.[0];
+		const pr = t.gh.ensurePull.mock.calls[0]?.[0];
 		expect(pr).toMatchObject({ head: BRANCH, base: "main", title: SPEC.title, draft: true });
 		expect(pr?.body).toContain("Added GET /health.");
 		expect(pr?.body).toContain("✅ passed");
@@ -306,7 +306,7 @@ describe("implement, verify, and publish", () => {
 		expect(repair?.message).toContain("expected 200, got 404");
 		expect(repair?.message).toContain("repair round 1 of 2");
 		expect(verifyCommands(t.execs)).toEqual([BUILD_COMMAND, TEST_COMMAND, BUILD_COMMAND, TEST_COMMAND]);
-		const body = t.gh.findOrCreatePull.mock.calls[0]?.[0].body ?? "";
+		const body = t.gh.ensurePull.mock.calls[0]?.[0].body ?? "";
 		expect(body).toContain("Added GET /health.");
 		expect(body).toContain("Add metrics");
 	});
@@ -323,7 +323,7 @@ describe("implement, verify, and publish", () => {
 		expect(outcome).toMatchObject({ state: "failed", outcome: "verification_failed" });
 		expect(t.calls.filter((c) => c.agent === "implementer")).toHaveLength(1 + config.limits.repairRounds);
 		expect(t.publish).not.toHaveBeenCalled();
-		expect(t.gh.findOrCreatePull).not.toHaveBeenCalled();
+		expect(t.gh.ensurePull).not.toHaveBeenCalled();
 		expect(t.status().body).toContain(`\`${TEST_COMMAND}\` (exit 1)`);
 		expect(t.status().body).not.toContain("SECRET-LOOKING");
 		expect(finished()).toMatchObject({ state: "failed" });

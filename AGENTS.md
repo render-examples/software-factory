@@ -51,7 +51,7 @@ changing credentials, claims, Sandboxes, publishing, or GitHub writes.
 - Build agent output objects with `z.strictObject`. Bound strings and arrays.
 - Keep task inputs and results small and JSON-serializable.
 - Open Sandboxes through `withSandbox`. In GitHub tasks, call
-  `claim.recordSandbox()` immediately after opening one.
+  `claim.trackSandbox()` immediately after opening one.
 - Use `ExpectedFailure` only for expected messages safe to publish on GitHub.
   Keep outcome names in snake_case.
 - Quote generated shell arguments with `shq`. Put long or

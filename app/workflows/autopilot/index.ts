@@ -69,16 +69,16 @@ async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, 
 	// Trigger labels are consumed when a run starts. Autopilot adds its label
 	// back only while it is waiting for a human answer.
 	await gh.removeLabel(input.issue, config.labels.autopilot);
-	await claim.progress("running Triage");
+	await claim.reportProgress("running Triage");
 	const triage = record("triage", await runTriage({ ...base, issue: input.issue, commentId: input.commentId }));
 	if (triage.state === "done" && triage.outcome === "asked") {
-		await claim.checkpoint();
+		await claim.assertCurrent();
 		await gh.addLabels(input.issue, [config.labels.autopilot]);
 		return finish("waiting_for_answers", triage.summary);
 	}
 	if (triage.state !== "done" || triage.data?.kind !== "spec") return stop("triage", triage);
 
-	await claim.progress("implementing the spec");
+	await claim.reportProgress("implementing the spec");
 	const specToPr = record(
 		"spec-to-pr",
 		await runSpecToPr({
@@ -94,7 +94,7 @@ async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, 
 	);
 	if (specToPr.state !== "done" || specToPr.data?.kind !== "pull_request") return stop("spec-to-pr", specToPr);
 
-	await claim.progress("reviewing the draft pull request");
+	await claim.reportProgress("reviewing the draft pull request");
 	const review = record(
 		"pr-review",
 		await runPrReview({ ...base, pr: specToPr.data.pr, headSha: specToPr.data.headSha, workflowIssue: input.issue }),

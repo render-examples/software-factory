@@ -55,34 +55,34 @@ export const specToPrWorkflow = defineGitHubTask(
 		const branch = branchName(input.issue);
 		const rounds = config.limits.repairRounds;
 
-		await claim.progress("opening a sandbox");
+		await claim.reportProgress("opening a sandbox");
 		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
 		return withSandbox(open, async (sandbox) => {
-			await claim.recordSandbox(sandbox);
+			await claim.trackSandbox(sandbox);
 			const baseSha = sandbox.headSha;
 			const implement = async (message: string): Promise<Implementation> =>
-				(await (deps.runAgent ?? runAgent)(implementer, message, { ...claim.agentOptions(sandbox), timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
+				(await (deps.runAgent ?? runAgent)(implementer, message, { ...claim.agentRunOptions(sandbox), timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
 
 			const owned = await ownedCommits(git, branch, baseSha, author);
 
-			await claim.progress("implementing the spec");
+			await claim.reportProgress("implementing the spec");
 			let implementation = await implement(implementMessage(repo, issue, spec));
 			if (!(await hasChanges(sandbox))) return noChanges();
 
 			let verification: VerifyRun[];
 			for (let round = 1; ; round++) {
-				await claim.progress("running the verify commands");
+				await claim.reportProgress("running the verify commands");
 				verification = await runVerify(sandbox, repo.config.verify);
 				if (allPassed(verification)) break;
 				if (round > rounds) {
 					const after = rounds > 0 ? ` after ${rounds} repair round${rounds === 1 ? "" : "s"}` : "";
 					throw new ExpectedFailure(`verification failed${after}: ${failureSummary(verification)}. No PR was opened.`, "verification_failed");
 				}
-				await claim.progress(`repairing failed verification (round ${round} of ${rounds})`);
+				await claim.reportProgress(`repairing failed verification (round ${round} of ${rounds})`);
 				implementation = mergeImplementation(implementation, await implement(repairMessage(repo, issue, spec, verification, round, rounds)));
 			}
 
-			await claim.progress("publishing the branch");
+			await claim.reportProgress("publishing the branch");
 			const published = await (deps.publish ?? publish)({
 				sandbox,
 				repo,
@@ -98,8 +98,8 @@ export const specToPrWorkflow = defineGitHubTask(
 				throw new ExpectedFailure(refusalSummary(published.refused), "publish_refused");
 			}
 
-			await claim.progress("opening the draft pull request");
-			const { pull } = await gh.findOrCreatePull({
+			await claim.reportProgress("opening the draft pull request");
+			const { pull } = await gh.ensurePull({
 				head: branch,
 				base: repo.config.baseBranch,
 				title: pullRequestTitle(spec),

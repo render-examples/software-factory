@@ -24,14 +24,14 @@ export interface Claim {
 	readonly subject: Subject;
 	readonly traceId: string;
 	readonly runId: string;
-	/** Fails when a newer run has claimed this issue or PR. Call before durable writes. */
-	checkpoint(): Promise<void>;
-	/** Checks the claim, then shows progress in the status comment. */
-	progress(summary: string): Promise<void>;
-	/** Records an opened sandbox in the status comment, so a run that stops this one can terminate it. Call first thing. */
-	recordSandbox(sandbox: RunAgentOptions["sandbox"]): Promise<void>;
+	/** Ends the run as superseded once a newer run owns this issue or PR. Call before durable writes. */
+	assertCurrent(): Promise<void>;
+	/** Asserts the claim, then publishes `summary` in the status comment. */
+	reportProgress(summary: string): Promise<void>;
+	/** Records the sandbox in the status comment, so a run that stops this one can terminate it. Call right after opening it. */
+	trackSandbox(sandbox: { id: string }): Promise<void>;
 	/** runAgent options for `sandbox`, so the agent's events carry this run's trace. */
-	agentOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions;
+	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions;
 }
 
 /** How the work ended. `summary` is shown on GitHub, so it must be safe to publish. */
@@ -111,6 +111,13 @@ const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
 	output_invalid: "submitted an invalid result",
 };
 
+interface RunningState {
+	summary: string;
+	sandboxId?: string;
+}
+
+type RunningUpdate = { summary: string } | { sandboxId: string };
+
 /** The lifecycle behind a Claim. Only withClaim calls the methods beyond the Claim interface. */
 class ClaimedRun implements Claim {
 	readonly gh: GitHubClient;
@@ -121,8 +128,7 @@ class ClaimedRun implements Claim {
 	readonly #opts: ClaimOptions;
 	readonly #event: { traceId: string; runId: string; repo: string; subject: string };
 	readonly #startedAt = Date.now();
-	#summary = "";
-	#sandboxId: string | undefined;
+	#running: RunningState = { summary: "" };
 
 	constructor(ctx: Pick<TaskContext, "metadata">, opts: ClaimOptions) {
 		({ traceId: this.traceId, runId: this.runId } = traceIds(ctx));
@@ -133,23 +139,19 @@ class ClaimedRun implements Claim {
 		this.#event = { traceId: this.traceId, runId: this.runId, repo: opts.repo.fullName, subject: subjectName(opts.subject) };
 	}
 
-	async checkpoint(): Promise<void> {
+	async assertCurrent(): Promise<void> {
 		if (!(await this.#holdsClaim())) throw new Superseded();
 	}
 
-	async progress(summary: string): Promise<void> {
-		this.#summary = summary;
-		await this.checkpoint();
-		// A newer run can take over between the check and the write; setStatus refuses to overwrite its running status.
-		if (!(await setStatus(this.#status("running", summary)))) throw new Superseded();
+	async reportProgress(summary: string): Promise<void> {
+		await this.#updateRunning({ summary });
 	}
 
-	async recordSandbox(sandbox: RunAgentOptions["sandbox"]): Promise<void> {
-		this.#sandboxId = sandbox.id;
-		await this.progress(this.#summary);
+	async trackSandbox(sandbox: { id: string }): Promise<void> {
+		await this.#updateRunning({ sandboxId: sandbox.id });
 	}
 
-	agentOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions {
+	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions {
 		return { sandbox, ...this.#event };
 	}
 
@@ -179,7 +181,7 @@ class ClaimedRun implements Claim {
 			runs,
 		});
 		if (!acquired.acquired) throw new Superseded();
-		await this.checkpoint();
+		await this.assertCurrent();
 	}
 
 	async finish<Data>(outcome: Outcome<Data>): Promise<TaskResult<Data>> {
@@ -216,6 +218,13 @@ class ClaimedRun implements Claim {
 		return status !== undefined && (status.traceId ?? status.runId) === this.traceId;
 	}
 
+	async #updateRunning(update: RunningUpdate): Promise<void> {
+		this.#running = { ...this.#running, ...update };
+		await this.assertCurrent();
+		// A newer run can take over between the check and the write; setStatus refuses to overwrite its running status.
+		if (!(await setStatus(this.#status("running", this.#running.summary)))) throw new Superseded();
+	}
+
 	#status<S extends StatusUpdate["state"]>(state: S, summary: string, links?: StatusLink[]): StatusUpdate & { state: S } {
 		const { task, title } = this.#opts;
 		return {
@@ -228,7 +237,7 @@ class ClaimedRun implements Claim {
 			state,
 			summary,
 			links,
-			sandboxId: this.#sandboxId,
+			sandboxId: this.#running.sandboxId,
 		};
 	}
 

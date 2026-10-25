@@ -162,10 +162,10 @@ export class GitHubClient {
 	}
 
 	/**
-	 * The open PR from `head` with its title and body refreshed, or a new one. Safe to repeat: a replayed run
-	 * finds the PR the first one opened.
+	 * Makes an open PR from `head` exist with this title and body: updates the open one, or opens a new one.
+	 * Safe to repeat: a replayed run finds the PR the first one opened.
 	 */
-	async findOrCreatePull(args: {
+	async ensurePull(args: {
 		head: string;
 		base: string;
 		title: string;

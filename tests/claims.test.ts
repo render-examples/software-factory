@@ -266,9 +266,11 @@ describe("withClaim", () => {
 			async (run) => {
 				expect(run.runId).toBe("trn-run");
 				expect(gh.labels.has(WORKING_LABEL)).toBe(true);
-				await run.recordSandbox({ id: "sbx-run" } as never);
+				await run.trackSandbox({ id: "sbx-run" } as never);
 				expect(parseMarker(gh.comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-run", state: "running", sandboxId: "sbx-run" });
-				await run.progress("reading the issue");
+				await run.reportProgress("reading the issue");
+				expect(gh.comments[0]?.body).toContain("reading the issue");
+				expect(parseMarker(gh.comments[0]?.body ?? "", "status")?.sandboxId).toBe("sbx-run");
 				return { outcome: "asked-questions", summary: "asked 2 questions" };
 			},
 		);
@@ -296,7 +298,7 @@ describe("withClaim", () => {
 		gh.permissions = { w: "write" };
 		const body = vi.fn(async (run: import("../app/claims/index.js").Claim) => {
 			gh.addStatus("trn-new");
-			await run.progress("doing expensive work");
+			await run.reportProgress("doing expensive work");
 			return { outcome: "done", summary: "done" };
 		});
 		const outcome = await withClaim(

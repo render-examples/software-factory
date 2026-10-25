@@ -33,16 +33,16 @@ export const triageWorkflow = defineGitHubTask(
 		}
 		const thread = readThread(issue, comments, bot);
 
-		await claim.progress("opening a sandbox");
+		await claim.reportProgress("opening a sandbox");
 		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
 		return withSandbox(open, async (sandbox) => {
-			await claim.recordSandbox(sandbox);
-			const agents = triageAgents(deps.runAgent ?? runAgent, claim.agentOptions(sandbox));
-			await claim.progress("reading the issue and the repository");
+			await claim.trackSandbox(sandbox);
+			const agents = triageAgents(deps.runAgent ?? runAgent, claim.agentRunOptions(sandbox));
+			await claim.reportProgress("reading the issue and the repository");
 			const decision = await agents.triage(triageMessage(repo.fullName, thread));
 
 			if (decision.decision === "ask") {
-				await claim.progress("posting questions");
+				await claim.reportProgress("posting questions");
 				const round = thread.questions ? thread.questions.round + 1 : 1;
 				const body = `${triageQuestionsBody(decision.questions)}\n\n${renderMarker("questions", { round, questions: decision.questions })}`;
 				const comment = thread.questions ? await gh.updateComment(thread.questions.comment.id, body) : await gh.createComment(issue.number, body);
@@ -51,14 +51,14 @@ export const triageWorkflow = defineGitHubTask(
 			}
 
 			if (decision.decision === "decline") {
-				await claim.progress("posting the decision");
+				await claim.reportProgress("posting the decision");
 				const comment = await gh.createComment(issue.number, triageDeclineBody(decision.rationale));
 				return { outcome: "declined", summary: "declined the issue.", links: [{ label: "Reason", url: comment.htmlUrl }] };
 			}
 
-			await claim.progress(thread.spec ? "revising the spec" : "drafting the spec");
+			await claim.reportProgress(thread.spec ? "revising the spec" : "drafting the spec");
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
-			await claim.progress("posting the spec");
+			await claim.reportProgress("posting the spec");
 			return await publishSpec(gh, issue, thread.spec, drafted);
 		});
 	},

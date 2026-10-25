@@ -108,7 +108,7 @@ Export the agent from `app/agents/index.ts`.
 Call the agent inside a Sandbox owned by the task:
 
 ```typescript
-const result = await runAgent(finder, message, claim.agentOptions(sandbox));
+const result = await runAgent(finder, message, claim.agentRunOptions(sandbox));
 ```
 
 Use the typed `result.output`. Do not parse assistant text or accept a target
@@ -172,11 +172,11 @@ durable writes; a person starts a fresh run instead.
 
 ### 3. Use the claim correctly
 
-- Call `claim.progress()` before a major step.
+- Call `claim.reportProgress()` before a major step.
 - Open Sandboxes only through `withSandbox`.
-- Call `claim.recordSandbox(sandbox)` immediately after opening one.
-- Pass `claim.agentOptions(sandbox)` to `runAgent`.
-- Call `claim.checkpoint()` before a durable effect that is not already
+- Call `claim.trackSandbox(sandbox)` immediately after opening one.
+- Pass `claim.agentRunOptions(sandbox)` to `runAgent`.
+- Call `claim.assertCurrent()` before a durable effect that is not already
   guarded by the claim helper.
 - Throw `ExpectedFailure` only for an expected message safe to show on
   GitHub.

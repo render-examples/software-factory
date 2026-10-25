@@ -84,13 +84,13 @@ describe("GitHubClient", () => {
 		html_url: "https://github.test/pull/9",
 	};
 
-	it("findOrCreatePull opens a draft, and recovers from losing a race", async () => {
+	it("ensurePull opens a draft, and recovers from losing a race", async () => {
 		const fresh = fakeFetch(json([]), json(rawPull, { status: 201 }));
-		expect((await client(fresh.fetch).findOrCreatePull({ head: "h", base: "main", title: "t", body: "b" })).created).toBe(true);
+		expect((await client(fresh.fetch).ensurePull({ head: "h", base: "main", title: "t", body: "b" })).created).toBe(true);
 		expect(fresh.calls[1]).toMatchObject({ method: "POST", body: { head: "h", base: "main", draft: true } });
 
 		const raced = fakeFetch(json([]), new Response("A pull request already exists", { status: 422 }), json([rawPull]));
-		expect(await client(raced.fetch).findOrCreatePull({ head: "h", base: "main", title: "t", body: "b" })).toMatchObject({
+		expect(await client(raced.fetch).ensurePull({ head: "h", base: "main", title: "t", body: "b" })).toMatchObject({
 			created: false,
 			pull: { number: 9 },
 		});

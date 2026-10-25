@@ -52,21 +52,21 @@ export const prReviewWorkflow = defineGitHubTask(
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
 		// 2. One sandbox at the PR head: verify, then review the complete change.
-		await claim.progress("opening a sandbox");
+		await claim.reportProgress("opening a sandbox");
 		const { verify, review } = await withPullSandbox(deps.openSandbox ?? openSandbox, repo, pull, async (sandbox) => {
-			await claim.recordSandbox(sandbox);
+			await claim.trackSandbox(sandbox);
 			const baseRef = await mergeBase(sandbox, pull.baseRef);
-			await claim.progress("running the verify commands");
+			await claim.reportProgress("running the verify commands");
 			const verify = await runVerify(sandbox, repo.config.verify);
 
-			await claim.progress("reviewing the pull request");
+			await claim.reportProgress("reviewing the pull request");
 			const message = reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify });
-			const { output: review } = await (deps.runAgent ?? runAgent)(prReviewer, message, claim.agentOptions(sandbox));
+			const { output: review } = await (deps.runAgent ?? runAgent)(prReviewer, message, claim.agentRunOptions(sandbox));
 			return { verify, review };
 		});
 
 		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
-		await claim.progress("posting the review");
+		await claim.reportProgress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,
 			headSha: input.headSha,
