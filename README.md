@@ -16,12 +16,6 @@ The template provides the infrastructure common to agent workflows:
 
 ## Included workflow
 
-```text
-issue --factory:triage--> specification
-specification --factory:spec-approved--> draft pull request
-pull request --factory:pr-review--> COMMENT review
-```
-
 - **Triage** reads the issue, discussion, and repository. It asks questions,
   writes a specification, or declines the request.
 - **Spec-to-PR** implements the approved specification, runs your verification
