@@ -59,6 +59,10 @@ Setup is complete when:
 - applying `factory:triage` produces an App-authored status comment and a
   useful outcome.
 
+software-factory has no web UI. You use it through labels and comments in
+GitHub. Opening the `factory-gateway` URL in a browser shows only a short
+message that the gateway is running.
+
 ## Next steps
 
 - [Configuration](configuration.md) — change settings, follow or cancel runs,

@@ -244,6 +244,9 @@ and apply it. The form asks for no values.
 
 Continue when both services have deployed and the gateway is live.
 
+The gateway has no web UI. Opening its URL in a browser shows a short
+message that it is running; that is expected, not a failed deploy.
+
 ## Phase 8: Configure GitHub
 
 Ask for the public gateway URL. It is not a secret. Run:
