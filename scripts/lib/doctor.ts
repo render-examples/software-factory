@@ -4,7 +4,16 @@ import { PROVIDER_KEY_ENV } from "../../app/runner/keys.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
-import { LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
+import {
+	envGroupFor,
+	LABELS,
+	missingEvents,
+	missingPermissions,
+	SECRET_ENV,
+	SERVICE_ENV,
+	type Service,
+	WEBHOOK_PATH,
+} from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
 export interface DoctorOptions extends ScriptDeps {
@@ -31,13 +40,19 @@ function checkEnv({ env, services }: DoctorOptions, out: Reporter): void {
 		out.heading(`Environment: factory-${service}`);
 		for (const name of SERVICE_ENV[service]) {
 			if (env[name]?.trim()) out.pass(`${name} is set`);
-			else out.fail(`${name} is not set`, `Set it on factory-${service} (render.yaml declares it)`);
+			else out.fail(`${name} is not set`, setFix(service, name));
 		}
 		const workspace = env.RENDER_WORKSPACE_ID?.trim();
 		if (service === "workflows" && workspace && !workspace.startsWith("tea-")) {
 			out.fail("RENDER_WORKSPACE_ID is not a workspace ID", "It looks like tea-…; find it in Workspace Settings");
 		}
 	}
+}
+
+function setFix(service: Service, name: string): string {
+	const group = envGroupFor(service, name);
+	if (!group) return `Set it on factory-${service} (render.yaml declares it)`;
+	return `Set it in the ${group.name} env group: add it to .env and run \`npm run setup:render\``;
 }
 
 /** The env var each configured provider's key is read from, in config order. */
@@ -68,9 +83,12 @@ function checkModels({ env, models }: DoctorOptions, out: Reporter): void {
 			continue;
 		}
 		if (env[keyName]?.trim()) out.pass(`${label}: ${keyName} is set`);
-		else out.fail(`${label}: ${keyName} is not set`, "Set it on factory-workflows; use a spend-capped key");
+		else out.fail(`${label}: ${keyName} is not set`, `${setFix("workflows", keyName)}; use a spend-capped key`);
 		if (!SERVICE_ENV.workflows.includes(keyName)) {
-			out.warn(`render.yaml doesn't declare ${keyName}`, "Add it to factory-workflows' envVars with sync: false");
+			out.warn(
+				`setup:render doesn't manage ${keyName}`,
+				"Add it to the software-factory-workflows group in ENV_GROUPS and SERVICE_ENV (scripts/lib/requirements.ts)",
+			);
 		}
 	}
 }

@@ -28,20 +28,25 @@ Configure <owner/repository> with base branch <branch>.
 Stop at every human checkpoint. Do not print or expose secrets.
 ```
 
-The agent will configure the fork, create a GitHub App, deploy the Blueprint,
-connect the webhook, verify the deployment, and guide one Triage smoke test.
+The agent will configure the fork, create a GitHub App, create the Render
+environment groups, deploy the Blueprint, connect the webhook, verify the
+deployment, and guide one Triage smoke test.
 
 You must take over for:
 
 - approval to commit or push;
 - GitHub App creation and installation;
-- paid Render resource creation;
 - secret entry;
+- paid Render resource creation;
 - webhook activation; and
 - creation or labeling of the smoke-test issue.
 
-Enter secrets directly in `.env`, GitHub, or the Render Dashboard. Never put
-them in chat, issues, commits, or command output.
+You enter each secret once, in local `.env`: the Render API key and the
+Anthropic API key. The GitHub App setup writes its own values there.
+`npm run setup:render` copies them into
+[environment groups](configuration.md#environment-groups) that both services
+link, so the Blueprint form asks for nothing. Never put secrets in chat,
+issues, commits, or command output.
 
 ## Definition of done
 

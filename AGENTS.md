@@ -86,8 +86,11 @@ strict output schemas.
 
 - Configuration key: update `FactoryConfig` in `factory.config.ts` and
   `docs/configuration.md`.
-- Environment variable: update `render.yaml`, `.env.example`, `SERVICE_ENV`
-  in `scripts/lib/requirements.ts`, and `docs/configuration.md`.
+- Environment variable: update `.env.example`, `SERVICE_ENV` and, for a
+  secret, `ENV_GROUPS` in `scripts/lib/requirements.ts`, and
+  `docs/configuration.md`. Secrets belong in an env group, not a
+  `sync: false` entry in `render.yaml`. Never link a group with GitHub App
+  credentials or a model key to the gateway.
 - App permission, event, or label: update
   `scripts/lib/requirements.ts`, setup behavior, and doctor tests.
 - `app/runner/` or `sandbox/`: refresh every repository snapshot after

@@ -297,6 +297,10 @@ Before handing off, confirm:
 - Prompt, agent, schema, or Workflows changes require a Workflows deploy.
 - Gateway route changes require a gateway deploy.
 - App permission, event, or label changes require `npm run setup:github`.
+- A new secret, such as another provider key, goes in `ENV_GROUPS` in
+  `scripts/lib/requirements.ts`. Add it to `.env`, rerun
+  `npm run setup:render`, and redeploy the services that link its group. See
+  [Environment groups](../configuration.md#environment-groups).
 - Changes under `app/runner/` or `sandbox/` also require a snapshot refresh for
   every configured repository.
 

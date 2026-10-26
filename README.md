@@ -16,8 +16,8 @@ The recommended setup is agent-guided:
    asks.
 
 The runbook configures the fork before deployment, creates a GitHub App,
-deploys the Render Blueprint, connects the webhook, verifies both services,
-and runs one Triage smoke test.
+stores secrets in Render environment groups, deploys the Render Blueprint,
+connects the webhook, verifies both services, and runs one Triage smoke test.
 
 **What software-factory solves for you:**
 1. Authenticating GitHub events and routing them to durable Render Workflows tasks.

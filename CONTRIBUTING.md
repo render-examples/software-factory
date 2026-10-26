@@ -72,6 +72,11 @@ render blueprints validate render.yaml
 npm audit --omit=dev --audit-level=high
 ```
 
+`render blueprints validate` resolves the Blueprint's
+[env groups](docs/configuration.md#environment-groups) in the CLI's current
+workspace. Outside a workspace where `npm run setup:render` has run, expect
+only `depends on non-existent group` errors.
+
 Run one test file with:
 
 ```bash

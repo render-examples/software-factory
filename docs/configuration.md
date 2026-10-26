@@ -234,14 +234,15 @@ Workflows services have no Shell. Put the deployed Workflows values and exact
 npm run doctor -- --service workflows
 ```
 
-The [setup runbook](runbooks/setup.md#phase-9-run-doctor) lists the required
+The [setup runbook](runbooks/setup.md#phase-10-run-doctor) lists the required
 values and common failures.
 
 ## Environment variables
 
 Local variables are listed in [`.env.example`](../.env.example). The
 Blueprint supplies `RENDER_WORKFLOW_SLUG` to the gateway from the Workflows
-service.
+service. Every other deployed value comes from an
+[environment group](#environment-groups).
 
 ### Gateway
 
@@ -264,7 +265,50 @@ service.
 | `GITHUB_API_URL` | Optional GitHub API base URL |
 
 `GITHUB_API_URL` is not in the Blueprint. GitHub Enterprise Server users must
-set it in local `.env` for setup commands and on `factory-workflows` in the
-Render Dashboard.
+set it in local `.env` for setup commands and add it to the
+`software-factory-workflows` env group in the Render Dashboard.
 
 Never commit `.env` or provider keys.
+
+## Environment groups
+
+Secrets never pass through `render.yaml` or the Blueprint form. Each service
+links Render
+[environment groups](https://render.com/docs/configure-environment-variables#environment-groups)
+instead:
+
+| Group | Linked to | Variables |
+|---|---|---|
+| `software-factory-shared` | both services | `RENDER_API_KEY` |
+| `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET` |
+| `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY` |
+
+The gateway links no group that holds GitHub App credentials or a model key.
+`ENV_GROUPS` in
+[`scripts/lib/requirements.ts`](../scripts/lib/requirements.ts) defines this
+layout for setup and `doctor`.
+
+A Blueprint can't define a group that holds secrets it doesn't commit, so the
+groups must exist in the workspace before the Blueprint is applied. Create or
+update them from local `.env`:
+
+```bash
+npm run setup:render -- --workspace <tea-...>
+```
+
+The command writes nothing until every value is set. It updates only values
+that changed, leaves other variables in each group alone, and never prints a
+secret. A second group with the same name makes it stop, because a Blueprint
+links groups by name.
+
+To rotate a secret, change it in `.env`, rerun `npm run setup:render`, and
+redeploy the services that link the group.
+
+### Create the groups in the Dashboard
+
+To keep the Render API key out of local `.env`, create the groups by hand
+before applying the Blueprint. In the workspace, open **Environment Groups**
+and create each group in the table with the exact name and variables shown.
+Paste values from `.env` or from their source without showing them in chat.
+Workflows `doctor` still reads these values locally, so export them in the
+shell where it runs.
