@@ -17,6 +17,7 @@
     "dev:gateway": "node --env-file=.env node_modules/.bin/tsx watch app/entrypoints/gateway.ts",
     "dev:workflows": "render workflows dev -- node --env-file=.env node_modules/.bin/tsx app/entrypoints/workflows.ts",
     "setup:app": "node --env-file-if-exists=.env --import tsx scripts/setup-app.ts",
+    "setup:render": "node --env-file-if-exists=.env --import tsx scripts/setup-render.ts",
     "setup:github": "node --env-file-if-exists=.env --import tsx scripts/setup-github.ts",
     "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts",
     "lint": "biome lint --error-on-warnings app scripts tests factory.config.ts",

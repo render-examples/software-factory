@@ -3,6 +3,10 @@
 # - factory-workflows: runs every task (agents, snapshot refresh, cancel). It has no `repo` field, so it
 #   deploys from the same repository as this Blueprint, including forks.
 # Run and agent telemetry is logged as JSON lines; find it in each service's logs or a log stream.
+#
+# Secrets live in three environment groups that `npm run setup:render` creates from .env before this
+# Blueprint is applied. Blueprint groups can't hold `sync: false` values, so the groups are not defined here.
+# The gateway links no group that holds GitHub App credentials or a model key.
 
 projects:
   - name: software-factory
@@ -18,10 +22,8 @@ projects:
             startCommand: npm run start:gateway
             healthCheckPath: /ready
             envVars:
-              - key: GITHUB_WEBHOOK_SECRET
-                sync: false
-              - key: RENDER_API_KEY
-                sync: false
+              - fromGroup: software-factory-shared
+              - fromGroup: software-factory-gateway
               - key: RENDER_WORKFLOW_SLUG
                 fromService:
                   type: workflow
@@ -35,13 +37,5 @@ projects:
             buildCommand: npm ci
             startCommand: npm run start:workflows
             envVars:
-              - key: RENDER_API_KEY
-                sync: false
-              - key: RENDER_WORKSPACE_ID
-                sync: false
-              - key: GITHUB_APP_ID
-                sync: false
-              - key: GITHUB_APP_PRIVATE_KEY
-                sync: false
-              - key: ANTHROPIC_API_KEY
-                sync: false
+              - fromGroup: software-factory-shared
+              - fromGroup: software-factory-workflows

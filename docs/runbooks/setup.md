@@ -20,12 +20,13 @@ Collect:
 - Render workspace with Sandboxes access in Oregon; and
 - confirmation that the default Anthropic models are acceptable.
 
-The user must enter these secrets directly in local files, GitHub, or Render:
+Secrets reach Render through local `.env` and
+[environment groups](../configuration.md#environment-groups), never through
+chat or the Blueprint form:
 
-- Render API key;
-- Anthropic API key;
-- GitHub App private key; and
-- webhook secret.
+- `setup:app` writes the GitHub App private key and webhook secret to `.env`;
+- the user adds the Render API key and Anthropic API key to `.env`; and
+- `setup:render` copies them into the env groups that `render.yaml` links.
 
 Never ask the user to paste a secret into chat. Never print `.env`.
 
@@ -167,7 +168,57 @@ for an owner to approve the installation.
 
 Continue only after the user confirms access to every configured repository.
 
-## Phase 6: Deploy the Blueprint
+## Phase 6: Create the Render env groups
+
+`render.yaml` reads every secret from three
+[environment groups](../configuration.md#environment-groups) that must exist
+in the workspace before the Blueprint is applied. `setup:render` creates them
+from local `.env`.
+
+Ask which workspace to deploy to. It needs Sandboxes access in Oregon. The
+workspace ID starts with `tea-` and is not a secret. If the Render CLI is
+signed in, list the IDs with:
+
+```bash
+render workspaces -o json
+```
+
+Otherwise, ask the user to copy the ID from **Workspace Settings**.
+
+### Human checkpoint: secret entry
+
+Ask the user to add these lines to `.env` in their editor:
+
+```text
+RENDER_API_KEY=<a Render API key>
+ANTHROPIC_API_KEY=<a dedicated key with a provider-enforced spend limit>
+```
+
+The Anthropic key enters the Sandbox during agent runs. Do not read or print
+`.env` to check the values; `setup:render` reports which are missing.
+
+Run:
+
+```bash
+npm run setup:render -- --workspace <tea-...>
+```
+
+The command checks that every value is present before it writes anything,
+confirms that the API key can access the workspace, then creates or updates:
+
+- `software-factory-shared`, for both services: `RENDER_API_KEY`;
+- `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET`; and
+- `software-factory-workflows`, for Workflows: `RENDER_WORKSPACE_ID`,
+  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`.
+
+It saves the workspace ID to `.env`, never prints a secret, and is safe to
+rerun. Continue only when it reports no failed check.
+
+If the user would rather not keep the Render API key in `.env`, they can
+create the same groups in the Dashboard instead. See
+[Environment groups](../configuration.md#environment-groups).
+
+## Phase 7: Deploy the Blueprint
 
 [`render.yaml`](../../render.yaml) creates two paid resources in the
 `production` environment of a `software-factory` project:
@@ -175,30 +226,25 @@ Continue only after the user confirms access to every configured repository.
 - `factory-gateway`, a Starter web service in Oregon; and
 - `factory-workflows`, a Workflows service in Oregon.
 
-### Human checkpoint: resources and secrets
+If the Render CLI is signed in to the same workspace, confirm that the
+Blueprint resolves its env groups:
+
+```bash
+render blueprints validate render.yaml
+```
+
+`depends on non-existent group` means Phase 6 ran in a different workspace or
+did not finish.
+
+### Human checkpoint: resources
 
 Explain the resources and expected charges. Ask the user to create the
-Blueprint from the configured fork and branch.
-
-Enter these values for `factory-gateway`:
-
-- `GITHUB_WEBHOOK_SECRET`;
-- `RENDER_API_KEY`.
-
-Enter these values for `factory-workflows`:
-
-- `RENDER_API_KEY`;
-- `RENDER_WORKSPACE_ID`;
-- `GITHUB_APP_ID`;
-- `GITHUB_APP_PRIVATE_KEY`;
-- `ANTHROPIC_API_KEY`.
-
-The workspace ID starts with `tea-`. Copy GitHub values from local `.env`
-without showing them in chat or command output.
+Blueprint from the configured fork and branch, in the workspace from Phase 6,
+and apply it. The form asks for no values.
 
 Continue when both services have deployed and the gateway is live.
 
-## Phase 7: Configure GitHub
+## Phase 8: Configure GitHub
 
 Ask for the public gateway URL. It is not a secret. Run:
 
@@ -218,7 +264,7 @@ The command:
 It is safe to rerun. Continue only when it reports no failed repository or
 webhook operation.
 
-## Phase 8: Activate the webhook
+## Phase 9: Activate the webhook
 
 `setup:github` cannot activate an App webhook through GitHub's API.
 
@@ -227,7 +273,7 @@ webhook operation.
 Ask the user to open the App's **Webhook** settings, confirm that the URL ends
 in `/webhooks/github`, enable **Active**, and save without changing the secret.
 
-## Phase 9: Run `doctor`
+## Phase 10: Run `doctor`
 
 `doctor` checks the environment in which it runs. It is read-only and does
 not print secret values.
@@ -247,16 +293,11 @@ This checks the gateway's deployed environment.
 Workflows services have no Shell. Run `doctor` locally with the values used by
 `factory-workflows`.
 
-Local `.env` already contains the GitHub App values. Ask the user to add:
-
-- `RENDER_API_KEY`;
-- `RENDER_WORKSPACE_ID`;
-- `ANTHROPIC_API_KEY`; and
-- `RENDER_WORKFLOW_SLUG`.
-
-Use the deployed workflow slug, including any suffix Render added. Copy the
-exact value from `factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into
-local `.env`.
+Local `.env` already holds the values `setup:render` copied into the
+`software-factory-shared` and `software-factory-workflows` groups. It also
+needs `RENDER_WORKFLOW_SLUG`, which is not a secret. Use the deployed workflow
+slug, including any suffix Render added: copy the exact value from
+`factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`.
 
 Run:
 
@@ -268,7 +309,7 @@ The warning `no webhook deliveries yet, so the hook may be inactive` is
 expected before the smoke test. Do not continue while either command has a
 failed check.
 
-## Phase 10: Smoke-test Triage
+## Phase 11: Smoke-test Triage
 
 ### Human checkpoint: issue and label
 
@@ -315,7 +356,10 @@ render logs -r <factory-workflows-id> --text run.finished
 
 ### A service does not deploy
 
-- For a missing `sync: false` value, set it and redeploy.
+- For `depends on non-existent group`, run `npm run setup:render` in the
+  workspace that holds the Blueprint, then retry the Blueprint sync.
+- For a missing or wrong value, fix it in `.env`, rerun
+  `npm run setup:render`, and redeploy the affected service.
 - For a build failure, inspect the failing service's build log before changing
   configuration.
 - For a gateway health failure, confirm that it binds to `0.0.0.0:$PORT` and
@@ -367,7 +411,8 @@ Repeated errors for one agent usually require a prompt or schema change.
 
 ### An agent cannot start
 
-Check the selected provider key on `factory-workflows`, then run:
+Check the selected provider key in the `software-factory-workflows` env
+group, then run:
 
 ```bash
 npm run doctor -- --service workflows

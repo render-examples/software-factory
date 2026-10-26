@@ -60,11 +60,38 @@ export const LABELS: readonly LabelSpec[] = [
 
 export type Service = "gateway" | "workflows";
 
-/** Each service's env vars, exactly as render.yaml declares them. */
+/** Each service's env vars, exactly as render.yaml declares them (through its env groups or directly). */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
 	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
 	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
 };
+
+export interface EnvGroupSpec {
+	name: string;
+	/** The services whose render.yaml entry links the group with `fromGroup`. */
+	services: readonly Service[];
+	keys: readonly string[];
+}
+
+/**
+ * The environment groups setup:render creates from .env and render.yaml links. Each service gets every key in
+ * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG, which the Blueprint wires from the Workflows service.
+ * The gateway links no group that holds GitHub App credentials or a model key.
+ */
+export const ENV_GROUPS: readonly EnvGroupSpec[] = [
+	{ name: "software-factory-shared", services: ["gateway", "workflows"], keys: ["RENDER_API_KEY"] },
+	{ name: "software-factory-gateway", services: ["gateway"], keys: ["GITHUB_WEBHOOK_SECRET"] },
+	{
+		name: "software-factory-workflows",
+		services: ["workflows"],
+		keys: ["RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
+	},
+];
+
+/** The group a service reads `key` from, if any. */
+export function envGroupFor(service: Service, key: string): EnvGroupSpec | undefined {
+	return ENV_GROUPS.find((group) => group.services.includes(service) && group.keys.includes(key));
+}
 
 /** Values doctor must never print. */
 export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];

@@ -4,7 +4,7 @@
  *   npm run setup:app [-- --org <org>] [--name <name>] [--write-env]
  *
  * The App's webhook starts inactive at a placeholder URL; `npm run setup:github` points it at the gateway once the
- * Blueprint is deployed. Prints the values the Blueprint form asks for.
+ * Blueprint is deployed. `npm run setup:render` copies the App's values into Render env groups before that.
  */
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
@@ -67,21 +67,20 @@ console.log(`\n${bold("1. Install the App")} on every repository in factory.conf
 console.log(`   ${app.html_url}/installations/new`);
 for (const repo of repos) console.log(`   - ${repo}`);
 
-console.log(`\n${bold("2. Deploy the Blueprint")} and paste these into its form:`);
-console.log(dim("   factory-workflows"));
-console.log(`   GITHUB_APP_ID=${env.GITHUB_APP_ID}`);
-console.log(`   GITHUB_APP_PRIVATE_KEY=${env.GITHUB_APP_PRIVATE_KEY}`);
-console.log(dim("   factory-gateway"));
-console.log(`   GITHUB_WEBHOOK_SECRET=${env.GITHUB_WEBHOOK_SECRET}`);
-console.log(dim("   The private key is base64-encoded so it fits on one line. Keep these values secret."));
-
-console.log(`\n${bold("3. Connect the webhook")} once the gateway is live:`);
-console.log("   npm run setup:github -- --gateway-url https://<gateway>.onrender.com --webhook-secret <GITHUB_WEBHOOK_SECRET>");
-
 if (values["write-env"]) {
 	await writeEnvFile(".env", env);
 	console.log(`\n${green("✓")} Wrote GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_WEBHOOK_SECRET to .env`);
-	console.log(dim("   setup:github and doctor read .env, so --webhook-secret can be omitted."));
 } else {
-	console.log(yellow("\nThe private key isn't saved anywhere else. Rerun with --write-env to also write .env."));
+	console.log(`\n${bold("Add these to .env")}; setup:render, setup:github, and doctor read them from there:`);
+	console.log(`   GITHUB_APP_ID=${env.GITHUB_APP_ID}`);
+	console.log(`   GITHUB_APP_PRIVATE_KEY=${env.GITHUB_APP_PRIVATE_KEY}`);
+	console.log(`   GITHUB_WEBHOOK_SECRET=${env.GITHUB_WEBHOOK_SECRET}`);
+	console.log(dim("   The private key is base64-encoded so it fits on one line. Keep these values secret."));
+	console.log(yellow("   The private key isn't saved anywhere else. Rerun with --write-env to write .env instead."));
 }
+
+console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY, RENDER_WORKSPACE_ID, and ANTHROPIC_API_KEY to .env:`);
+console.log("   npm run setup:render");
+
+console.log(`\n${bold("3. Deploy the Blueprint")}, then connect the webhook once the gateway is live:`);
+console.log("   npm run setup:github -- --gateway-url https://<gateway>.onrender.com");
