@@ -44,6 +44,16 @@ describe("gateway", () => {
 		expect(await ready.json()).toEqual({ status: "ready" });
 	});
 
+	it("tells a browser at / that the headless gateway is running, without revealing its secret", async () => {
+		const res = await app.request("/");
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text).toContain("software-factory gateway is running");
+		expect(text).toContain("no web UI");
+		expect(text).not.toContain(SECRET);
+		expect(startTask).not.toHaveBeenCalled();
+	});
+
 	it("rejects a bad signature before parsing the body", async () => {
 		const parse = vi.spyOn(JSON, "parse");
 		const res = await app.fetch(webhook("{not json", { signature: sign("{not json", "wrong") }));

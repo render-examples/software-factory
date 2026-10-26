@@ -16,6 +16,14 @@ export interface GatewayDeps {
 export function createGateway(deps: GatewayDeps): Hono {
 	const app = new Hono();
 
+	// The gateway has no UI; people who open its URL in a browser should see that it's running, not a 404.
+	app.get("/", (c) =>
+		c.text(
+			"software-factory gateway is running.\n\n" +
+				"It has no web UI. GitHub sends webhooks to POST /webhooks/github, and the factory replies on issues and pull requests.\n" +
+				"Health checks: GET /health and GET /ready. Setup and usage: docs/quickstart.md in your software-factory repository.\n",
+		),
+	);
 	app.get("/health", (c) => c.json({ status: "ok" }));
 	app.get("/ready", (c) => c.json({ status: "ready" }));
 
