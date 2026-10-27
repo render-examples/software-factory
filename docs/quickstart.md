@@ -65,6 +65,9 @@ message that the gateway is running.
 
 ## Next steps
 
+- [Run the full pipeline](runbooks/setup.md#optional-run-the-full-pipeline)
+  — take a small request from issue to spec, draft pull request, and review,
+  step by step or with `factory:autopilot`.
 - [Configuration](configuration.md) — change settings, follow or cancel runs,
   check a deployment, and manage snapshots.
 - [Architecture](architecture.md) — understand state, coordination, and

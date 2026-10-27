@@ -355,6 +355,51 @@ Optionally confirm that the Workflows logs contain `run.finished`:
 render logs -r <factory-workflows-id> --text run.finished
 ```
 
+## Optional: Run the full pipeline
+
+The smoke test requests no change, so it exercises only Triage. After it
+passes, offer to walk the user through Spec-to-PR and PR Reviewer on a new
+issue with a small, concrete request.
+
+### Human checkpoint: pipeline test
+
+Explain that this run spends model tokens and Sandbox time, pushes a branch,
+and opens a draft pull request in the test repository. Ask before creating the
+issue and before applying each label. Suggested issue:
+
+```text
+Title: software-factory pipeline test
+
+Add a file named FACTORY_TEST.md at the repository root that contains one
+sentence describing this repository.
+```
+
+If the repository's `verify` list is empty, say that nothing checks the change
+before the pull request opens.
+
+Offer two paths.
+
+**Step by step.** Run each stage separately so the user sees each handoff:
+
+1. Apply `factory:triage` to the issue. Wait for the App-authored spec
+   comment. If Triage asks questions, the user replies on the issue and Triage
+   continues.
+2. Ask the user to review the spec, then apply `factory:spec-approved` to the
+   issue. Spec-to-PR implements the spec, runs the `verify` commands, and
+   opens a draft pull request. If the spec comment changes after the label is
+   applied, Spec-to-PR stops; review the spec and reapply the label.
+3. Apply `factory:pr-review` to the draft pull request. PR Reviewer runs the
+   `verify` commands and posts a COMMENT review.
+
+**Autopilot.** Apply `factory:autopilot` to a new issue instead. It grants
+upfront approval for the same three stages and runs them as child tasks of one
+workflow. It stops if Triage asks questions and continues after a human reply.
+It never approves or merges the pull request.
+
+Offer autopilot after the step-by-step run if the user chose that path first.
+Either path ends with a draft pull request the user can close and a branch
+they can delete.
+
 ## Troubleshooting setup
 
 ### A service does not deploy
@@ -447,6 +492,7 @@ GitHub App: <settings or public URL>
 Gateway doctor: passed
 Workflows doctor: passed
 Triage smoke test: <issue URL and outcome>
+Full pipeline: <not run, or issue and pull request URLs>
 
 Local uncommitted changes: <none or summary>
 Follow-up actions: <none or explicit list>
