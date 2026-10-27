@@ -27,6 +27,7 @@
     "python:lock": "cd python && uv lock --python 3.11 && uv export --frozen --no-header --format requirements-txt --hashes -o requirements.txt"
   },
   "dependencies": {
+    "@cursor/sdk": "1.0.40",
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@hono/node-server": "^2.0.0",

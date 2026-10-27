@@ -1,0 +1,8 @@
+{
+  "name": "software-factory-cursor-runtime",
+  "private": true,
+  "description": "The Cursor SDK the cursor harness installs in the sandbox, beside the runner bundle.",
+  "dependencies": {
+    "@cursor/sdk": "1.0.40"
+  }
+}

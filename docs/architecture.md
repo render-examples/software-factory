@@ -232,7 +232,10 @@ Tests pin these invariants and the tool authority of every built-in agent.
 ## Residual risks
 
 - Sandboxes use allow-all egress.
-- The model key exists in runner memory during a call.
+- The model key exists in runner memory during a call. A Cursor key also
+  authorizes Cursor cloud agents and team billing.
+- The Cursor harness keeps its conversation store in the Sandbox's scratch
+  directory, which the agent's own tools can write.
 - Prompt injection can influence specifications, code, and reviews.
 - Anyone with `minimumPermission` can start model spend.
 - PR Reviewer runs repository-defined commands from the labeled pull request.

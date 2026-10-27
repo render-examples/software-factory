@@ -160,6 +160,35 @@ later). A changed lockfile is reinstalled the next time a Sandbox opens;
 refresh the snapshots so each Sandbox doesn't repeat the install. To run the
 adapter's tests locally, run `uv sync` in `python/` first.
 
+### Cursor SDK
+
+To run an agent on a Cursor agent with Cursor-hosted models, use the `cursor`
+adapter:
+
+```typescript
+harness: cursor({ model: { id: "composer-2.5" } }),
+```
+
+It runs the [Cursor SDK](https://cursor.com/docs/sdk/typescript)'s local
+runtime inside the Sandbox, with `CURSOR_API_KEY`. Use a team service-account
+key with a spend limit: a Cursor key can also start cloud agents and bills your
+team, and it sits in runner memory during a call. Cursor's own tools are off,
+and so are `.cursor/` settings, MCP servers, and hooks from the checkout; the
+model gets the factory's tools and `submit` as custom tools. The cloud runtime
+isn't offered, because it runs outside the Sandbox and can write to GitHub
+itself.
+
+Cursor enables replacing its system prompt per account. Without that access,
+the agent's prompt leads the first message, under Cursor's own system prompt.
+With it, pass `replaceSystemPrompt: true`.
+
+The SDK is pinned in [`cursor/package.json`](../cursor/package.json) and
+installed root-owned in each Sandbox from `cursor/package-lock.json`, with the
+base image's npm. To upgrade it, change the version there and in the root
+`package.json`, then run `npm install` in both directories. Cursor's models can't be scripted, so its
+contract tests run live and only on request:
+`CURSOR_LIVE=1 CURSOR_API_KEY=... npx vitest run tests/harness-cursor.test.ts`.
+
 ### Tool support
 
 Every harness gives the model the factory's own tools, so an agent's tools and
@@ -178,7 +207,7 @@ The factory has no hard dollar budget.
 | Gateway routing or validation | Deploy `factory-gateway` |
 | Label, App permission, or subscribed event | Run `npm run setup:github`; update the App when prompted |
 | `app/runner/`, `app/harness/`, or `python/` sources | Deploy `factory-workflows`; each Sandbox gets the new runner payload when it opens |
-| `python/requirements.txt` | Deploy `factory-workflows`, then refresh each repository snapshot so Sandboxes don't each reinstall |
+| `python/requirements.txt` or `cursor/package-lock.json` | Deploy `factory-workflows`, then refresh each repository snapshot so Sandboxes don't each reinstall |
 | `sandbox/` | Deploy `factory-workflows`, then refresh each repository snapshot |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 

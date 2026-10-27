@@ -136,6 +136,19 @@ export async function runContract(harness: Harness, input: RunnerInput | string,
 	return { code, stdout, events: parseEvents(stdout) };
 }
 
+/** Like runContract, but against the harness's real model, with `key` delivered on stdin as in the sandbox. */
+export async function runLive(harness: Harness, input: RunnerInput, key: string) {
+	let stdout = "";
+	const code = await main(["--key-stdin"], {
+		stdin: Readable.from([`${key}\n${JSON.stringify(input)}`]),
+		write: async (chunk) => {
+			stdout += chunk;
+		},
+		agents: [testAgent(harness)],
+	});
+	return { code, stdout, events: parseEvents(stdout) };
+}
+
 let runnerPath: string | undefined;
 
 /** Bundles the runner into a fresh temp dir, outside the repo, so no node_modules is reachable from it. */

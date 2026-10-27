@@ -16,6 +16,9 @@ async function buildBundle(): Promise<{ text: string; inputs: string[] }> {
 		platform: "node",
 		format: "esm",
 		target: "node22",
+		// The cursor harness loads the SDK from the sandbox's provisioned install: its default build lazy-loads its own
+		// chunks, which a single-file bundle can't hold.
+		external: ["@cursor/sdk"],
 		// Bundled CommonJS dependencies call require() for Node built-ins, which ESM doesn't define.
 		banner: { js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);' },
 		logLevel: "warning",
