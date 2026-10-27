@@ -1,35 +1,28 @@
 /** doctor: read-only checks of one or both services' environment, the GitHub App, and Workflows tasks. */
+import type { Agent } from "../../app/agents/define.js";
+import { AGENTS } from "../../app/agents/registry.js";
 import { TASKS } from "../../app/config/index.js";
-import { PROVIDER_KEY_ENV } from "../../app/runner/keys.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
-import {
-	envGroupFor,
-	LABELS,
-	missingEvents,
-	missingPermissions,
-	SECRET_ENV,
-	SERVICE_ENV,
-	type Service,
-	WEBHOOK_PATH,
-} from "./requirements.js";
+import { envGroupFor, LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
 export interface DoctorOptions extends ScriptDeps {
 	services: readonly Service[];
 	repos: readonly string[];
-	/** config.models: "provider/model" per tier. */
-	models: Readonly<Record<string, string>>;
+	/** The agents whose harnesses to check; defaults to every agent the factory runs. */
+	agents?: readonly Agent[];
 	renderApiUrl?: string;
 }
 
 export async function runDoctor(opts: DoctorOptions, out: Reporter): Promise<number> {
 	const { env } = opts;
-	out.addSecrets(...SECRET_ENV.map((name) => env[name]), ...modelKeys(opts.models).map((name) => env[name]));
+	const agents = opts.agents ?? AGENTS;
+	out.addSecrets(...SECRET_ENV.map((name) => env[name]), ...agents.map((agent) => env[agent.harness.credential]));
 
 	checkEnv(opts, out);
-	if (opts.services.includes("workflows")) checkModels(opts, out);
+	if (opts.services.includes("workflows")) checkHarnesses(env, agents, out);
 	await checkGitHub(opts, out);
 	await checkTasks(opts, out);
 	return out.summary();
@@ -55,41 +48,20 @@ function setFix(service: Service, name: string): string {
 	return `Set it in the ${group.name} env group: add it to .env and run \`npm run setup:render\``;
 }
 
-/** The env var each configured provider's key is read from, in config order. */
-function modelKeys(models: Readonly<Record<string, string>>): string[] {
-	const names = Object.values(models)
-		.map((id) => PROVIDER_KEY_ENV[id.split("/")[0] ?? ""]?.[0])
-		.filter((name): name is string => !!name);
-	return [...new Set(names)];
-}
-
-function checkModels({ env, models }: DoctorOptions, out: Reporter): void {
-	out.heading("Model keys");
-	const tiersByProvider = new Map<string, string[]>();
-	for (const [tier, id] of Object.entries(models)) {
-		const slash = id.indexOf("/");
-		if (slash <= 0) {
-			out.fail(`models.${tier} is not "provider/model": ${id}`);
-			continue;
-		}
-		const provider = id.slice(0, slash);
-		tiersByProvider.set(provider, [...(tiersByProvider.get(provider) ?? []), tier]);
+/** Each harness the agents use, the agents on it, and whether its key is set. */
+function checkHarnesses(env: Env, agents: readonly Agent[], out: Reporter): void {
+	out.heading("Agent harnesses");
+	const groups = new Map<string, { agent: Agent; ids: string[] }>();
+	for (const agent of agents) {
+		const key = `${agent.harness.name} ${agent.harness.label}`;
+		const group = groups.get(key) ?? { agent, ids: [] };
+		group.ids.push(agent.id);
+		groups.set(key, group);
 	}
-	for (const [provider, tiers] of tiersByProvider) {
-		const keyName = PROVIDER_KEY_ENV[provider]?.[0];
-		const label = `${provider} (${tiers.join(", ")})`;
-		if (!keyName) {
-			out.fail(`${label}: unknown provider`, "Use a provider from app/runner/keys.ts");
-			continue;
-		}
-		if (env[keyName]?.trim()) out.pass(`${label}: ${keyName} is set`);
-		else out.fail(`${label}: ${keyName} is not set`, `${setFix("workflows", keyName)}; use a spend-capped key`);
-		if (!SERVICE_ENV.workflows.includes(keyName)) {
-			out.warn(
-				`setup:render doesn't manage ${keyName}`,
-				"Add it to the software-factory-workflows group in ENV_GROUPS and SERVICE_ENV (scripts/lib/requirements.ts)",
-			);
-		}
+	for (const [label, { agent, ids }] of groups) {
+		const { credential } = agent.harness;
+		if (env[credential]?.trim()) out.pass(`${label} (${ids.join(", ")}): ${credential} is set`);
+		else out.fail(`${label} (${ids.join(", ")}): ${credential} is not set`, `${setFix("workflows", credential)}; use a spend-capped key`);
 	}
 }
 

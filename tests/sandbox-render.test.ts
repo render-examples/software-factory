@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { gunzipSync } from "node:zlib";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxExecEvent } from "@renderinc/sdk/experimental";
 import { list as listTar } from "tar";
@@ -7,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { config, type RepoContext } from "../app/config/index.js";
 import { buildSnapshot, type OpenSandboxDeps, openSandbox, type SandboxApi, SandboxClient, type SnapshotManifest } from "../app/sandbox/index.js";
 
+const FAKE_BUNDLE = "// fake runner bundle\n";
 vi.mock("../app/runner/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const TOKEN = "ghs_factoryReadToken0000000000000000000";
 const BASE_SHA = "1".repeat(40);
@@ -344,6 +348,30 @@ describe("openSandbox", () => {
 		await expect(openSandbox(repo(), { kind: "branch", name: "gone" }, deps())).rejects.toThrow("couldn't find remote ref");
 		expect(fake.execIndex("scrub-credentials.sh")).toBeGreaterThan(fake.execIndex("'fetch'"));
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
+	});
+
+	it("replaces a stale runner bundle with this host's, root-owned and checked, before verifying the sandbox", async () => {
+		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
+		const upload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-runner-[0-9a-f-]{36}\/runner\.mjs\.gz$/.test(c.path)) as {
+			path: string;
+			data: Buffer;
+		};
+		expect(gunzipSync(upload.data).toString("utf8")).toBe(FAKE_BUNDLE);
+		const stage = upload.path.replace(/\/runner\.mjs\.gz$/, "");
+		const install = fake.commands().find((c) => c.includes(`install -o root -g root -m 0644 ${stage}/runner.mjs /opt/factory/app/runner/runner.mjs`));
+		expect(install).toContain(`= ${sha256(FAKE_BUNDLE)} ]`);
+		expect(fake.execIndex("install -o root")).toBeLessThan(fake.execIndex("verify.sh"));
+		expect(fake.commands()).toContain(`rm -rf ${stage}`);
+	});
+
+	it("leaves a runner bundle that matches this host's alone", async () => {
+		fake.overrides = (_id, command) =>
+			command.startsWith("sha256sum /opt/factory/app/runner/runner.mjs")
+				? [out(`${sha256(FAKE_BUNDLE)}  /opt/factory/app/runner/runner.mjs\n`), exit(0)]
+				: [];
+		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
+		expect(fake.calls.some((c) => c.op === "upload" && c.path.includes("factory-runner-"))).toBe(false);
+		expect(fake.execIndex("install -o root")).toBe(-1);
 	});
 
 	it("refuses a sandbox where the runner could not be confirmed non-dumpable", async () => {

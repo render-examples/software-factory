@@ -117,12 +117,14 @@ A base-branch push builds a repository snapshot with the runner, a base
 checkout, and installed dependencies. A GitHub task then:
 
 1. restores the newest snapshot;
-2. verifies runtime permissions and process hardening;
-3. fetches the exact requested ref with a temporary read-only token;
-4. removes the token and verifies its removal;
-5. reinstalls dependencies when the lockfiles or install command changed;
-6. runs agents and repository commands as an unprivileged user; and
-7. closes the Sandbox in `finally`.
+2. replaces the snapshot's runner bundle with this deployment's when their
+   hashes differ, root-owned and read-only to the runner user;
+3. verifies runtime permissions and process hardening;
+4. fetches the exact requested ref with a temporary read-only token;
+5. removes the token and verifies its removal;
+6. reinstalls dependencies when the lockfiles or install command changed;
+7. runs agents and repository commands as an unprivileged user; and
+8. closes the Sandbox in `finally`.
 
 Render terminates a cancelled task without running `finally`. For that case,
 each GitHub task records its Sandbox ID in the status comment. A replacement
@@ -138,7 +140,7 @@ prepared state, not trusted current state.
 An agent definition fixes:
 
 - its prompt;
-- model tier and thinking level;
+- its harness: the agent library and model that run it;
 - available tools;
 - output schema;
 - turn limit; and
@@ -146,6 +148,15 @@ An agent definition fixes:
 
 The model loop and every model-directed tool run in the Sandbox beside the
 checkout. Agent tools never run on the Workflows host.
+
+A harness adapter in `app/harness/` wraps an agent library's own
+configuration. Agent definitions and their harnesses are bundled into the
+Sandbox runner, which runs the agent named in its input on that agent's
+harness. The host and the runner speak a versioned contract
+(`app/runner/core/protocol.ts`): JSON on stdin, with the key on the first line,
+and JSON Lines events on stdout. Every harness gives the model the factory's
+own tools and `submit`, so tool authority and the read-only shell policy don't
+depend on the library.
 
 Every agent finishes through a typed `submit` tool. The runner validates the
 submission against JSON Schema. The host validates it again with the agent's
@@ -251,7 +262,8 @@ Start with:
 5. [`app/workflows/autopilot/index.ts`](../app/workflows/autopilot/index.ts) —
    parent/subtask orchestration.
 6. [`app/agents/run.ts`](../app/agents/run.ts) — host-side agent execution.
-7. [`app/runner/main.ts`](../app/runner/main.ts) — Sandbox runner entry point.
+7. [`app/runner/main.ts`](../app/runner/main.ts) — Sandbox runner entry point;
+   [`app/harness/`](../app/harness/) — agent library adapters.
 8. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
 9. [`app/changeset/index.ts`](../app/changeset/index.ts) — validated
    publishing.

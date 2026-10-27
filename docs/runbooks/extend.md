@@ -1,7 +1,7 @@
 # Extension runbook
 
-Use this runbook when adding an agent, a Render Workflows task, or a GitHub
-trigger. It is written for coding agents working in a fork of
+Use this runbook when adding an agent, an agent harness, a Render Workflows
+task, or a GitHub trigger. It is written for coding agents working in a fork of
 software-factory.
 
 Read [Architecture](../architecture.md) first. Do not change the authority
@@ -15,6 +15,7 @@ Inspect:
 
 - `factory.config.ts`;
 - `app/agents/`;
+- `app/harness/`;
 - `app/workflows/`;
 - `app/schemas/`;
 - `app/gateway/routes.ts`;
@@ -29,6 +30,8 @@ Decide which change you need:
 
 - **Agent only:** a new prompt, tool set, and typed result used by an existing
   task.
+- **Agent harness:** another agent library or model client behind the runner
+  contract.
 - **Claiming task:** work attached to one issue or pull request that must stop
   when another run takes over.
 - **Plain task:** maintenance work without an issue or pull request claim,
@@ -73,10 +76,12 @@ app/agents/<agent-id>/
 Define the agent:
 
 ```typescript
+import { medium } from "../models.js";
+
 export const finder = defineAgent({
   id: "finder",
   prompt: "finder/prompt.md",
-  model: "medium",
+  harness: medium,
   tools: ["read", "ls", "bash"],
   output: Finding,
   maxTurns: 40,
@@ -87,21 +92,24 @@ The definition fixes the agent's authority:
 
 - `id` must be unique and stable;
 - `prompt` is relative to `app/agents/`;
-- `model` is `medium` or `large`;
+- `harness` is a value from `app/agents/models.ts` or one built with an
+  adapter from `app/harness/`;
 - `tools` may include `read`, `ls`, `bash`, `edit`, and `write`;
-- `output` is a bounded strict Zod object;
-- `maxTurns` is a positive model-call limit; and
-- `thinking` is optional.
+- `output` is a bounded strict Zod object; and
+- `maxTurns` is a positive model-call limit.
 
-Grant `edit` or `write` only when the agent must change the checkout. The
-read-only shell policy in `app/runner/tools.ts` guides read-only agents; it is
-not a security boundary.
+Grant `edit` or `write` only when the agent must change the checkout.
+The read-only shell policy in `app/runner/tools/shell-policy.ts` guides
+read-only agents; it is not a security boundary.
 
 The prompt should explain the job, evidence requirements, limits, and when to
 call `submit`. Put repository-, issue-, and run-specific data in the message
 passed to `runAgent`, not in the prompt.
 
-Export the agent from `app/agents/index.ts`.
+Export the agent from `app/agents/index.ts` and add it to `AGENTS` in
+`app/agents/registry.ts`. The Sandbox runner is bundled from that list and
+runs only the agents in it. Agent modules are bundled into the runner, so they
+must not import host-only code.
 
 ### 3. Call the agent
 
@@ -121,6 +129,34 @@ list only if write tools are intentional.
 
 Add task-level tests for the user-visible result and meaningful failures. Use
 fakes; tests must not call GitHub, Render, or a model provider.
+
+## Add an agent harness
+
+A harness puts an agent library behind the runner contract in
+[`app/runner/core/`](../../app/runner/core/). The runner calls it inside the
+Sandbox with a validated input and the key from stdin; the host reads only what
+it declares.
+
+1. Add an adapter in `app/harness/<name>.ts` that takes the library's own
+   configuration and returns a `Harness` (`app/harness/types.ts`):
+   - `name` and `label` name the library and model before a run;
+   - `credential` is the env var on the Workflows service that holds its key;
+     the host sends its value into the Sandbox; and
+   - `run` and `selfTest` are the runtime (`app/runner/core/harness.ts`),
+     which the runner calls inside the Sandbox.
+2. Give the model only the factory's tools, through `createFactoryTools`
+   (`app/runner/tools/`), and a `submit` tool checked by `Submission`
+   (`app/runner/core/submit.ts`). Never offer the library's own shell, file,
+   network, or subagent tools: their authority isn't the factory's.
+3. Emit `started`, then exactly one `result` or `error`, and stop at
+   `max_turns` and `timeout_ms`.
+4. Honor `testScript` (set by `--test-stub`) by playing its turns instead of
+   calling a model, if the library has a fake model; then add the harness to
+   `HARNESSES` in `tests/helpers/runner.ts` so it runs the conformance suite.
+5. Export the adapter from `app/harness/index.ts` and use it in an agent
+   definition or `app/agents/models.ts`.
+
+`tests/agents-catalog.test.ts` fails if the bundle imports host-only code.
 
 ## Add a GitHub task
 
@@ -287,7 +323,8 @@ Before handing off, confirm:
 - the new agent has the minimum tools it needs;
 - model output cannot select an external write target;
 - the gateway still imports no GitHub auth, Sandbox, agent, or workflow code;
-- `app/runner/` still imports nothing from the rest of `app/`;
+- the runner bundle (`app/runner/`, `app/harness/`, agent definitions, and
+  schemas) still imports no host-only code;
 - GitHub tasks record their Sandbox before running an agent;
 - tests cover the user-visible success and important failures; and
 - documentation and setup requirements changed when the App contract changed.
@@ -301,7 +338,12 @@ Before handing off, confirm:
   `scripts/lib/requirements.ts`. Add it to `.env`, rerun
   `npm run setup:render`, and redeploy the services that link its group. See
   [Environment groups](../configuration.md#environment-groups).
-- Changes under `app/runner/` or `sandbox/` also require a snapshot refresh for
+- A harness whose key is new needs the key in `.env`, `npm run setup:render`,
+  and a Workflows deploy. Setup and `doctor` derive the key list from the
+  agents' harnesses.
+- Changes under `app/runner/`, `app/harness/`, or agent definitions reach
+  Sandboxes with the Workflows deploy: each Sandbox gets the new runner bundle
+  when it opens. Changes under `sandbox/` also require a snapshot refresh for
   every configured repository.
 
 State the required deploy and refresh actions in the handoff.

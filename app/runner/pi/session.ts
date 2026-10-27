@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type AfterToolCallContext, Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
 import agentCorePackage from "@earendil-works/pi-agent-core/package.json" with { type: "json" };
@@ -13,13 +12,22 @@ import {
 	type Usage as PiUsage,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { RUNNER_EXIT, type RunnerErrorCode, type RunnerEvent, RunnerInput, type ThinkingLevel, type Usage } from "./protocol.js";
-import { createSubmitTool, MAX_SUBMIT_ATTEMPTS, outputSchemaProblem, SUBMIT_TOOL } from "./submit.js";
-import { registerTestStubModel, type TestStub } from "./test-stub.js";
-import { createTools } from "./tools.js";
+import { type Emitter, errorMessage, previewText } from "../core/emit.js";
+import type { HarnessRun } from "../core/harness.js";
+import { RUNNER_EXIT, type RunnerErrorCode, type Usage } from "../core/protocol.js";
+import { SUBMIT_TOOL, Submission } from "../core/submit.js";
+import { contentText, createTools } from "../tools/index.js";
+import { createSubmitTool } from "./submit-tool.js";
+import { registerTestStubModel } from "./test-stub.js";
 
-/** Reported in `started` and `--self-test`. */
 export const PI_VERSION: string = agentCorePackage.version;
+
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
+
+export interface PiSessionOptions {
+	model: Model<Api>;
+	thinkingLevel: ThinkingLevel;
+}
 
 const MAX_OUTPUT_TOKENS = 16_384;
 /** Passed to the agent so the max_tokens cap below stays in step with Pi's thinking budget. */
@@ -34,56 +42,6 @@ const MAX_MODEL_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 2_000;
 
 const SUBMIT_REMINDER = `You stopped without calling ${SUBMIT_TOOL}. Call it now, exactly once, with your final output built from what you have found so far.`;
-
-export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-// ── events ──────────────────────────────────────────────────────────────
-
-type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;
-type EventBody = WithoutAt<RunnerEvent>;
-
-interface Emitter {
-	(event: EventBody): void;
-	readonly terminated: boolean;
-	/** Replaces `secret` with `[REDACTED]` in every later line. */
-	redact(secret: string): void;
-	/** Resolves once every line written so far has been flushed. */
-	flush(): Promise<void>;
-}
-
-/** Writes one RunnerEvent per line. Drops everything after the first terminal (`result`/`error`) event. */
-export function createEmitter(write: (chunk: string) => Promise<void>): Emitter {
-	const secrets: string[] = [];
-	let pending = Promise.resolve();
-	let terminated = false;
-	const emit = (event: EventBody) => {
-		if (terminated) return;
-		terminated = event.type === "result" || event.type === "error";
-		const { type, ...fields } = event;
-		let line = JSON.stringify({ type, at: new Date().toISOString(), ...fields });
-		for (const secret of secrets) line = line.replaceAll(secret, "[REDACTED]");
-		pending = pending.then(() => write(`${line}\n`)).catch(() => {});
-	};
-	return Object.assign(emit, {
-		get terminated() {
-			return terminated;
-		},
-		redact(secret: string) {
-			if (secret) secrets.push(secret);
-		},
-		flush: () => pending,
-	});
-}
-
-const PREVIEW_CHARS = 2000;
-const TRUNCATED = "…[truncated]";
-
-function outputPreview(result: unknown): string {
-	const content = (result as { content?: unknown } | undefined)?.content;
-	if (!Array.isArray(content)) return "";
-	const text = content.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`)).join("\n");
-	return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS - TRUNCATED.length) + TRUNCATED : text;
-}
 
 /**
  * Undefined for all-zero usage (e.g. a request aborted before it was sent). When the provider reports no cost
@@ -103,8 +61,6 @@ function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
 	return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { ...usage, cost_usd: cost } : usage;
 }
 
-// ── models ──────────────────────────────────────────────────────────────
-
 /** The built-in provider catalog with in-memory credentials: the key is passed per request, nothing is stored. */
 export function createModels(): MutableModels {
 	return builtinModels({ credentials: new InMemoryCredentialStore() });
@@ -117,71 +73,27 @@ function capMaxTokens(model: Model<Api>, level: ThinkingLevel): Model<Api> {
 	return { ...model, maxTokens: Math.min(model.maxTokens, MAX_OUTPUT_TOKENS + thinking) };
 }
 
-// ── input ───────────────────────────────────────────────────────────────
-
-/** Validates a RunnerInput, including what Zod can't see: the output schema's root and the directories. */
-export function parseInput(json: unknown): RunnerInput | string {
-	const parsed = RunnerInput.safeParse(json);
-	if (!parsed.success) {
-		return `invalid RunnerInput: ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`;
-	}
-	const input = parsed.data;
-	const schemaProblem = outputSchemaProblem(input.output_schema);
-	if (schemaProblem) return schemaProblem;
-	if (input.tools.length > 0) {
-		if (!input.cwd) return "cwd is required when tools is non-empty";
-		if (!input.scratch_dir) return "scratch_dir is required when tools is non-empty";
-		if (!isDirectory(input.cwd)) return `cwd ${input.cwd} is not a directory`;
-	}
-	return input;
-}
-
-function isDirectory(path: string): boolean {
-	try {
-		return statSync(path).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-// ── session ─────────────────────────────────────────────────────────────
-
 type Failure = { code: RunnerErrorCode; message: string };
 
-interface SessionOptions {
-	/** Already validated with parseInput. */
-	input: RunnerInput;
-	emit: Emitter;
-	/** Passed with every request; unused with `testStub`. */
-	apiKey?: string;
-	/** Replaces the model with deterministic test responses (tests, snapshot self-checks). */
-	testStub?: TestStub;
-	/** Epoch ms the `timeout_ms` budget is measured from (default: now). */
-	startedAt?: number;
-	/** Aborting stops the run with `agent_error`. */
-	signal?: AbortSignal;
-}
-
-/** Runs one agent and emits `started` … then exactly one `result` or `error`. Returns the exit code. */
-export async function runSession(opts: SessionOptions): Promise<number> {
-	const { input, emit } = opts;
-	const startedAt = opts.startedAt ?? Date.now();
+/** Runs one agent on Pi and emits `started` … then exactly one `result` or `error`. Returns the exit code. */
+export async function runPiSession(run: HarnessRun, opts: PiSessionOptions): Promise<number> {
+	const { input, emit, startedAt } = run;
 	const fail = (code: RunnerErrorCode, message: string) => {
 		emit({ type: "error", code, message });
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
 	const models = createModels();
-	const requested = models.getModel(input.model_provider, input.model);
+	const requested = models.getModel(opts.model.provider, opts.model.id);
 	if (!requested) {
-		return fail("invalid_input", `unknown model "${input.model_provider}/${input.model}" (not in the Pi ${PI_VERSION} registry)`);
+		return fail("invalid_input", `unknown model "${opts.model.provider}/${opts.model.id}" (not in the Pi ${PI_VERSION} registry)`);
 	}
-	if (!opts.testStub && !opts.apiKey) {
-		return fail("agent_error", `no API key for provider "${input.model_provider}": pass it with --key-stdin`);
+	if (!run.testScript && !run.apiKey) {
+		return fail("agent_error", `no API key for provider "${opts.model.provider}": pass it with --key-stdin`);
 	}
-	const model = capMaxTokens(opts.testStub ? registerTestStubModel(models, opts.testStub(input), requested) : requested, input.thinking_level);
+	const model = capMaxTokens(run.testScript ? registerTestStubModel(models, run.testScript, requested) : requested, opts.thinkingLevel);
 
-	let submission: { output: unknown } | undefined;
+	const submission = new Submission(input.output_schema);
 	let failure: Failure | undefined;
 	const stopped = new AbortController();
 	const tools =
@@ -193,34 +105,16 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 		initialState: {
 			systemPrompt: input.system_prompt,
 			model,
-			thinkingLevel: input.thinking_level,
-			tools: [
-				...tools,
-				createSubmitTool(input.output_schema, {
-					onAccepted: (output) => {
-						submission = { output };
-					},
-					onRejected: (attempts, problems, fields) => {
-						if (attempts < MAX_SUBMIT_ATTEMPTS) return;
-						// Schema paths, rule names, and field names only: TypeBox's errors don't quote the submitted values.
-						const last = problems.slice(0, 5).join("; ");
-						const names =
-							fields
-								.slice(0, 20)
-								.map((f) => f.slice(0, 40))
-								.join(", ") || "none";
-						stop({ code: "invalid_submission", message: `${SUBMIT_TOOL} was rejected ${attempts} times; last: ${last}; submitted fields: ${names}` });
-					},
-				}),
-			],
+			thinkingLevel: opts.thinkingLevel,
+			tools: [...tools, createSubmitTool(input.output_schema, submission, (message) => stop({ code: "invalid_submission", message }))],
 		},
 		streamFn: (m, context, options) => models.streamSimple(m, context, options),
-		getApiKey: () => opts.apiKey,
+		getApiKey: () => run.apiKey,
 		thinkingBudgets: THINKING_BUDGETS,
 		afterToolCall: async (ctx) => (endsBatch(ctx) || failure !== undefined ? { terminate: true } : undefined),
 	});
 
-	emit({ type: "started", agent_id: input.agent_id, model: `${model.provider}/${model.id}`, pi_version: PI_VERSION });
+	emit({ type: "started", agent_id: input.agent_id, harness: "pi", harness_version: PI_VERSION, model: `${model.provider}/${model.id}` });
 
 	function stop(reason?: Failure) {
 		if (reason) failure ??= reason;
@@ -245,13 +139,13 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 		if (event.type !== "turn_end") return;
 		turns++;
 		// Backstop for batches that still continue after a submission (e.g. a sibling call failed validation).
-		if (submission || failure) stop();
+		if (submission.accepted || failure) stop();
 		else if (turns >= input.max_turns) stop({ code: "max_turns", message: `turn limit (${input.max_turns}) reached without a submission` });
 	});
 
 	const onAbort = () => stop({ code: "agent_error", message: "the run was cancelled" });
-	if (opts.signal?.aborted) onAbort();
-	opts.signal?.addEventListener("abort", onAbort, { once: true });
+	if (run.signal?.aborted) onAbort();
+	run.signal?.addEventListener("abort", onAbort, { once: true });
 
 	const budgetMs = input.timeout_ms - Math.min(SAFETY_MARGIN_MS, Math.floor(input.timeout_ms / 10));
 	let deadline: NodeJS.Timeout | undefined;
@@ -270,7 +164,7 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	const conversation = (async () => {
 		if (stopped.signal.aborted) return;
 		await prompt(input.message);
-		if (!submission && !failure && stoppedOnItsOwn(agent)) await prompt(SUBMIT_REMINDER);
+		if (!submission.accepted && !failure && stoppedOnItsOwn(agent)) await prompt(SUBMIT_REMINDER);
 	})();
 	let thrown: unknown;
 	await Promise.race([
@@ -282,10 +176,10 @@ export async function runSession(opts: SessionOptions): Promise<number> {
 	clearTimeout(deadline);
 	clearTimeout(grace);
 	unsubscribe();
-	opts.signal?.removeEventListener("abort", onAbort);
+	run.signal?.removeEventListener("abort", onAbort);
 
-	if (submission) {
-		emit({ type: "result", output: submission.output, turns });
+	if (submission.accepted) {
+		emit({ type: "result", output: submission.accepted.output, turns });
 		return RUNNER_EXIT.ok;
 	}
 	failure ??= diagnose(agent, thrown);
@@ -304,7 +198,7 @@ function forward(event: AgentEvent, emit: Emitter, model: Model<Api>) {
 				tool_call_id: event.toolCallId,
 				tool: event.toolName,
 				is_error: event.isError,
-				output_preview: outputPreview(event.result),
+				output_preview: previewText(contentText((event.result as { content?: unknown } | undefined)?.content)),
 			});
 			break;
 		case "message_end": {

@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { ClientError, SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxSnapshot } from "@renderinc/sdk/experimental";
 import { create as createTar } from "tar";
@@ -265,9 +267,58 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 	return snap;
 }
 
-/** A gzipped tar of the runtime scripts and a freshly built, self-contained runner bundle. */
+// ── Runner bundle ───────────────────────────────────────────────────────
+
+const RUNNER_PATH = `${APP_DIR}/runner/runner.mjs`;
+let built: Promise<{ text: string; sha256: string }> | undefined;
+
+/** The runner bundle this host deploys, built once per process. */
+export function runnerBundle(): Promise<{ text: string; sha256: string }> {
+	built ??= bundleRunner().then(
+		(text) => ({ text, sha256: createHash("sha256").update(text).digest("hex") }),
+		(err: unknown) => {
+			built = undefined;
+			throw err;
+		},
+	);
+	return built;
+}
+
+/**
+ * Replaces a restored sandbox's runner with this host's bundle when they differ, so a change to an agent's
+ * harness or model reaches existing snapshots without a rebuild. It runs before verify.sh, which self-tests the
+ * runner, and installs the file root-owned and read-only to the runner user, as the build does. Returns whether
+ * it replaced the bundle.
+ */
+export async function ensureRunnerBundle(client: SandboxClient, id: string): Promise<boolean> {
+	const { text, sha256 } = await runnerBundle();
+	const quick = { timeoutMs: client.t.verifyTimeoutMs };
+	const current = (await client.check(id, `sha256sum ${RUNNER_PATH}`, { ...quick, waitReady: true })).trim().split(/\s+/)[0];
+	if (current === sha256) return false;
+	const stage = `/tmp/factory-runner-${randomUUID()}`;
+	await client.check(id, `mkdir -m 700 ${stage}`, quick);
+	try {
+		// Gzipped for the same reason as the staging archive: the upload endpoint rejects the bundle's raw JavaScript.
+		await client.upload(id, `${stage}/runner.mjs.gz`, gzipSync(text));
+		await client.check(
+			id,
+			[
+				`gunzip -c ${stage}/runner.mjs.gz > ${stage}/runner.mjs`,
+				`[ "$(sha256sum ${stage}/runner.mjs | cut -d' ' -f1)" = ${sha256} ]`,
+				`install -o root -g root -m 0644 ${stage}/runner.mjs ${RUNNER_PATH}`,
+			].join(" && "),
+			quick,
+		);
+	} finally {
+		await client.exec(id, `rm -rf ${stage}`, quick).catch(() => {});
+	}
+	log("info", "runner bundle replaced", { sandbox: id, from: current || null, to: sha256 });
+	return true;
+}
+
+/** A gzipped tar of the runtime scripts and the runner bundle. */
 async function stagingArchive(): Promise<Buffer> {
-	const bundle = await bundleRunner();
+	const bundle = (await runnerBundle()).text;
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
 		await mkdir(join(dir, "runner"));

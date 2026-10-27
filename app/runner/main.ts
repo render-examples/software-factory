@@ -1,17 +1,20 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { PROVIDER_KEY_ENV, scrubProviderKeys } from "./keys.js";
-import { RUNNER_EXIT } from "./protocol.js";
-import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
-import { defaultTestStub, type TestStub } from "./test-stub.js";
+import type { Agent } from "../agents/define.js";
+import { AGENTS } from "../agents/registry.js";
+import { createEmitter, errorMessage } from "./core/emit.js";
+import { parseInput } from "./core/input.js";
+import { scrubKeys } from "./core/keys.js";
+import { PROTOCOL_VERSION, RUNNER_EXIT } from "./core/protocol.js";
+import { defaultTestScript } from "./core/test-script.js";
 
 interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
 	/** Resolves once `chunk` is flushed. */
 	write(chunk: string): Promise<void>;
-	/** Replaces the default `--test-stub` responses (tests). */
-	testStub?: TestStub;
+	/** Replaces the bundled agents (tests). */
+	agents?: readonly Agent[];
 }
 
 const processIO = (): MainIO => ({
@@ -27,10 +30,12 @@ function useScratch(scratchDir: string): void {
 
 /**
  * `runner.mjs [--key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on stdout. With
- * `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
+ * `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. The input's `agent_id`
+ * selects the agent, and so its harness, from the bundle. Returns the exit code.
  */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
+	const agents = io.agents ?? AGENTS;
 	const emit = createEmitter(io.write);
 	const fail = async (code: "invalid_input" | "agent_error", message: string) => {
 		emit({ type: "error", code, message });
@@ -52,7 +57,11 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return fail("invalid_input", errorMessage(err));
 	}
 
-	for (const secret of scrubProviderKeys(process.env)) emit.redact(secret);
+	for (const secret of scrubKeys(
+		process.env,
+		agents.map((a) => a.harness.credential),
+	))
+		emit.redact(secret);
 	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
 
@@ -67,7 +76,7 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		stdin = newline === -1 ? "" : text.slice(newline + 1);
 	}
 
-	if (args["self-test"]) return selfTest(io);
+	if (args["self-test"]) return selfTest(io, agents);
 
 	let json: unknown;
 	try {
@@ -77,14 +86,17 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 	}
 	const input = parseInput(json);
 	if (typeof input === "string") return fail("invalid_input", input);
+	const agent = agents.find((a) => a.id === input.agent_id);
+	if (!agent) return fail("invalid_input", `unknown agent "${input.agent_id}": the runner bundle doesn't define it`);
+	if (input.test_script && !args["test-stub"]) return fail("invalid_input", "test_script is only honored with --test-stub");
 
 	try {
 		if (input.scratch_dir) useScratch(input.scratch_dir);
-		return await runSession({
+		return await agent.harness.run({
 			input,
 			emit,
 			apiKey,
-			testStub: args["test-stub"] ? (io.testStub ?? defaultTestStub) : undefined,
+			testScript: args["test-stub"] ? (input.test_script ?? defaultTestScript(input)) : undefined,
 			startedAt,
 		});
 	} catch (err) {
@@ -96,14 +108,29 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 	}
 }
 
-async function selfTest(io: MainIO): Promise<number> {
-	const models = createModels();
+/** Checks every bundled harness and prints one JSON line: `ok`, the protocol, and each harness's label and version. */
+async function selfTest(io: MainIO, agents: readonly Agent[]): Promise<number> {
+	const harnesses = [...new Map(agents.map((a) => [`${a.harness.name} ${a.harness.label}`, a.harness])).values()];
 	const errors: string[] = [];
-	for (const p of Object.keys(PROVIDER_KEY_ENV)) {
-		if (!models.getModels(p).length) errors.push(`no models for provider "${p}"`);
+	const reported: { name: string; label: string; version: string }[] = [];
+	for (const harness of harnesses) {
+		try {
+			const { version, problems } = await harness.selfTest();
+			reported.push({ name: harness.name, label: harness.label, version });
+			errors.push(...problems);
+		} catch (err) {
+			reported.push({ name: harness.name, label: harness.label, version: "unknown" });
+			errors.push(`${harness.name}: ${errorMessage(err)}`);
+		}
 	}
 	const ok = errors.length === 0;
-	const report = { ok, pi_version: PI_VERSION, node: process.version, ...(ok ? {} : { errors }) };
+	const report = {
+		ok,
+		protocol_version: PROTOCOL_VERSION,
+		node: process.version,
+		harnesses: reported,
+		...(ok ? {} : { errors }),
+	};
 	await io.write(`${JSON.stringify(report)}\n`);
 	return ok ? RUNNER_EXIT.ok : RUNNER_EXIT.error;
 }
