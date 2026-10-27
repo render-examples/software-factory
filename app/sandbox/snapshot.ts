@@ -1,17 +1,18 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
 import { ClientError, SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxSnapshot } from "@renderinc/sdk/experimental";
 import { create as createTar } from "tar";
+import { AGENTS } from "../agents/registry.js";
 import type { RepoContext } from "../config/index.js";
 import { githubToken } from "../github/auth.js";
 import { bundleRunner } from "../runner/bundle.js";
+import type { HarnessProvision } from "../harness/types.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
 import { errorMessage, log, SAFE_REF, shq } from "./shell.js";
 import { APP_DIR, REPO_DIR, RUN_AS, SANDBOX_ROOT, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
@@ -81,7 +82,8 @@ export function credentialFile(token: string): string {
 //
 // Each step is an exec or upload in an allow-all builder sandbox, ordered by trust:
 //
-//   1. Upload the scripts and runner bundle; install tools; create the runner user; self-test the runner
+//   1. Upload the scripts and runner payload; install tools; create the runner user; apply harness provisions;
+//      self-test the runner
 //   2. Upload a read-only token, clone at `sha`, scrub the token and verify none remains
 //   3. Hand REPO_DIR to the runner user and run the repository's install as that user (no secret present)
 //   4. Manifest, lockdown, verify.sh, named snapshot, prune
@@ -106,13 +108,14 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 		await client.check(id, `mkdir -p -m 700 ${STAGING_DIR}`, { ...boot, waitReady: true });
 		// Uploaded as an opaque .tgz and extracted in the sandbox: the upload endpoint rejects an
 		// uncompressed tar of the bundled runner's JavaScript, and doesn't accept application/gzip.
-		await client.upload(id, `${STAGING_DIR}/stage.tgz`, await stagingArchive());
+		const payload = await runnerPayload();
+		await client.upload(id, `${STAGING_DIR}/stage.tgz`, await stagingArchive(payload));
 		await client.check(id, `tar -xzf ${STAGING_DIR}/stage.tgz -C ${STAGING_DIR} && rm ${STAGING_DIR}/stage.tgz`, boot);
 		await client.check(
 			id,
 			`mkdir -p ${APP_DIR}/runner ${APP_DIR}/build ${REPO_DIR} ${SCRATCH_DIR}` +
 				` && cp ${STAGING_DIR}/*.sh ${APP_DIR}/ && cp ${STAGING_DIR}/build/*.sh ${APP_DIR}/build/` +
-				` && cp ${STAGING_DIR}/runner/runner.mjs ${APP_DIR}/runner/`,
+				` && cp -R ${STAGING_DIR}/runner/. ${APP_DIR}/runner/`,
 			boot,
 		);
 		await client.check(id, `bash ${APP_DIR}/install-tools.sh`, prepare);
@@ -120,6 +123,7 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 		await client.check(id, createRunnerUserCommand(), boot);
 		await client.upload(id, `${APP_DIR}/env`, envFileContent(node));
 		await client.upload(id, `${APP_DIR}/gitconfig`, SANDBOX_GITCONFIG);
+		await applyProvisions(client, id, payload.provisions);
 		// The self-test executes third-party code (the bundled packages); the token arrives only after it passes.
 		await client.check(
 			id,
@@ -267,63 +271,145 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 	return snap;
 }
 
-// ── Runner bundle ───────────────────────────────────────────────────────
+// ── Runner payload ──────────────────────────────────────────────────────
 
-const RUNNER_PATH = `${APP_DIR}/runner/runner.mjs`;
-let built: Promise<{ text: string; sha256: string }> | undefined;
+const RUNNER_DIR = `${APP_DIR}/runner`;
+const PROVISION_DIR = `${APP_DIR}/provision`;
 
-/** The runner bundle this host deploys, built once per process. */
-export function runnerBundle(): Promise<{ text: string; sha256: string }> {
-	built ??= bundleRunner().then(
-		(text) => ({ text, sha256: createHash("sha256").update(text).digest("hex") }),
-		(err: unknown) => {
-			built = undefined;
-			throw err;
-		},
-	);
+export interface RunnerPayload {
+	/** Paths relative to APP_DIR/runner/: the bundle, then every file the agents' harnesses provision. */
+	files: ReadonlyMap<string, Buffer>;
+	sha256: string;
+	runnerSha256: string;
+	provisions: readonly HarnessProvision[];
+}
+
+let built: Promise<RunnerPayload> | undefined;
+
+/** The runner bundle and the agents' harness provisions, built once per process. */
+export function runnerPayload(): Promise<RunnerPayload> {
+	built ??= buildPayload().catch((err: unknown) => {
+		built = undefined;
+		throw err;
+	});
 	return built;
 }
 
-/**
- * Replaces a restored sandbox's runner with this host's bundle when they differ, so a change to an agent's
- * harness or model reaches existing snapshots without a rebuild. It runs before verify.sh, which self-tests the
- * runner, and installs the file root-owned and read-only to the runner user, as the build does. Returns whether
- * it replaced the bundle.
- */
-export async function ensureRunnerBundle(client: SandboxClient, id: string): Promise<boolean> {
-	const { text, sha256 } = await runnerBundle();
-	const quick = { timeoutMs: client.t.verifyTimeoutMs };
-	const current = (await client.check(id, `sha256sum ${RUNNER_PATH}`, { ...quick, waitReady: true })).trim().split(/\s+/)[0];
-	if (current === sha256) return false;
-	const stage = `/tmp/factory-runner-${randomUUID()}`;
-	await client.check(id, `mkdir -m 700 ${stage}`, quick);
-	try {
-		// Gzipped for the same reason as the staging archive: the upload endpoint rejects the bundle's raw JavaScript.
-		await client.upload(id, `${stage}/runner.mjs.gz`, gzipSync(text));
-		await client.check(
-			id,
-			[
-				`gunzip -c ${stage}/runner.mjs.gz > ${stage}/runner.mjs`,
-				`[ "$(sha256sum ${stage}/runner.mjs | cut -d' ' -f1)" = ${sha256} ]`,
-				`install -o root -g root -m 0644 ${stage}/runner.mjs ${RUNNER_PATH}`,
-			].join(" && "),
-			quick,
-		);
-	} finally {
-		await client.exec(id, `rm -rf ${stage}`, quick).catch(() => {});
+const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
+
+async function buildPayload(): Promise<RunnerPayload> {
+	const runner = Buffer.from(await bundleRunner());
+	const files = new Map<string, Buffer>([["runner.mjs", runner]]);
+	const provisions = [...new Map(AGENTS.flatMap((a) => (a.harness.provision ? [a.harness.provision()] : [])).map((p) => [p.id, p])).values()];
+	for (const provision of provisions) {
+		if (!/^[a-z0-9-]+$/.test(provision.id)) throw new Error(`harness provision id ${JSON.stringify(provision.id)} must be [a-z0-9-]`);
+		if (!/^[A-Za-z0-9._-]+$/.test(provision.hash)) throw new Error(`harness provision ${provision.id}: hash must be [A-Za-z0-9._-]`);
+		for (const file of provision.files) {
+			const parts = file.path.split("/");
+			if (file.path.startsWith("/") || parts.includes("..") || parts.includes("") || ["runner.mjs", "payload.sha256"].includes(file.path)) {
+				throw new Error(`harness provision ${provision.id}: unsafe path ${JSON.stringify(file.path)}`);
+			}
+			const data = await readFile(file.source);
+			const existing = files.get(file.path);
+			if (existing && !existing.equals(data)) throw new Error(`harness provisions ship different files at ${file.path}`);
+			files.set(file.path, data);
+		}
 	}
-	log("info", "runner bundle replaced", { sandbox: id, from: current || null, to: sha256 });
-	return true;
+	const digest = createHash("sha256");
+	for (const path of [...files.keys()].sort()) {
+		const data = files.get(path) as Buffer;
+		digest.update(`${path}\0${data.length}\0`).update(data);
+	}
+	return { files, sha256: digest.digest("hex"), runnerSha256: sha256(runner), provisions };
 }
 
-/** A gzipped tar of the runtime scripts and the runner bundle. */
-async function stagingArchive(): Promise<Buffer> {
-	const bundle = (await runnerBundle()).text;
+/** The payload as a gzipped tar rooted at APP_DIR/runner/. */
+async function payloadArchive(payload: RunnerPayload): Promise<Buffer> {
+	const dir = await mkdtemp(join(tmpdir(), "factory-payload-"));
+	try {
+		for (const [path, data] of payload.files) {
+			await mkdir(dirname(join(dir, path)), { recursive: true });
+			await writeFile(join(dir, path), data);
+		}
+		await writeFile(join(dir, "payload.sha256"), payload.sha256);
+		const chunks: Buffer[] = [];
+		for await (const chunk of createTar({ cwd: dir, portable: true, gzip: true }, await readdir(dir))) chunks.push(chunk as Buffer);
+		return Buffer.concat(chunks);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Replaces a restored sandbox's runner directory with this host's payload when they differ, then applies the
+ * harness provisions, so harness, model, and agent changes reach existing snapshots without a rebuild. It runs
+ * before verify.sh, which self-tests the runner. Returns whether it replaced the payload.
+ */
+export async function ensureRunnerPayload(client: SandboxClient, id: string): Promise<boolean> {
+	const payload = await runnerPayload();
+	const quick = { timeoutMs: client.t.verifyTimeoutMs };
+	const current = (await client.exec(id, `cat ${RUNNER_DIR}/payload.sha256 2>/dev/null`, { ...quick, waitReady: true })).stdout.trim();
+	let replaced = false;
+	if (current !== payload.sha256) {
+		const stage = `/tmp/factory-runner-${randomUUID()}`;
+		const next = `${APP_DIR}/runner.next`;
+		await client.check(id, `mkdir -m 700 ${stage}`, quick);
+		try {
+			// Gzipped, as the staging archive: the upload endpoint rejects the bundle's raw JavaScript.
+			await client.upload(id, `${stage}/payload.tgz`, await payloadArchive(payload));
+			await client.check(
+				id,
+				[
+					`rm -rf ${next} ${APP_DIR}/runner.prev`,
+					`mkdir -m 755 ${next}`,
+					`tar -xzf ${stage}/payload.tgz -C ${next}`,
+					`[ "$(sha256sum ${next}/runner.mjs | cut -d' ' -f1)" = ${payload.runnerSha256} ]`,
+					`chown -R root:root ${next}`,
+					`chmod -R a+rX,go-w ${next}`,
+					`mv ${RUNNER_DIR} ${APP_DIR}/runner.prev`,
+					`mv ${next} ${RUNNER_DIR}`,
+					`rm -rf ${APP_DIR}/runner.prev`,
+				].join(" && "),
+				quick,
+			);
+		} finally {
+			await client.exec(id, `rm -rf ${stage}`, quick).catch(() => {});
+		}
+		log("info", "runner payload replaced", { sandbox: id, from: current || null, to: payload.sha256 });
+		replaced = true;
+	}
+	await applyProvisions(client, id, payload.provisions);
+	return replaced;
+}
+
+/** Runs each provision's command as root from APP_DIR/runner when its hash differs from the one recorded. */
+async function applyProvisions(client: SandboxClient, id: string, provisions: readonly HarnessProvision[]): Promise<void> {
+	for (const provision of provisions) {
+		if (!provision.command) continue;
+		const marker = `${PROVISION_DIR}/${provision.id}.hash`;
+		const recorded = (await client.exec(id, `cat ${marker} 2>/dev/null`, { timeoutMs: client.t.verifyTimeoutMs })).stdout.trim();
+		if (recorded === provision.hash) continue;
+		const started = Date.now();
+		await client.check(
+			id,
+			`cd ${RUNNER_DIR} && bash -c ${shq(provision.command)} && mkdir -p -m 755 ${PROVISION_DIR} && printf '%s' ${shq(provision.hash)} > ${marker}`,
+			{ timeoutMs: client.t.prepareTimeoutMs },
+		);
+		log("info", "harness provision applied", { sandbox: id, provision: provision.id, ms: Date.now() - started });
+	}
+}
+
+/** A gzipped tar of the runtime scripts and the runner payload under runner/. */
+async function stagingArchive(payload: RunnerPayload): Promise<Buffer> {
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
 		await mkdir(join(dir, "runner"));
 		await mkdir(join(dir, "build"));
-		await writeFile(join(dir, "runner/runner.mjs"), bundle);
+		for (const [path, data] of payload.files) {
+			await mkdir(dirname(join(dir, "runner", path)), { recursive: true });
+			await writeFile(join(dir, "runner", path), data);
+		}
+		await writeFile(join(dir, "runner/payload.sha256"), payload.sha256);
 		for (const file of RUNTIME_SCRIPTS) await cp(join(SANDBOX_SCRIPTS_DIR, file), join(dir, file));
 		const chunks: Buffer[] = [];
 		for await (const chunk of createTar({ cwd: dir, portable: true, gzip: true }, await readdir(dir))) chunks.push(chunk as Buffer);

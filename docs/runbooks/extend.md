@@ -153,7 +153,16 @@ it declares.
 4. Honor `testScript` (set by `--test-stub`) by playing its turns instead of
    calling a model, if the library has a fake model; then add the harness to
    `HARNESSES` in `tests/helpers/runner.ts` so it runs the conformance suite.
-5. Export the adapter from `app/harness/index.ts` and use it in an agent
+5. If the library needs more than Node in the Sandbox, declare `provision`:
+   files to ship beside the bundle, a root command to run after they land, and
+   a `hash` that changes when the command must run again. The Sandbox applies
+   it at snapshot build and when a Sandbox opens, before the runner self-tests.
+   The command must leave what it creates root-owned and read-only to the
+   runner user. The pydantic adapter's Python environment is the reference.
+6. If the library holds the key in a process other than the runner, make that
+   process non-dumpable before it reads the key, as `python/factory_harness`
+   does, so tool subprocesses can't read its memory.
+7. Export the adapter from `app/harness/index.ts` and use it in an agent
    definition or `app/agents/models.ts`.
 
 `tests/agents-catalog.test.ts` fails if the bundle imports host-only code.

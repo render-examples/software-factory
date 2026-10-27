@@ -6,8 +6,9 @@ import { AGENTS } from "../agents/registry.js";
 import { createEmitter, errorMessage } from "./core/emit.js";
 import { parseInput } from "./core/input.js";
 import { scrubKeys } from "./core/keys.js";
-import { PROTOCOL_VERSION, RUNNER_EXIT } from "./core/protocol.js";
+import { PROTOCOL_VERSION, RUNNER_EXIT, ToolName } from "./core/protocol.js";
 import { defaultTestScript } from "./core/test-script.js";
+import { serveMcpTools } from "./tools/mcp-server.js";
 
 interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
@@ -32,6 +33,9 @@ function useScratch(scratchDir: string): void {
  * `runner.mjs [--key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on stdout. With
  * `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. The input's `agent_id`
  * selects the agent, and so its harness, from the bundle. Returns the exit code.
+ *
+ * `runner.mjs --mcp-tools --tools <a,b> --cwd <dir> --scratch-dir <dir>` instead serves those factory tools over
+ * MCP stdio, for harnesses whose library takes tools from an MCP server. It never receives a key.
  */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
@@ -43,7 +47,15 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
-	let args: { "key-stdin"?: boolean; "self-test"?: boolean; "test-stub"?: boolean };
+	let args: {
+		"key-stdin"?: boolean;
+		"self-test"?: boolean;
+		"test-stub"?: boolean;
+		"mcp-tools"?: boolean;
+		tools?: string;
+		cwd?: string;
+		"scratch-dir"?: string;
+	};
 	try {
 		args = parseArgs({
 			args: argv,
@@ -51,6 +63,10 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 				"key-stdin": { type: "boolean" },
 				"self-test": { type: "boolean" },
 				"test-stub": { type: "boolean" },
+				"mcp-tools": { type: "boolean" },
+				tools: { type: "string" },
+				cwd: { type: "string" },
+				"scratch-dir": { type: "string" },
 			},
 		}).values;
 	} catch (err) {
@@ -62,8 +78,18 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		agents.map((a) => a.harness.credential),
 	))
 		emit.redact(secret);
-	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
+	// stdout carries only RunnerEvent JSONL (or MCP messages); route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
+
+	if (args["mcp-tools"]) {
+		const tools = ToolName.array().safeParse((args.tools ?? "").split(",").filter(Boolean));
+		if (!tools.success || !args.cwd || !args["scratch-dir"]) {
+			console.error("--mcp-tools needs --tools (factory tool names), --cwd, and --scratch-dir");
+			return RUNNER_EXIT.invalid_input;
+		}
+		useScratch(args["scratch-dir"]);
+		return serveMcpTools({ tools: tools.data, cwd: args.cwd, scratchDir: args["scratch-dir"] }, io);
+	}
 
 	let stdin: string | undefined;
 	let apiKey: string | undefined;

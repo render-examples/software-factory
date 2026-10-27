@@ -12,4 +12,25 @@ export interface Harness extends HarnessRuntime {
 	 * for each run; setup and doctor manage it.
 	 */
 	readonly credential: string;
+	/** Sandbox setup that app/sandbox/ applies at snapshot build and when a sandbox opens. Called on the host only. */
+	readonly provision?: () => HarnessProvision;
+}
+
+/**
+ * A harness's sandbox setup. The host ships `files` with the runner bundle, root-owned and read-only to the runner
+ * user, and runs `command` as root whenever `hash` differs from the one the sandbox recorded: at snapshot build and
+ * when a sandbox opens, before the runner self-tests. The sandbox code runs it without knowing what it installs.
+ */
+export interface HarnessProvision {
+	/** Names this setup in logs and in the sandbox's record of applied setups; [a-z0-9-]. */
+	id: string;
+	/** Host files to ship; `path` is relative to the bundle's directory (APP_DIR/runner/). */
+	files: ReadonlyArray<{ path: string; source: string }>;
+	/**
+	 * Bash run as root from the bundle's directory after the files land. It must leave whatever it creates root-owned
+	 * and not writable by the runner user.
+	 */
+	command?: string;
+	/** Changes exactly when `command` must run again, e.g. a hash of the dependency lockfile. */
+	hash: string;
 }

@@ -158,6 +158,11 @@ and JSON Lines events on stdout. Every harness gives the model the factory's
 own tools and `submit`, so tool authority and the read-only shell policy don't
 depend on the library.
 
+A harness can declare files and a root setup command it needs in the Sandbox,
+such as the pydantic adapter's Python environment. The Sandbox applies them
+root-owned and read-only to the runner user before the runner self-tests, so
+an agent's tools can't change the harness code another agent runs.
+
 Every agent finishes through a typed `submit` tool. The runner validates the
 submission against JSON Schema. The host validates it again with the agent's
 Zod schema. Repositories, refs, issue numbers, pull requests, branches, and
@@ -199,7 +204,10 @@ unprivileged user.
 
 The model key enters the Sandbox during an agent call. The runner receives it
 through a root-only path and stdin, removes provider keys from tool
-environments, and runs under a non-dumpable Node binary. These controls reduce
+environments, and runs under a non-dumpable Node binary. The pydantic harness
+passes the key to its Python process on stdin; that process makes itself
+non-dumpable before reading it, and its MCP tool server gets an environment
+without it. These controls reduce
 exposure; they do not make untrusted code safe.
 
 ## Security invariants

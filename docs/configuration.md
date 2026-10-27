@@ -123,6 +123,45 @@ needs no other configuration change. The `pi` adapter supports Anthropic
 3. deploy `factory-workflows`; and
 4. run `npm run doctor -- --service workflows`.
 
+### Pydantic AI
+
+To run an agent on [Pydantic AI](https://ai.pydantic.dev), write a module in
+[`python/agents/`](../python/agents/) that builds the agent and hands it to the
+harness:
+
+```python
+from pydantic_ai import Agent
+
+from factory_harness import serve
+
+serve(Agent("anthropic:claude-sonnet-5"))
+```
+
+Then use it in an agent definition or `app/agents/models.ts`:
+
+```typescript
+harness: pydantic({ module: "agents/sonnet.py", credential: "ANTHROPIC_API_KEY" }),
+```
+
+The module supplies the model and library options. `credential` names the env
+var that holds the key on the Workflows service; the wrapper sets the same var
+in its own process, so use the name the agent's provider reads. The factory supplies the prompt (as the run's
+instructions), its own tools over MCP, the `submit` tool, and the limits, as
+for every harness. Tools you register on the Pydantic AI agent itself also run
+in the Sandbox, but the factory doesn't vet their authority: review them as
+you would agent code.
+
+Python dependencies are locked in [`python/`](../python/). After changing
+`pyproject.toml`, run `npm run python:lock` (it needs
+[uv](https://docs.astral.sh/uv/)) and commit `uv.lock` and `requirements.txt`.
+When a deployment uses the adapter, each Sandbox installs `requirements.txt`
+into a root-owned virtual environment with the base image's `python3` (3.11 or
+later). A changed lockfile is reinstalled the next time a Sandbox opens;
+refresh the snapshots so each Sandbox doesn't repeat the install. To run the
+adapter's tests locally, run `uv sync` in `python/` first.
+
+### Tool support
+
 Every harness gives the model the factory's own tools, so an agent's tools and
 the read-only shell policy behave the same on any harness.
 
@@ -138,7 +177,8 @@ The factory has no hard dollar budget.
 | Prompt, agent definition, or Workflows service code | Deploy `factory-workflows` |
 | Gateway routing or validation | Deploy `factory-gateway` |
 | Label, App permission, or subscribed event | Run `npm run setup:github`; update the App when prompted |
-| `app/runner/` or `app/harness/` | Deploy `factory-workflows`; each Sandbox gets the new runner bundle when it opens |
+| `app/runner/`, `app/harness/`, or `python/` sources | Deploy `factory-workflows`; each Sandbox gets the new runner payload when it opens |
+| `python/requirements.txt` | Deploy `factory-workflows`, then refresh each repository snapshot so Sandboxes don't each reinstall |
 | `sandbox/` | Deploy `factory-workflows`, then refresh each repository snapshot |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 

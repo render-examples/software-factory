@@ -23,6 +23,26 @@ jobs:
       - run: shellcheck sandbox/*.sh sandbox/build/*.sh
       - run: npm audit --omit=dev --audit-level=high
 
+  # The pydantic harness's leg of the runner conformance suite, against the locked Python environment.
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - run: npm ci
+      - name: Install the locked Python environment
+        working-directory: python
+        run: uv sync --frozen --python 3.11
+      - name: Check that requirements.txt matches uv.lock
+        working-directory: python
+        run: uv export --frozen --no-header --format requirements-txt --hashes | diff -u requirements.txt -
+      - run: npx vitest run tests/runner.test.ts tests/harness-pydantic.test.ts
+
   # Validation checks plans, regions, and conflicts against a real workspace, so it needs an API key.
   # Set the RENDER_API_KEY secret and the RENDER_WORKSPACE_ID variable to turn it on; forks without them skip it.
   blueprint:

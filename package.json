@@ -23,7 +23,8 @@
     "lint": "biome lint --error-on-warnings app scripts tests factory.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "python:lock": "cd python && uv lock --python 3.11 && uv export --frozen --no-header --format requirements-txt --hashes -o requirements.txt"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",

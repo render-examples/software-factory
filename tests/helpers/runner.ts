@@ -1,13 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 import { type Agent, defineAgent } from "../../app/agents/define.js";
-import { pi } from "../../app/harness/index.js";
+import { pi, pydantic } from "../../app/harness/index.js";
 import type { Harness } from "../../app/harness/types.js";
 import { PROTOCOL_VERSION, RunnerEvent, type RunnerInput, type TestTurn, type ToolName } from "../../app/runner/core/protocol.js";
 import { bundleRunner } from "../../app/runner/bundle.js";
@@ -43,10 +43,14 @@ export function testAgent(harness: Harness): Agent {
 	});
 }
 
+/** The local Python environment (`uv sync` in python/); the pydantic harness runs only when it exists. */
+export const PYTHON_READY = existsSync(new URL("../../python/.venv/bin/python", import.meta.url));
+
 /** Every harness the conformance suite runs against. */
 export const HARNESSES: ReadonlyArray<{ name: string; harness: Harness }> = [
 	{ name: "pi", harness: pi({ model: getBuiltinModel("anthropic", "claude-sonnet-5"), thinkingLevel: "off" }) },
 	{ name: "scripted", harness: scriptedHarness },
+	...(PYTHON_READY ? [{ name: "pydantic", harness: pydantic({ module: "agents/sonnet.py", credential: "ANTHROPIC_API_KEY" }) }] : []),
 ];
 
 export interface Workspace {

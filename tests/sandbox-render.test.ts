@@ -1,16 +1,41 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { gunzipSync } from "node:zlib";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxExecEvent } from "@renderinc/sdk/experimental";
 import { list as listTar } from "tar";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { config, type RepoContext } from "../app/config/index.js";
 import { buildSnapshot, type OpenSandboxDeps, openSandbox, type SandboxApi, SandboxClient, type SnapshotManifest } from "../app/sandbox/index.js";
+import { runnerPayload } from "../app/sandbox/snapshot.js";
+
+/** The files in a gzipped tar, by path. */
+async function untar(data: Buffer): Promise<Map<string, string>> {
+	const files = new Map<string, string>();
+	await pipeline(
+		Readable.from(data),
+		listTar({
+			onReadEntry: (e) => {
+				const chunks: Buffer[] = [];
+				e.on("data", (c: Buffer) => chunks.push(c));
+				e.on("end", () => files.set(e.path.replace(/^\.\//, ""), Buffer.concat(chunks).toString("utf8")));
+			},
+		}),
+	);
+	return files;
+}
 
 const FAKE_BUNDLE = "// fake runner bundle\n";
 vi.mock("../app/runner/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
+
+/** A harness that provisions one file and one root command, so the sandbox code's handling of any provision is visible. */
+const PROVISION_FILE = join(mkdtempSync(join(tmpdir(), "provision-")), "tool.txt");
+writeFileSync(PROVISION_FILE, "provisioned file\n");
+const PROVISION = { id: "test-env", files: [{ path: "extra/tool.txt", source: PROVISION_FILE }], command: "echo provisioning", hash: "h1" };
+vi.mock("../app/agents/registry.js", () => ({ AGENTS: [{ id: "a", harness: { name: "fake", provision: () => PROVISION } }] }));
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const TOKEN = "ghs_factoryReadToken0000000000000000000";
@@ -182,6 +207,8 @@ describe("buildSnapshot", () => {
 		const tokenUpload = fake.index((c) => c.op === "upload" && c.path === "/tmp/factory-stage/creds/github.com");
 		const order = [
 			fake.execIndex("install-tools.sh"),
+			fake.index((c) => c.op === "upload" && c.path === "/opt/factory/app/env"),
+			fake.execIndex("bash -c 'echo provisioning'"),
 			fake.execIndex("--self-test"),
 			tokenUpload,
 			fake.execIndex(" clone "),
@@ -235,17 +262,7 @@ describe("buildSnapshot", () => {
 			contentType?: string;
 		};
 		expect(stage.contentType).toBeUndefined();
-		const files = new Map<string, string>();
-		await pipeline(
-			Readable.from(stage.data),
-			listTar({
-				onReadEntry: (e) => {
-					const chunks: Buffer[] = [];
-					e.on("data", (c: Buffer) => chunks.push(c));
-					e.on("end", () => files.set(e.path, Buffer.concat(chunks).toString("utf8")));
-				},
-			}),
-		);
+		const files = await untar(stage.data);
 		expect([...files.keys()].filter((p) => !p.endsWith("/")).sort()).toEqual([
 			"as-runner.sh",
 			"build/git-credential-staged.sh",
@@ -254,10 +271,14 @@ describe("buildSnapshot", () => {
 			"install-tools.sh",
 			"lockfile-hash.sh",
 			"run-agent.sh",
+			"runner/extra/tool.txt",
+			"runner/payload.sha256",
 			"runner/runner.mjs",
 			"verify.sh",
 		]);
 		expect(files.get("runner/runner.mjs")).toBe("// fake runner bundle\n");
+		expect(files.get("runner/extra/tool.txt")).toBe("provisioned file\n");
+		expect(files.get("runner/payload.sha256")).toBe((await runnerPayload()).sha256);
 
 		const env = fake.calls.find((c) => c.op === "upload" && c.path === "/opt/factory/app/env") as { data: string };
 		expect(env.data).toContain("FACTORY_RUN_AS=factory\n");
@@ -350,28 +371,36 @@ describe("openSandbox", () => {
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
 	});
 
-	it("replaces a stale runner bundle with this host's, root-owned and checked, before verifying the sandbox", async () => {
+	it("replaces a stale runner payload and applies harness provisions, root-owned, before verifying the sandbox", async () => {
 		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
-		const upload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-runner-[0-9a-f-]{36}\/runner\.mjs\.gz$/.test(c.path)) as {
+		const upload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-runner-[0-9a-f-]{36}\/payload\.tgz$/.test(c.path)) as {
 			path: string;
 			data: Buffer;
 		};
-		expect(gunzipSync(upload.data).toString("utf8")).toBe(FAKE_BUNDLE);
-		const stage = upload.path.replace(/\/runner\.mjs\.gz$/, "");
-		const install = fake.commands().find((c) => c.includes(`install -o root -g root -m 0644 ${stage}/runner.mjs /opt/factory/app/runner/runner.mjs`));
-		expect(install).toContain(`= ${sha256(FAKE_BUNDLE)} ]`);
-		expect(fake.execIndex("install -o root")).toBeLessThan(fake.execIndex("verify.sh"));
-		expect(fake.commands()).toContain(`rm -rf ${stage}`);
+		const files = await untar(upload.data);
+		expect(files.get("runner.mjs")).toBe(FAKE_BUNDLE);
+		expect(files.get("extra/tool.txt")).toBe("provisioned file\n");
+		const swap = fake.commands().find((c) => c.includes("mv /opt/factory/app/runner.next /opt/factory/app/runner")) as string;
+		expect(swap).toContain(`= ${sha256(FAKE_BUNDLE)} ]`);
+		expect(swap).toContain("chown -R root:root /opt/factory/app/runner.next");
+		expect(swap).toContain("chmod -R a+rX,go-w /opt/factory/app/runner.next");
+		const provision =
+			"cd /opt/factory/app/runner && bash -c 'echo provisioning' && mkdir -p -m 755 /opt/factory/app/provision && printf '%s' 'h1' > /opt/factory/app/provision/test-env.hash";
+		expect(fake.commands()).toContain(provision);
+		expect(fake.execIndex("mv /opt/factory/app/runner.next")).toBeLessThan(fake.execIndex("bash -c 'echo provisioning'"));
+		expect(fake.execIndex("bash -c 'echo provisioning'")).toBeLessThan(fake.execIndex("verify.sh"));
 	});
 
-	it("leaves a runner bundle that matches this host's alone", async () => {
-		fake.overrides = (_id, command) =>
-			command.startsWith("sha256sum /opt/factory/app/runner/runner.mjs")
-				? [out(`${sha256(FAKE_BUNDLE)}  /opt/factory/app/runner/runner.mjs\n`), exit(0)]
-				: [];
+	it("leaves a matching runner payload and an already applied provision alone", async () => {
+		const { sha256: current } = await runnerPayload();
+		fake.overrides = (_id, command) => {
+			if (command.startsWith("cat /opt/factory/app/runner/payload.sha256")) return [out(current), exit(0)];
+			if (command.startsWith("cat /opt/factory/app/provision/test-env.hash")) return [out("h1"), exit(0)];
+			return [];
+		};
 		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
 		expect(fake.calls.some((c) => c.op === "upload" && c.path.includes("factory-runner-"))).toBe(false);
-		expect(fake.execIndex("install -o root")).toBe(-1);
+		expect(fake.execIndex("echo provisioning")).toBe(-1);
 	});
 
 	it("refuses a sandbox where the runner could not be confirmed non-dumpable", async () => {

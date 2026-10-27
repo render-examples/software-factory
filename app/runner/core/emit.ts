@@ -25,10 +25,9 @@ export function createEmitter(write: (chunk: string) => Promise<void>): Emitter 
 		for (const secret of secrets) line = line.replaceAll(secret, "[REDACTED]");
 		pending = pending.then(() => write(`${line}\n`)).catch(() => {});
 	};
-	return Object.assign(emit, {
-		get terminated() {
-			return terminated;
-		},
+	// defineProperty, not Object.assign: assign would copy the getter's value once instead of the getter.
+	Object.defineProperty(emit, "terminated", { get: () => terminated });
+	return Object.assign(emit as typeof emit & { readonly terminated: boolean }, {
 		redact(secret: string) {
 			if (secret) secrets.push(secret);
 		},
