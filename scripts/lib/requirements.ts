@@ -1,4 +1,5 @@
 /** What the factory needs from GitHub and from each service's environment, in one place for setup and doctor. */
+import { AGENTS } from "../../app/agents/registry.js";
 import { config } from "../../app/config/index.js";
 import { WORKING_LABEL } from "../../app/claims/status.js";
 
@@ -60,10 +61,13 @@ export const LABELS: readonly LabelSpec[] = [
 
 export type Service = "gateway" | "workflows";
 
+/** The credential each agent's harness declares (app/agents/), once each, in agent order. Workflows sends them to its sandboxes. */
+export const HARNESS_KEY_ENV: readonly string[] = [...new Set(AGENTS.map((agent) => agent.harness.credential))];
+
 /** Each service's env vars, exactly as render.yaml declares them (through its env groups or directly). */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
 	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
-	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
+	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", ...HARNESS_KEY_ENV],
 };
 
 export interface EnvGroupSpec {
@@ -84,7 +88,7 @@ export const ENV_GROUPS: readonly EnvGroupSpec[] = [
 	{
 		name: "software-factory-workflows",
 		services: ["workflows"],
-		keys: ["RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY"],
+		keys: ["RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", ...HARNESS_KEY_ENV],
 	},
 ];
 

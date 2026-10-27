@@ -13,9 +13,12 @@ import {
 	type ReadToolDetails,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { Type } from "typebox";
-import type { ToolName } from "./protocol.js";
+import { type TSchema, Type } from "typebox";
+import { Value } from "typebox/value";
+import type { ToolName } from "../core/protocol.js";
 import { rejectReason } from "./shell-policy.js";
+
+export { rejectReason } from "./shell-policy.js";
 
 const DEFAULT_TIMEOUT_S = 120;
 const MAX_TIMEOUT_S = 1800;
@@ -71,11 +74,53 @@ export function createTools(opts: ToolOptions): AgentTool<any>[] {
 	return [...new Set(opts.tools)].map((name) => factories[name]());
 }
 
-type HarnessTool = ReturnType<typeof createEditTool> | ReturnType<typeof createWriteTool>;
+/** A factory tool as any harness registers it: JSON Schema parameters and a text result, no library types. */
+export interface FactoryTool {
+	name: ToolName;
+	description: string;
+	/** JSON Schema of the arguments. */
+	parameters: Record<string, unknown>;
+	/** Validates `args`, runs the tool, and never throws: a failure comes back with `isError`. */
+	execute(args: unknown, signal?: AbortSignal): Promise<{ text: string; isError: boolean }>;
+}
+
+let nextCallId = 0;
+
+/**
+ * The tools named in `opts.tools` as FactoryTools: the same implementations, environment, policy, and limits as
+ * `createTools`, so every harness gives an agent identical tool behavior.
+ */
+export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
+	return createTools(opts).map((tool) => ({
+		name: tool.name as ToolName,
+		description: tool.description,
+		parameters: tool.parameters as Record<string, unknown>,
+		async execute(args, signal) {
+			if (!Value.Check(tool.parameters as TSchema, args)) {
+				const problems = [...Value.Errors(tool.parameters as TSchema, args)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
+				return { text: `Invalid arguments for ${tool.name}:\n${problems.map((p) => `- ${p}`).join("\n")}`, isError: true };
+			}
+			try {
+				const result = await tool.execute(`factory-${++nextCallId}`, args, signal);
+				return { text: contentText(result.content), isError: false };
+			} catch (err) {
+				return { text: err instanceof Error ? err.message : String(err), isError: true };
+			}
+		},
+	}));
+}
+
+/** A tool result's text content; other content types become a placeholder. */
+export function contentText(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`)).join("\n");
+}
+
+type ContextTool = ReturnType<typeof createEditTool> | ReturnType<typeof createWriteTool>;
 
 /** Binds one of Pi's harness tools (which take the execution context per call) to `context`. */
 // biome-ignore lint/suspicious/noExplicitAny: see createTools.
-function withContext(inner: HarnessTool, context: ExecutionToolContext): AgentTool<any> {
+function withContext(inner: ContextTool, context: ExecutionToolContext): AgentTool<any> {
 	return {
 		...inner,
 		// biome-ignore lint/suspicious/noExplicitAny: the params match inner.parameters, validated by Pi.

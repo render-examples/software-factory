@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineAgent, runAgent } from "../app/agents/index.js";
+import { defineAgent, piOpus, runAgent } from "../app/agents/index.js";
 import { emit } from "../app/events/index.js";
-import { RunnerInput } from "../app/runner/protocol.js";
+import { PROTOCOL_VERSION, RunnerInput } from "../app/runner/core/protocol.js";
 import { REPO_DIR } from "../app/sandbox/types.js";
 import { eventLine, FakeSandbox } from "./helpers/fake-sandbox.js";
 
@@ -20,11 +20,10 @@ const Report = z.object({
 const reviewer = defineAgent({
 	id: "reviewer",
 	prompt: PROMPT,
-	model: "large",
+	harness: piOpus,
 	tools: ["read", "ls", "bash"],
 	output: Report,
 	maxTurns: 40,
-	thinking: "high",
 });
 
 const emitted = () => vi.mocked(emit).mock.calls.map(([e]) => e);
@@ -48,7 +47,7 @@ describe("defineAgent", () => {
 
 const cannedRun = (output: unknown) =>
 	[
-		eventLine({ type: "started", agent_id: "reviewer", model: "anthropic/claude-opus-5", pi_version: "0.83.0" }),
+		eventLine({ type: "started", agent_id: "reviewer", harness: "pi", harness_version: "0.83.0", model: "anthropic/claude-opus-5" }),
 		eventLine({ type: "usage", usage: { input_tokens: 1000, output_tokens: 200, cache_read_tokens: 50, cache_write_tokens: 0, cost_usd: 0.01 } }),
 		eventLine({ type: "tool_call", tool_call_id: "c1", tool: "ls", args: {} }),
 		eventLine({ type: "usage", usage: { input_tokens: 1500, output_tokens: 100, cache_read_tokens: 0, cache_write_tokens: 10, cost_usd: 0.02 } }),
@@ -76,6 +75,7 @@ describe("runAgent in a sandbox", () => {
 		expect(sandbox.uploads.get(`${runDir}/key`)).toBe(HOST_KEY);
 		const input = RunnerInput.parse(JSON.parse(sandbox.uploads.get(`${runDir}/input.json`) as string));
 		expect(input).toMatchObject({
+			protocol_version: PROTOCOL_VERSION,
 			agent_id: "reviewer",
 			system_prompt: reviewer.prompt,
 			message: "Review it.",
@@ -89,7 +89,15 @@ describe("runAgent in a sandbox", () => {
 		expect(emitted()[0]).toMatchObject({
 			type: "agent.finished",
 			traceId: "trace-2",
-			payload: { outcome: "ok", turns: 2, model: "anthropic/claude-opus-5", costUsd: run.costUsd, usage: run.usage },
+			payload: {
+				outcome: "ok",
+				turns: 2,
+				harness: "pi",
+				harnessVersion: "0.83.0",
+				model: "anthropic/claude-opus-5",
+				costUsd: run.costUsd,
+				usage: run.usage,
+			},
 		});
 	});
 });

@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import { modelFor } from "../config/index.js";
 import { emit } from "../events/index.js";
-import { providerApiKey } from "../runner/keys.js";
-import { type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/protocol.js";
-import { errorMessage } from "../runner/session.js";
+import { errorMessage } from "../runner/core/emit.js";
+import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/core/protocol.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
 
@@ -55,7 +53,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	opts: RunAgentOptions,
 ): Promise<AgentRun<Output>> {
 	const { sandbox, ...base } = opts;
-	const { provider, model } = modelFor(agent.model);
+	const { harness } = agent;
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const finish = (outcome: string, summary: Summary, message?: string) =>
 		emit({
@@ -66,7 +64,9 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			type: "agent.finished",
 			payload: {
 				agentId: agent.id,
-				model: `${provider}/${model}`,
+				harness: harness.name,
+				...(summary.harnessVersion ? { harnessVersion: summary.harnessVersion } : {}),
+				model: summary.model ?? harness.label,
 				outcome,
 				turns: summary.turns,
 				usage: summary.usage,
@@ -80,13 +80,11 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const failure = (code: AgentErrorCode, text: string) => new AgentError(agent.id, code, text);
 	try {
 		const runnerInput: RunnerInput = {
+			protocol_version: PROTOCOL_VERSION,
 			trace_id: base.traceId,
 			agent_id: agent.id,
 			system_prompt: agent.prompt,
 			message,
-			model_provider: provider,
-			model,
-			thinking_level: agent.thinking ?? "medium",
 			tools: [...agent.tools],
 			output_schema: agent.outputJsonSchema,
 			max_turns: agent.maxTurns,
@@ -94,8 +92,8 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			cwd: REPO_DIR,
 			scratch_dir: SCRATCH_DIR,
 		};
-		const apiKey = providerApiKey(provider, process.env);
-		if (!apiKey) throw failure("agent_error", `no API key for provider "${provider}" in the environment`);
+		const apiKey = process.env[harness.credential]?.trim();
+		if (!apiKey) throw failure("agent_error", `${harness.credential} is not set: the ${harness.name} harness needs it`);
 
 		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
 		summary = summarize(stdout.text);
@@ -170,6 +168,9 @@ interface Summary {
 	costUsd: number;
 	turns: number;
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
+	/** From the runner's `started` event: what actually ran, which the host can't always know. */
+	harnessVersion?: string;
+	model?: string;
 	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
@@ -197,7 +198,10 @@ function summarize(jsonl: string): Summary {
 			continue;
 		}
 		if (summary.terminal) continue;
-		if (event.type === "usage") {
+		if (event.type === "started") {
+			summary.harnessVersion = event.harness_version;
+			summary.model = event.model;
+		} else if (event.type === "usage") {
 			const u = summary.usage;
 			u.input_tokens += event.usage.input_tokens;
 			u.output_tokens += event.usage.output_tokens;

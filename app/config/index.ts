@@ -1,6 +1,6 @@
-import config, { type ModelTier, type RepoConfig } from "../../factory.config.js";
+import config, { type RepoConfig } from "../../factory.config.js";
 
-export { config, type ModelTier, type RepoConfig };
+export { config, type RepoConfig };
 
 /** One repository a run acts on, resolved from the webhook that started it. */
 export interface RepoContext {
@@ -27,13 +27,6 @@ export function requireRepo(fullName: string, installationId: number): RepoConte
 	const repo = resolveRepo(fullName, installationId);
 	if (!repo) throw new Error(`${fullName} is not configured in factory.config.ts`);
 	return repo;
-}
-
-export function modelFor(tier: ModelTier): { provider: string; model: string } {
-	const id = config.models[tier];
-	const slash = id.indexOf("/");
-	if (slash <= 0) throw new Error(`models.${tier} must be "provider/model", got "${id}"`);
-	return { provider: id.slice(0, slash), model: id.slice(slash + 1) };
 }
 
 export function requireEnv(name: string): string {

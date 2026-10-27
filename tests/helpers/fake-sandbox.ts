@@ -1,4 +1,4 @@
-import type { RunnerEvent } from "../../app/runner/protocol.js";
+import type { RunnerEvent } from "../../app/runner/core/protocol.js";
 import type { ExecOptions, ExecResult, Sandbox } from "../../app/sandbox/types.js";
 
 type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;

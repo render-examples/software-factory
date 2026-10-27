@@ -1,17 +1,20 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { PROVIDER_KEY_ENV, scrubProviderKeys } from "./keys.js";
-import { RUNNER_EXIT } from "./protocol.js";
-import { createEmitter, createModels, errorMessage, PI_VERSION, parseInput, runSession } from "./session.js";
-import { defaultTestStub, type TestStub } from "./test-stub.js";
+import type { Agent } from "../agents/define.js";
+import { AGENTS } from "../agents/registry.js";
+import { createEmitter, errorMessage } from "./core/emit.js";
+import { parseInput } from "./core/input.js";
+import { scrubKeys } from "./core/keys.js";
+import { executeHarness } from "./core/kernel.js";
+import { PROTOCOL_VERSION, RUNNER_EXIT } from "./core/protocol.js";
 
 interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
 	/** Resolves once `chunk` is flushed. */
 	write(chunk: string): Promise<void>;
-	/** Replaces the default `--test-stub` responses (tests). */
-	testStub?: TestStub;
+	/** Replaces the bundled agents (tests). */
+	agents?: readonly Agent[];
 }
 
 const processIO = (): MainIO => ({
@@ -26,11 +29,14 @@ function useScratch(scratchDir: string): void {
 }
 
 /**
- * `runner.mjs [--key-stdin] [--test-stub] [--self-test]`: RunnerInput on stdin, RunnerEvent JSONL on stdout. With
- * `--key-stdin`, the first line of stdin is the model key and the rest is the RunnerInput. Returns the exit code.
+ * `runner.mjs --key-stdin`: the model key on the first line of stdin, then a RunnerInput; RunnerEvent JSONL on
+ * stdout. The input's `agent_id` selects the agent, and so its harness, from the bundle. Returns the exit code.
+ *
+ * `runner.mjs --self-test` checks that the bundle and every agent definition in it load, and prints one JSON line.
  */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
+	const agents = io.agents ?? AGENTS;
 	const emit = createEmitter(io.write);
 	const fail = async (code: "invalid_input" | "agent_error", message: string) => {
 		emit({ type: "error", code, message });
@@ -38,21 +44,24 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		return code === "invalid_input" ? RUNNER_EXIT.invalid_input : RUNNER_EXIT.error;
 	};
 
-	let args: { "key-stdin"?: boolean; "self-test"?: boolean; "test-stub"?: boolean };
+	let args: { "key-stdin"?: boolean; "self-test"?: boolean };
 	try {
 		args = parseArgs({
 			args: argv,
 			options: {
 				"key-stdin": { type: "boolean" },
 				"self-test": { type: "boolean" },
-				"test-stub": { type: "boolean" },
 			},
 		}).values;
 	} catch (err) {
 		return fail("invalid_input", errorMessage(err));
 	}
 
-	for (const secret of scrubProviderKeys(process.env)) emit.redact(secret);
+	for (const secret of scrubKeys(
+		process.env,
+		agents.map((a) => a.harness.credential),
+	))
+		emit.redact(secret);
 	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
 
@@ -67,7 +76,7 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		stdin = newline === -1 ? "" : text.slice(newline + 1);
 	}
 
-	if (args["self-test"]) return selfTest(io);
+	if (args["self-test"]) return selfTest(io, agents);
 
 	let json: unknown;
 	try {
@@ -77,16 +86,13 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 	}
 	const input = parseInput(json);
 	if (typeof input === "string") return fail("invalid_input", input);
+	const agent = agents.find((a) => a.id === input.agent_id);
+	if (!agent) return fail("invalid_input", `unknown agent "${input.agent_id}": the runner bundle doesn't define it`);
+	if (!apiKey) return fail("invalid_input", "no model key: pass it as the first line of stdin with --key-stdin");
 
 	try {
 		if (input.scratch_dir) useScratch(input.scratch_dir);
-		return await runSession({
-			input,
-			emit,
-			apiKey,
-			testStub: args["test-stub"] ? (io.testStub ?? defaultTestStub) : undefined,
-			startedAt,
-		});
+		return await executeHarness({ input, emit, apiKey, startedAt }, agent.harness);
 	} catch (err) {
 		console.error(err);
 		if (!emit.terminated) return await fail("agent_error", errorMessage(err));
@@ -96,16 +102,16 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 	}
 }
 
-async function selfTest(io: MainIO): Promise<number> {
-	const models = createModels();
-	const errors: string[] = [];
-	for (const p of Object.keys(PROVIDER_KEY_ENV)) {
-		if (!models.getModels(p).length) errors.push(`no models for provider "${p}"`);
-	}
-	const ok = errors.length === 0;
-	const report = { ok, pi_version: PI_VERSION, node: process.version, ...(ok ? {} : { errors }) };
+/** Reaching this proves the bundle and every agent definition in it load in this sandbox. Prints one JSON line. */
+async function selfTest(io: MainIO, agents: readonly Agent[]): Promise<number> {
+	const report = {
+		ok: true,
+		protocol_version: PROTOCOL_VERSION,
+		node: process.version,
+		agents: agents.map((a) => ({ id: a.id, harness: a.harness.name, label: a.harness.label })),
+	};
 	await io.write(`${JSON.stringify(report)}\n`);
-	return ok ? RUNNER_EXIT.ok : RUNNER_EXIT.error;
+	return RUNNER_EXIT.ok;
 }
 
 async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
