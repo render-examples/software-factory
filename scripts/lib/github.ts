@@ -150,6 +150,14 @@ class RepoClient {
 		return this.http.paginate<RepoLabel>(`${this.base}/labels`);
 	}
 
+	metadata(): Promise<unknown> {
+		return this.http.json("GET", this.base);
+	}
+
+	branch(name: string): Promise<unknown> {
+		return this.http.json("GET", `${this.base}/branches/${encodeURIComponent(name)}`);
+	}
+
 	async createLabel(label: { name: string; color: string; description: string }): Promise<void> {
 		await this.http.json("POST", `${this.base}/labels`, { body: label });
 	}

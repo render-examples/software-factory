@@ -56,6 +56,7 @@ Run:
 ```bash
 node --version
 npm ci
+npm run setup:preflight -- --local
 npm run check
 ```
 
@@ -81,6 +82,7 @@ Requirements:
 
 - use the exact GitHub `owner/name`;
 - name an existing base branch;
+- confirm Issues is enabled under the target repository's Settings > General > Features (ask an admin to enable it if necessary);
 - use an install command that is deterministic and leaves tracked files
   unchanged; and
 - list every command required before publishing.
@@ -203,8 +205,24 @@ Run:
 npm run setup:render -- --workspace <tea-...>
 ```
 
-The command checks that every value is present before it writes anything,
-confirms that the API key can access the workspace, then creates or updates:
+Before any environment-group writes, the command runs read-only preflight:
+it checks the pinned Node version, required values, workspace access, App
+installation, repository Issues availability, and each configured base branch.
+Resolve every failure before deploying paid resources. To run these checks
+without changing any groups, use:
+
+```bash
+npm run setup:preflight -- --workspace <tea-...>
+```
+
+Preflight mints repository-scoped read-only installation tokens, but changes
+no repository settings and creates no Sandbox or model request. It explicitly
+leaves Sandbox execution, configured-model access, and provider spend caps
+unverified; confirm account access before deployment and verify execution in
+the separately approved Triage smoke test. A successful preflight is not the
+definition of completed setup.
+
+After preflight passes, the command creates or updates:
 
 - `software-factory-shared`, for both services: `RENDER_API_KEY`;
 - `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET`; and

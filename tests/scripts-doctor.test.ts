@@ -50,6 +50,8 @@ interface World {
 	installed?: boolean;
 	labels?: string[];
 	labelsResponse?: { status: number; body: unknown };
+	repositoryResponse?: { status?: number; body: unknown };
+	branchResponse?: { status?: number; body: unknown };
 	tasks?: string[];
 	tasksStatus?: number;
 }
@@ -78,6 +80,12 @@ function fakeFetch(world: World = {}) {
 				return json(world.deliveries ?? [{ id: 1, delivered_at: "2026-10-18T00:00:00Z", status_code: 202, event: "issues" }]);
 			case "GET api.github.com/repos/acme/web/installation":
 				return world.installed === false ? json({ message: "Not Found" }, 404) : json({ id: 7, permissions: APP.permissions, events: APP.events });
+			case "GET api.github.com/repos/acme/web":
+				if (world.repositoryResponse) return json(world.repositoryResponse.body, world.repositoryResponse.status);
+				return json({ full_name: "acme/web", has_issues: true, archived: false });
+			case "GET api.github.com/repos/acme/web/branches/release%2Fcandidate":
+				if (world.branchResponse) return json(world.branchResponse.body, world.branchResponse.status);
+				return json({ name: "release/candidate", commit: { sha: "a".repeat(40) } });
 			case "POST api.github.com/app/installations/7/access_tokens":
 				return json({ token: TOKEN, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
 			case "GET api.github.com/repos/acme/web/labels":
@@ -121,6 +129,27 @@ function expectNoSecrets(output: string) {
 }
 
 describe("doctor", () => {
+	it("blocks readiness when Issues is disabled even with an installed App and existing labels", async () => {
+		const { code, find } = await doctor({ world: { repositoryResponse: { body: { full_name: "acme/web", has_issues: false, archived: false } } } });
+		expect(code).toBe(1);
+		expect(find("fail", "acme/web: Issues is disabled")).toBeDefined();
+	});
+
+	it("checks the configured base branch and blocks readiness when it is inaccessible", async () => {
+		const { code, find } = await doctor({
+			baseBranches: { "acme/web": "release/candidate" },
+			world: { branchResponse: { status: 404, body: { message: "Not Found" } } },
+		});
+		expect(code).toBe(1);
+		expect(find("fail", "base branch release/candidate is missing or inaccessible")).toBeDefined();
+	});
+
+	it("accepts an accessible non-main base branch", async () => {
+		const { code, find } = await doctor({ baseBranches: { "acme/web": "release/candidate" } });
+		expect(code).toBe(0);
+		expect(find("pass", "base branch release/candidate is accessible")).toBeDefined();
+	});
+
 	it("passes a healthy deployment and exits 0", async () => {
 		const { code, results, output } = await doctor();
 		expect(results.filter((r) => r.level === "fail" || r.level === "warn")).toEqual([]);

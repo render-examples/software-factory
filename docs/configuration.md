@@ -310,7 +310,14 @@ update them from local `.env`:
 npm run setup:render -- --workspace <tea-...>
 ```
 
-The command writes nothing until every value is set. It updates only values
+The command runs the [pre-deployment checks](runbooks/setup.md#phase-6-create-the-render-env-groups)
+before writing any group: required values, pinned Node version, workspace
+access, repository Issues availability, and configured base branches must
+pass. Run `npm run setup:preflight -- --workspace <tea-...>` to check without
+updating groups. Model and Sandbox execution remain unverified until the
+approved smoke test.
+
+It updates only values
 that changed, leaves other variables in each group alone, and never prints a
 secret. A second group with the same name makes it stop, because a Blueprint
 links groups by name.

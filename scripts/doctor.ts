@@ -26,7 +26,15 @@ if (!services) {
 
 const out = new Reporter();
 try {
-	process.exitCode = await runDoctor({ env: process.env, services, repos: Object.keys(config.repos) }, out);
+	process.exitCode = await runDoctor(
+		{
+			env: process.env,
+			services,
+			repos: Object.keys(config.repos),
+			baseBranches: Object.fromEntries(Object.entries(config.repos).map(([name, repo]) => [name, repo.baseBranch])),
+		},
+		out,
+	);
 } catch (error) {
 	out.fail(`doctor crashed: ${errorMessage(error)}`);
 	process.exitCode = 1;
