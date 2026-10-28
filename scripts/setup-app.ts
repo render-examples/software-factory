@@ -13,14 +13,15 @@ import { githubApiUrl } from "../app/github/auth.js";
 import { writeEnvFile } from "./lib/env-file.js";
 import { githubWebUrl } from "./lib/github.js";
 import { buildManifest, exchangeManifestCode, formPage, newState, registrationUrl, startCallbackServer } from "./lib/manifest.js";
-import { bold, dim, errorMessage, green, yellow } from "./lib/output.js";
+import { bold, dim, errorMessage, green } from "./lib/output.js";
 
 const { values } = parseArgs({
 	options: {
 		org: { type: "string" },
 		name: { type: "string" },
 		port: { type: "string" },
-		"write-env": { type: "boolean", default: false },
+		// Accepted for compatibility; credentials are always saved instead of printed.
+		"write-env": { type: "boolean", default: true },
 	},
 });
 
@@ -67,17 +68,8 @@ console.log(`\n${bold("1. Install the App")} on every repository in factory.conf
 console.log(`   ${app.html_url}/installations/new`);
 for (const repo of repos) console.log(`   - ${repo}`);
 
-if (values["write-env"]) {
-	await writeEnvFile(".env", env);
-	console.log(`\n${green("✓")} Wrote GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_WEBHOOK_SECRET to .env`);
-} else {
-	console.log(`\n${bold("Add these to .env")}; setup:render, setup:github, and doctor read them from there:`);
-	console.log(`   GITHUB_APP_ID=${env.GITHUB_APP_ID}`);
-	console.log(`   GITHUB_APP_PRIVATE_KEY=${env.GITHUB_APP_PRIVATE_KEY}`);
-	console.log(`   GITHUB_WEBHOOK_SECRET=${env.GITHUB_WEBHOOK_SECRET}`);
-	console.log(dim("   The private key is base64-encoded so it fits on one line. Keep these values secret."));
-	console.log(yellow("   The private key isn't saved anywhere else. Rerun with --write-env to write .env instead."));
-}
+await writeEnvFile(".env", env);
+console.log(`\n${green("✓")} Wrote GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_WEBHOOK_SECRET to .env`);
 
 console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY, RENDER_WORKSPACE_ID, and ANTHROPIC_API_KEY to .env:`);
 console.log("   npm run setup:render");

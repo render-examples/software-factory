@@ -120,16 +120,19 @@ that branch.
 Start the GitHub App manifest flow:
 
 ```bash
-npm run setup:app -- --write-env
+npm run setup:app
 ```
 
 For an organization-owned App:
 
 ```bash
-npm run setup:app -- --org <organization> --write-env
+npm run setup:app -- --org <organization>
 ```
 
 Keep the command running while the user completes the browser flow.
+The command saves credentials to `.env` without printing their values. On
+POSIX systems, it makes new and existing `.env` files readable and writable
+only by the owner. The `--write-env` flag is still accepted for compatibility.
 
 ### Human checkpoint: create the App
 
