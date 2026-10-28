@@ -308,9 +308,14 @@ Run:
 npm run doctor -- --service workflows
 ```
 
-The warning `no webhook deliveries yet, so the hook may be inactive` is
-expected before the smoke test. Do not continue while either command has a
-failed check.
+A required check that cannot be verified exits nonzero. Before continuing,
+resolve failed checks on both services. Workflows doctor checks that the latest
+webhook delivery reached the configured gateway successfully. If it reports
+delivery as unverified, open the App's settings, confirm Webhook > Active, save,
+and redeliver a ping from Advanced. Then rerun doctor. A historical attempt to a
+placeholder URL does not verify this setup. A successful delivery is historical
+evidence; the smoke test below verifies the current end-to-end path.
+The gateway's skipped GitHub checks are expected: it holds no App credentials.
 
 ## Phase 11: Smoke-test Triage
 

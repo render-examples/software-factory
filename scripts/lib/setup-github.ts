@@ -57,22 +57,11 @@ async function configureWebhook(app: GitHubApp, info: AppInfo, url: string, secr
 	else out.pass(`webhook content type set to json${current.content_type ? ` (was ${current.content_type})` : ""}`);
 	out.pass("webhook secret set (the gateway's GITHUB_WEBHOOK_SECRET must be the same value)");
 
-	// The REST API can't activate an App webhook (PATCH /app/hook/config has no `active`). A delivery proves it's on.
-	const settings = appSettingsUrl(info, app.apiUrl);
-	let deliveries: Awaited<ReturnType<GitHubApp["recentDeliveries"]>> = [];
-	try {
-		deliveries = await app.recentDeliveries(1);
-	} catch (error) {
-		out.warn(`could not list webhook deliveries: ${errorMessage(error)}`);
-	}
-	if (deliveries.length > 0) {
-		out.pass(`webhook is delivering (latest ${deliveries[0]?.event} at ${deliveries[0]?.delivered_at})`);
-	} else {
-		out.warn(
-			"webhook activation can't be set through the API: turn it on by hand",
-			`Open ${settings}, check Webhook > Active, and click Save changes. Leave the URL and secret as they are.`,
-		);
-	}
+	// The API cannot read or set Active. Past attempts cannot verify the URL and secret just written.
+	out.warn(
+		"webhook configured; activation and delivery are unverified",
+		`Open ${appSettingsUrl(info, app.apiUrl)}, check Webhook > Active and save. Redeliver a ping in Advanced, then run doctor. Leave the URL and secret as they are.`,
+	);
 }
 
 async function ensureRepoLabels(app: GitHubApp, info: AppInfo, fullName: string, out: Reporter): Promise<void> {

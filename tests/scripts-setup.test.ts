@@ -123,10 +123,27 @@ describe("setup:github", () => {
 		expect(created.every((c) => c.auth === `Bearer ${TOKEN}`)).toBe(true);
 
 		const output = lines.join("\n");
-		expect(output).toContain("webhook activation can't be set through the API");
+		expect(output).toContain("webhook configured; activation and delivery are unverified");
 		expect(output).toContain("https://github.com/organizations/acme/settings/apps/sf");
 		expect(output).not.toContain(SECRET);
 		expect(output).not.toContain(TOKEN);
+	});
+
+	it.each([200, 502])("does not present a historical %s attempt as proof after updating the webhook", async (status_code) => {
+		const { fetch } = githubWorld({ deliveries: [{ id: 1, event: "ping", status_code, delivered_at: "2020-01-01T00:00:00Z" }] });
+		const lines: string[] = [];
+		const code = await setupGithub(
+			new GitHubApp({ env: env(), fetch }),
+			{ gatewayUrl: "https://gw.onrender.com", webhookSecret: SECRET, repos: ["acme/web"] },
+			new Reporter((line) => lines.push(line)),
+		);
+		const output = lines.join("\n");
+		expect(code).toBe(0);
+		expect(output).toContain("activation and delivery are unverified");
+		expect(output).toContain("Webhook > Active");
+		expect(output).toContain("Redeliver a ping");
+		expect(output).not.toContain("webhook is delivering");
+		expect(output).not.toContain(SECRET);
 	});
 
 	it("is idempotent: a second run creates no labels", async () => {
