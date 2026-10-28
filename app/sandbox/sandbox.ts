@@ -11,6 +11,7 @@ import {
 	computeLockfileHash,
 	credentialFile,
 	credentialHelperArgs,
+	ensureRunnerPayload,
 	readToken,
 	resolveBaseHead,
 	runInstall,
@@ -68,7 +69,8 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 	const id = await createFromSnapshot(client, repo, deps);
 	try {
 		await client.waitRunning(id);
-		const info = await verifySandbox(client, id, { waitReady: true });
+		await ensureRunnerPayload(client, id);
+		const info = await verifySandbox(client, id);
 		// verify.sh can only probe /proc as root; a sandbox where it couldn't check never gets a model key.
 		if (!info.runnerNonDumpable) throw new Error(`could not confirm the runner is non-dumpable in ${id}`);
 		const manifest = SnapshotManifestSchema.parse(JSON.parse((await client.download(id, `${APP_DIR}/manifest.json`)).toString("utf8")));

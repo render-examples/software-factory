@@ -4,6 +4,9 @@ This file applies to the whole repository.
 
 ## Use the right guide
 
+- Agent libraries, models, or harness adapters:
+  [docs/configuration.md#agent-harnesses-and-models](docs/configuration.md#agent-harnesses-and-models)
+  and [docs/runbooks/extend.md](docs/runbooks/extend.md#add-an-agent-harness)
 - First deployment:
   [docs/runbooks/setup.md](docs/runbooks/setup.md)
 - Repositories, labels, models, permissions, limits, or snapshots:
@@ -31,8 +34,10 @@ database.
 
 Two dependency rules are mandatory:
 
-1. `app/runner/` imports nothing from the rest of `app/`. It is bundled into
-   a self-contained Sandbox program.
+1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent
+   definitions in `app/agents/registry.ts`, and `app/schemas/`) imports no
+   host-only code: GitHub, Sandboxes, Workflows, claims, events, or config.
+   `tests/agents-catalog.test.ts` enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
    workflows. The gateway holds no GitHub credential and runs no model.
 
@@ -93,8 +98,13 @@ strict output schemas.
   credentials or a model key to the gateway.
 - App permission, event, or label: update
   `scripts/lib/requirements.ts`, setup behavior, and doctor tests.
-- `app/runner/` or `sandbox/`: refresh every repository snapshot after
-  deployment.
+- Agent harness: declare the env var of its key as the adapter's
+  `credential`; setup and `doctor` derive the key list. It must give the
+  model only the factory's tools; add it to `HARNESSES` in
+  `tests/helpers/runner.ts` if it can run the conformance suite.
+- `sandbox/`: refresh every repository snapshot after deployment. Changes to
+  `app/runner/`, `app/harness/`, or agents reach Sandboxes with the Workflows
+  deploy, because each Sandbox replaces a stale runner bundle when it opens.
 
 ## Verify
 

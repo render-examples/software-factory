@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
@@ -6,8 +7,27 @@ import { list as listTar } from "tar";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { config, type RepoContext } from "../app/config/index.js";
 import { buildSnapshot, type OpenSandboxDeps, openSandbox, type SandboxApi, SandboxClient, type SnapshotManifest } from "../app/sandbox/index.js";
+import { runnerPayload } from "../app/sandbox/snapshot.js";
 
+/** The files in a gzipped tar, by path. */
+async function untar(data: Buffer): Promise<Map<string, string>> {
+	const files = new Map<string, string>();
+	await pipeline(
+		Readable.from(data),
+		listTar({
+			onReadEntry: (e) => {
+				const chunks: Buffer[] = [];
+				e.on("data", (c: Buffer) => chunks.push(c));
+				e.on("end", () => files.set(e.path.replace(/^\.\//, ""), Buffer.concat(chunks).toString("utf8")));
+			},
+		}),
+	);
+	return files;
+}
+
+const FAKE_BUNDLE = "// fake runner bundle\n";
 vi.mock("../app/runner/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const TOKEN = "ghs_factoryReadToken0000000000000000000";
 const BASE_SHA = "1".repeat(40);
@@ -178,6 +198,7 @@ describe("buildSnapshot", () => {
 		const tokenUpload = fake.index((c) => c.op === "upload" && c.path === "/tmp/factory-stage/creds/github.com");
 		const order = [
 			fake.execIndex("install-tools.sh"),
+			fake.index((c) => c.op === "upload" && c.path === "/opt/factory/app/env"),
 			fake.execIndex("--self-test"),
 			tokenUpload,
 			fake.execIndex(" clone "),
@@ -231,17 +252,7 @@ describe("buildSnapshot", () => {
 			contentType?: string;
 		};
 		expect(stage.contentType).toBeUndefined();
-		const files = new Map<string, string>();
-		await pipeline(
-			Readable.from(stage.data),
-			listTar({
-				onReadEntry: (e) => {
-					const chunks: Buffer[] = [];
-					e.on("data", (c: Buffer) => chunks.push(c));
-					e.on("end", () => files.set(e.path, Buffer.concat(chunks).toString("utf8")));
-				},
-			}),
-		);
+		const files = await untar(stage.data);
 		expect([...files.keys()].filter((p) => !p.endsWith("/")).sort()).toEqual([
 			"as-runner.sh",
 			"build/git-credential-staged.sh",
@@ -250,10 +261,12 @@ describe("buildSnapshot", () => {
 			"install-tools.sh",
 			"lockfile-hash.sh",
 			"run-agent.sh",
+			"runner/payload.sha256",
 			"runner/runner.mjs",
 			"verify.sh",
 		]);
 		expect(files.get("runner/runner.mjs")).toBe("// fake runner bundle\n");
+		expect(files.get("runner/payload.sha256")).toBe((await runnerPayload()).sha256);
 
 		const env = fake.calls.find((c) => c.op === "upload" && c.path === "/opt/factory/app/env") as { data: string };
 		expect(env.data).toContain("FACTORY_RUN_AS=factory\n");
@@ -344,6 +357,29 @@ describe("openSandbox", () => {
 		await expect(openSandbox(repo(), { kind: "branch", name: "gone" }, deps())).rejects.toThrow("couldn't find remote ref");
 		expect(fake.execIndex("scrub-credentials.sh")).toBeGreaterThan(fake.execIndex("'fetch'"));
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
+	});
+
+	it("replaces a stale runner payload, root-owned, before verifying the sandbox", async () => {
+		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
+		const upload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-runner-[0-9a-f-]{36}\/payload\.tgz$/.test(c.path)) as {
+			path: string;
+			data: Buffer;
+		};
+		const files = await untar(upload.data);
+		expect(files.get("runner.mjs")).toBe(FAKE_BUNDLE);
+		const swap = fake.commands().find((c) => c.includes("mv /opt/factory/app/runner.next /opt/factory/app/runner")) as string;
+		expect(swap).toContain(`= ${sha256(FAKE_BUNDLE)} ]`);
+		expect(swap).toContain("chown -R root:root /opt/factory/app/runner.next");
+		expect(swap).toContain("chmod -R a+rX,go-w /opt/factory/app/runner.next");
+		expect(fake.execIndex("mv /opt/factory/app/runner.next")).toBeGreaterThanOrEqual(0);
+		expect(fake.execIndex("mv /opt/factory/app/runner.next")).toBeLessThan(fake.execIndex("verify.sh"));
+	});
+
+	it("leaves a matching runner payload alone", async () => {
+		const { sha256: current } = await runnerPayload();
+		fake.overrides = (_id, command) => (command.startsWith("cat /opt/factory/app/runner/payload.sha256") ? [out(current), exit(0)] : []);
+		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
+		expect(fake.calls.some((c) => c.op === "upload" && c.path.includes("factory-runner-"))).toBe(false);
 	});
 
 	it("refuses a sandbox where the runner could not be confirmed non-dumpable", async () => {

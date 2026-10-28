@@ -105,7 +105,6 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}
 			sleep: async () => {},
 			services: ["gateway", "workflows"],
 			repos: ["acme/web"],
-			models: { medium: "anthropic/sonnet", large: "anthropic/opus" },
 			...rest,
 		},
 		out,

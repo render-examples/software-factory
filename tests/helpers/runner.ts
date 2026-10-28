@@ -4,13 +4,19 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { fauxAssistantMessage as testStubAssistantMessage, fauxToolCall as testStubToolCall } from "@earendil-works/pi-ai";
+import { z } from "zod";
+import { type Agent, defineAgent } from "../../app/agents/define.js";
+import type { Harness } from "../../app/harness/types.js";
+import { PROTOCOL_VERSION, RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/core/protocol.js";
 import { bundleRunner } from "../../app/runner/bundle.js";
 import { main } from "../../app/runner/main.js";
-import { RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/protocol.js";
-import type { TestStub } from "../../app/runner/test-stub.js";
+import { scriptedPi } from "./pi-scripted.js";
+import { scripted, type TestTurn } from "./scripted-harness.js";
+
+export type { TestTurn };
 
 export const SUBMIT = "submit";
+export const TEST_AGENT_ID = "test-agent";
 
 /** The output schema most runner tests use: what `z.toJSONSchema` emits for a small object. */
 const OUTPUT_SCHEMA = {
@@ -25,6 +31,30 @@ const OUTPUT_SCHEMA = {
 	additionalProperties: false,
 } as const;
 export const GOOD = { summary: "All good.", files: ["README.md"], confidence: "high" };
+
+/** A test agent on `harness`; the runner takes its tools and schema from the input, so these are placeholders. */
+export function testAgent(harness: Harness): Agent {
+	return defineAgent({
+		id: TEST_AGENT_ID,
+		prompt: "../../tests/fixtures/agents/echo.md",
+		harness,
+		tools: ["read", "ls", "bash", "edit", "write"],
+		output: z.object({ summary: z.string() }),
+		maxTurns: 20,
+	});
+}
+
+/**
+ * Every harness the conformance suite runs against, each built around a scripted model that plays the test's turns:
+ * to the harness, a model like any other.
+ */
+export const HARNESSES: ReadonlyArray<{ name: string; make: (turns: readonly TestTurn[]) => Harness }> = [
+	{ name: "pi", make: scriptedPi },
+	{ name: "scripted", make: scripted },
+];
+
+/** The key conformance runs deliver on stdin; scripted models ignore it. */
+export const TEST_KEY = "sk-test-STDINKEY-0123456789";
 
 export interface Workspace {
 	cwd: string;
@@ -55,13 +85,11 @@ export function makeWorkspace(): Workspace {
 export function makeInput(ws: Workspace | undefined, overrides: Partial<RunnerInput> = {}): RunnerInput {
 	const tools: ToolName[] = overrides.tools ?? (ws ? ["read", "ls", "bash"] : []);
 	return {
+		protocol_version: PROTOCOL_VERSION,
 		trace_id: randomUUID(),
-		agent_id: "test-agent",
+		agent_id: TEST_AGENT_ID,
 		system_prompt: "You are a test agent.",
 		message: "Do the thing.",
-		model_provider: "anthropic",
-		model: "claude-sonnet-4-5",
-		thinking_level: "off",
 		tools,
 		output_schema: OUTPUT_SCHEMA,
 		max_turns: 20,
@@ -89,21 +117,24 @@ export function terminal(events: RunnerEvent[]) {
 
 export const toolResults = (events: RunnerEvent[]) => events.flatMap((e) => (e.type === "tool_result" ? [e] : []));
 
-/** Runs main() in-process with deterministic model responses. */
-export async function runWithTestStub(input: unknown, testStub: TestStub, extraArgs: string[] = []) {
+/** One scripted model turn that makes one tool call. */
+export const call = (name: string, args: Record<string, unknown>): TestTurn => ({ calls: [{ name, args }] });
+
+/**
+ * Runs main() in-process through the runner contract as the sandbox does: `key` on the first line of stdin, then
+ * the input; RunnerEvent JSONL out. `harness` runs behind the test agent.
+ */
+export async function runContract(harness: Harness, input: RunnerInput, key = TEST_KEY) {
 	let stdout = "";
-	const code = await main(["--test-stub", ...extraArgs], {
-		stdin: Readable.from([typeof input === "string" ? input : JSON.stringify(input)]),
+	const code = await main(["--key-stdin"], {
+		stdin: Readable.from([`${key}\n${JSON.stringify(input)}`]),
 		write: async (chunk) => {
 			stdout += chunk;
 		},
-		testStub,
+		agents: [testAgent(harness)],
 	});
 	return { code, stdout, events: parseEvents(stdout) };
 }
-
-const toolUse = { stopReason: "toolUse" } as const;
-export const call = (name: string, args: Record<string, unknown>) => testStubAssistantMessage(testStubToolCall(name, args), toolUse);
 
 let runnerPath: string | undefined;
 

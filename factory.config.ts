@@ -1,5 +1,3 @@
-export type ModelTier = "medium" | "large";
-
 export interface RepoConfig {
 	/** Branch that specs are implemented against and snapshots are built from. */
 	baseBranch: string;
@@ -17,8 +15,6 @@ export interface FactoryConfig {
 	commandPrefix: string;
 	/** GitHub permission the triggering actor needs on the repository. */
 	minimumPermission: "triage" | "write" | "maintain" | "admin";
-	/** "provider/model" per tier, from Pi's model registry. */
-	models: Record<ModelTier, string>;
 	limits: {
 		/** Fix rounds after a failed verify in Spec-to-PR. */
 		repairRounds: number;
@@ -53,10 +49,6 @@ export default defineFactoryConfig({
 	},
 	commandPrefix: "/factory",
 	minimumPermission: "write",
-	models: {
-		medium: "anthropic/claude-sonnet-5",
-		large: "anthropic/claude-opus-5",
-	},
 	limits: {
 		repairRounds: 2,
 		maxChangedFiles: 200,

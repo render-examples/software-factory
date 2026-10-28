@@ -31,10 +31,6 @@ export default defineFactoryConfig({
   },
   commandPrefix: "/factory",
   minimumPermission: "write",
-  models: {
-    medium: "anthropic/claude-sonnet-5",
-    large: "anthropic/claude-opus-5",
-  },
   limits: {
     repairRounds: 2,
     maxChangedFiles: 200,
@@ -79,8 +75,6 @@ After adding a repository:
 | `labels.autopilot` | `factory:autopilot` | Runs all three stages through a reviewed draft PR |
 | `commandPrefix` | `/factory` | Prefix for commands such as `/factory cancel` |
 | `minimumPermission` | `write` | Live repository permission required to start work |
-| `models.medium` | `anthropic/claude-sonnet-5` | Triage and PR Reviewer model |
-| `models.large` | `anthropic/claude-opus-5` | Spec writer and implementer model |
 | `limits.repairRounds` | `2` | Repair attempts after failed verification |
 | `limits.maxChangedFiles` | `200` | Maximum files in a published change |
 | `limits.maxFileBytes` | `1000000` | Maximum size of one changed file |
@@ -99,22 +93,41 @@ remove old ones.
 
 Keep `sandbox.timeoutSeconds` at least as long as the longest Workflows task.
 
-## Models
+## Agent harnesses and models
 
-Agent definitions select the `medium` or `large` tier.
-`factory.config.ts` maps each tier to a `provider/model` supported by
-`@earendil-works/pi-ai`, the model client used by the Sandbox runner.
+Each agent runs on a harness: an agent library and its configuration, built by
+an adapter in [`app/harness/`](../app/harness/). The built-in agents share two
+harnesses from [`app/agents/models.ts`](../app/agents/models.ts):
 
-Changing a model mapping requires a Workflows redeploy. To add another
-provider:
+```typescript
+export const piSonnet = pi({ model: getBuiltinModel("anthropic", "claude-sonnet-5") });
+export const piOpus = pi({ model: getBuiltinModel("anthropic", "claude-opus-5") });
+```
 
-1. choose a registered `provider/model`;
-2. find its key name in [`app/runner/keys.ts`](../app/runner/keys.ts);
-3. add the key to `factory-workflows` in [`render.yaml`](../render.yaml);
-4. add it to [`.env.example`](../.env.example) and
-   `SERVICE_ENV` in `scripts/lib/requirements.ts`;
-5. set the key in Render; and
-6. run `npm run doctor -- --service workflows`.
+Triage and PR Reviewer use `piSonnet`; the spec writer and implementer use
+`piOpus`. Each value is named for its library and model. To change a model,
+add or edit a value and rename it to match, or give one agent its own harness
+in its definition. Model IDs are type-checked against the library's
+catalog, so a typo fails `npm run typecheck`. The `pi` adapter also takes
+`thinkingLevel` (`off`, `minimal`, `low`, `medium`, or `high`; default
+`medium`).
+
+Each harness declares the env var of its key, its `credential`. Setup and
+`doctor` derive the keys they manage from the agents' harnesses, so a harness that needs a new key
+needs no other configuration change. The `pi` adapter supports Anthropic
+(`ANTHROPIC_API_KEY`), Google (`GEMINI_API_KEY`), and OpenAI
+(`OPENAI_API_KEY`). After a harness change that needs a new key:
+
+1. add the key to local `.env`;
+2. run `npm run setup:render` to add it to the `software-factory-workflows`
+   env group;
+3. deploy `factory-workflows`; and
+4. run `npm run doctor -- --service workflows`.
+
+### Tool support
+
+Every harness gives the model the factory's own tools, so an agent's tools and
+the read-only shell policy behave the same on any harness.
 
 Use a key dedicated to this deployment with a provider-enforced spend limit.
 The factory has no hard dollar budget.
@@ -124,11 +137,12 @@ The factory has no hard dollar budget.
 | Change | Required action |
 |---|---|
 | Repository, label, permission, or publishing limit | Deploy both services |
-| Model mapping | Deploy `factory-workflows` |
-| Prompt or Workflows service code | Deploy `factory-workflows` |
+| Agent harness or model | Deploy `factory-workflows` |
+| Prompt, agent definition, or Workflows service code | Deploy `factory-workflows` |
 | Gateway routing or validation | Deploy `factory-gateway` |
 | Label, App permission, or subscribed event | Run `npm run setup:github`; update the App when prompted |
-| `app/runner/` or `sandbox/` | Deploy Workflows, then refresh each repository snapshot |
+| `app/runner/` or `app/harness/` sources | Deploy `factory-workflows`; each Sandbox gets the new runner payload when it opens |
+| `sandbox/` | Deploy `factory-workflows`, then refresh each repository snapshot |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 
 ## Snapshots
@@ -261,7 +275,7 @@ service. Every other deployed value comes from an
 | `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Authenticate the GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
-| `ANTHROPIC_API_KEY` | Call the default models |
+| `ANTHROPIC_API_KEY` | Call the default models; each agent's harness declares the key it needs |
 | `GITHUB_API_URL` | Optional GitHub API base URL |
 
 `GITHUB_API_URL` is not in the Blueprint. GitHub Enterprise Server users must

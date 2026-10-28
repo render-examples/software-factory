@@ -58,15 +58,16 @@ questions, the workflow stops and continues when a person replies.
 
 The built-in agents and tasks are examples of the template's extension model:
 
-- Add or replace an agent with a Markdown prompt, a model tier, a bounded Zod
-  output schema, and the minimum tools it needs.
+- Add or replace an agent with a Markdown prompt, a harness (agent library and
+  model), a bounded Zod output schema, and the minimum tools it needs.
+- Run agents on another agent library by adding a harness adapter.
 - Define a GitHub task for work attached to an issue or pull request.
 - Add a plain Workflows task for maintenance or other work without a GitHub
   claim.
 - Route new GitHub events, labels, or commands through the authenticated
   gateway.
-- Change repositories, verification commands, models, permissions, and limits
-  in `factory.config.ts`.
+- Change repositories, verification commands, permissions, and limits in
+  `factory.config.ts`, and agent models in `app/agents/models.ts`.
 
 The Sandbox runner, claim lifecycle, GitHub client, formatting helpers, and
 publishing boundary are reusable building blocks. Start with the

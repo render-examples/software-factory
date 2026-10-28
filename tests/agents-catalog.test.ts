@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { implementer, prReviewer, specWriter, triage } from "../app/agents/index.js";
+import { AGENTS, implementer, prReviewer, specWriter, triage } from "../app/agents/index.js";
+import { bundleInputs } from "../app/runner/bundle.js";
 
 const agents = [triage, specWriter, implementer, prReviewer];
+
+describe("agent registry", () => {
+	it("bundles every built-in agent, each with a non-empty prompt", () => {
+		expect(AGENTS.map((agent) => agent.id)).toEqual(agents.map((agent) => agent.id));
+		for (const agent of AGENTS) expect(agent.prompt.trim(), agent.id).not.toBe("");
+	});
+
+	it("keeps host-only code out of the sandbox runner bundle", { timeout: 60_000 }, async () => {
+		const app = (await bundleInputs()).filter((path) => !path.includes("node_modules/"));
+		const hostOnly = app.filter(
+			(path) => /^app\/(github|sandbox|workflows|claims|gateway|events|config|entrypoints)\//.test(path) || path === "app/agents/run.ts",
+		);
+		expect(hostOnly).toEqual([]);
+		expect(app).toContain("app/agents/registry.ts");
+	});
+});
 
 describe("agent authority", () => {
 	it("gives every agent a unique id and prompt file", () => {
