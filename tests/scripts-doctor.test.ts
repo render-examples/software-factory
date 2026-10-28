@@ -65,6 +65,12 @@ function fakeFetch(world: World = {}) {
 		calls.push({ method, url, auth: headers.Authorization ?? "" });
 		const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 		switch (`${method} ${url.host}${url.pathname}`) {
+			case "GET api.github.com/repos/acme/web":
+				if (world.repositoryResponse) return json(world.repositoryResponse.body, world.repositoryResponse.status);
+				return json({ full_name: "acme/web", has_issues: true, archived: false });
+			case "GET api.github.com/repos/acme/web/branches/release%2Fcandidate":
+				if (world.branchResponse) return json(world.branchResponse.body, world.branchResponse.status);
+				return json({ name: "release/candidate", commit: { sha: "a".repeat(40) } });
 			case "GET api.github.com/app":
 				return json(world.app ?? APP);
 			case "GET api.github.com/app/hook/config":
@@ -80,12 +86,6 @@ function fakeFetch(world: World = {}) {
 				return json(world.deliveries ?? [{ id: 1, delivered_at: "2026-10-18T00:00:00Z", status_code: 202, event: "issues" }]);
 			case "GET api.github.com/repos/acme/web/installation":
 				return world.installed === false ? json({ message: "Not Found" }, 404) : json({ id: 7, permissions: APP.permissions, events: APP.events });
-			case "GET api.github.com/repos/acme/web":
-				if (world.repositoryResponse) return json(world.repositoryResponse.body, world.repositoryResponse.status);
-				return json({ full_name: "acme/web", has_issues: true, archived: false });
-			case "GET api.github.com/repos/acme/web/branches/release%2Fcandidate":
-				if (world.branchResponse) return json(world.branchResponse.body, world.branchResponse.status);
-				return json({ name: "release/candidate", commit: { sha: "a".repeat(40) } });
 			case "POST api.github.com/app/installations/7/access_tokens":
 				return json({ token: TOKEN, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
 			case "GET api.github.com/repos/acme/web/labels":
