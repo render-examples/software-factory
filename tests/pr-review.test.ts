@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FactoryEvent } from "../app/events/index.js";
+import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
@@ -9,7 +10,6 @@ vi.mock("../app/events/index.js", () => ({
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
-const { config } = await import("../app/config/index.js");
 const { GitHubError, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { runPrReview } = await import("../app/workflows/pr-review/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -26,10 +26,6 @@ type RunAgent = typeof import("../app/agents/index.js").runAgent;
 type PrReviewDeps = import("../app/workflows/pr-review/index.js").PrReviewDeps;
 
 const BOT = "software-factory[bot]";
-const REPO = Object.keys(config.repos)[0];
-if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
-const [BUILD_COMMAND, TEST_COMMAND] = config.repos[REPO].verify;
-if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two verify commands");
 const HEAD = "a".repeat(40);
 const MERGE_BASE = "b".repeat(40);
 const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-root" } };
@@ -382,6 +378,22 @@ describe("runPrReview", () => {
 			runId: "trn-run",
 		});
 		expect(gh.status()).toContain("pullrequestreview-9");
+	});
+
+	it.each(REPOSITORY_CASES)("reviews $repo on $baseBranch with its own verification commands", async ({ repo, baseBranch, verify }) => {
+		gh.pull = { ...gh.pull, baseRef: baseBranch };
+		const result = await runPrReview(ctx, { ...input, repo }, deps());
+
+		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
+		expect(opened).toEqual([{ kind: "pull", number: 34, headSha: HEAD, baseBranch }]);
+		expect(sandbox.execs.map((entry) => entry.command)).toEqual([`git merge-base 'refs/remotes/origin/${baseBranch}' HEAD`, ...verify]);
+		expect(sandbox.execs.every((entry) => entry.opts?.asRunner)).toBe(true);
+		const message = agents.call("pr-reviewer").message;
+		expect(message).toContain(`# Pull request #34 in ${repo}`);
+		if (verify.length === 0) expect(message).toContain("No verify commands are configured.");
+		for (const command of verify) expect(message).toContain(`\`${command}\`: passed`);
+		expect(gh.posted[0]).toMatchObject({ commitId: HEAD, event: "COMMENT" });
+		expect(sandbox.closed).toBe(1);
 	});
 
 	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {

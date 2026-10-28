@@ -1,5 +1,6 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import { describe, expect, it, vi } from "vitest";
+import { REPO } from "./fixtures/config.js";
 
 const buildSnapshot = vi.fn(async (_client: unknown, repo: { fullName: string }, sha: string) => ({
 	id: "snp-1",
@@ -10,12 +11,10 @@ const buildSnapshot = vi.fn(async (_client: unknown, repo: { fullName: string },
 vi.mock("../app/sandbox/index.js", () => ({ buildSnapshot, sandboxClient: async () => ({ fake: true }) }));
 
 const { refreshSnapshot } = await import("../app/workflows/refresh-snapshot.js");
-const { config, TASKS } = await import("../app/config/index.js");
+const { TASKS } = await import("../app/config/index.js");
 
 const ctx = { metadata: {}, run: async () => undefined } as unknown as TaskContext;
 const SHA = "a".repeat(40);
-const REPO = Object.keys(config.repos)[0];
-if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
 
 describe("refresh-snapshot task", () => {
 	it("registers under its task name and builds the configured repository at the pushed commit", async () => {

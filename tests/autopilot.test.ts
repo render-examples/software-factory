@@ -6,6 +6,7 @@ import type { GitHubClient, IssueComment } from "../app/github/index.js";
 import { renderMarker } from "../app/github/index.js";
 import type { SpecToPrHandoff } from "../app/workflows/spec-to-pr/index.js";
 import type { TriageHandoff } from "../app/workflows/triage/spec.js";
+import { REPO } from "./fixtures/config.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
@@ -20,8 +21,6 @@ const { triageWorkflow } = await import("../app/workflows/triage/index.js");
 const { specToPrWorkflow } = await import("../app/workflows/spec-to-pr/index.js");
 const { prReviewWorkflow } = await import("../app/workflows/pr-review/index.js");
 
-const REPO = Object.keys(config.repos)[0];
-if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
 const SPEC_HASH = "b".repeat(64);
 
 const input = { repo: REPO, installationId: 5, issue: 12, actor: "maintainer" };

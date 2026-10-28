@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FactoryEvent } from "../app/events/index.js";
+import { REPO as REPO_NAME } from "./fixtures/config.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
@@ -9,7 +10,7 @@ vi.mock("../app/events/index.js", () => ({
 }));
 
 const { AgentError } = await import("../app/agents/index.js");
-const { config, requireRepo } = await import("../app/config/index.js");
+const { requireRepo } = await import("../app/config/index.js");
 const { renderMarker, parseMarker } = await import("../app/github/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
 type IssueComment = import("../app/github/index.js").IssueComment;
@@ -17,8 +18,6 @@ type Permission = import("../app/github/index.js").Permission;
 const { finishStatus, readStatus, takeOver, WORKING_LABEL, withClaim } = await import("../app/claims/index.js");
 
 const BOT = "software-factory[bot]";
-const REPO_NAME = Object.keys(config.repos)[0];
-if (!REPO_NAME) throw new Error("factory.config.ts must configure at least one repository");
 const REPO = requireRepo(REPO_NAME, 5);
 
 class FakeGitHub {
