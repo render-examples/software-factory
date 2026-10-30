@@ -225,7 +225,17 @@ the factory adds it back so a human reply can start the continuation. Use
 ## Check a deployment
 
 `doctor` is read-only, does not print secret values, and exits nonzero when a
-required check fails.
+required check fails or cannot be verified. This includes unreachable task APIs,
+missing task registration, and installation permissions or events that have not
+been accepted. The gateway intentionally skips GitHub checks because it has no
+App credentials.
+
+Webhook delivery is verified only when the latest attempt went to the configured
+gateway and received a 2xx response. If no such evidence is available, confirm
+Webhook > Active in the App's settings, save, and redeliver a ping from Advanced
+before rerunning doctor. GitHub's API does not report the Active setting, so a
+successful delivery proves delivery only at the reported time; it cannot guarantee
+that the hook has not since been disabled.
 
 From a local checkout, this checks the services and credentials represented
 by local `.env`:

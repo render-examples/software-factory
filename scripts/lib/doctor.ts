@@ -1,4 +1,5 @@
 /** doctor: read-only checks of one or both services' environment, the GitHub App, and Workflows tasks. */
+import { z } from "zod";
 import type { Agent } from "../../app/agents/define.js";
 import { AGENTS } from "../../app/agents/registry.js";
 import { TASKS } from "../../app/config/index.js";
@@ -109,6 +110,7 @@ async function checkGitHub(opts: DoctorOptions, out: Reporter): Promise<void> {
 
 async function checkWebhook(app: GitHubApp, info: Awaited<ReturnType<GitHubApp["getApp"]>>, env: Env, out: Reporter) {
 	const settings = appSettingsUrl(info, app.apiUrl);
+	let configuredUrl: string | undefined;
 	try {
 		const hook = await app.getHookConfig();
 		const url = hook.url ? safeUrl(hook.url) : null;
@@ -117,36 +119,45 @@ async function checkWebhook(app: GitHubApp, info: Awaited<ReturnType<GitHubApp["
 		} else if (url.protocol !== "https:" || !url.pathname.replace(/\/+$/, "").endsWith(WEBHOOK_PATH)) {
 			out.fail(`webhook URL ${hook.url} is not an https …${WEBHOOK_PATH} URL`, "Rerun `npm run setup:github`");
 		} else {
+			configuredUrl = hook.url;
 			out.pass(`webhook URL is ${hook.url}`);
 			const external = env.RENDER_EXTERNAL_URL?.trim();
 			if (external && safeUrl(external)?.origin !== url.origin) {
-				out.warn(`webhook URL doesn't point at this service (${external})`);
+				out.fail(`webhook URL doesn't point at this service (${external})`, "Rerun `npm run setup:github` with this gateway URL");
 			}
 		}
 		if (hook.content_type === "json") out.pass("webhook content type is json");
 		else out.fail(`webhook content type is ${hook.content_type ?? "unset"}, not json`, "Rerun `npm run setup:github`");
-		if (String(hook.insecure_ssl ?? "0") !== "0") out.warn("webhook skips TLS verification", "Set insecure_ssl to 0");
+		if (String(hook.insecure_ssl ?? "0") !== "0") out.fail("webhook skips TLS verification", "Set insecure_ssl to 0");
 	} catch (error) {
 		out.fail(`could not read the webhook config: ${errorMessage(error)}`);
 	}
 
-	// GET /app/hook/config doesn't report whether the hook is active; recent deliveries do.
+	// The config endpoint omits Active. A successful old or differently targeted attempt cannot establish current delivery health.
+	const fix = `Open ${settings}, check Webhook > Active and save; redeliver a ping in Advanced, then rerun doctor`;
 	try {
-		const [latest] = await app.recentDeliveries(10);
+		const [latest] = await app.recentDeliveries(1);
 		if (!latest) {
-			out.warn("no webhook deliveries yet, so the hook may be inactive", `Check Webhook > Active in ${settings}`);
-		} else if (latest.status_code >= 200 && latest.status_code < 300) {
-			out.pass(`webhook is active: latest delivery (${latest.event}, ${latest.delivered_at}) got ${latest.status_code}`);
-		} else if (latest.status_code === 401) {
+			out.fail("webhook activation and delivery are unverified: no deliveries yet", fix);
+			return;
+		}
+		const delivery = await app.hookDelivery(latest.id);
+		if (!configuredUrl || delivery.url !== configuredUrl) {
+			out.fail("latest webhook delivery was not sent to the configured gateway", fix);
+			return;
+		}
+		if (delivery.status_code >= 200 && delivery.status_code < 300) {
+			out.pass(`latest delivery to the configured gateway (${delivery.event}, ${delivery.delivered_at}) got ${delivery.status_code}`);
+		} else if (delivery.status_code === 401) {
 			out.fail(
 				"the gateway rejected the latest delivery's signature (401)",
-				"The gateway's GITHUB_WEBHOOK_SECRET differs from the App's: rerun setup:github with the gateway's value",
+				"The gateway's GITHUB_WEBHOOK_SECRET differs from the App's: rerun setup:github with the gateway's value, then redeliver a ping",
 			);
 		} else {
-			out.warn(`latest webhook delivery (${latest.event}, ${latest.delivered_at}) got ${latest.status_code || "no response"}`);
+			out.fail(`latest webhook delivery got ${delivery.status_code || "no response"}`, fix);
 		}
 	} catch (error) {
-		out.warn(`could not list webhook deliveries: ${errorMessage(error)}`);
+		out.fail(`webhook delivery is unverified: ${errorMessage(error)}`, fix);
 	}
 }
 
@@ -162,10 +173,10 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 		out.pass(`installed (installation ${installation.id})`);
 		const perms = missingPermissions(installation.permissions);
 		if (perms.length) {
-			out.warn(`installation hasn't granted: ${perms.join(", ")}`, "An owner must accept the App's updated permissions in the installation settings");
+			out.fail(`installation hasn't granted: ${perms.join(", ")}`, "An owner must accept the App's updated permissions in the installation settings");
 		}
 		const events = missingEvents(installation.events);
-		if (events.length) out.warn(`installation isn't receiving: ${events.join(", ")}`, "Accept the App's updated events");
+		if (events.length) out.fail(`installation isn't receiving: ${events.join(", ")}`, "Accept the App's updated events");
 
 		const token = await app.installationToken(installation.id, name, { issues: "read", metadata: "read" });
 		out.addSecrets(token);
@@ -183,15 +194,17 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 	}
 }
 
+const taskRows = z.array(z.object({ task: z.object({ name: z.string().min(1).max(255) }) })).max(100);
+
 /**
  * The Render API's GET /v1/tasks, filtered by slug, for each task the gateway starts. The SDK's workflows client
- * has no list-tasks method, so this is a plain request. A non-auth API error skips rather than fails.
+ * has no list-tasks method, so this is a plain request. Unverified registration must not pass readiness.
  */
 async function checkTasks(opts: DoctorOptions, out: Reporter): Promise<void> {
 	out.heading("Workflows tasks");
 	const apiKey = opts.env.RENDER_API_KEY?.trim();
 	if (!apiKey) {
-		out.skip("task registration: RENDER_API_KEY is not set");
+		out.fail("task registration is unverified: RENDER_API_KEY is not set", "Set RENDER_API_KEY and rerun doctor");
 		return;
 	}
 	const slug = opts.env.RENDER_WORKFLOW_SLUG?.trim() || "factory-workflows";
@@ -206,7 +219,7 @@ async function checkTasks(opts: DoctorOptions, out: Reporter): Promise<void> {
 			signal: AbortSignal.timeout(15_000),
 		});
 	} catch (error) {
-		out.skip(`task registration: Render API unreachable (${errorMessage(error)})`);
+		out.fail(`task registration is unverified: Render API unreachable (${errorMessage(error)})`, "Check connectivity and rerun doctor");
 		return;
 	}
 	if (response.status === 401 || response.status === 403) {
@@ -214,14 +227,18 @@ async function checkTasks(opts: DoctorOptions, out: Reporter): Promise<void> {
 		return;
 	}
 	if (!response.ok) {
-		out.skip(`task registration: the Render API returned ${response.status} for GET /v1/tasks`);
+		out.fail(`task registration is unverified: the Render API returned ${response.status} for GET /v1/tasks`, "Retry doctor after the API recovers");
 		return;
 	}
-	const rows = (await response.json().catch(() => [])) as { task?: { name?: string } }[];
-	const found = new Set(rows.map((row) => row.task?.name).filter((name): name is string => !!name));
+	const result = taskRows.safeParse(await response.json().catch(() => undefined));
+	if (!result.success) {
+		out.fail("task registration is unverified: Render returned an invalid task list", "Retry doctor; if this persists, check the Render API response schema");
+		return;
+	}
+	const found = new Set(result.data.map((row) => row.task.name));
 	const missing = expected.filter((task) => !found.has(task));
 	if (found.size === 0) {
-		out.warn(`no tasks found for workflow ${slug}`, "Deploy factory-workflows; on the gateway, RENDER_WORKFLOW_SLUG must be its slug");
+		out.fail(`no tasks found for workflow ${slug}`, "Deploy factory-workflows; on the gateway, RENDER_WORKFLOW_SLUG must be its slug");
 	} else if (missing.length) {
 		out.fail(`tasks not registered on ${slug}: ${missing.join(", ")}`, "Redeploy factory-workflows");
 	} else {

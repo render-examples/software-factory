@@ -1,5 +1,6 @@
 /** GitHub App access for the setup scripts and doctor, from injected env and fetch rather than process globals. */
 import { createPrivateKey } from "node:crypto";
+import { z } from "zod";
 import { appJwt, githubApiUrl, normalizePrivateKey } from "../../app/github/auth.js";
 import { GitHubHttp } from "../../app/github/request.js";
 import { GitHubError } from "../../app/github/types.js";
@@ -30,12 +31,14 @@ export interface HookConfig {
 	secret?: string;
 }
 
-export interface HookDelivery {
-	id: number;
-	delivered_at: string;
-	status_code: number;
-	event: string;
-}
+const hookDelivery = z.object({
+	id: z.number().int().positive(),
+	delivered_at: z.iso.datetime(),
+	status_code: z.number().int().min(0).max(599),
+	event: z.string().min(1).max(100),
+});
+
+export type HookDelivery = z.infer<typeof hookDelivery>;
 
 export interface Installation {
 	id: number;
@@ -97,8 +100,19 @@ export class GitHubApp {
 	}
 
 	/** The most recent deliveries, newest first. */
-	recentDeliveries(perPage = 10): Promise<HookDelivery[]> {
-		return this.http.json<HookDelivery[]>("GET", "/app/hook/deliveries", { query: { per_page: perPage } });
+	async recentDeliveries(perPage = 10): Promise<HookDelivery[]> {
+		const response = await this.http.json<unknown>("GET", "/app/hook/deliveries", { query: { per_page: perPage } });
+		const result = z.array(hookDelivery).max(100).safeParse(response);
+		if (!result.success) throw new Error("GitHub returned an invalid webhook delivery list");
+		return result.data;
+	}
+
+	/** Only retain delivery metadata: request/response payloads can contain private repository content. */
+	async hookDelivery(id: number): Promise<HookDelivery & { url: string }> {
+		const response = await this.http.json<unknown>("GET", `/app/hook/deliveries/${id}`);
+		const result = hookDelivery.extend({ url: z.url() }).safeParse(response);
+		if (!result.success) throw new Error("GitHub returned invalid webhook delivery metadata");
+		return result.data;
 	}
 
 	/** The App's installation on a repository, or null when it isn't installed there. */
