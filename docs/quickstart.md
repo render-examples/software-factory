@@ -12,11 +12,19 @@ Prepare:
 - a Render workspace with Sandboxes access in Oregon;
 - a Render API key;
 - a dedicated Anthropic API key with a provider-enforced spend limit;
-- admin access to each target GitHub repository; and
+- admin access to each target GitHub repository;
+- Issues enabled on each target repository (Settings > General > Features); and
 - the Node.js version in [`.node-version`](../.node-version).
 
 The Blueprint creates paid resources: a Starter web service and a Workflows
 service. Sandbox and model usage are billed separately.
+
+Setup checks the pinned Node version locally, then checks workspace and
+repository access before writing Render environment groups. Disabled Issues
+or an inaccessible base branch blocks that preflight. See the
+[pre-deployment check](runbooks/setup.md#phase-6-create-the-render-env-groups)
+for the command and its limits; model and Sandbox execution are verified by
+the separately approved smoke test.
 
 ## Start the setup
 

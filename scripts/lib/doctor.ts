@@ -6,12 +6,15 @@ import { TASKS } from "../../app/config/index.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
+import { checkRepositoryPrerequisites } from "./repo-prerequisites.js";
 import { envGroupFor, LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
 export interface DoctorOptions extends ScriptDeps {
 	services: readonly Service[];
 	repos: readonly string[];
+	/** The CLI supplies configured branches; callers without branch checks still verify repository capabilities. */
+	baseBranches?: Readonly<Record<string, string>>;
 	/** The agents whose harnesses to check; defaults to every agent the factory runs. */
 	agents?: readonly Agent[];
 	renderApiUrl?: string;
@@ -104,7 +107,7 @@ async function checkGitHub(opts: DoctorOptions, out: Reporter): Promise<void> {
 	else out.pass("App subscribes to issues, issue_comment, pull_request, push");
 
 	await checkWebhook(app, info, env, out);
-	for (const fullName of opts.repos) await checkRepo(app, info, fullName, out);
+	for (const fullName of opts.repos) await checkRepo(app, info, fullName, out, opts.baseBranches?.[fullName]);
 	out.addSecrets(...app.mintedTokens);
 }
 
@@ -161,7 +164,7 @@ async function checkWebhook(app: GitHubApp, info: Awaited<ReturnType<GitHubApp["
 	}
 }
 
-async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string }, fullName: string, out: Reporter) {
+async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string }, fullName: string, out: Reporter, baseBranch?: string) {
 	out.heading(fullName);
 	try {
 		const { owner, name } = splitRepo(fullName);
@@ -178,9 +181,14 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 		const events = missingEvents(installation.events);
 		if (events.length) out.fail(`installation isn't receiving: ${events.join(", ")}`, "Accept the App's updated events");
 
-		const token = await app.installationToken(installation.id, name, { issues: "read", metadata: "read" });
+		const token = await app.installationToken(installation.id, name, {
+			issues: "read",
+			metadata: "read",
+			...(baseBranch ? { contents: "read" } : {}),
+		});
 		out.addSecrets(token);
 		out.pass("installation token minted");
+		await checkRepositoryPrerequisites(app.repo(owner, name, token), fullName, baseBranch, out);
 
 		const existing = new Set((await app.repo(owner, name, token).listLabels()).map((l) => l.name.toLowerCase()));
 		const missing = LABELS.filter((label) => !existing.has(label.name.toLowerCase()));
