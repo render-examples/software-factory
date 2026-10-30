@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FactoryEvent } from "../app/events/index.js";
+import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
@@ -26,10 +27,6 @@ type PublishResult = import("../app/changeset/index.js").PublishResult;
 
 const BOT = "software-factory[bot]";
 const BOT_ID = 4242;
-const REPO = Object.keys(config.repos)[0];
-if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
-const [BUILD_COMMAND, TEST_COMMAND] = config.repos[REPO].verify;
-if (!BUILD_COMMAND || !TEST_COMMAND) throw new Error("test fixture requires two verify commands");
 const BASE = "b".repeat(40);
 const PR_HEAD = "c".repeat(40);
 const ISSUE = 12;
@@ -289,6 +286,22 @@ describe("implement, verify, and publish", () => {
 		expect(pr?.body).toContain("✅ passed");
 		expect(t.status().data?.state).toBe("done");
 		expect(t.status().body).toContain(`[Draft PR #34](https://github.com/${REPO}/pull/34)`);
+		expect(t.sandbox.close).toHaveBeenCalledOnce();
+	});
+
+	it.each(REPOSITORY_CASES)("publishes $repo against $baseBranch with its own verification commands", async ({ repo, baseBranch, verify }) => {
+		const t = setup({ input: { ...input, repo } });
+		const outcome = await t.run();
+
+		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
+		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: repo }), { kind: "branch", name: baseBranch });
+		expect(verifyCommands(t.execs)).toEqual(verify);
+		expect(t.publish).toHaveBeenCalledWith(expect.objectContaining({ repo: expect.objectContaining({ fullName: repo }) }));
+		expect(t.gh.ensurePull).toHaveBeenCalledWith(expect.objectContaining({ base: baseBranch, draft: true }));
+		const message = t.calls[0]?.message ?? "";
+		expect(message).toContain(`issue #${ISSUE} in ${repo}`);
+		if (verify.length === 0) expect(message).toContain("none configured");
+		for (const command of verify) expect(message).toContain(`- \`${command}\``);
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 

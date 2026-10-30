@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { config } from "../app/config/index.js";
 import { AutopilotInput, PrReviewInput, SpecToPrInput, TriageInput } from "../app/schemas/tasks.js";
 import { route } from "../app/gateway/routes.js";
+import { REPO, REPOSITORY_CASES } from "./fixtures/config.js";
 
-const REPO = Object.keys(config.repos)[0] as string;
 const BASE = config.repos[REPO]?.baseBranch as string;
 const DELIVERY = "delivery-1";
 const SHA = "a".repeat(40);
@@ -111,6 +111,17 @@ describe("route: starts", () => {
 			input: { repo: REPO, installationId: 7, number: 12, kind: "issue", actor: "maintainer" },
 			subject: "issue#12",
 		});
+	});
+
+	it.each(REPOSITORY_CASES)("routes $repo only from its own base branch $baseBranch", ({ repo, baseBranch }) => {
+		const payload = push({ repository: { full_name: repo }, ref: `refs/heads/${baseBranch}` });
+		expect(route("push", payload, DELIVERY)).toEqual({
+			kind: "start",
+			task: "refresh-snapshot",
+			input: { repo, installationId: 7, sha: SHA },
+			idempotencyKey: `${repo}@${SHA}`,
+		});
+		expect(route("push", { ...payload, ref: "refs/heads/main" }, DELIVERY).kind).toBe("ignore");
 	});
 
 	it("push to the base branch starts refresh-snapshot keyed by repo@sha", () => {

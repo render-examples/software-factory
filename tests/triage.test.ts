@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FactoryEvent } from "../app/events/index.js";
+import { REPO } from "./fixtures/config.js";
 
 const events: FactoryEvent[] = [];
 vi.mock("../app/events/index.js", () => ({
@@ -24,8 +25,6 @@ type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 
 const BOT = "software-factory[bot]";
-const REPO = Object.keys(config.repos)[0];
-if (!REPO) throw new Error("factory.config.ts must configure at least one repository");
 const APPROVED = config.labels.specApproved;
 const ctx = { metadata: { taskRunId: "trn-triage", rootTaskRunId: "trn-triage" } };
 const input = { repo: REPO, installationId: 5, issue: 12, actor: "maintainer" };

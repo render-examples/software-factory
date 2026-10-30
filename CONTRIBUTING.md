@@ -62,7 +62,10 @@ npm run check
 ```
 
 It runs Biome, TypeScript, and Vitest. Tests fake GitHub, Render, and model
-calls.
+calls. Vitest replaces `factory.config.ts` with the explicit configuration in
+`tests/fixtures/config.ts`, so customizing your deployment does not change test
+subjects, permissions, or expected verification commands. Keep configuration
+compatibility cases in that fixture and exercise them through routing and tasks.
 
 Run additional checks when relevant:
 
