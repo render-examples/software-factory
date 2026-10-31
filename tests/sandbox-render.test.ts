@@ -35,6 +35,8 @@ const HEAD_SHA = "2".repeat(40);
 const HASH = "a".repeat(64);
 const NAME = "factory-acme-web";
 
+const allowList = (...domains: string[]) => ({ type: "allow-list", rules: domains.map((domain) => ({ domain })) });
+
 const repo = (overrides: Partial<RepoContext["config"]> = {}): RepoContext => ({
 	owner: "acme",
 	name: "web",
@@ -193,7 +195,7 @@ describe("buildSnapshot", () => {
 
 		const creates = fake.calls.filter((c) => c.op === "create");
 		expect(creates).toHaveLength(1);
-		expect(creates[0]?.input).toEqual({ timeoutSeconds: 3_600, networkPolicy: { type: "allow-all" } });
+		expect(creates[0]?.input).toEqual({ timeoutSeconds: 3_600, networkPolicy: allowList("github.com", "deb.debian.org") });
 
 		const tokenUpload = fake.index((c) => c.op === "upload" && c.path === "/tmp/factory-stage/creds/github.com");
 		const order = [
@@ -275,6 +277,20 @@ describe("buildSnapshot", () => {
 		expect(env.data).toContain("FACTORY_NODE=/usr/bin/node\n");
 	});
 
+	it("adds the repository's egress hosts to the builder's allow-list, once each", async () => {
+		await buildSnapshot(client(), repo({ egress: ["registry.npmjs.org", "github.com"] }), BASE_SHA, { readToken });
+		expect(fake.inputs("create")).toEqual([
+			{ timeoutSeconds: 3_600, networkPolicy: allowList("github.com", "deb.debian.org", "registry.npmjs.org") },
+		]);
+	});
+
+	it("names the allow-list when install fails, since a blocked host looks like a network flake", async () => {
+		fake.overrides = (_id, command) => (command.includes("'npm ci'") ? [out("npm error ECONNRESET\n", "stderr"), exit(1)] : []);
+		await expect(buildSnapshot(client(), repo(), BASE_SHA, { readToken })).rejects.toThrow(
+			'Sandbox egress is limited to github.com, deb.debian.org. If install needs another host, add it to egress for "acme/web" in factory.config.ts.',
+		);
+	});
+
 	it("never installs when the scrub fails", async () => {
 		fake.overrides = (_id, command) =>
 			command.includes("scrub-credentials.sh") ? [out("scrub-credentials: token for github.com found in x\n", "stderr"), exit(1)] : [];
@@ -294,7 +310,7 @@ describe("openSandbox", () => {
 
 		const creates = fake.calls.filter((c) => c.op === "create");
 		expect(creates.map((c) => c.input)).toEqual([
-			{ snapshotName: NAME, networkPolicy: { type: "allow-all" }, timeoutSeconds: config.sandbox.timeoutSeconds },
+			{ snapshotName: NAME, networkPolicy: allowList("github.com", "api.anthropic.com"), timeoutSeconds: config.sandbox.timeoutSeconds },
 		]);
 		expect(fake.commands().filter((c) => c.includes("verify.sh"))).toEqual(["bash /opt/factory/app/verify.sh"]);
 
@@ -320,6 +336,15 @@ describe("openSandbox", () => {
 		// Lockfiles unchanged: no reinstall.
 		expect(fake.execIndex("'bash' '-c' 'npm ci'")).toBe(-1);
 		expect(fake.calls.some((c) => c.op === "terminate")).toBe(false);
+	});
+
+	it("allows the repository's egress hosts, and lifts the limit only for a repository configured allow-all", async () => {
+		await openSandbox(repo({ egress: ["proxy.golang.org", "*.example.com"] }), { kind: "branch", name: "main" }, deps());
+		await openSandbox(repo({ egress: "allow-all" }), { kind: "branch", name: "main" }, deps());
+		expect(fake.inputs("create").map((input) => (input as { networkPolicy: unknown }).networkPolicy)).toEqual([
+			allowList("github.com", "api.anthropic.com", "proxy.golang.org", "*.example.com"),
+			{ type: "allow-all" },
+		]);
 	});
 
 	it("builds the snapshot inline exactly once when it is missing, then retries", async () => {

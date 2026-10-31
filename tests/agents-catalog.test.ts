@@ -33,6 +33,10 @@ describe("agent authority", () => {
 		expect(agents.every((agent) => agent.tools.length > 0)).toBe(true);
 	});
 
+	it("lets every agent's sandbox reach only its model provider's API beyond the factory's own hosts", () => {
+		for (const agent of agents) expect(agent.harness.egress, agent.id).toEqual(["api.anthropic.com"]);
+	});
+
 	it("rejects unknown fields in every object an agent can submit, so a misspelled field is named in the error", () => {
 		const looseObjects = (schema: unknown, path: string): string[] => {
 			if (typeof schema !== "object" || schema === null) return [];

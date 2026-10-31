@@ -5,6 +5,12 @@ export interface RepoConfig {
 	install?: string;
 	/** Commands that must pass before a PR opens and that PR Reviewer runs. */
 	verify: string[];
+	/**
+	 * HTTPS hosts this repository's sandboxes may reach beyond github.com and the agents' model APIs: package
+	 * registries and anything `install` or `verify` downloads. Exact hostnames; `*.` only as the leftmost label.
+	 * Every other destination is blocked. "allow-all" lifts the restriction for this repository.
+	 */
+	egress?: string[] | "allow-all";
 }
 
 export interface FactoryConfig {
@@ -39,6 +45,7 @@ export default defineFactoryConfig({
 			baseBranch: "main",
 			install: "npm ci",
 			verify: ["npm run build", "npm test"],
+			egress: ["registry.npmjs.org"],
 		},
 	},
 	labels: {

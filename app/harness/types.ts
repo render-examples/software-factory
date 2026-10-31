@@ -12,4 +12,9 @@ export interface Harness extends HarnessRuntime {
 	 * for each run; setup and doctor manage it.
 	 */
 	readonly credential: string;
+	/**
+	 * The HTTPS hosts the harness calls from the sandbox, such as its model provider's API. Sandboxes block every
+	 * destination not on their allow-list, so a host missing here makes every model request fail.
+	 */
+	readonly egress: readonly string[];
 }

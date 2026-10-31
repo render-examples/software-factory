@@ -1,6 +1,27 @@
-import config, { type RepoConfig } from "../../factory.config.js";
+import config, { type FactoryConfig, type RepoConfig } from "../../factory.config.js";
 
 export { config, type RepoConfig };
+
+/** A lowercase hostname with at least one dot, as the Sandbox egress rules take it; `*.` only as the leftmost label. */
+const EGRESS_HOST = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Throws naming the first host that isn't a bare hostname: no scheme, port, path, or uppercase. */
+export function assertEgressHosts(hosts: readonly string[], where: string): void {
+	for (const host of hosts) {
+		if (!EGRESS_HOST.test(host)) {
+			throw new Error(`${where}: egress host ${JSON.stringify(host)} must be a lowercase hostname such as registry.npmjs.org or *.example.com`);
+		}
+	}
+}
+
+/** Checks what the type system can't. Runs when this module loads, so an invalid config stops every service at startup. */
+export function validateConfig(c: FactoryConfig): void {
+	for (const [fullName, repo] of Object.entries(c.repos)) {
+		if (repo.egress !== undefined && repo.egress !== "allow-all") assertEgressHosts(repo.egress, `factory.config.ts repos["${fullName}"]`);
+	}
+}
+
+validateConfig(config);
 
 /** One repository a run acts on, resolved from the webhook that started it. */
 export interface RepoContext {

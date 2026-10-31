@@ -142,7 +142,10 @@ driver that only translates the library.
    configuration and returns a `Harness` (`app/harness/types.ts`):
    - `name` and `label` name the library and model before a run;
    - `credential` is the env var on the Workflows service that holds its key;
-     the host sends its value into the Sandbox; and
+     the host sends its value into the Sandbox;
+   - `egress` lists the HTTPS hosts the library calls from the Sandbox, such
+     as its model API. Sandboxes block every host not on their allow-list, so
+     derive it from the library's configuration when you can; and
    - `driver` is a `Driver` (`app/runner/core/driver.ts`).
 2. Write the driver in `app/runner/<name>/`. `open(ctx)` resolves the model
    and reports the library version; the session's `run()` converses with the

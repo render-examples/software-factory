@@ -16,6 +16,7 @@ export function scripted(turns: readonly TestTurn[]): Harness {
 		name: "scripted",
 		label: "scripted",
 		credential: "SCRIPTED_API_KEY",
+		egress: [],
 		driver: { open: (ctx) => ({ version: "1.0.0", model: "scripted", run: () => play(ctx, turns) }) },
 	};
 }

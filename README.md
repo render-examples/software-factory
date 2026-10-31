@@ -86,9 +86,11 @@ tests, authority rules, deploys, and snapshot refreshes.
   submodules, oversized changes, and branches with human commits.
 - GitHub must reproduce the candidate tree SHA before the factory publishes
   it.
+- Sandboxes reach only an HTTPS allow-list: GitHub, the agents' model APIs,
+  and the hosts each repository's install and verify commands need.
 
-Sandboxes use allow-all egress, and the model key exists in runner memory
-during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
+Allowed hosts can still carry data out, and the model key exists in runner
+memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
 and [residual risks](docs/architecture.md#residual-risks) before using private
 code or untrusted pull requests.
 

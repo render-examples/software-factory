@@ -1,15 +1,7 @@
 import { z } from "zod";
-import type { SandboxApi, SandboxClient } from "./client.js";
+import type { SandboxClient } from "./client.js";
 import { errorMessage } from "./shell.js";
 import { APP_DIR } from "./types.js";
-
-type NetworkPolicy = NonNullable<NonNullable<Parameters<SandboxApi["create"]>[0]>["networkPolicy"]>;
-
-/**
- * Allow-all egress for every sandbox, in the shape the API accepts, `{ type }`. SDK 1.2.0's types still describe
- * the older `{ default, allowedDomains }` shape.
- */
-export const ALLOW_ALL_EGRESS = { type: "allow-all" } as unknown as NetworkPolicy;
 
 const SandboxInfo = z.object({
 	runAs: z.string().min(1),
