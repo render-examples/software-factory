@@ -74,6 +74,7 @@ repos: {
     baseBranch: "main",
     install: "npm ci",
     verify: ["npm run build", "npm test"],
+    egress: ["registry.npmjs.org"],
   },
 },
 ```
@@ -84,8 +85,11 @@ Requirements:
 - name an existing base branch;
 - confirm Issues is enabled under the target repository's Settings > General > Features (ask an admin to enable it if necessary);
 - use an install command that is deterministic and leaves tracked files
-  unchanged; and
-- list every command required before publishing.
+  unchanged;
+- list every command required before publishing; and
+- list in `egress` every host the install and verify commands download from,
+  such as the package registry. Sandboxes block every other destination. See
+  [Sandbox egress](../configuration.md#sandbox-egress).
 
 Use `verify: []` only when the user explicitly wants no command-based
 verification. Keep the default labels, permission, limits, and Sandbox timeout

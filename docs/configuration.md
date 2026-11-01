@@ -16,11 +16,13 @@ export default defineFactoryConfig({
       baseBranch: "main",
       install: "npm ci",
       verify: ["npm run build", "npm test"],
+      egress: ["registry.npmjs.org"],
     },
     "acme/api": {
       baseBranch: "main",
       install: "go mod download",
       verify: ["go test ./..."],
+      egress: ["proxy.golang.org", "sum.golang.org"],
     },
   },
   labels: {
@@ -52,10 +54,47 @@ from any other repository, even if the App is installed there.
 | `baseBranch` | Yes | Branch used for Triage, implementation, and snapshots |
 | `install` | No | Dependency command run after clone credentials are removed |
 | `verify` | Yes | Commands required before publishing and during PR review |
+| `egress` | No | Extra HTTPS hosts this repository's Sandboxes may reach, or `"allow-all"` |
 
 Use deterministic install commands such as `npm ci`. Snapshot creation fails
 if installation changes a tracked file. Use `verify: []` only when you
 intentionally want no command-based verification.
+
+### Sandbox egress
+
+Sandboxes reach the network through an HTTPS allow-list that Render enforces.
+Every other destination fails as a reset connection. The factory builds each
+list:
+
+| Sandbox | Allowed hosts |
+|---|---|
+| Task Sandbox | `github.com`, every agent harness's model API, and the repository's `egress` |
+| Snapshot builder | `github.com`, `deb.debian.org`, and the repository's `egress` |
+
+List in `egress` every host the repository's `install` and `verify` commands
+download from. Task Sandboxes need the list too: they reinstall when the
+lockfiles change. Common hosts:
+
+| Ecosystem | Hosts |
+|---|---|
+| npm | `registry.npmjs.org` |
+| Go modules | `proxy.golang.org`, `sum.golang.org` |
+| Go toolchain download | `go.dev`, `dl.google.com` |
+| PyPI | `pypi.org`, `files.pythonhosted.org` |
+
+A rule matches one exact hostname. Use `*.example.com` to admit its
+subdomains; a wildcard may only be the leftmost label. Only HTTPS is admitted.
+An invalid host stops both services at startup. An install that fails under
+the allow-list names the allowed hosts in its error.
+
+Set `egress: "allow-all"` to lift the restriction for one repository. Prefer
+listing hosts: the allow-list is what stops dependency scripts and
+prompt-injected agents from sending code or the model key to arbitrary
+destinations.
+
+Render fixes a Sandbox's policy when it is created, so an `egress` change
+applies to the next Sandbox after a Workflows deploy. No snapshot refresh is
+needed.
 
 After adding a repository:
 
@@ -123,6 +162,12 @@ needs no other configuration change. The `pi` adapter supports Anthropic
    env group;
 3. deploy `factory-workflows`; and
 4. run `npm run doctor -- --service workflows`.
+
+Each harness also declares its `egress`: the hosts its model requests go to.
+Every task Sandbox's allow-list includes the hosts of all registered agents.
+The `pi` adapter uses the host of the model's `baseUrl`, so switching
+providers needs no egress change. Pass `egress` to `pi()` when a custom
+`models` registry serves the model from another host, such as a proxy.
 
 ### Tool support
 

@@ -23,6 +23,11 @@ export interface PiOptions {
 	models?: () => MutableModels;
 	/** The env var holding the key. Default: the provider's, from PI_PROVIDER_KEY_ENV; required for other providers. */
 	credential?: string;
+	/**
+	 * The hosts model requests go to. Default: the host of `model.baseUrl`. Set it when `models` resolves the model
+	 * to a different base URL, such as a proxy.
+	 */
+	egress?: string[];
 }
 
 /** Runs an agent on Pi (`@earendil-works/pi-agent-core`) with the factory's tools. */
@@ -37,6 +42,7 @@ export function pi(opts: PiOptions): Harness {
 		name: "pi",
 		label: `${provider}/${id}`,
 		credential,
+		egress: opts.egress ?? [new URL(opts.model.baseUrl).hostname],
 		driver: piDriver({ model: opts.model, thinkingLevel, models: opts.models }),
 	};
 }

@@ -1,5 +1,7 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
+import { pi } from "../app/harness/index.js";
 import { fauxPi } from "./helpers/pi-scripted.js";
 import { GOOD, makeInput, makeWorkspace, parseEvents, runContract, SUBMIT, terminal, toolResults } from "./helpers/runner.js";
 
@@ -9,6 +11,15 @@ const calls = (...list: [string, Record<string, unknown>][]) =>
 		{ stopReason: "toolUse" },
 	);
 const overloaded = () => fauxAssistantMessage([], { stopReason: "error", errorMessage: "overloaded_error: Overloaded" });
+
+describe("pi harness egress", () => {
+	const model = getBuiltinModel("anthropic", "claude-sonnet-5");
+
+	it("defaults to the model's API host, and takes an explicit list for a model served elsewhere", () => {
+		expect(pi({ model }).egress).toEqual(["api.anthropic.com"]);
+		expect(pi({ model, egress: ["llm-proxy.example.com"] }).egress).toEqual(["llm-proxy.example.com"]);
+	});
+});
 
 describe("pi driver", { timeout: 30_000 }, () => {
 	it("ends with no_submission when the model stops without submitting, without asking it again", async () => {

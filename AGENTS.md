@@ -90,7 +90,8 @@ strict output schemas.
 ## Cross-cutting changes
 
 - Configuration key: update `FactoryConfig` in `factory.config.ts` and
-  `docs/configuration.md`.
+  `docs/configuration.md`. Check what the type system can't in
+  `validateConfig` (`app/config/index.ts`).
 - Environment variable: update `.env.example`, `SERVICE_ENV` and, for a
   secret, `ENV_GROUPS` in `scripts/lib/requirements.ts`, and
   `docs/configuration.md`. Secrets belong in an env group, not a
@@ -99,8 +100,9 @@ strict output schemas.
 - App permission, event, or label: update
   `scripts/lib/requirements.ts`, setup behavior, and doctor tests.
 - Agent harness: declare the env var of its key as the adapter's
-  `credential`; setup and `doctor` derive the key list. It must give the
-  model only the factory's tools; add it to `HARNESSES` in
+  `credential` and the hosts it calls as its `egress`; setup and `doctor`
+  derive the key list, and Sandbox allow-lists include every harness's
+  hosts. It must give the model only the factory's tools; add it to `HARNESSES` in
   `tests/helpers/runner.ts` if it can run the conformance suite.
 - `sandbox/`: refresh every repository snapshot after deployment. Changes to
   `app/runner/`, `app/harness/`, or agents reach Sandboxes with the Workflows

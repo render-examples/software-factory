@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { SandboxSnapshotNotFoundError, SandboxSnapshotNotReadyError } from "@renderinc/sdk";
+import type { SandboxNetworkPolicy } from "@renderinc/sdk/experimental";
 import { z } from "zod";
 import { config, type RepoContext } from "../config/index.js";
 import { type SandboxClient, sandboxClient } from "./client.js";
+import { egressHint, taskEgress } from "./egress.js";
 import { errorMessage, log, SAFE_REF } from "./shell.js";
 import {
 	asRunner,
@@ -19,7 +21,7 @@ import {
 	snapshotName,
 } from "./snapshot.js";
 import { APP_DIR, type OpenedSandbox, REPO_DIR, RUN_AS, type Sandbox, type SandboxRef, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
-import { ALLOW_ALL_EGRESS, verifySandbox } from "./verify.js";
+import { verifySandbox } from "./verify.js";
 
 const SnapshotManifestSchema = z.object({
 	repo: z.string(),
@@ -66,7 +68,8 @@ export interface OpenSandboxDeps extends SnapshotDeps {
 export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: OpenSandboxDeps = {}): Promise<OpenedSandbox> {
 	checkRef(ref);
 	const client = deps.client ?? sandboxClient();
-	const id = await createFromSnapshot(client, repo, deps);
+	const egress = taskEgress(repo);
+	const id = await createFromSnapshot(client, repo, egress, deps);
 	try {
 		await client.waitRunning(id);
 		await ensureRunnerPayload(client, id);
@@ -82,7 +85,7 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 			const lockfileHash = await computeLockfileHash(client, id);
 			if (lockfileHash !== manifest.lockfileHash || install !== manifest.install) {
 				log("info", "reinstalling dependencies", { sandbox: id, repo: repo.fullName, headSha });
-				await runInstall(client, id, install);
+				await runInstall(client, id, install, egressHint(repo, egress));
 			}
 		}
 		return { ...connectSandbox(id, client), headSha, manifest };
@@ -120,14 +123,14 @@ function isSnapshotUnavailable(err: unknown): boolean {
 	return err instanceof SandboxSnapshotNotFoundError || err instanceof SandboxSnapshotNotReadyError;
 }
 
-async function createFromSnapshot(client: SandboxClient, repo: RepoContext, deps: OpenSandboxDeps): Promise<string> {
+async function createFromSnapshot(client: SandboxClient, repo: RepoContext, egress: SandboxNetworkPolicy, deps: OpenSandboxDeps): Promise<string> {
 	const name = snapshotName(repo);
 	const create = async () =>
 		(
 			await client.call(() =>
 				client.api.create({
 					snapshotName: name,
-					networkPolicy: ALLOW_ALL_EGRESS,
+					networkPolicy: egress,
 					timeoutSeconds: config.sandbox.timeoutSeconds,
 				}),
 			)

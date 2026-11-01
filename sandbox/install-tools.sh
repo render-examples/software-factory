@@ -20,6 +20,10 @@ have useradd || pkgs="$pkgs passwd"
 if [ -n "$pkgs" ]; then
 	log "apt-get install$pkgs"
 	export DEBIAN_FRONTEND=noninteractive
+	# The image's Debian sources use plain HTTP, and the sandbox egress allow-list admits only HTTPS.
+	for src in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+		if [ -f "$src" ]; then sed -i 's|http://deb\.debian\.org/|https://deb.debian.org/|g' "$src"; fi
+	done
 	apt-get update -qq >&2
 	# shellcheck disable=SC2086 # intentional word splitting of the package list
 	apt-get install -y -qq --no-install-recommends ca-certificates $pkgs >&2

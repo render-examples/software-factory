@@ -199,10 +199,18 @@ Clone and fetch credentials are read-only and temporary. Runtime files are
 root-owned and read-only. Agents and repository commands run as an
 unprivileged user.
 
+Every Sandbox is created with an HTTPS egress allow-list built by the
+Workflows host from trusted configuration. Task Sandboxes reach `github.com`,
+the agents' model APIs, and the repository's configured `egress` hosts. The
+snapshot builder reaches `github.com`, Debian's package mirror, and the
+repository's hosts. Render enforces the list outside the Sandbox and fixes it
+at creation, so nothing inside the Sandbox can widen it. See
+[Sandbox egress](configuration.md#sandbox-egress).
+
 The model key enters the Sandbox during an agent call. The runner receives it
 through a root-only path and stdin, removes provider keys from tool
-environments, and runs under a non-dumpable Node binary. These controls reduce
-exposure; they do not make untrusted code safe.
+environments, and runs under a non-dumpable Node binary. These controls and
+the allow-list reduce exposure; they do not make untrusted code safe.
 
 ## Security invariants
 
@@ -220,12 +228,20 @@ Changes must preserve these properties:
 9. Implement the specification as it existed when approved.
 10. Give every Sandbox a provider timeout and `finally` cleanup. Record a
     GitHub task's Sandbox so cancellation can terminate it.
+11. Create every Sandbox with an egress allow-list built from trusted
+    configuration. Only a repository's configured `egress: "allow-all"` lifts it.
 
 Tests pin these invariants and the tool authority of every built-in agent.
 
 ## Residual risks
 
-- Sandboxes use allow-all egress.
+- Allowed hosts remain exfiltration paths. Code in a Sandbox can send data to
+  an attacker's own GitHub account or model API account through `github.com`
+  or the model API, and to anything a wildcard rule admits. Task Sandboxes
+  keep `github.com` for their whole lifetime because the policy can't change
+  after the fetch.
+- DNS resolution is not restricted by the allow-list.
+- A repository configured with `egress: "allow-all"` has unrestricted egress.
 - The model key exists in runner memory during a call.
 - Prompt injection can influence specifications, code, and reviews.
 - Anyone with `minimumPermission` can start model spend.

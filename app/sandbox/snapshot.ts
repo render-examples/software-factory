@@ -12,9 +12,10 @@ import type { RepoContext } from "../config/index.js";
 import { githubToken } from "../github/auth.js";
 import { bundleRunner } from "../runner/bundle.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
+import { builderEgress, egressHint } from "./egress.js";
 import { errorMessage, log, SAFE_REF, shq } from "./shell.js";
 import { APP_DIR, REPO_DIR, RUN_AS, SANDBOX_ROOT, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
-import { ALLOW_ALL_EGRESS, verifySandbox } from "./verify.js";
+import { verifySandbox } from "./verify.js";
 
 /** The one named snapshot per repository: `factory-<owner>-<name>`, restricted to [A-Za-z0-9_.-]. */
 export function snapshotName(repo: Pick<RepoContext, "owner" | "name">): string {
@@ -78,7 +79,7 @@ export function credentialFile(token: string): string {
 
 // ── Build ───────────────────────────────────────────────────────────────
 //
-// Each step is an exec or upload in an allow-all builder sandbox, ordered by trust:
+// Each step is an exec or upload in a builder sandbox limited to builderEgress, ordered by trust:
 //
 //   1. Upload the scripts and runner payload; install tools; create the runner user; self-test the runner
 //   2. Upload a read-only token, clone at `sha`, scrub the token and verify none remains
@@ -97,7 +98,8 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 	const started = Date.now();
 	log("info", "snapshot build started", { repo: repo.fullName, sha, snapshot: name });
 
-	const { id } = await client.call(() => client.api.create({ timeoutSeconds: BUILDER_TIMEOUT_SECONDS, networkPolicy: ALLOW_ALL_EGRESS }));
+	const egress = builderEgress(repo);
+	const { id } = await client.call(() => client.api.create({ timeoutSeconds: BUILDER_TIMEOUT_SECONDS, networkPolicy: egress }));
 	try {
 		await client.waitRunning(id);
 
@@ -145,7 +147,7 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 		await client.check(id, `chown -R ${RUN_AS}: ${REPO_DIR}`, prepare);
 		const lockfileHash = await computeLockfileHash(client, id);
 		const install = repo.config.install?.trim() || null;
-		if (install) await runInstall(client, id, install);
+		if (install) await runInstall(client, id, install, egressHint(repo, egress));
 
 		// ── 4. Manifest, lockdown, verify, snapshot ──────────────────────
 		const manifest: SnapshotManifest = {
@@ -222,10 +224,10 @@ export async function computeLockfileHash(client: SandboxClient, id: string): Pr
  * Runs the repository's install command as the runner user, then fails if it changed any tracked file: the
  * checkout is what agents edit and publish from, so a dirty tree would leak into every PR.
  */
-export async function runInstall(client: SandboxClient, id: string, install: string): Promise<void> {
+export async function runInstall(client: SandboxClient, id: string, install: string, failureHint = ""): Promise<void> {
 	const res = await client.exec(id, asRunner("bash", "-c", install), { timeoutMs: client.t.prepareTimeoutMs });
 	if (res.exitCode !== 0) {
-		throw new Error(`install (${install}) exited ${res.exitCode}: ${(res.stderr || res.stdout).trim().slice(-2000)}`);
+		throw new Error(`install (${install}) exited ${res.exitCode}: ${(res.stderr || res.stdout).trim().slice(-2000)}${failureHint}`);
 	}
 	const dirty = (
 		await client.check(id, asRunner("git", "status", "--porcelain", "--untracked-files=no"), {
