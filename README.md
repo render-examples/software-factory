@@ -4,9 +4,13 @@ software-factory is an extensible template for building GitHub-native coding age
 workflows on Render. It includes a complete issue-to-PR workflow that you can
 run, change, or use as the foundation for your own automations.
 
-Start by [forking this repository](https://github.com/render-examples/software-factory/fork).
-Deploy from your fork: its `factory.config.ts` defines the repositories the
-factory may access.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
+
+The button forks this repository into your GitHub account and opens a
+Blueprint from your fork. Don't apply the Blueprint yet: it depends on
+environment groups that the setup runbook below creates, and your fork's
+`factory.config.ts` must first list the repositories the factory may access.
+The runbook has you apply the Blueprint once both are ready.
 
 The recommended setup is agent-guided:
 
