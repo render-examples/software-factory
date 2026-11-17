@@ -129,7 +129,7 @@ export class AgentRunRecorder {
 		});
 		if (await this.#flush()) return;
 		// Whatever kept the stream from being written, the run's outcome and cost still belong in the log.
-		this.#queue = this.#queue.filter((event) => event.type === agentRunStarted || event.type === agentRunFinished);
+		this.#queue = this.#queue.filter(lifecycle);
 		await this.#flush();
 	}
 
@@ -139,12 +139,12 @@ export class AgentRunRecorder {
 			warn("agent run event dropped: invalid payload", { agentRunId: this.id, type: type.type });
 			return;
 		}
-		const lifecycle = type === agentRunStarted || type === agentRunFinished;
-		if (this.#queue.length >= MAX_QUEUED && !lifecycle) {
+		const event = { type, subject: this.#subject, source: this.#source, payload: parsed.data };
+		if (this.#queue.length >= MAX_QUEUED && !lifecycle(event)) {
 			this.#dropped++;
 			return;
 		}
-		this.#queue.push({ type, subject: this.#subject, source: this.#source, payload: parsed.data });
+		this.#queue.push(event);
 		this.#schedule();
 	}
 
@@ -191,7 +191,9 @@ export class AgentRunRecorder {
 			});
 		} catch (error) {
 			// Deltas are only worth sending live; the log events wait for the next write.
-			this.#queue = [...events, ...this.#queue].slice(0, MAX_QUEUED);
+			const requeued = [...events, ...this.#queue];
+			this.#queue = requeued.filter((event, index) => index < MAX_QUEUED || lifecycle(event));
+			this.#dropped += requeued.length - this.#queue.length;
 			this.#finals = [...finals, ...this.#finals];
 			warn("agent run events not recorded", { agentRunId: this.id, queued: this.#queue.length, error: errorMessage(error) });
 			this.#schedule();
@@ -204,6 +206,9 @@ export class AgentRunRecorder {
 		return true;
 	}
 }
+
+/** The run's first and last events, which the bounded queue never drops. */
+const lifecycle = (event: Pending) => event.type === agentRunStarted || event.type === agentRunFinished;
 
 async function notify(tx: Tx, notice: LiveNotice): Promise<void> {
 	await tx.query("select pg_notify($1, $2)", [LIVE_CHANNEL, JSON.stringify(notice)]);

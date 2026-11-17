@@ -167,6 +167,16 @@ describe("AgentRunRecorder", () => {
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('"dropped":6'));
 	});
 
+	it("keeps the outcome when a write fails with the queue full", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const database = flaky(2);
+		const r = recorder(database);
+		for (let i = 0; i < 1005; i++) feed(r, { type: "tool_call", at, tool_call_id: `c${i}`, tool: "ls", args: {} });
+		await vi.waitFor(() => expect(database.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
+		await r.finish(SUMMARY);
+		expect((await logged(r)).map((e) => e.type)).toEqual(["agent_run.started", "agent_run.finished"]);
+	});
+
 	it("still records the outcome when the rest of the stream can't be written", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		const database = flaky(2);
