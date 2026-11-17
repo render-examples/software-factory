@@ -236,7 +236,7 @@ Organization installations use the equivalent organization settings URL.
 
 ## Follow and control runs
 
-While a factory run holds an issue or pull request, it has `factory:working`.
+While a factory run is working on an issue or pull request, it has `factory:working`.
 The App-authored status comment shows progress, the run ID, the path of the
 issue or pull request's [event stream](#event-streams), and the final result. It is a view of the
 [database](#database): editing or deleting it changes nothing, and the next
@@ -245,16 +245,19 @@ update recreates it.
 Open that run under `factory-workflows` in the Render Dashboard to inspect its
 input, logs, and result.
 
-Every delivery, claim, task run, and agent run is recorded in the
+Every delivery, task run, and agent run is recorded in the
 [database](#database). The `runs` table holds each task run's state, outcome,
-summary, and Sandbox; `claims` holds the run that owns each issue or pull
-request; `agent_runs` holds each agent run's agent, model, outcome, turns,
-token usage, and cost. Follow a run live over an [event stream](#event-streams),
-or query the tables. Each row names its thread: `github:owner/name#issue-12`
-for an issue, `github:owner/name#pr-34` for a pull request.
+summary, and Sandbox, including runs rejected for permission; `threads` holds
+the latest run started on each issue or pull request, whose trace owns it while
+any of its runs is running; `agent_runs` holds each agent run's agent, model,
+outcome, turns, token usage, and cost. Follow a run live over an
+[event stream](#event-streams), or query the tables. Each row names its thread:
+`github:owner/name#issue-12` for an issue, `github:owner/name#pr-34` for a pull
+request.
 
 ```sql
 select run_id, task, state, outcome, summary from runs where thread = 'github:owner/name#issue-12' order by started_at;
+select t.thread, r.task, r.state from threads t join runs r on r.trace_id = t.trace_id where r.state = 'running';
 select thread, sum(cost_usd) from agent_runs group by thread order by 2 desc;
 ```
 
@@ -265,9 +268,11 @@ comment:
 /factory cancel
 ```
 
-The commenter needs `minimumPermission`. Cancellation stops the run that holds
-the claim and terminates its recorded Sandboxes. It also clears a stale
-`running` status when the task has already stopped.
+The commenter needs `minimumPermission`. Cancel is a run like any other:
+starting it takes over the issue or pull request, which stops the running
+workflow and its current child task and terminates their recorded Sandboxes.
+The status comment then shows what it cancelled, or that nothing was running.
+It also closes runs still recorded as `running` after their task stopped.
 
 To restart work, remove the trigger label and apply it again.
 

@@ -47,7 +47,7 @@ export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
 	headSha: z.string().regex(/^[0-9a-f]{40}$/),
 	actor: ActorLogin,
-	/** Keeps an autopilot review under the issue-level root claim. */
+	/** Starts an autopilot review on the workflow's issue, continuing its root run. */
 	workflowIssue: z.number().int().positive().optional(),
 });
 

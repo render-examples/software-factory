@@ -6,6 +6,6 @@ import { triage } from "./triage/index.js";
 
 /**
  * Every agent the factory runs. The sandbox runner is bundled from this list and runs an agent only if it is here.
- * Bundled modules must not import host-only code (GitHub, Sandbox, Workflows, claims, events, config).
+ * Bundled modules must not import host-only code (GitHub, Sandbox, Workflows, runs, events, config).
  */
 export const AGENTS: readonly Agent[] = [triage, specWriter, implementer, prReviewer];

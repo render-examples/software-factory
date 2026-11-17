@@ -34,6 +34,8 @@ export interface PublishInput {
 	limits?: PublishLimits;
 	/** Commits an earlier attempt of this run created: the branch may be moved off them as well as off baseSha. */
 	ownedCommits?: readonly string[];
+	/** Throws once the caller may no longer publish. Called immediately before the branch moves. */
+	assertOwned: () => Promise<void>;
 }
 
 /** Test seams: where the script and checkout live, and where the output goes. */
@@ -88,6 +90,8 @@ export async function publish(input: PublishInput, paths: PublishPaths = {}): Pr
 		author: identity,
 		committer: identity,
 	});
+	// Collecting and uploading can take minutes, so ownership is checked again right before the only durable write.
+	await input.assertOwned();
 	await moveBranch(git, branch, commitSha, new Set([baseSha]), new Set(input.ownedCommits ?? []));
 	return { commitSha, treeSha, changedFiles: checked.files };
 }

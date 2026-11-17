@@ -1,9 +1,9 @@
 import { implementer, runAgent } from "../../agents/index.js";
 import { publish } from "../../changeset/index.js";
-import { ExpectedFailure, type Outcome } from "../../claims/index.js";
 import { config, type RepoContext, TASKS } from "../../config/index.js";
 import { pullRequestBody, pullRequestTitle } from "../../format/index.js";
 import { type GitDataClient, gitData } from "../../github/index.js";
+import { ExpectedFailure, type Outcome } from "../../runs/index.js";
 import { type OpenedSandbox, openSandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
 import { type Implementation, SpecToPrInput } from "../../schemas/index.js";
 import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
@@ -43,8 +43,8 @@ export const specToPrWorkflow = defineGitHubTask(
 		thread: (input) => ({ kind: "issue", number: input.issue }),
 		timeoutSeconds: 4 * 60 * 60,
 	},
-	async (claim, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {
-		const { gh, repo } = claim;
+	async (run, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {
+		const { gh, repo } = run;
 		// Fixed for the whole run, so publishing the same tree twice produces the same commit.
 		const date = commitDate((deps.now ?? (() => new Date()))());
 		const { spec, comment } = await loadApprovedSpec(gh, input.issue, input.approval);
@@ -55,34 +55,34 @@ export const specToPrWorkflow = defineGitHubTask(
 		const branch = branchName(input.issue);
 		const rounds = config.limits.repairRounds;
 
-		await claim.reportProgress("opening a sandbox");
+		await run.reportProgress("opening a sandbox");
 		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
 		return withSandbox(open, async (sandbox) => {
-			await claim.trackSandbox(sandbox);
+			await run.trackSandbox(sandbox);
 			const baseSha = sandbox.headSha;
 			const implement = async (message: string): Promise<Implementation> =>
-				(await (deps.runAgent ?? runAgent)(implementer, message, { ...claim.agentRunOptions(sandbox), timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
+				(await (deps.runAgent ?? runAgent)(implementer, message, { ...run.agentRunOptions(sandbox), timeoutMs: IMPLEMENT_TIMEOUT_MS })).output;
 
 			const owned = await ownedCommits(git, branch, baseSha, author);
 
-			await claim.reportProgress("implementing the spec");
+			await run.reportProgress("implementing the spec");
 			let implementation = await implement(implementMessage(repo, issue, spec));
 			if (!(await hasChanges(sandbox))) return noChanges();
 
 			let verification: VerifyRun[];
 			for (let round = 1; ; round++) {
-				await claim.reportProgress("running the verify commands");
+				await run.reportProgress("running the verify commands");
 				verification = await runVerify(sandbox, repo.config.verify);
 				if (allPassed(verification)) break;
 				if (round > rounds) {
 					const after = rounds > 0 ? ` after ${rounds} repair round${rounds === 1 ? "" : "s"}` : "";
 					throw new ExpectedFailure(`verification failed${after}: ${failureSummary(verification)}. No PR was opened.`, "verification_failed");
 				}
-				await claim.reportProgress(`repairing failed verification (round ${round} of ${rounds})`);
+				await run.reportProgress(`repairing failed verification (round ${round} of ${rounds})`);
 				implementation = mergeImplementation(implementation, await implement(repairMessage(repo, issue, spec, verification, round, rounds)));
 			}
 
-			await claim.reportProgress("publishing the branch");
+			await run.reportProgress("publishing the branch");
 			const published = await (deps.publish ?? publish)({
 				sandbox,
 				repo,
@@ -92,13 +92,14 @@ export const specToPrWorkflow = defineGitHubTask(
 				author,
 				ownedCommits: owned,
 				gitData: git,
+				assertOwned: () => run.assertCurrent(),
 			});
 			if ("refused" in published) {
 				if (published.refused.every((r) => r.kind === "no_changes")) return noChanges();
 				throw new ExpectedFailure(refusalSummary(published.refused), "publish_refused");
 			}
 
-			await claim.reportProgress("opening the draft pull request");
+			await run.reportProgress("opening the draft pull request");
 			const { pull } = await gh.ensurePull({
 				head: branch,
 				base: repo.config.baseBranch,

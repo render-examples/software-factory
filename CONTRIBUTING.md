@@ -1,7 +1,7 @@
 # Contributing
 
-Read [Architecture](docs/architecture.md) before changing claims, credentials,
-Sandboxes, publishing, or GitHub authority. Use the
+Read [Architecture](docs/architecture.md) before changing run coordination,
+credentials, Sandboxes, publishing, or GitHub authority. Use the
 [extension runbook](docs/runbooks/extend.md) for agents, Workflows tasks, and
 GitHub triggers.
 

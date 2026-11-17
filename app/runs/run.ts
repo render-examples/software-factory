@@ -4,37 +4,28 @@ import type { z } from "zod";
 import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agents/index.js";
 import { config, type RepoContext } from "../config/index.js";
 import { append, type Db, workflowsDb } from "../db/index.js";
-import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached, runStarted } from "../events/index.js";
+import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
 import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 import { checkPermission } from "./permission.js";
-import {
-	acquire,
-	type RunControl,
-	readClaim,
-	release,
-	runEvent,
-	type StatusLink,
-	showRejection,
-	stopRun,
-	syncStatus,
-	warn,
-	workflowRuns,
-} from "./status.js";
+import { type StatusLink, showRejection, syncStatus, warn } from "./status.js";
+import { isCurrent, type RunControl, runEvent, startOnThread, stopTrace, workflowRuns } from "./thread.js";
 import { traceIds } from "./trace.js";
 
-/** What the work gets: this task run's identity and its claim on the issue or PR. */
-export interface Claim {
+/** What the work gets: this task run's identity on its issue or PR. */
+export interface Run {
 	readonly gh: GitHubClient;
 	readonly repo: RepoContext;
 	readonly thread: GitHubThread;
 	readonly traceId: string;
 	readonly runId: string;
-	/** Ends the run as superseded once a newer run owns this issue or PR. Call before durable writes. */
+	/** The trace this run stopped when it started, and its task runs that were still running. */
+	readonly displaced: { traceId: string; runIds: readonly string[] } | null;
+	/** Ends the run as superseded once a newer run started on this issue or PR. Call before durable writes. */
 	assertCurrent(): Promise<void>;
-	/** Asserts the claim, then publishes `summary` in the status comment. */
+	/** Asserts the run is current, then publishes `summary` in the status comment. */
 	reportProgress(summary: string): Promise<void>;
-	/** Records the sandbox, so a run that stops this one can terminate it. Call right after opening it. */
+	/** Records the sandbox, so a run that takes over can terminate it. Call right after opening it. */
 	trackSandbox(sandbox: { id: string }): Promise<void>;
 	/** runAgent options for `sandbox`, so the agent's events carry this run's trace. */
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions;
@@ -71,7 +62,7 @@ export class ExpectedFailure extends Error {
 	}
 }
 
-export interface ClaimOptions {
+export interface RunOptions {
 	repo: RepoContext;
 	thread: GitHubThread;
 	/** The task's registered name; recorded in its events. */
@@ -79,7 +70,7 @@ export interface ClaimOptions {
 	/** The task's name in the status comment, such as "PR Reviewer". */
 	title: string;
 	actor: string;
-	/** Root tasks may replace another root; subtasks may only continue their own root. */
+	/** Root runs take over the thread; child runs may only continue their own trace. */
 	mode?: "replace" | "continue";
 	gh?: GitHubClient;
 	runs?: RunControl;
@@ -87,28 +78,30 @@ export interface ClaimOptions {
 }
 
 /**
- * Runs `work` while this task run claims the issue or PR. The claim is the thread's latest `claim.acquired` in
- * Postgres. withClaim checks the actor's permission, claims the thread and stops the previous holder, records
- * progress and how the run ended, and keeps the status comment in sync as a view.
+ * Runs `work` as a task run on the issue or PR. withRun checks the actor's permission, starts the run on the thread
+ * (a root run takes over and stops the trace it displaced), records progress and how the run ended, and keeps the
+ * status comment in sync as a view. The trace whose run started last owns the thread until its runs finish.
  */
-export async function withClaim<Data = undefined>(
+export async function withRun<Data = undefined>(
 	ctx: Pick<TaskContext, "metadata">,
-	opts: ClaimOptions,
-	work: (claim: Claim) => Promise<Outcome<Data>>,
+	opts: RunOptions,
+	work: (run: Run) => Promise<Outcome<Data>>,
 ): Promise<TaskResult<Data>> {
-	const run = new ClaimedRun(ctx, opts);
+	const run = new ThreadRun(ctx, opts);
+	if (!(await run.authorized())) return await run.reject<Data>();
+	if (!(await run.start())) return run.result<Data>("cancelled", SUPERSEDED);
 	try {
-		await run.start();
-		if (!(await run.authorized())) return await run.reject<Data>();
-		await run.acquire();
+		await run.stopDisplaced();
 		return await run.finish(await work(run));
 	} catch (error) {
 		return await run.fail<Data>(error);
 	}
 }
 
-/** Thrown once another trace holds the claim. */
+/** Thrown once this run is no longer current. */
 class Superseded extends Error {}
+
+const SUPERSEDED = { outcome: "superseded", summary: "a newer run took over." };
 
 /** Ways an agent stops that come from the model or its limits. Any other agent error is the platform's and fails the task. */
 const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
@@ -121,21 +114,24 @@ const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
 
 const FINAL_SYNC_ATTEMPTS = 3;
 
-/** The lifecycle behind a Claim. Only withClaim calls the methods beyond the Claim interface. */
-class ClaimedRun implements Claim {
+/** The lifecycle behind a Run. Only withRun calls the methods beyond the Run interface. */
+class ThreadRun implements Run {
 	readonly gh: GitHubClient;
 	readonly repo: RepoContext;
 	readonly thread: GitHubThread;
 	readonly traceId: string;
 	readonly runId: string;
-	readonly #opts: ClaimOptions;
+	displaced: Run["displaced"] = null;
+	readonly #opts: RunOptions;
 	readonly #db: Db;
 	readonly #key: ThreadKey;
 	readonly #startedAt = Date.now();
+	/** The thread's latest trace before this run started on it, when that was another trace. */
+	#previous: string | null = null;
 	/** The status body this run last wrote. */
 	#shown: string | undefined;
 
-	constructor(ctx: Pick<TaskContext, "metadata">, opts: ClaimOptions) {
+	constructor(ctx: Pick<TaskContext, "metadata">, opts: RunOptions) {
 		({ traceId: this.traceId, runId: this.runId } = traceIds(ctx));
 		this.repo = opts.repo;
 		this.thread = opts.thread;
@@ -146,8 +142,7 @@ class ClaimedRun implements Claim {
 	}
 
 	async assertCurrent(): Promise<void> {
-		const claim = await readClaim(this.#db, this.#key);
-		if (!claim?.held || claim.traceId !== this.traceId) throw new Superseded();
+		if (!(await isCurrent(this.#db, this.#key, this))) throw new Superseded();
 	}
 
 	async reportProgress(summary: string): Promise<void> {
@@ -157,7 +152,7 @@ class ClaimedRun implements Claim {
 	}
 
 	async trackSandbox(sandbox: { id: string }): Promise<void> {
-		// Recorded before the check: a run that claims the thread after the check sees this sandbox when it stops this run.
+		// Recorded before the check: a run that takes over after the check sees this sandbox when it stops this run.
 		await this.#append(runSandboxAttached, { sandbox_id: sandbox.id });
 		await this.assertCurrent();
 	}
@@ -166,38 +161,36 @@ class ClaimedRun implements Claim {
 		return { sandbox, traceId: this.traceId, runId: this.runId, thread: this.#key };
 	}
 
-	async start(): Promise<void> {
-		const { task, title, actor, mode = "replace" } = this.#opts;
-		await this.#append(runStarted, { trace_id: this.traceId, task, title, actor, mode });
-	}
-
 	authorized(): Promise<boolean> {
 		return checkPermission(this.gh, this.#opts.actor);
 	}
 
+	/** Records the rejection on the run's own stream; it never starts on the thread, so it displaces nothing. */
 	async reject<Data>(): Promise<TaskResult<Data>> {
 		const { actor, task, title } = this.#opts;
 		const summary = `@${actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
-		await this.#append(runRejected, { actor, reason: summary });
-		await showRejection(this.#db, this.gh, this.repo.fullName, this.thread, { runId: this.runId, task, title, summary }).catch((error) =>
+		await this.#append(runRejected, { trace_id: this.traceId, task, title, actor, reason: summary });
+		const run = { traceId: this.traceId, runId: this.runId, task, title, summary };
+		await showRejection(this.#db, this.gh, this.repo.fullName, this.thread, run).catch((error) =>
 			warn("could not show the rejection", error, { runId: this.runId }),
 		);
-		return this.#result("rejected", { outcome: "permission_denied", summary });
+		return this.result("rejected", { outcome: "permission_denied", summary });
 	}
 
-	/**
-	 * Claims the thread, then stops the previous holder. Claiming first fences the previous run even when stopping
-	 * it fails or is slow: its next ownership check fails.
-	 */
-	async acquire(): Promise<void> {
-		const claimed = await acquire(this.#db, { thread: this.#key, traceId: this.traceId, runId: this.runId, mode: this.#opts.mode ?? "replace" });
-		if (!claimed) throw new Superseded();
-		const { previous } = claimed;
-		if (previous?.held && previous.traceId !== this.traceId) {
-			const stop = { by: this.runId, outcome: "superseded", summary: () => "a newer run took over." } as const;
-			await stopRun(this.#db, this.#opts.runs ?? workflowRuns(), previous.traceId, stop).catch((error) =>
-				warn("could not stop the previous run", error, { traceId: previous.traceId }),
-			);
+	/** Starts the run on the thread. Returns false when a child's trace no longer owns it, or newer runs kept winning. */
+	async start(): Promise<boolean> {
+		const { task, title, actor, mode = "replace" } = this.#opts;
+		const started = await startOnThread(this.#db, { thread: this.#key, runId: this.runId, traceId: this.traceId, task, title, actor, mode });
+		this.#previous = started?.displaced ?? null;
+		return started !== null;
+	}
+
+	/** Stops the trace this run displaced. Starting first fences that trace even when stopping it fails or is slow. */
+	async stopDisplaced(): Promise<void> {
+		if (this.#previous) {
+			const { title, actor, runs = workflowRuns() } = this.#opts;
+			const runIds = await stopTrace(this.#db, runs, this.#previous, { by: this.runId, summary: `${title} by @${actor} took over.` });
+			if (runIds.length) this.displaced = { traceId: this.#previous, runIds };
 		}
 		await this.#sync();
 	}
@@ -212,7 +205,10 @@ class ClaimedRun implements Claim {
 	 * its message, which can hold secrets or repository output, and rethrown so the task fails.
 	 */
 	async fail<Data>(error: unknown): Promise<TaskResult<Data>> {
-		if (error instanceof Superseded) return await this.#record("cancelled", { outcome: "superseded", summary: "a newer run took over." });
+		// A takeover terminates this run's sandbox, so any error can mean a newer run started; that isn't a failure.
+		if (error instanceof Superseded || !(await isCurrent(this.#db, this.#key, this).catch(() => true))) {
+			return await this.#record("cancelled", SUPERSEDED);
+		}
 		if (error instanceof ExpectedFailure) return await this.#end("failed", { outcome: error.outcome, summary: error.message });
 		const message = error instanceof Error ? error.message.slice(0, 500) : String(error);
 		if (error instanceof AgentError && AGENT_STOPS[error.code]) {
@@ -226,6 +222,10 @@ class ClaimedRun implements Claim {
 		throw error;
 	}
 
+	result<Data>(state: TaskResult["state"], { outcome, summary, data }: Outcome<Data>): TaskResult<Data> {
+		return { state, outcome, summary, traceId: this.traceId, runId: this.runId, ...(data === undefined ? {} : { data }) };
+	}
+
 	/** Records how the run ended and shows it on GitHub. */
 	async #end<Data>(state: "done" | "failed", outcome: Outcome<Data>): Promise<TaskResult<Data>> {
 		const result = await this.#record(state, outcome);
@@ -236,15 +236,10 @@ class ClaimedRun implements Claim {
 		return result;
 	}
 
-	/** Appends `run.finished`; a root run also releases the claim if its trace still holds it. */
+	/** Appends `run.finished`. It changes nothing for a run already recorded as stopped. */
 	async #record<Data>(state: "done" | "failed" | "cancelled", { outcome, summary, links = [], data }: Outcome<Data>): Promise<TaskResult<Data>> {
 		await this.#append(runFinished, { state, outcome, summary, links, duration_ms: Date.now() - this.#startedAt });
-		if (this.traceId === this.runId) await release(this.#db, this.#key, this.traceId, this.runId, state);
-		return this.#result(state, { outcome, summary, data });
-	}
-
-	#result<Data>(state: TaskResult["state"], { outcome, summary, data }: Outcome<Data>): TaskResult<Data> {
-		return { state, outcome, summary, traceId: this.traceId, runId: this.runId, ...(data === undefined ? {} : { data }) };
+		return this.result(state, { outcome, summary, data });
 	}
 
 	#append<S extends z.ZodType>(type: EventSpec<S>, payload: z.input<S>): Promise<unknown> {

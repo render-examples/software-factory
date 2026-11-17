@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
 import type { RepoContext } from "../app/config/index.js";
 import { type GitDataClient, gitData } from "../app/github/git-data.js";
-import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
 import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
 
 const SCRIPT = fileURLToPath(new URL("../sandbox/collect-changes.sh", import.meta.url));
@@ -341,6 +341,7 @@ function harness(dir: string, base: string): Harness {
 					gitData: gh.client(),
 					limits: LIMITS,
 					...overrides,
+					assertOwned: overrides.assertOwned ?? (async () => {}),
 				},
 				{ scriptPath: SCRIPT, repoDir: dir, outPath: h.outPath },
 			);
@@ -574,6 +575,33 @@ describe("publish branch handling", () => {
 		await expect(h.run()).rejects.toThrow(/Refusing to move refs\/heads\/factory\/issue-7/);
 		expect(h.gh.refs.get("factory/issue-7")).toBe(foreign);
 		expect(h.gh.calls.some((c) => c.method === "PATCH")).toBe(false);
+	});
+
+	it("checks ownership after building the commit, immediately before moving the branch", async () => {
+		const { h } = setup();
+		let before: string[] = [];
+		const result = await h.run({
+			assertOwned: async () => {
+				before = h.gh.calls.map((c) => `${c.method} ${c.path}`);
+			},
+		});
+		if ("refused" in result) throw new Error("refused");
+		expect(before.at(-1)).toBe("POST /commits");
+		expect(before.some((call) => call.includes("/ref"))).toBe(false);
+		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
+	});
+
+	it("moves no branch once the caller no longer owns its thread", async () => {
+		const { h } = setup();
+		await expect(
+			h.run({
+				assertOwned: async () => {
+					throw new Error("superseded");
+				},
+			}),
+		).rejects.toThrow("superseded");
+		expect(h.gh.refs.size).toBe(0);
+		expect(h.gh.calls.some((c) => c.path.includes("/ref"))).toBe(false);
 	});
 
 	it("is idempotent on retry with a fixed commit date", async () => {

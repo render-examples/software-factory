@@ -1,8 +1,8 @@
 import { runAgent } from "../../agents/index.js";
-import type { Outcome } from "../../claims/index.js";
 import { type RepoContext, TASKS } from "../../config/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { renderMarker } from "../../github/index.js";
+import type { Outcome } from "../../runs/index.js";
 import { openSandbox, type Sandbox, type SandboxRef, withSandbox } from "../../sandbox/index.js";
 import { TriageInput } from "../../schemas/index.js";
 import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
@@ -22,8 +22,8 @@ export interface TriageDeps extends GitHubTaskDeps {
  */
 export const triageWorkflow = defineGitHubTask(
 	{ name: TASKS.triage, title: "Triage", input: TriageInput, thread: (input) => ({ kind: "issue", number: input.issue }), timeoutSeconds: 3600 },
-	async (claim, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
-		const { gh, repo } = claim;
+	async (run, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
+		const { gh, repo } = run;
 		const [issue, comments, bot] = await Promise.all([gh.getIssue(input.issue), gh.listIssueComments(input.issue), gh.botLogin()]);
 		if (input.commentId !== undefined) {
 			const trigger = comments.find((c) => c.id === input.commentId);
@@ -33,16 +33,16 @@ export const triageWorkflow = defineGitHubTask(
 		}
 		const thread = readThread(issue, comments, bot);
 
-		await claim.reportProgress("opening a sandbox");
+		await run.reportProgress("opening a sandbox");
 		const open = () => (deps.openSandbox ?? openSandbox)(repo, { kind: "branch", name: repo.config.baseBranch });
 		return withSandbox(open, async (sandbox) => {
-			await claim.trackSandbox(sandbox);
-			const agents = triageAgents(deps.runAgent ?? runAgent, claim.agentRunOptions(sandbox));
-			await claim.reportProgress("reading the issue and the repository");
+			await run.trackSandbox(sandbox);
+			const agents = triageAgents(deps.runAgent ?? runAgent, run.agentRunOptions(sandbox));
+			await run.reportProgress("reading the issue and the repository");
 			const decision = await agents.triage(triageMessage(repo.fullName, thread));
 
 			if (decision.decision === "ask") {
-				await claim.reportProgress("posting questions");
+				await run.reportProgress("posting questions");
 				const round = thread.questions ? thread.questions.round + 1 : 1;
 				const body = `${triageQuestionsBody(decision.questions)}\n\n${renderMarker("questions", { round, questions: decision.questions })}`;
 				const comment = thread.questions ? await gh.updateComment(thread.questions.comment.id, body) : await gh.createComment(issue.number, body);
@@ -51,14 +51,14 @@ export const triageWorkflow = defineGitHubTask(
 			}
 
 			if (decision.decision === "decline") {
-				await claim.reportProgress("posting the decision");
+				await run.reportProgress("posting the decision");
 				const comment = await gh.createComment(issue.number, triageDeclineBody(decision.rationale));
 				return { outcome: "declined", summary: "declined the issue.", links: [{ label: "Reason", url: comment.htmlUrl }] };
 			}
 
-			await claim.reportProgress(thread.spec ? "revising the spec" : "drafting the spec");
+			await run.reportProgress(thread.spec ? "revising the spec" : "drafting the spec");
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
-			await claim.reportProgress("posting the spec");
+			await run.reportProgress("posting the spec");
 			return await publishSpec(gh, issue, thread.spec, drafted);
 		});
 	},

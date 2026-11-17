@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../app/db/index.js";
 import { REPO } from "./fixtures/config.js";
-import { holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
+import { runRow, startRun } from "./helpers/runs.js";
 
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
-const { WORKING_LABEL } = await import("../app/claims/index.js");
+const { WORKING_LABEL } = await import("../app/runs/index.js");
 const { runTriage } = await import("../app/workflows/triage/index.js");
 type AgentRunner = import("../app/workflows/triage/agents.js").AgentRunner;
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -72,7 +72,7 @@ class FakeGitHub {
 		return { ...comment };
 	}
 
-	/** Comments other than the status comment withClaim keeps. */
+	/** Comments other than the status comment withRun keeps. */
 	written(): IssueComment[] {
 		return this.comments.filter((c) => !parseMarker(c.body, "status"));
 	}
@@ -189,12 +189,12 @@ function specComment(gh: FakeGitHub, s: Spec, version: number, login = BOT, note
 	return gh.add(login, `## Specification v${version}\n\n${renderMarker("spec", { spec: s, hash: contentHash(s), version, notes })}`);
 }
 
-/** Wraps the agent runner so a newer run claims the issue as soon as `agentId` returns. */
-function loseClaimAfter(deps: { runAgent: AgentRunner }, agentId: string): void {
+/** Wraps the agent runner so a newer run starts on the issue as soon as `agentId` returns. */
+function loseThreadAfter(deps: { runAgent: AgentRunner }, agentId: string): void {
 	const run = deps.runAgent;
 	deps.runAgent = (async (...args: Parameters<AgentRunner>) => {
 		const result = await run(...args);
-		if (args[0].id === agentId) await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
+		if (args[0].id === agentId) await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
 		return result;
 	}) as AgentRunner;
 }
@@ -374,19 +374,19 @@ describe("triage task", () => {
 		expect(sandbox.closed).toBe(1);
 	});
 
-	it("posts no questions once a newer run claims the issue", async () => {
+	it("posts no questions once a newer run starts on the issue", async () => {
 		const { gh, deps } = setup({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
-		loseClaimAfter(deps, "triage");
+		loseThreadAfter(deps, "triage");
 
 		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
 		expect(gh.written()).toEqual([]);
 	});
 
-	it("neither revises the spec nor removes its approval once a newer run claims the issue", async () => {
+	it("neither revises the spec nor removes its approval once a newer run starts on the issue", async () => {
 		const { gh, deps } = setup({ triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] });
 		const original = specComment(gh, spec(), 1);
 		gh.labels.add(APPROVED);
-		loseClaimAfter(deps, "spec-writer");
+		loseThreadAfter(deps, "spec-writer");
 
 		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
 		expect(gh.written().map((c) => c.body)).toEqual([original.body]);

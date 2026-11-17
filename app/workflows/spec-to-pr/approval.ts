@@ -1,7 +1,7 @@
 import { config } from "../../config/index.js";
-import { Spec, type SpecApproval } from "../../schemas/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment } from "../../github/index.js";
-import { ExpectedFailure } from "../../claims/index.js";
+import { ExpectedFailure } from "../../runs/index.js";
+import { Spec, type SpecApproval } from "../../schemas/index.js";
 
 type ApprovalGitHub = Pick<GitHubClient, "botLogin" | "listIssueComments" | "getLabelEvents">;
 

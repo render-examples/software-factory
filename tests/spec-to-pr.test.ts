@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
-import { holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
+import { runRow, startRun } from "./helpers/runs.js";
 
 const { AgentError } = await import("../app/agents/index.js");
 const { config } = await import("../app/config/index.js");
@@ -206,7 +206,7 @@ function setup(
 
 const verifyCommands = (execs: Array<{ command: string }>) => execs.filter((e) => !e.command.startsWith("git status")).map((e) => e.command);
 const finished = () => runRow(db, "trn-spec");
-const loseClaim = () => holdClaim(db, REPO, { kind: "issue", number: ISSUE }, { traceId: "trn-newer" });
+const loseThread = () => startRun(db, REPO, { kind: "issue", number: ISSUE }, { traceId: "trn-newer" });
 
 let db: Db;
 beforeAll(async () => {
@@ -358,11 +358,11 @@ describe("rerunning on an existing branch", () => {
 	});
 });
 
-describe("losing the claim", () => {
-	it("does not move the branch once a newer run claims the issue", async () => {
+describe("losing the thread", () => {
+	it("does not move the branch once a newer run starts on the issue", async () => {
 		const t = setup();
 		vi.mocked(t.runAgent as NonNullable<SpecToPrDeps["runAgent"]>).mockImplementationOnce(async () => {
-			await loseClaim();
+			await loseThread();
 			return { output: implementation(), costUsd: 0, usage: {}, turns: 1 } as never;
 		});
 		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });
@@ -370,10 +370,10 @@ describe("losing the claim", () => {
 		expect(t.gh.ensurePull).not.toHaveBeenCalled();
 	});
 
-	it("does not open the pull request once a newer run claims the issue", async () => {
+	it("does not open the pull request once a newer run starts on the issue", async () => {
 		const t = setup();
 		t.publish.mockImplementationOnce(async () => {
-			await loseClaim();
+			await loseThread();
 			return PUBLISHED;
 		});
 		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });

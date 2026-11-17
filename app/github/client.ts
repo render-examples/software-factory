@@ -76,6 +76,10 @@ export class GitHubClient {
 		);
 	}
 
+	async deleteComment(commentId: number): Promise<void> {
+		await this.http.json("DELETE", `${this.base}/issues/comments/${commentId}`);
+	}
+
 	/** Creates a repository label; an existing one (422) is left as it is. */
 	async ensureLabel(name: string, color: string, description = ""): Promise<void> {
 		try {

@@ -2,7 +2,7 @@ import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { append, type Db } from "../app/db/index.js";
-import { type AgentRunSummary, AgentRunRecorder, defineEvent } from "../app/events/index.js";
+import { AgentRunRecorder, type AgentRunSummary, defineEvent } from "../app/events/index.js";
 import { createGateway, EventHub } from "../app/gateway/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
 import type { ThreadKey } from "../app/threads/index.js";
@@ -19,7 +19,7 @@ const SUMMARY: AgentRunSummary = {
 	usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0 },
 	costUsd: 0,
 };
-const claimed = defineEvent("test.claimed", 1, z.strictObject({ run_id: z.string().max(50) }));
+const opened = defineEvent("test.opened", 1, z.strictObject({ run_id: z.string().max(50) }));
 const progressed = defineEvent("test.progressed", 1, z.strictObject({ summary: z.string().max(100) }));
 
 let db: Db;
@@ -121,9 +121,7 @@ describe("GET /threads/:thread/stream", () => {
 	it("shows every stream's events on the thread in commit order, with live deltas, and resumes from a <tx>-<seq> ID", async () => {
 		const thread = "github:acme/web#issue-77";
 		const path = `/threads/${encodeURIComponent(thread)}/stream`;
-		await db.withTx((tx) =>
-			append(tx, { type: claimed, stream: `thread:${thread}`, thread, source: "workflow:trn-1", payload: { run_id: "trn-1" } }),
-		);
+		await db.withTx((tx) => append(tx, { type: opened, stream: `thread:${thread}`, thread, source: "workflow:trn-1", payload: { run_id: "trn-1" } }));
 		await db.withTx((tx) =>
 			append(tx, { type: progressed, stream: "run:trn-1", thread, source: "workflow:trn-1", payload: { summary: "triaging" } }),
 		);
@@ -144,7 +142,7 @@ describe("GET /threads/:thread/stream", () => {
 
 		const stream = readSse(await get(path));
 		const backlog = await stream.take(4);
-		expect(backlog.map((f) => f.event)).toEqual(["test.claimed", "test.progressed", "agent_run.started", "assistant.message"]);
+		expect(backlog.map((f) => f.event)).toEqual(["test.opened", "test.progressed", "agent_run.started", "assistant.message"]);
 		for (const frame of backlog) expect(frame.id).toMatch(/^\d+-\d+$/);
 
 		feed(r, delta("Draft", "m2"));
@@ -160,16 +158,14 @@ describe("GET /threads/:thread/stream", () => {
 
 	it("serves a GitHub issue or pull request at its alias path, the same as at its thread key", async () => {
 		const thread = "github:acme/web#pr-34";
-		await db.withTx((tx) =>
-			append(tx, { type: claimed, stream: `thread:${thread}`, thread, source: "workflow:trn-3", payload: { run_id: "trn-3" } }),
-		);
+		await db.withTx((tx) => append(tx, { type: opened, stream: `thread:${thread}`, thread, source: "workflow:trn-3", payload: { run_id: "trn-3" } }));
 		const frames = [];
 		for (const path of [`/threads/${encodeURIComponent(thread)}/stream`, "/threads/github/acme/web/pr/34/stream"]) {
 			const stream = readSse(await get(path));
 			frames.push(await stream.take(1));
 			await stream.close();
 		}
-		expect(frames[0]).toEqual([expect.objectContaining({ event: "test.claimed", data: expect.objectContaining({ thread }) })]);
+		expect(frames[0]).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread }) })]);
 		expect(frames[1]).toEqual(frames[0]);
 	});
 });

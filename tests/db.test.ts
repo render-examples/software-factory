@@ -153,8 +153,8 @@ describe("ordered reads", () => {
 
 	it("pages a thread across streams by (tx, seq)", async () => {
 		const thread: ThreadKey = `github:acme/web#issue-${randomUUID()}`;
-		const [claims, run] = [`thread:${thread}`, newStream()];
-		await db.withTx((tx) => append(tx, note(claims, "claim", { thread })));
+		const [threadStream, run] = [`thread:${thread}`, newStream()];
+		await db.withTx((tx) => append(tx, note(threadStream, "opened", { thread })));
 		await db.withTx(async (tx) => {
 			await append(tx, note(run, "started", { thread }));
 			await append(tx, note(newStream(), "unrelated"));
@@ -163,7 +163,7 @@ describe("ordered reads", () => {
 		const first = await readThread(db, thread, START, 2);
 		const last = first.at(-1) as LogEvent;
 		const rest = await readThread(db, thread, { tx: last.tx, seq: last.seq }, 2);
-		expect([...first, ...rest].map((event) => event.payload)).toEqual([{ text: "claim" }, { text: "started" }, { text: "finished" }]);
+		expect([...first, ...rest].map((event) => event.payload)).toEqual([{ text: "opened" }, { text: "started" }, { text: "finished" }]);
 	});
 });
 

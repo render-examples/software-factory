@@ -1,7 +1,7 @@
 import type { RepoContext } from "../../config/index.js";
 import type { PullRequest } from "../../github/index.js";
-import { ExpectedFailure } from "../../claims/index.js";
-import { type OpenedSandbox, type SandboxRef, type Sandbox, shq, withSandbox } from "../../sandbox/index.js";
+import { ExpectedFailure } from "../../runs/index.js";
+import { type OpenedSandbox, type Sandbox, type SandboxRef, shq, withSandbox } from "../../sandbox/index.js";
 
 export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
 

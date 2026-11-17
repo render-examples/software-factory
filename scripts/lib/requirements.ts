@@ -1,7 +1,7 @@
 /** What the factory needs from GitHub and from each service's environment, in one place for setup and doctor. */
 import { AGENTS } from "../../app/agents/registry.js";
 import { config } from "../../app/config/index.js";
-import { WORKING_LABEL } from "../../app/claims/status.js";
+import { WORKING_LABEL } from "../../app/runs/status.js";
 
 /**
  * Repository permissions the App requests. Each is used by app/:

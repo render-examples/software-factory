@@ -37,26 +37,25 @@ export const deliveryReceived = defineEvent(
 	z.strictObject({ event: name, repo: id.optional(), task: name.optional(), ignored: z.string().max(200).optional() }),
 );
 
-/** Stream `run:<task_run_id>` for the rest of this block. `trace_id` is the root task run. */
+/**
+ * Stream `thread:<thread>`: task run `run_id` started on the thread. `trace_id` is its root task run. The trace
+ * whose run started last owns the thread until its runs finish; the stream's version fences starts.
+ */
 export const runStarted = defineEvent(
 	"run.started",
 	1,
-	z.strictObject({ trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
+	z.strictObject({ run_id: id, trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
 );
 
-/** The actor lacked the permission to start the run, which never claimed its thread. */
-export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ actor: name, reason: summary }));
+/** Stream `run:<task_run_id>` for the rest of this block. The actor lacked the permission, so the run never started. */
+export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ trace_id: id, task: name, title: name, actor: name, reason: summary }));
 
 export const runProgress = defineEvent("run.progress", 1, z.strictObject({ summary }));
 
 export const runSandboxAttached = defineEvent("run.sandbox_attached", 1, z.strictObject({ sandbox_id: id }));
 
-/** Another run stopped this one; `by` is that run, and `active` whether Render still had this one's trace running. */
-export const runStopped = defineEvent(
-	"run.stopped",
-	1,
-	z.strictObject({ by: id, outcome: z.enum(["superseded", "cancelled"]), active: z.boolean(), summary }),
-);
+/** A run that took over the thread stopped this one; `by` is that run, and `active` whether Render still had this one's trace running. */
+export const runStopped = defineEvent("run.stopped", 1, z.strictObject({ by: id, active: z.boolean(), summary }));
 
 export const runFinished = defineEvent(
 	"run.finished",
@@ -69,16 +68,6 @@ export const runFinished = defineEvent(
 		duration_ms: z.number().int().nonnegative(),
 	}),
 );
-
-/** Stream `thread:<thread>`; its version fences claims. `run_id` is the trace's current task run. */
-export const claimAcquired = defineEvent(
-	"claim.acquired",
-	1,
-	z.strictObject({ trace_id: id, run_id: id, previous_trace_id: id.nullable(), previous_run_id: id.nullable() }),
-);
-
-export const claimReleased = defineEvent("claim.released", 1, z.strictObject({ trace_id: id, state: finalState }));
-
 // Live agent events (plan 05)
 
 /**

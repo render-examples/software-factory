@@ -2,8 +2,6 @@ export {
 	agentRunFinished,
 	agentRunStarted,
 	assistantMessage,
-	claimAcquired,
-	claimReleased,
 	defineEvent,
 	deliveryReceived,
 	type EventSpec,
@@ -19,4 +17,4 @@ export {
 	toolResult,
 	usage,
 } from "./catalog.js";
-export { type AgentRunSummary, AgentRunRecorder, type RecorderOptions } from "./recorder.js";
+export { AgentRunRecorder, type AgentRunSummary, type RecorderOptions } from "./recorder.js";

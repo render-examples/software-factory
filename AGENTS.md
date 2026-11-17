@@ -30,9 +30,9 @@ software-factory deploys two processes:
 
 Agents run inside Render Sandboxes. Only code in the Workflows service writes
 to GitHub. Postgres holds factory state as an append-only event log
-(`app/db/`), including who owns each thread (a GitHub issue or pull request,
-keyed `github:owner/name#issue-12`); only the two
-services connect to it, and both apply its migrations at startup. GitHub holds
+(`app/db/`), including which run owns each thread (a GitHub issue or pull
+request, keyed `github:owner/name#issue-12`); only the two services connect to
+it, and both apply its migrations at startup. GitHub holds
 issues, specifications, pull requests, and reviews, and Render Workflows holds
 task execution. The status comment is a view and is never read back.
 
@@ -40,7 +40,7 @@ Two dependency rules are mandatory:
 
 1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent
    definitions in `app/agents/registry.ts`, and `app/schemas/`) imports no
-   host-only code: GitHub, Sandboxes, Workflows, claims, events, the
+   host-only code: GitHub, Sandboxes, Workflows, runs, events, the
    database, or config.
    `tests/agents-catalog.test.ts` enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
@@ -49,7 +49,8 @@ Two dependency rules are mandatory:
 
 Read the canonical
 [security invariants](docs/architecture.md#security-invariants) before
-changing credentials, claims, Sandboxes, publishing, or GitHub writes.
+changing credentials, run coordination, Sandboxes, publishing, or GitHub
+writes.
 
 ## Code conventions
 
@@ -62,7 +63,7 @@ changing credentials, claims, Sandboxes, publishing, or GitHub writes.
 - Build agent output objects with `z.strictObject`. Bound strings and arrays.
 - Keep task inputs and results small and JSON-serializable.
 - Open Sandboxes through `withSandbox`. In GitHub tasks, call
-  `claim.trackSandbox()` immediately after opening one.
+  `run.trackSandbox()` immediately after opening one.
 - Use `ExpectedFailure` only for expected messages safe to publish on GitHub.
   Keep outcome names in snake_case.
 - Quote generated shell arguments with `shq`. Put long or

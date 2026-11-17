@@ -29,7 +29,7 @@ both services, and runs one Triage smoke test.
 2. Running agents and repository tools inside short-lived, isolated Render Sandboxes.
 3. Handling overlapping runs, cancellation, cleanup, and idempotency.
 4. Validating typed agent output and safely publishing proposed code to GitHub.
-5. Recording every delivery, claim, task run, and agent run in a Postgres event log, and streaming agent runs live.
+5. Recording every delivery, task run, and agent run in a Postgres event log, and streaming agent runs live.
 6. Providing deployment configuration, setup scripts, and health checks.
 
 **What software-factory leaves for you:**
@@ -51,8 +51,8 @@ both services, and runs one Triage smoke test.
 
 GitHub holds the discussion, labels, specifications, pull requests, and
 reviews. Render Workflows runs the tasks. Postgres records every delivery,
-claim, task run, and agent run; the status comment on each issue or pull
-request is rendered from it. Sandboxes contain the checkout, agent loop, and
+task run, and agent run; the status comment on each issue or pull request is
+rendered from it. Sandboxes contain the checkout, agent loop, and
 model-directed tools. The included workflow never approves or merges code.
 
 The three labels above keep each transition human-gated. Apply
@@ -86,14 +86,14 @@ The built-in agents and tasks are examples of the template's extension model:
   model), a bounded Zod output schema, and the minimum tools it needs.
 - Run agents on another agent library by adding a harness adapter.
 - Define a GitHub task for work attached to an issue or pull request.
-- Add a plain Workflows task for maintenance or other work without a GitHub
-  claim.
+- Add a plain Workflows task for maintenance or other work without an issue
+  or pull request.
 - Route new GitHub events, labels, or commands through the authenticated
   gateway.
 - Change repositories, verification commands, permissions, and limits in
   `factory.config.ts`, and agent models in `app/agents/models.ts`.
 
-The Sandbox runner, claim lifecycle, GitHub client, formatting helpers, and
+The Sandbox runner, run lifecycle, GitHub client, formatting helpers, and
 publishing boundary are reusable building blocks. Start with the
 [extension runbook](docs/runbooks/extend.md), which covers the required files,
 tests, authority rules, deploys, and snapshot refreshes.

@@ -1,4 +1,4 @@
-import { claimAcquired, claimReleased, runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
+import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
 import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
@@ -29,11 +29,20 @@ const runs: Projection = {
 			);
 		switch (event.type) {
 			case runStarted.type: {
-				const { trace_id, task, title } = runStarted.payload.parse(event.payload);
+				const { run_id, trace_id, task, title } = runStarted.payload.parse(event.payload);
 				await tx.query(
 					`insert into runs (run_id, trace_id, task, title, thread, state, started_at, updated_seq)
 					 values ($1, $2, $3, $4, $5, 'running', $6, $7)`,
-					[runId, trace_id, task, title, event.thread, event.createdAt, event.seq],
+					[run_id, trace_id, task, title, event.thread, event.createdAt, event.seq],
+				);
+				return;
+			}
+			case runRejected.type: {
+				const { trace_id, task, title, reason } = runRejected.payload.parse(event.payload);
+				await tx.query(
+					`insert into runs (run_id, trace_id, task, title, thread, state, outcome, summary, links, started_at, finished_at, updated_seq)
+					 values ($1, $2, $3, $4, $5, 'rejected', 'permission_denied', $6, '[]', $7, $7, $8)`,
+					[runId, trace_id, task, title, event.thread, reason, event.createdAt, event.seq],
 				);
 				return;
 			}
@@ -47,13 +56,8 @@ const runs: Projection = {
 				await tx.query("update runs set sandbox_id = $2, updated_seq = $3 where run_id = $1 and state = 'running'", [runId, sandbox_id, event.seq]);
 				return;
 			}
-			case runRejected.type: {
-				await close("rejected", "permission_denied", runRejected.payload.parse(event.payload).reason);
-				return;
-			}
 			case runStopped.type: {
-				const { outcome, summary } = runStopped.payload.parse(event.payload);
-				await close("cancelled", outcome, summary);
+				await close("cancelled", "superseded", runStopped.payload.parse(event.payload).summary);
 				return;
 			}
 			case runFinished.type: {
@@ -65,31 +69,23 @@ const runs: Projection = {
 	},
 };
 
-/** Which trace holds each thread, and the thread stream's version at its latest claim event. */
-const claims: Projection = {
-	table: "claims",
+/** The latest run started on each thread. */
+const threads: Projection = {
+	table: "threads",
 	key: ["thread"],
 	operational: ["status_comment_id"],
 	async apply(tx, event) {
-		if (event.type === claimAcquired.type) {
-			const { trace_id, run_id } = claimAcquired.payload.parse(event.payload);
-			await tx.query(
-				`insert into claims (thread, stream_version, trace_id, run_id, state, updated_seq) values ($1, $2, $3, $4, 'held', $5)
-				 on conflict (thread) do update set stream_version = excluded.stream_version, trace_id = excluded.trace_id,
-				   run_id = excluded.run_id, state = 'held', updated_seq = excluded.updated_seq`,
-				[event.thread, event.streamVersion, trace_id, run_id, event.seq],
-			);
-		} else if (event.type === claimReleased.type) {
-			await tx.query("update claims set stream_version = $2, state = 'released', updated_seq = $3 where thread = $1", [
-				event.thread,
-				event.streamVersion,
-				event.seq,
-			]);
-		}
+		if (event.type !== runStarted.type) return;
+		const { trace_id, run_id } = runStarted.payload.parse(event.payload);
+		await tx.query(
+			`insert into threads (thread, trace_id, run_id, updated_seq) values ($1, $2, $3, $4)
+			 on conflict (thread) do update set trace_id = excluded.trace_id, run_id = excluded.run_id, updated_seq = excluded.updated_seq`,
+			[event.thread, trace_id, run_id, event.seq],
+		);
 	},
 };
 
-export const PROJECTIONS: readonly Projection[] = [runs, claims, agentRuns];
+export const PROJECTIONS: readonly Projection[] = [runs, threads, agentRuns];
 
 /** Applies an event to every projection, in the transaction that appends it. */
 export async function project(tx: Tx, event: LogEvent): Promise<void> {

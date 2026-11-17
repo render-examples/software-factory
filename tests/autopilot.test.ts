@@ -1,17 +1,17 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TaskResult } from "../app/claims/index.js";
 import { config } from "../app/config/index.js";
 import type { Db } from "../app/db/index.js";
 import type { GitHubClient, IssueComment } from "../app/github/index.js";
+import type { TaskResult } from "../app/runs/index.js";
 import { runAutopilot } from "../app/workflows/autopilot/index.js";
 import { prReviewWorkflow } from "../app/workflows/pr-review/index.js";
 import { type SpecToPrHandoff, specToPrWorkflow } from "../app/workflows/spec-to-pr/index.js";
 import { triageWorkflow } from "../app/workflows/triage/index.js";
 import type { TriageHandoff } from "../app/workflows/triage/spec.js";
 import { REPO } from "./fixtures/config.js";
-import { holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
+import { runRow, startRun } from "./helpers/runs.js";
 
 const SPEC_HASH = "b".repeat(64);
 
@@ -180,13 +180,13 @@ describe("autopilot", () => {
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
-	it("does not put the autopilot label back after a newer run claims the issue", async () => {
+	it("does not put the autopilot label back after a newer run starts on the issue", async () => {
 		const gh = new FakeGitHub();
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
 			db,
 			triage: async () => {
-				await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
+				await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
 				return result("trn-triage", "asked", { summary: "asked one question." });
 			},
 		});
@@ -221,7 +221,7 @@ describe("autopilot", () => {
 			gh: asClient(gh),
 			db,
 			triage: async () => {
-				await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
+				await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
 				return result("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." });
 			},
 			specToPr,

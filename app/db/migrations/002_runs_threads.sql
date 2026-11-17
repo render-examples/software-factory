@@ -1,4 +1,4 @@
--- One row per Workflows task run, derived from its run:<id> stream.
+-- One row per Workflows task run, from its run.started on the thread stream (or its run.rejected) and its run:<id> stream.
 create table runs (
   run_id      text primary key,
   trace_id    text not null,
@@ -17,13 +17,12 @@ create table runs (
 create index runs_trace on runs (trace_id);
 create index runs_thread on runs (thread);
 
--- The trace that owns each thread, such as an issue or pull request, derived from its thread:<thread> stream.
-create table claims (
+-- The latest run started on each thread, such as an issue or pull request, derived from its thread:<thread> stream.
+-- Its trace owns the thread while any of the trace's runs is running.
+create table threads (
   thread            text primary key,
-  stream_version    int not null,
   trace_id          text not null,
   run_id            text not null,
-  state             text not null,
   -- Operational: the comment the status view is synced to. db:rebuild keeps it.
   status_comment_id bigint,
   updated_seq       bigint not null

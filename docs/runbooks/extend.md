@@ -32,10 +32,10 @@ Decide which change you need:
   task.
 - **Agent harness:** another agent library or model client behind the runner
   contract.
-- **Claiming task:** work attached to one issue or pull request that must stop
+- **GitHub task:** work attached to one issue or pull request that must stop
   when another run takes over.
-- **Plain task:** maintenance work without an issue or pull request claim,
-  such as snapshot refresh.
+- **Plain task:** maintenance work without an issue or pull request, such as
+  snapshot refresh.
 - **GitHub trigger:** a new authenticated event, label, or command that starts
   a task.
 
@@ -116,7 +116,7 @@ must not import host-only code.
 Call the agent inside a Sandbox owned by the task:
 
 ```typescript
-const result = await runAgent(finder, message, claim.agentRunOptions(sandbox));
+const result = await runAgent(finder, message, run.agentRunOptions(sandbox));
 ```
 
 Use the typed `result.output`. Do not parse assistant text or accept a target
@@ -204,7 +204,7 @@ export const exampleWorkflow = defineGitHubTask(
     thread: (input) => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
-  async (claim, input, deps): Promise<Outcome> => {
+  async (run, input, deps): Promise<Outcome> => {
     // Code in the Workflows service owns all external writes.
     return { outcome: "completed", summary: "completed the example task." };
   },
@@ -223,14 +223,15 @@ export const runExample = exampleWorkflow.run;
 GitHub tasks do not retry automatically. A retry can repeat model spend or
 durable writes; a person starts a fresh run instead.
 
-### 3. Use the claim correctly
+### 3. Use the run correctly
 
-- Call `claim.reportProgress()` before a major step.
+- Call `run.reportProgress()` before a major step.
 - Open Sandboxes only through `withSandbox`.
-- Call `claim.trackSandbox(sandbox)` immediately after opening one.
-- Pass `claim.agentRunOptions(sandbox)` to `runAgent`.
-- Call `claim.assertCurrent()` before a durable effect that is not already
-  guarded by the claim helper.
+- Call `run.trackSandbox(sandbox)` immediately after opening one.
+- Pass `run.agentRunOptions(sandbox)` to `runAgent`.
+- Call `run.assertCurrent()` immediately before a durable effect that
+  `reportProgress()` does not already guard, and pass it to `publish()` as
+  `assertOwned`.
 - Throw `ExpectedFailure` only for an expected message safe to show on
   GitHub.
 - Return a short snake_case `outcome`, user-facing `summary`, and relevant
@@ -259,7 +260,7 @@ export const pipeline = defineGitHubTask(
     thread: input => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
-  async (_claim, input, _deps, ctx) => {
+  async (_run, input, _deps, ctx) => {
     if (!ctx.run) throw new Error("pipeline requires a Workflows context");
     const first = await ctx.run(firstWorkflow.task, input);
     if (first.state !== "done" || !first.data) {
@@ -272,9 +273,10 @@ export const pipeline = defineGitHubTask(
 ```
 
 Each `ctx.run()` starts a child task on separate compute and waits for its
-typed result. The parent owns the thread's root claim; its children continue
-that claim, update the current stage and Sandbox, and run their own permission
-checks.
+typed result. The parent is the trace that owns the thread; each child starts
+on the thread only while that trace is still its latest, becomes the current
+stage in the status comment, records its own Sandbox, and runs its own
+permission check.
 
 Keep parent retries disabled. Retrying a parent can create new child runs and
 repeat model spend. Return immediately after a child is cancelled, rejected,
@@ -286,7 +288,7 @@ is the complete example.
 ## Add a plain Workflows task
 
 Use the Render SDK's `task()` directly only when the work has no issue or pull
-request claim. `app/workflows/refresh-snapshot.ts` is the reference.
+request. `app/workflows/refresh-snapshot.ts` is the reference.
 
 A plain task must still:
 

@@ -1,9 +1,9 @@
-import { type TaskContext, type TaskDefinition, task as registerTask } from "@renderinc/sdk/workflows";
+import { task as registerTask, type TaskContext, type TaskDefinition } from "@renderinc/sdk/workflows";
 import type { z } from "zod";
-import { type Claim, type Outcome, type RunControl, type TaskResult, withClaim } from "../claims/index.js";
 import { requireRepo } from "../config/index.js";
 import type { Db } from "../db/index.js";
 import type { GitHubClient } from "../github/index.js";
+import { type Outcome, type Run, type RunControl, type TaskResult, withRun } from "../runs/index.js";
 import type { GitHubThread } from "../threads/index.js";
 
 /** Test seams shared by tasks attached to a GitHub issue or pull request. */
@@ -20,7 +20,7 @@ export interface GitHubTaskSpec<Input> {
 	title: string;
 	/** Validates input before any work starts. */
 	input: z.ZodType<Input>;
-	/** Selects the issue or pull request this run owns. */
+	/** Selects the issue or pull request this run starts on. */
 	thread(input: Input, ctx: GitHubTaskContext): GitHubThread;
 	timeoutSeconds: number;
 }
@@ -43,16 +43,16 @@ export interface GitHubTask<Deps, Data = undefined> {
 /**
  * Defines work attached to one GitHub issue or pull request. Every run validates
  * input, resolves the configured repository, checks the actor's permission, and
- * claims its thread until it finishes.
+ * starts on its thread: a root run takes it over, and a subtask continues its root.
  */
 export function defineGitHubTask<Input extends { repo: string; installationId: number; actor: string }, Data, Deps extends GitHubTaskDeps>(
 	spec: GitHubTaskSpec<Input>,
-	work: (claim: Claim, input: Input, deps: Deps, ctx: GitHubTaskContext) => Promise<Outcome<Data>>,
+	work: (run: Run, input: Input, deps: Deps, ctx: GitHubTaskContext) => Promise<Outcome<Data>>,
 ): GitHubTask<Deps, Data> {
 	const run: GitHubTaskRunner<Deps, Data> = (ctx, raw, deps = {} as Deps) => {
 		const input = spec.input.parse(raw);
 		const repo = requireRepo(input.repo, input.installationId);
-		return withClaim(
+		return withRun(
 			ctx,
 			{
 				repo,
@@ -65,7 +65,7 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 				runs: deps.runs,
 				db: deps.db,
 			},
-			(claim) => work(claim, input, deps, ctx),
+			(threadRun) => work(threadRun, input, deps, ctx),
 		);
 	};
 	// Replaying a run can repeat model spend and durable writes. A new GitHub

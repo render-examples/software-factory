@@ -2,8 +2,8 @@
 
 Agents inspect and modify repositories inside short-lived Render Sandboxes.
 Code in the Workflows service validates their results and performs every
-GitHub write. Postgres records every delivery, claim, task run, and agent run,
-and the gateway streams agent runs live to readers.
+GitHub write. Postgres records every delivery, task run, and agent run, and the
+gateway streams agent runs live to readers.
 
 ## Design principles
 
@@ -20,7 +20,7 @@ flowchart LR
   GitHub -->|signed webhook| Gateway
   Gateway -->|record delivery| Postgres
   Gateway -->|start task| Workflows
-  Workflows -->|claims, runs, agent events| Postgres
+  Workflows -->|runs, agent events| Postgres
   Workflows -->|restore| Sandbox
   Sandbox -->|live events, typed result, candidate tree| Workflows
   Workflows -->|validated write| GitHub
@@ -72,8 +72,8 @@ security, correctness, performance, and tests.
 ### Autopilot
 
 Applying `factory:autopilot` grants upfront approval for Triage, Spec-to-PR, and PR Reviewer.
-The parent starts each GitHub task with `ctx.run`, so every stage has its own compute, claim,
-status, and Sandbox.
+The parent starts each GitHub task with `ctx.run`, so every stage is its own run, with
+its own compute, status, and Sandbox.
 
 Autopilot does not apply the manual transition labels. Triage can still remove
 a stale `factory:spec-approved` label when it revises a spec. Triage returns
@@ -90,14 +90,14 @@ Each kind of state has one owner:
 
 | State | Owner |
 |---|---|
-| Deliveries, claims, task runs, their outcomes, and their Sandboxes | Postgres event log |
+| Deliveries, task runs, the run that owns each thread, outcomes, and Sandboxes | Postgres event log |
 | Agent runs: messages, tool calls, outcome, usage, and cost | Postgres event log |
 | Whether a task process is alive, and its input and result | Render Workflows |
 | Issues, labels, specifications, pull requests, and reviews | GitHub |
 | Prepared repository filesystem | Render Sandbox snapshot |
 
-The status comment on an issue or pull request is a view of the claim and the
-current run, rendered from Postgres. Nothing reads it back, and nothing reads
+The status comment on an issue or pull request is a view of the thread's latest
+trace, rendered from Postgres. Nothing reads it back, and nothing reads
 agent run events to decide what a task may do: they are for people to watch.
 
 ### Event log
@@ -131,36 +131,58 @@ at three boundaries:
    key `delivery:github:<delivery ID>`, so another channel's delivery IDs can't
    collide with GitHub's. The bare delivery ID is the Workflows idempotency key. If Postgres is unavailable it
    returns 502, so GitHub marks the delivery failed and it can be redelivered.
-2. The version of a thread's `thread:<thread>` stream fences claims on it.
+2. The version of a thread's `thread:<thread>` stream fences the runs that
+   start on it.
 3. Hidden markers identify App-authored specifications, pull requests, and
    reviews so writes can update or reuse them.
 
-A claim belongs to a trace: the root workflow run. It also names the trace's
-current task run, which is the root or one of its children. A child continues
-its root's claim and may not take over another's. Cancellation stops the root
-and closes the current child.
+A run belongs to a trace: the root workflow run and its child task runs. A run
+starts on its thread by appending `run.started`, with its run and trace IDs, to
+the thread's stream, and the trace whose run started last owns the thread
+until its runs finish. Each run's progress, Sandbox, and end are events on its
+own `run:<run ID>` stream.
 
-A new GitHub task run appends `claim.acquired` to the thread's stream at the
-version it read, so of two runs that read the same claim only one appends; the
-other rereads and tries again. After its claim commits, it cancels the
-previous trace if Render still has it running, terminates the Sandboxes that
-trace recorded, and records it stopped. Claiming first fences the previous
-run even when cancelling it fails: it stops at its next ownership check.
+A root run appends `run.started` at the version it read, so of two runs that
+read the same latest trace only one appends; the other rereads and tries again.
+If the trace it displaced still has running runs, the new run then cancels that
+trace's root if Render still has it active, terminates the Sandboxes those runs
+recorded, and appends `run.stopped` for each. Starting first fences the
+displaced trace even when stopping it fails: it stops at its next ownership
+check. A child run starts only while its own trace is the thread's latest, so a
+stale child can never take the thread back.
 
-GitHub tasks check ownership immediately before progress updates and durable
-writes. The GitHub write happens after the check, outside the transaction, so a
-run can still lose its claim in between. Publishing also uses a deterministic
-branch and refuses to overwrite human commits.
+The actor's permission is checked before a run starts. A rejected run never
+appends to the thread's stream, so it displaces nothing. Its `run.rejected` is
+recorded on its own stream, and it is shown on GitHub only on a thread with no
+runs, the first time, so anyone who can comment can't make the factory comment.
+
+`/factory cancel` is a run like any other. Starting it stops the running trace,
+root and current child; its result is what it stopped, or that nothing was
+running.
+
+A run is current while its trace is the thread's latest and the run is still
+running. GitHub tasks check this immediately before progress updates and
+durable writes, and publishing checks it again immediately before moving the
+branch. The GitHub write happens after the check, outside the transaction, so a
+run can still be displaced in between. Publishing also uses a deterministic
+branch and refuses to overwrite human commits. A run that fails after it was
+displaced, for example because its Sandbox was terminated, ends as superseded
+rather than as a failure.
 
 Render Workflows decides whether a task process is alive. Render can cancel a
 task without running its `finally`, which leaves its run recorded as running
-and its claim held until the next claim or `/factory cancel` closes it. There
-is no sweeper.
+and its trace owning the thread until another run, such as `/factory cancel`,
+takes over. There is no sweeper.
 
 The status comment and `factory:working` are synced from Postgres after each
-claim, progress update, and finish. A GitHub failure while syncing is logged
-and never fails the run; the final sync retries. Editing or deleting the
-comment can't change who owns the issue or pull request.
+start, progress update, and finish. The comment shows the thread's latest
+trace: the run that started last while it runs, and otherwise the trace's root,
+which reports how the trace ended. `factory:working` is present while that
+trace has a running run. A thread records one status comment; when two syncs
+create one at once, the one recorded first stays and the other is deleted. A
+GitHub failure while syncing is logged and never fails the run; the final sync
+retries. Editing or deleting the comment can't change who owns the issue or
+pull request.
 
 ## Sandboxes and snapshots
 
@@ -178,9 +200,9 @@ checkout, and installed dependencies. A GitHub task then:
 8. closes the Sandbox in `finally`.
 
 Render terminates a cancelled task without running `finally`. For that case,
-each GitHub task records its Sandbox ID in Postgres. A replacement run or
-`/factory cancel` terminates the recorded Sandbox. The provider timeout
-is the final cleanup backstop.
+each GitHub task records its Sandbox ID in Postgres. A run that takes over the
+thread, such as `/factory cancel`, terminates the recorded Sandbox. The
+provider timeout is the final cleanup backstop.
 
 Snapshots avoid reinstalling dependencies on every run. Restored Sandboxes
 still fetch the requested commit and verify their current state; a snapshot is
@@ -274,7 +296,8 @@ the Workflows host, which:
 3. rejects workflow files, symlinks, and submodules;
 4. asks GitHub to build the same tree;
 5. compares GitHub's tree SHA with the Sandbox tree SHA; and
-6. moves the deterministic branch only when the factory still owns it.
+6. moves the deterministic branch only when the factory still owns it and,
+   checked immediately before, the run still owns its thread.
 
 ## Trust boundaries
 
@@ -291,7 +314,7 @@ database credential. It serves event streams only to requests that present
 ### Workflows host
 
 The Workflows service holds GitHub, Render, and database credentials. It
-selects every destination, checks claim ownership, validates Sandbox output,
+selects every destination, checks thread ownership, validates Sandbox output,
 and performs GitHub writes.
 
 ### Sandbox
@@ -319,7 +342,7 @@ Changes must preserve these properties:
 
 1. Verify a webhook signature before parsing its body.
 2. Check the triggering actor's current repository permission for every
-   GitHub task run.
+   GitHub task run before it starts on its thread.
 3. Let only code in the Workflows service write to GitHub.
 4. Keep GitHub write credentials out of Sandboxes.
 5. Run every model-directed tool inside a Sandbox.
@@ -328,8 +351,8 @@ Changes must preserve these properties:
 8. Stop automation at a draft pull request and a COMMENT review.
 9. Implement the specification as it existed when approved.
 10. Give every Sandbox a provider timeout and `finally` cleanup. Record a
-    GitHub task's Sandbox in Postgres before its next ownership check, so
-    cancellation can terminate it.
+    GitHub task's Sandbox in Postgres before its next ownership check, so a
+    run that takes over the thread can terminate it.
 11. Create every Sandbox with an egress allow-list built from trusted
     configuration. Only a repository's configured `egress: "allow-all"` lifts it.
 12. Give database credentials only to the gateway and Workflows services.
@@ -387,9 +410,10 @@ Start with:
    routing.
 2. [`app/workflows/github-task.ts`](../app/workflows/github-task.ts) —
    GitHub task declaration.
-3. [`app/claims/claim.ts`](../app/claims/claim.ts) — permission, ownership,
-   progress, and completion; [`app/claims/status.ts`](../app/claims/status.ts)
-   — claims, stopping runs, and the status comment view.
+3. [`app/runs/run.ts`](../app/runs/run.ts) — permission, starting, progress,
+   and completion; [`app/runs/thread.ts`](../app/runs/thread.ts) — thread
+   ownership and stopping a displaced trace;
+   [`app/runs/status.ts`](../app/runs/status.ts) — the status comment view.
 4. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts) — one
    complete GitHub task.
 5. [`app/workflows/autopilot/index.ts`](../app/workflows/autopilot/index.ts) —

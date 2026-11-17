@@ -1,6 +1,6 @@
 import { prReviewer, runAgent } from "../../agents/index.js";
-import type { Outcome } from "../../claims/index.js";
 import { TASKS } from "../../config/index.js";
+import type { Outcome } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";
 import { PrReviewInput } from "../../schemas/index.js";
 import { defineGitHubTask, type GitHubTaskDeps } from "../github-task.js";
@@ -31,8 +31,8 @@ export const prReviewWorkflow = defineGitHubTask(
 		},
 		timeoutSeconds: 2 * 60 * 60,
 	},
-	async (claim, input, deps: PrReviewDeps): Promise<Outcome> => {
-		const { gh, repo } = claim;
+	async (run, input, deps: PrReviewDeps): Promise<Outcome> => {
+		const { gh, repo } = run;
 
 		// 1. The PR must be open, still at the labeled commit, and not yet reviewed there.
 		const pull = await gh.getPull(input.pr);
@@ -52,25 +52,25 @@ export const prReviewWorkflow = defineGitHubTask(
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
 		// 2. One sandbox at the PR head: verify, then review the complete change.
-		await claim.reportProgress("opening a sandbox");
+		await run.reportProgress("opening a sandbox");
 		const { verify, review } = await withPullSandbox(deps.openSandbox ?? openSandbox, repo, pull, async (sandbox) => {
-			await claim.trackSandbox(sandbox);
+			await run.trackSandbox(sandbox);
 			const baseRef = await mergeBase(sandbox, pull.baseRef);
-			await claim.reportProgress("running the verify commands");
+			await run.reportProgress("running the verify commands");
 			const verify = await runVerify(sandbox, repo.config.verify);
 
-			await claim.reportProgress("reviewing the pull request");
+			await run.reportProgress("reviewing the pull request");
 			const message = reviewerMessage({ repo: repo.fullName, pull, baseRef, files, verify });
-			const { output: review } = await (deps.runAgent ?? runAgent)(prReviewer, message, claim.agentRunOptions(sandbox));
+			const { output: review } = await (deps.runAgent ?? runAgent)(prReviewer, message, run.agentRunOptions(sandbox));
 			return { verify, review };
 		});
 
 		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
-		await claim.reportProgress("posting the review");
+		await run.reportProgress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,
 			headSha: input.headSha,
-			runId: claim.runId,
+			runId: run.runId,
 			review,
 			render: { verification: verify, isCommentable: commentable(diffLines) },
 		});

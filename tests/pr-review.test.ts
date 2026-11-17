@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
-import { holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
+import { runRow, startRun } from "./helpers/runs.js";
 
 const { AgentError } = await import("../app/agents/index.js");
 const { GitHubError, parseMarker, renderMarker } = await import("../app/github/index.js");
@@ -402,14 +402,14 @@ describe("runPrReview", () => {
 	});
 
 	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {
-		await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
+		await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
 		const result = await runPrReview(childCtx, { ...input, workflowIssue: 12 }, deps());
 		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
 		expect(gh.statusNumbers).toEqual([12]);
 		expect(await runRow(db, "trn-run")).toMatchObject({ sandbox_id: "sbx-pr" });
 	});
 
-	it("posts no review once a newer run claims the pull request", async () => {
+	it("posts no review once a newer run starts on the pull request", async () => {
 		const review = agents.run;
 		const result = await runPrReview(
 			ctx,
@@ -417,7 +417,7 @@ describe("runPrReview", () => {
 			deps({
 				runAgent: (async (...args: Parameters<RunAgent>) => {
 					const output = await review(...args);
-					await holdClaim(db, REPO, { kind: "pr", number: 34 }, { traceId: "trn-newer" });
+					await startRun(db, REPO, { kind: "pr", number: 34 }, { traceId: "trn-newer" });
 					return output;
 				}) as RunAgent,
 			}),

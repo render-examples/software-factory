@@ -1,9 +1,9 @@
 import { config } from "../../config/index.js";
-import { type SpecDraft, validateSpec } from "../../schemas/index.js";
 import { renderSpec, sanitizeInline, truncate } from "../../format/index.js";
 import { contentHash, type GitHubClient, type Issue, renderMarker } from "../../github/index.js";
-import { ExpectedFailure, type Outcome } from "../../claims/index.js";
+import { ExpectedFailure, type Outcome } from "../../runs/index.js";
 import type { Sandbox } from "../../sandbox/index.js";
+import { type SpecDraft, validateSpec } from "../../schemas/index.js";
 import type { TriageAgents } from "./agents.js";
 import { type CurrentSpec, retryMessage } from "./thread.js";
 
