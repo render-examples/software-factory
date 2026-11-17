@@ -14,6 +14,8 @@ set -euo pipefail
 run_dir=${1:?usage: run-agent.sh <run_dir> <timeout_seconds>}
 seconds=${2:?usage: run-agent.sh <run_dir> <timeout_seconds>}
 run_dir=${run_dir%/}
+# The file exists before the PID does, so a host that finds the PID can follow the file.
+: >"$run_dir.jsonl"
 echo "$$" >"$run_dir.pid"
 app=$(dirname "${BASH_SOURCE[0]}")
 # shellcheck source=/dev/null

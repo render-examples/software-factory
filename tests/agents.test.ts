@@ -166,8 +166,8 @@ describe("runAgent in a sandbox", () => {
 
 		expect(run.output).toEqual({ verdict: "ok", findings: [], priority: 2 });
 		const offset = Buffer.byteLength(`${lines[0]}\n${lines[1]}\n`);
-		const follows = sandbox.execs.filter(({ command }) => command.startsWith("tail "));
-		expect(follows.map(({ command }) => command)).toEqual([
+		const follows = sandbox.execs.filter(({ command }) => command.includes("tail "));
+		expect(follows.map(({ command }) => command.slice(command.indexOf("tail ")))).toEqual([
 			`tail -c +${offset + 1} -f --pid="$(cat '${sandbox.runDir}.pid')" '${sandbox.runDir}.jsonl'`,
 		]);
 		expect(await recorded("trn-drop")).toEqual(["agent_run.started", "tool.call", "assistant.message", "tool.call", "agent_run.finished"]);

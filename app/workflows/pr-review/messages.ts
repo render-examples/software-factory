@@ -1,4 +1,4 @@
-import { fenced, truncate } from "../../format/index.js";
+import { fenced, truncate, verbatimCodeSpan } from "../../format/index.js";
 import type { PullFile, PullRequest } from "../../github/index.js";
 import type { VerifyRun } from "../run-verify.js";
 
@@ -46,7 +46,7 @@ function verifySection(verify: readonly VerifyRun[]): string {
 	const items = verify.map((v) => {
 		const status = v.passed ? "passed" : `failed (${v.exitCode === null ? "did not run" : `exit ${v.exitCode}`})`;
 		const seconds = ((v.durationMs ?? 0) / 1000).toFixed(1);
-		return `### \`${v.command}\`: ${status} in ${seconds}s\n\n${v.passed ? "" : fenced(v.output || "(no output)")}`.trimEnd();
+		return `### ${verbatimCodeSpan(v.command)}: ${status} in ${seconds}s\n\n${v.passed ? "" : fenced(v.output || "(no output)")}`.trimEnd();
 	});
 	return `## Verify results\n\n${items.join("\n\n")}`;
 }

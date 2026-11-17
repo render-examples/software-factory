@@ -4,10 +4,15 @@ import { shq } from "../sandbox/shell.js";
 import type { ExecStreamOptions, Sandbox } from "../sandbox/types.js";
 
 const RETRY_MS = 5_000;
+/** The follow command's status while run-agent.sh has yet to write `<runDir>.pid` or create `<runDir>.jsonl`. */
+const NOT_STARTED = 75;
 
 /**
  * Splits output arriving in chunks into lines and passes on each complete line once. `offset` counts the bytes of
  * the lines passed on, so output read again from `offset` after `restart` neither skips nor repeats a line.
+ *
+ * Output arrives decoded, so `offset` is exact only for ASCII lines, which the runner writes: a multi-byte character
+ * split across chunks would decode to replacement characters of a different length.
  */
 export class LineRelay {
 	#offset = 0;
@@ -42,8 +47,8 @@ export class LineRelay {
 
 /**
  * Follows `<runDir>.jsonl` from `relay.offset` until run-agent.sh exits, for when its command stream dropped: the
- * command keeps running in the Sandbox. A dropped follow is retried every 5 seconds until `deadline`. Returns why
- * it stopped early, if it did.
+ * command keeps running in the Sandbox. A follow that dropped, or found run-agent.sh not started yet, is retried
+ * every 5 seconds until `deadline`. Returns why it stopped early, if it did.
  */
 export async function followRun(
 	sandbox: Sandbox,
@@ -63,7 +68,9 @@ export async function followRun(
 		relay.restart();
 		try {
 			const exitCode = await sandbox.execStream(followCommand(runDir, relay.offset), { onData, timeoutMs, signal });
-			return exitCode === 0 ? undefined : `following ${runDir}.jsonl exited ${exitCode}`;
+			if (exitCode === 0) return undefined;
+			if (exitCode !== NOT_STARTED) return `following ${runDir}.jsonl exited ${exitCode}`;
+			lastError = "run-agent.sh had not started";
 		} catch (err) {
 			if (signal?.aborted) throw err;
 			lastError = errorMessage(err);
@@ -71,6 +78,14 @@ export async function followRun(
 	}
 }
 
-/** `--pid` ends the follow once run-agent.sh exits, or at once if it already has, after reading to the end. */
-const followCommand = (runDir: string, offset: number) =>
-	`tail -c +${offset + 1} -f --pid="$(cat ${shq(`${runDir}.pid`)})" ${shq(`${runDir}.jsonl`)}`;
+/**
+ * `--pid` ends the follow once run-agent.sh exits, or at once if it already has, after reading to the end. Until
+ * the PID and the file exist, the command exits NOT_STARTED, unless run-agent.sh has written `<runDir>.exit`.
+ */
+function followCommand(runDir: string, offset: number): string {
+	const [pid, jsonl, exit] = [".pid", ".jsonl", ".exit"].map((ext) => shq(`${runDir}${ext}`));
+	return (
+		`if [ ! -s ${pid} ] || [ ! -f ${jsonl} ]; then [ -e ${exit} ] || exit ${NOT_STARTED}; fi; ` +
+		`tail -c +${offset + 1} -f --pid="$(cat ${pid})" ${jsonl}`
+	);
+}

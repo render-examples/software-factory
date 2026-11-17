@@ -287,7 +287,9 @@ the command's stdout, which the host reads as it arrives and feeds to the
 recorder line by line. Nothing in the Sandbox holds an endpoint or credential
 for the log. If the command stream drops, the command keeps running, and the
 host follows the file from the last complete line it relayed until
-`run-agent.sh` exits, so no event is lost or repeated. When the command ends,
+`run-agent.sh` exits, so no event is lost or repeated. The runner escapes
+every non-ASCII character, so the byte offset the host counts from decoded
+output always matches the file. When the command ends,
 the host downloads the file, relays any lines the live copy missed, and takes
 the result, outcome, and cost from the file alone.
 

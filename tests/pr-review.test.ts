@@ -494,3 +494,23 @@ describe("runPrReview", () => {
 		expect(body).not.toContain("AssertionError");
 	});
 });
+
+describe("reviewerMessage", () => {
+	it("keeps a verify command with backticks in one code span", async () => {
+		const { reviewerMessage } = await import("../app/workflows/pr-review/messages.js");
+		const pull = {
+			number: 7,
+			state: "open",
+			merged: false,
+			title: "t",
+			body: "",
+			headSha: "a".repeat(40),
+			headRef: "h",
+			baseRef: "main",
+			htmlUrl: "",
+		};
+		const verify = [{ command: "echo `date`", passed: true, durationMs: 1000, exitCode: 0, output: "" }];
+		const message = reviewerMessage({ repo: "o/r", pull, baseRef: "b".repeat(40), files: [], verify });
+		expect(message).toContain("### `` echo `date` ``: passed");
+	});
+});
