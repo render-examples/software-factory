@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import { emit } from "../events/index.js";
+import { type Db, workflowsDb } from "../db/index.js";
+import { AgentRunRecorder, subjectKey } from "../events/index.js";
 import { errorMessage } from "../runner/core/emit.js";
 import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/core/protocol.js";
 import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
@@ -34,6 +35,8 @@ export interface RunAgentOptions {
 	/** Default 30 minutes. */
 	timeoutMs?: number;
 	signal?: AbortSignal;
+	/** The event log the run is recorded in. Default: the Workflows process's pool. */
+	db?: Db;
 }
 
 export interface AgentRun<Output extends OutputSchema> {
@@ -45,7 +48,8 @@ export interface AgentRun<Output extends OutputSchema> {
 
 /**
  * Runs `agent` in `opts.sandbox` on `message`, the task for this run, and returns the submission parsed by the
- * agent's Zod schema. Every failure throws an AgentError; usage and cost are recorded on `agent.finished` either way.
+ * agent's Zod schema. Every failure throws an AgentError. Either way, the run is recorded in the event log as an
+ * agent run, ending with `agent_run.finished` and its usage and cost.
  */
 export async function runAgent<Tools extends readonly ToolName[], Output extends OutputSchema>(
 	agent: Agent<Tools, Output>,
@@ -55,25 +59,21 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const { sandbox, ...base } = opts;
 	const { harness } = agent;
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	const recorder = new AgentRunRecorder({
+		db: base.db ?? workflowsDb(),
+		runId: base.runId ?? base.traceId,
+		subject: eventSubject(base.repo, base.subject),
+	});
+	recorder.start({ agentId: agent.id, harness: harness.name, model: harness.label });
 	const finish = (outcome: string, summary: Summary, message?: string) =>
-		emit({
-			traceId: base.traceId,
-			runId: base.runId,
-			repo: base.repo,
-			subject: base.subject,
-			type: "agent.finished",
-			payload: {
-				agentId: agent.id,
-				harness: harness.name,
-				...(summary.harnessVersion ? { harnessVersion: summary.harnessVersion } : {}),
-				model: summary.model ?? harness.label,
-				outcome,
-				turns: summary.turns,
-				usage: summary.usage,
-				costUsd: summary.costUsd,
-				...(summary.invalidLines ? { invalidLines: summary.invalidLines } : {}),
-				...(message ? { message } : {}),
-			},
+		recorder.finish({
+			outcome,
+			turns: summary.turns,
+			usage: summary.usage,
+			costUsd: summary.costUsd,
+			harnessVersion: summary.harnessVersion,
+			message,
+			invalidLines: summary.invalidLines,
 		});
 
 	let summary = emptySummary();
@@ -96,7 +96,9 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 		if (!apiKey) throw failure("agent_error", `${harness.credential} is not set: the ${harness.name} harness needs it`);
 
 		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
-		summary = summarize(stdout.text);
+		const { events, invalidLines } = parseEvents(stdout.text);
+		for (const event of events) recorder.onRunnerEvent(event);
+		summary = summarize(events, invalidLines);
 		const end = summary.terminal;
 		if (!end) {
 			throw failure("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`);
@@ -107,13 +109,19 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 			throw failure("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`);
 		}
-		finish("ok", summary);
+		await finish("ok", summary);
 		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns };
 	} catch (err) {
 		const error = err instanceof AgentError ? err : failure("agent_error", errorMessage(err));
-		finish(error.code, summary, error.message);
+		await finish(error.code, summary, error.message);
 		throw error;
 	}
+}
+
+/** The log's subject, from the run's "owner/name" and "issue#12". */
+function eventSubject(repo?: string, subject?: string): string | undefined {
+	const match = /^(issue|pr)#(\d+)$/.exec(subject ?? "");
+	return repo && match ? subjectKey(repo, { kind: match[1] as "issue" | "pr", number: Number(match[2]) }) : undefined;
 }
 
 interface RunnerOutput {
@@ -170,7 +178,6 @@ interface Summary {
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
 	/** From the runner's `started` event: what actually ran, which the host can't always know. */
 	harnessVersion?: string;
-	model?: string;
 	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
@@ -184,23 +191,28 @@ function emptySummary(): Summary {
 	};
 }
 
-/** Sums usage over the runner's events and finds the terminal one. Turns come from `result`, else count model calls. */
-function summarize(jsonl: string): Summary {
-	const summary = emptySummary();
-	let calls = 0;
+function parseEvents(jsonl: string): { events: RunnerEvent[]; invalidLines: number } {
+	const events: RunnerEvent[] = [];
+	let invalidLines = 0;
 	for (const line of jsonl.split("\n")) {
 		if (!line.trim()) continue;
-		let event: RunnerEvent;
 		try {
-			event = RunnerEvent.parse(JSON.parse(line));
+			events.push(RunnerEvent.parse(JSON.parse(line)));
 		} catch {
-			summary.invalidLines++;
-			continue;
+			invalidLines++;
 		}
-		if (summary.terminal) continue;
+	}
+	return { events, invalidLines };
+}
+
+/** Sums usage up to the terminal event. Turns come from `result`, else count model calls. */
+function summarize(events: readonly RunnerEvent[], invalidLines: number): Summary {
+	const summary = { ...emptySummary(), invalidLines };
+	let calls = 0;
+	for (const event of events) {
+		if (summary.terminal) break;
 		if (event.type === "started") {
 			summary.harnessVersion = event.harness_version;
-			summary.model = event.model;
 		} else if (event.type === "usage") {
 			const u = summary.usage;
 			u.input_tokens += event.usage.input_tokens;

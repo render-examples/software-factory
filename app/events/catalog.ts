@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import { z } from "zod";
 
 /**
  * One type of event in the log. Bump `version` whenever the payload schema changes; readers handle every version
@@ -19,3 +19,70 @@ export function subjectKey(repo: string, subject: { kind: "issue" | "pr"; number
 export function defineEvent<S extends z.ZodType>(type: string, version: number, payload: S): EventSpec<S> {
 	return { type, version, payload };
 }
+
+// Live agent events (plan 05)
+
+/** IDs and names, such as a tool call's ID or a tool's name, in characters. */
+export const ID_MAX = 200;
+/** Model text in one event, in characters. */
+export const MESSAGE_MAX = 64 * 1024;
+/** Tool arguments (as JSON) and output previews, in characters. */
+export const TOOL_TEXT_MAX = 32 * 1024;
+
+const id = z.string().min(1).max(ID_MAX);
+const count = z.number().int().nonnegative();
+const TokenUsage = z.strictObject({
+	input_tokens: count,
+	output_tokens: count,
+	cache_read_tokens: count,
+	cache_write_tokens: count,
+	cost_usd: z.number().nonnegative().optional(),
+});
+
+/** The first event on `agent_run:<id>`: what the host started, before the runner reports anything. */
+export const agentRunStarted = defineEvent("agent_run.started", 1, z.strictObject({ run_id: id, agent_id: id, harness: id, model: id }));
+export const assistantMessage = defineEvent("assistant.message", 1, z.strictObject({ message_id: id, text: z.string().max(MESSAGE_MAX) }));
+export const toolCall = defineEvent("tool.call", 1, z.strictObject({ call_id: id, tool: id, args: z.string().max(TOOL_TEXT_MAX) }));
+export const toolResult = defineEvent(
+	"tool.result",
+	1,
+	z.strictObject({ call_id: id, tool: id, is_error: z.boolean(), output_preview: z.string().max(TOOL_TEXT_MAX) }),
+);
+/** One model request's usage, as the runner reported it: for display only. */
+export const usage = defineEvent("usage", 1, TokenUsage);
+/** Outcome, turns, usage, and cost from the host's own summary of the run, never from streamed `usage` events. */
+export const agentRunFinished = defineEvent(
+	"agent_run.finished",
+	1,
+	z.strictObject({
+		outcome: z.string().min(1).max(64),
+		turns: count,
+		usage: TokenUsage,
+		cost_usd: z.number().nonnegative(),
+		harness_version: z.string().max(ID_MAX).optional(),
+		/** Why the run failed. */
+		message: z.string().max(2000).optional(),
+		/** Runner output lines that weren't valid events. */
+		invalid_lines: count.optional(),
+	}),
+);
+
+/** Postgres's NOTIFY channel for what the log doesn't store: deltas of in-progress assistant messages. */
+export const LIVE_CHANNEL = "live";
+
+/** Postgres rejects NOTIFY payloads over 8,000 bytes; a delta's text is split into parts that stay under it. */
+export const LiveNotice = z.discriminatedUnion("type", [
+	z.strictObject({
+		type: z.literal("delta"),
+		stream: id,
+		subject: z.string().max(400).nullable(),
+		message_id: id,
+		/** Orders one message's deltas; with `part`, lets a listener drop a repeat. */
+		local_seq: count,
+		part: count,
+		text: z.string().max(8000),
+	}),
+	/** The message is complete (its `assistant.message` is in the log) or will never be. */
+	z.strictObject({ type: z.literal("final"), stream: id, message_id: id }),
+]);
+export type LiveNotice = z.infer<typeof LiveNotice>;

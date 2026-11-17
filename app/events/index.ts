@@ -1,6 +1,19 @@
-export { defineEvent, type EventSpec, subjectKey } from "./catalog.js";
+export {
+	agentRunFinished,
+	agentRunStarted,
+	assistantMessage,
+	defineEvent,
+	type EventSpec,
+	LIVE_CHANNEL,
+	LiveNotice,
+	subjectKey,
+	toolCall,
+	toolResult,
+	usage,
+} from "./catalog.js";
+export { type AgentRunSummary, AgentRunRecorder, type RecorderOptions } from "./recorder.js";
 
-/** One telemetry event: how a task run or an agent run ended. Nothing reads these back to decide what a run does. */
+/** One telemetry event: how a task run ended. Nothing reads these back to decide what a run does. */
 export interface FactoryEvent {
 	/** The root task run of the task. */
 	traceId: string;
@@ -10,7 +23,7 @@ export interface FactoryEvent {
 	repo?: string;
 	/** "issue#12" or "pr#34" */
 	subject?: string;
-	type: "run.finished" | "agent.finished";
+	type: "run.finished";
 	payload: Record<string, unknown>;
 }
 

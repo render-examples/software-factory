@@ -1,12 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineAgent, piOpus, runAgent } from "../app/agents/index.js";
-import { emit } from "../app/events/index.js";
+import { type Db, readStream } from "../app/db/index.js";
 import { PROTOCOL_VERSION, RunnerInput } from "../app/runner/core/protocol.js";
 import { REPO_DIR } from "../app/sandbox/types.js";
+import { pgliteDb } from "./helpers/db.js";
 import { eventLine, FakeSandbox } from "./helpers/fake-sandbox.js";
-
-vi.mock("../app/events/index.js", () => ({ emit: vi.fn(async () => {}) }));
 
 const PROMPT = "../../tests/fixtures/agents/echo.md";
 const HOST_KEY = "sk-ant-test-HOSTKEY-0123456789";
@@ -26,12 +25,11 @@ const reviewer = defineAgent({
 	maxTurns: 40,
 });
 
-const emitted = () => vi.mocked(emit).mock.calls.map(([e]) => e);
-
-beforeEach(() => {
-	vi.mocked(emit).mockClear();
-	vi.mocked(emit).mockImplementation(async () => {});
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
 afterEach(() => {
 	delete process.env.ANTHROPIC_API_KEY;
 });
@@ -61,7 +59,15 @@ describe("runAgent in a sandbox", () => {
 
 	it("runs tool-using agents in the sandbox without exposing the model key to commands or events", async () => {
 		const sandbox = new FakeSandbox({ jsonl: `${cannedRun({ verdict: "ok", findings: ["x"] })}\n` });
-		const run = await runAgent(reviewer, "Review it.", { traceId: "trace-2", sandbox, timeoutMs: 600_000 });
+		const run = await runAgent(reviewer, "Review it.", {
+			traceId: "trace-2",
+			runId: "trn-7",
+			repo: "acme/web",
+			subject: "issue#12",
+			sandbox,
+			timeoutMs: 600_000,
+			db,
+		});
 
 		expect(run).toEqual({
 			output: { verdict: "ok", findings: ["x"], priority: 2 },
@@ -85,19 +91,47 @@ describe("runAgent in a sandbox", () => {
 		for (const { command } of sandbox.execs) expect(command).not.toContain(HOST_KEY);
 		expect(sandbox.uploads.get(`${runDir}/input.json`)).not.toContain(HOST_KEY);
 
-		expect(emitted()).toHaveLength(1);
-		expect(emitted()[0]).toMatchObject({
-			type: "agent.finished",
-			traceId: "trace-2",
-			payload: {
-				outcome: "ok",
-				turns: 2,
-				harness: "pi",
-				harnessVersion: "0.83.0",
+		const { rows } = await db.query("select * from agent_runs where run_id = 'trn-7'");
+		expect(rows).toEqual([
+			expect.objectContaining({
+				subject: "acme/web#issue-12",
+				agent_id: "reviewer",
 				model: "anthropic/claude-opus-5",
-				costUsd: run.costUsd,
+				state: "ok",
+				turns: 2,
+				tool_calls: 1,
 				usage: run.usage,
-			},
+			}),
+		]);
+		expect(Number(rows[0]?.cost_usd)).toBeCloseTo(run.costUsd, 10);
+		const events = await readStream(db, `agent_run:${rows[0]?.id}`, 0);
+		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "usage", "tool.call", "usage", "agent_run.finished"]);
+		expect(events.every((e) => e.subject === "acme/web#issue-12" && e.source === "workflow:trn-7")).toBe(true);
+		expect(events.at(-1)?.payload).toMatchObject({ outcome: "ok", turns: 2, harness_version: "0.83.0" });
+		expect(JSON.stringify(events)).not.toContain(HOST_KEY);
+	});
+
+	it("records a failed run with its error code and message, and still throws the AgentError", async () => {
+		const sandbox = new FakeSandbox({ jsonl: `${eventLine({ type: "error", code: "max_turns", message: "turn limit (40) reached" })}\n` });
+		await expect(runAgent(reviewer, "Review it.", { traceId: "trn-8", sandbox, db })).rejects.toMatchObject({
+			name: "AgentError",
+			code: "max_turns",
 		});
+		const { rows } = await db.query<{ id: string; state: string; subject: string | null }>(
+			"select id, state, subject from agent_runs where run_id = 'trn-8'",
+		);
+		expect(rows).toEqual([expect.objectContaining({ state: "max_turns", subject: null })]);
+		const [finished] = (await readStream(db, `agent_run:${rows[0]?.id}`, 0)).slice(-1);
+		expect(finished?.payload).toMatchObject({ outcome: "max_turns", message: "turn limit (40) reached" });
+	});
+
+	it("returns the agent's result when the event log is unreachable", async () => {
+		const down: Db = { ...db, query: () => Promise.reject(new Error("db down")), withTx: () => Promise.reject(new Error("db down")) };
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const sandbox = new FakeSandbox({ jsonl: `${cannedRun({ verdict: "ok", findings: [] })}\n` });
+		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-9", sandbox, db: down });
+		expect(run.output).toEqual({ verdict: "ok", findings: [], priority: 2 });
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("agent run events not recorded"));
+		warn.mockRestore();
 	});
 });

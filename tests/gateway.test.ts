@@ -1,9 +1,11 @@
 import { createHmac } from "node:crypto";
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { config, type TaskName } from "../app/config/index.js";
+import type { Db } from "../app/db/index.js";
 import { TriageInput } from "../app/schemas/tasks.js";
-import { createGateway, type GatewayDeps } from "../app/gateway/index.js";
+import { createGateway, EventHub, type GatewayDeps } from "../app/gateway/index.js";
 import { REPO } from "./fixtures/config.js";
+import { pgliteDb } from "./helpers/db.js";
 
 const SECRET = "webhook-secret";
 
@@ -30,10 +32,16 @@ function webhook(body: string, { event = "issues", delivery = "delivery-1" as st
 
 let startTask: Mock<GatewayDeps["startTask"]>;
 let app: ReturnType<typeof createGateway>;
+let db: Db;
+
+beforeAll(async () => {
+	({ db } = await pgliteDb());
+});
+afterAll(() => db.end());
 
 beforeEach(() => {
 	startTask = vi.fn(async (_task: TaskName, _input: object, _key: string) => ({ id: "trn-123" }));
-	app = createGateway({ startTask, webhookSecret: SECRET });
+	app = createGateway({ startTask, webhookSecret: SECRET, db, hub: new EventHub(), eventsReadToken: "events-token" });
 });
 
 describe("gateway", () => {

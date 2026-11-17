@@ -75,7 +75,7 @@ async function converse(ctx: DriverContext, models: MutableModels, model: Model<
 		thinkingBudgets: THINKING_BUDGETS,
 		afterToolCall: async (call) => (endsBatch(call, ctx.submit.name) ? { terminate: true } : undefined),
 	});
-	const unsubscribe = agent.subscribe((event) => report(event, ctx.report, model));
+	const unsubscribe = agent.subscribe(reporter(ctx.report, model));
 	const abort = () => agent.abort();
 	ctx.signal.addEventListener("abort", abort, { once: true });
 	try {
@@ -126,27 +126,38 @@ function refused(model: Model<Api>): AssistantMessageEventStream {
 	return stream;
 }
 
-function report(event: AgentEvent, out: Report, model: Model<Api>) {
-	switch (event.type) {
-		case "tool_execution_start":
-			out.toolCall(event.toolCallId, event.toolName, event.args);
-			break;
-		case "tool_execution_end":
-			out.toolResult(event.toolCallId, event.toolName, contentText((event.result as { content?: unknown } | undefined)?.content), event.isError);
-			break;
-		case "message_end": {
-			const message = event.message;
-			if (message.role !== "assistant") break;
-			const text = message.content
-				.flatMap((c) => (c.type === "text" ? [c.text] : []))
-				.join("\n")
-				.trim();
-			if (text) out.text(text);
-			const usage = toUsage(message.usage, model);
-			if (usage) out.usage(usage);
-			break;
+/** Translates Pi's events, naming each assistant message at its start so its deltas and final text share an ID. */
+function reporter(out: Report, model: Model<Api>): (event: AgentEvent) => void {
+	let messages = 0;
+	let messageId = "";
+	return (event) => {
+		switch (event.type) {
+			case "tool_execution_start":
+				out.toolCall(event.toolCallId, event.toolName, event.args);
+				break;
+			case "tool_execution_end":
+				out.toolResult(event.toolCallId, event.toolName, contentText((event.result as { content?: unknown } | undefined)?.content), event.isError);
+				break;
+			case "message_start":
+				if (event.message.role === "assistant") messageId = `m${++messages}`;
+				break;
+			case "message_update":
+				if (event.assistantMessageEvent.type === "text_delta") out.delta(messageId, event.assistantMessageEvent.delta);
+				break;
+			case "message_end": {
+				const message = event.message;
+				if (message.role !== "assistant") break;
+				const text = message.content
+					.flatMap((c) => (c.type === "text" ? [c.text] : []))
+					.join("\n")
+					.trim();
+				if (text) out.text(messageId, text);
+				const usage = toUsage(message.usage, model);
+				if (usage) out.usage(usage);
+				break;
+			}
 		}
-	}
+	};
 }
 
 /**

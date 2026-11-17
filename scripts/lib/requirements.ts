@@ -66,7 +66,7 @@ export const HARNESS_KEY_ENV: readonly string[] = [...new Set(AGENTS.map((agent)
 
 /** Each service's env vars, exactly as render.yaml declares them (through its env groups or directly). */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
-	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG", "DATABASE_URL"],
+	gateway: ["GITHUB_WEBHOOK_SECRET", "EVENTS_READ_TOKEN", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG", "DATABASE_URL"],
 	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "DATABASE_URL", ...HARNESS_KEY_ENV],
 };
 
@@ -85,7 +85,7 @@ export interface EnvGroupSpec {
  */
 export const ENV_GROUPS: readonly EnvGroupSpec[] = [
 	{ name: "software-factory-shared", services: ["gateway", "workflows"], keys: ["RENDER_API_KEY"] },
-	{ name: "software-factory-gateway", services: ["gateway"], keys: ["GITHUB_WEBHOOK_SECRET"] },
+	{ name: "software-factory-gateway", services: ["gateway"], keys: ["GITHUB_WEBHOOK_SECRET", "EVENTS_READ_TOKEN"] },
 	{
 		name: "software-factory-workflows",
 		services: ["workflows"],
@@ -99,7 +99,13 @@ export function envGroupFor(service: Service, key: string): EnvGroupSpec | undef
 }
 
 /** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY", "DATABASE_URL"];
+export const SECRET_ENV: readonly string[] = [
+	"GITHUB_WEBHOOK_SECRET",
+	"EVENTS_READ_TOKEN",
+	"RENDER_API_KEY",
+	"GITHUB_APP_PRIVATE_KEY",
+	"DATABASE_URL",
+];
 
 const LEVELS = ["none", "read", "write", "admin"];
 

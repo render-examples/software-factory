@@ -90,7 +90,8 @@ export async function executeHarness(run: HarnessRun, harness: HarnessRuntime): 
 		signal: stop.signal,
 		requestModel,
 		report: {
-			text: (text) => emit({ type: "assistant_text", text }),
+			delta: (messageId, text) => emit({ type: "assistant_delta", message_id: messageId, text }),
+			text: (messageId, text) => emit({ type: "assistant_text", message_id: messageId, text }),
 			usage: (usage) => emit({ type: "usage", usage }),
 			toolCall(id, tool, args) {
 				announced.add(id);

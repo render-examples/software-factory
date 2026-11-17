@@ -33,7 +33,7 @@ describe("emit", () => {
 	it("never throws, even when the payload can't be serialized", () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-		expect(() => emit({ traceId: "trn-1", type: "agent.finished", payload: { cost: 1n } })).not.toThrow();
+		expect(() => emit({ traceId: "trn-1", type: "run.finished", payload: { cost: 1n } })).not.toThrow();
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining("event dropped"));
 	});
 });

@@ -5,7 +5,7 @@
 import { z } from "zod";
 
 /** Bumped on any incompatible change; a runner rejects input for another version. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const TOOL_NAMES = ["read", "ls", "bash", "edit", "write"] as const;
 export const ToolName = z.enum(TOOL_NAMES);
@@ -64,7 +64,9 @@ export const RunnerEvent = z.discriminatedUnion("type", [
 		is_error: z.boolean(),
 		output_preview: z.string(),
 	}),
-	z.object({ type: z.literal("assistant_text"), at: z.iso.datetime(), text: z.string() }),
+	/** Part of an assistant message as the model streams it; `assistant_text` with the same `message_id` completes it. */
+	z.object({ type: z.literal("assistant_delta"), at: z.iso.datetime(), message_id: z.string(), text: z.string() }),
+	z.object({ type: z.literal("assistant_text"), at: z.iso.datetime(), message_id: z.string(), text: z.string() }),
 	z.object({ type: z.literal("usage"), at: z.iso.datetime(), usage: Usage }),
 	z.object({ type: z.literal("result"), at: z.iso.datetime(), output: z.unknown(), turns: z.number().int().nonnegative() }),
 	z.object({ type: z.literal("error"), at: z.iso.datetime(), code: z.enum(RUNNER_ERROR_CODES), message: z.string() }),

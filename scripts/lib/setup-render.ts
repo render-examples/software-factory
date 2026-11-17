@@ -2,9 +2,15 @@
  * setup:render: create or update the environment groups render.yaml links, from local values. Idempotent.
  * It writes only the keys in ENV_GROUPS and leaves other variables in a group alone.
  */
+import { randomBytes } from "node:crypto";
 import type { Env, ScriptDeps } from "./github.js";
 import { errorMessage, type Reporter } from "./output.js";
 import { ENV_GROUPS, type EnvGroupSpec } from "./requirements.js";
+
+/** A new bearer token for the gateway's event streams, unless `env` already has one. */
+export function newEventsReadToken(env: Env): string | undefined {
+	return env.EVENTS_READ_TOKEN?.trim() ? undefined : randomBytes(32).toString("hex");
+}
 
 /** Values safe to show; every other group value is redacted from output. */
 const NOT_SECRET = new Set(["RENDER_WORKSPACE_ID", "GITHUB_APP_ID"]);
