@@ -1,5 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
-import { type AfterToolCallContext, Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
 import agentCorePackage from "@earendil-works/pi-agent-core/package.json" with { type: "json" };
 import {
 	type Api,
@@ -8,12 +8,20 @@ import {
 	calculateCost,
 	createAssistantMessageEventStream,
 	InMemoryCredentialStore,
-	isRetryableAssistantError,
 	type Model,
 	type MutableModels,
 	type Usage as PiUsage,
 } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import {
+	type AgentSession,
+	type AgentSessionEvent,
+	createAgentSession,
+	DefaultResourceLoader,
+	ModelRuntime,
+	SessionManager,
+	SettingsManager,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { type Driver, type DriverContext, InvalidInput, type Report } from "../core/driver.js";
 import type { Usage } from "../core/protocol.js";
 import { contentText } from "../tools/index.js";
@@ -26,78 +34,138 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
 export interface PiDriverOptions {
 	model: Model<Api>;
 	thinkingLevel: ThinkingLevel;
-	/** Default: the built-in catalog (createModels). */
+	/** Providers added to Pi's built-in catalog, each replacing a built-in provider with the same ID. */
 	models?: () => MutableModels;
 }
 
 const MAX_OUTPUT_TOKENS = 16_384;
-/** Passed to the agent so the max_tokens cap below stays in step with Pi's thinking budget. */
+/** Passed to Pi so the max_tokens cap below stays in step with Pi's thinking budget. */
 const THINKING_BUDGETS = { minimal: 1024, low: 2048, medium: 8192, high: 16_384 } as const;
 
-/** Retries of a model request that failed transiently (overloaded, rate limited, dropped stream). */
-const MAX_MODEL_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 2_000;
+/**
+ * Pi restarts a model request that failed transiently (overloaded, rate limited, dropped stream) with this backoff.
+ * Cache warming re-sends requests on a timer, which would spend the run's turns, so it's off.
+ */
+const SETTINGS = {
+	thinkingBudgets: THINKING_BUDGETS,
+	retry: { enabled: true, maxRetries: 2, baseDelayMs: 2_000 },
+	cacheWarming: "off",
+} as const;
 
-/** The built-in provider catalog with in-memory credentials: the key is passed per request, nothing is stored. */
-export function createModels(): MutableModels {
-	return builtinModels({ credentials: new InMemoryCredentialStore() });
-}
-
-/** Runs agents on Pi (`@earendil-works/pi-agent-core`). */
+/** Runs agents on Pi (`@earendil-works/pi-coding-agent`). */
 export function piDriver(opts: PiDriverOptions): Driver {
 	return {
-		open(ctx) {
-			const models = (opts.models ?? createModels)();
+		async open(ctx) {
+			const runtime = await createRuntime(opts.models?.());
 			const { provider, id } = opts.model;
-			const requested = models.getModel(provider, id);
+			const requested = runtime.getModel(provider, id);
 			if (!requested) throw new InvalidInput(`unknown model "${provider}/${id}" (not in the Pi ${PI_VERSION} registry)`);
+			await runtime.setRuntimeApiKey(provider, ctx.apiKey);
 			const model = capMaxTokens(requested, opts.thinkingLevel);
 			return {
 				version: PI_VERSION,
 				model: `${model.provider}/${model.id}`,
-				run: () => converse(ctx, models, model, opts.thinkingLevel),
+				run: () => converse(ctx, runtime, model, opts.thinkingLevel),
 			};
 		},
 	};
 }
 
-async function converse(ctx: DriverContext, models: MutableModels, model: Model<Api>, thinkingLevel: ThinkingLevel): Promise<void> {
-	const agent = new Agent({
-		initialState: {
-			systemPrompt: ctx.systemPrompt,
-			model,
-			thinkingLevel,
-			tools: [...ctx.tools.map(piTool), piSubmitTool(ctx.submit)],
-		},
-		// Every provider request, retries included, passes the kernel's turn limit first.
-		streamFn: (m, context, options) => (ctx.requestModel() ? models.streamSimple(m, context, options) : refused(m)),
-		getApiKey: () => ctx.apiKey,
-		thinkingBudgets: THINKING_BUDGETS,
-		afterToolCall: async (call) => (endsBatch(call, ctx.submit.name) ? { terminate: true } : undefined),
+/** Pi's catalog with in-memory credentials: the key is set per run, and nothing is read from or written to disk. */
+async function createRuntime(custom: MutableModels | undefined): Promise<ModelRuntime> {
+	const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
+	for (const provider of custom?.getProviders() ?? []) runtime.registerNativeProvider(provider);
+	return runtime;
+}
+
+async function converse(ctx: DriverContext, runtime: ModelRuntime, model: Model<Api>, thinkingLevel: ThinkingLevel): Promise<void> {
+	/**
+	 * The loop ends only when every tool result in a batch sets `terminate`, so a submission batched with other
+	 * calls (e.g. `ls` + submit) would cost another LLM request. The submit tool terminates on acceptance; its
+	 * siblings terminate whenever the batch submits. A rejected submission carries no `terminate`, so the model still
+	 * gets to retry. Listeners see each assistant message before its tools run.
+	 */
+	let submitting = false;
+	const tools = [...ctx.tools.map((tool) => piTool(tool, () => submitting)), piSubmitTool(ctx.submit)];
+	const session = await openSession(ctx, runtime, model, thinkingLevel, tools);
+	const report = reporter(ctx.report, model);
+	session.subscribe((event) => {
+		if (event.type === "message_end" && event.message.role === "assistant") submitting = callsTool(event.message, ctx.submit.name);
+		report(event);
 	});
-	const unsubscribe = agent.subscribe(reporter(ctx.report, model));
-	const abort = () => agent.abort();
+	const abort = () => void session.abort();
 	ctx.signal.addEventListener("abort", abort, { once: true });
 	try {
 		if (ctx.signal.aborted) return;
-		await agent.prompt(ctx.message);
-		// Restarts the last request while it fails with a transient model error.
-		for (let attempt = 1; attempt <= MAX_MODEL_RETRIES && !ctx.signal.aborted; attempt++) {
-			const last = lastAssistant(agent);
-			if (last?.stopReason !== "error" || !isRetryableAssistantError(last)) break;
-			agent.state.messages = agent.state.messages.slice(0, -1);
-			await sleep(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), undefined, { signal: ctx.signal }).catch(() => {});
-			if (ctx.signal.aborted) return;
-			await agent.continue();
-		}
-		const last = lastAssistant(agent);
+		await session.prompt(ctx.message, { expandPromptTemplates: false });
+		const last = lastAssistant(session);
 		if (last?.stopReason === "error" || last?.stopReason === "aborted") {
-			throw new Error(last.errorMessage ?? agent.state.errorMessage ?? `model request ${last.stopReason}`);
+			throw new Error(last.errorMessage ?? `model request ${last.stopReason}`);
 		}
 	} finally {
-		unsubscribe();
 		ctx.signal.removeEventListener("abort", abort);
+		session.dispose();
 	}
+}
+
+/**
+ * A session that loads nothing from `cwd`, the untrusted checkout, or from `agentDir`: no context files such as
+ * AGENTS.md, skills, prompt templates, themes, or extensions. An extension would run repository code in this
+ * process, next to the key. The system prompt is the agent's alone, and the tools are exactly `tools`.
+ */
+async function openSession(
+	ctx: DriverContext,
+	runtime: ModelRuntime,
+	model: Model<Api>,
+	thinkingLevel: ThinkingLevel,
+	tools: ToolDefinition[],
+): Promise<AgentSession> {
+	const agentDir = await mkdtemp(join(ctx.scratchDir, "pi-agent-"));
+	const settingsManager = SettingsManager.inMemory(SETTINGS);
+	const resourceLoader = new DefaultResourceLoader({
+		cwd: ctx.cwd,
+		agentDir,
+		settingsManager,
+		noExtensions: true,
+		noSkills: true,
+		noPromptTemplates: true,
+		noThemes: true,
+		noContextFiles: true,
+		systemPrompt: ctx.systemPrompt,
+	});
+	await resourceLoader.reload();
+	const { session } = await createAgentSession({
+		cwd: ctx.cwd,
+		agentDir,
+		modelRuntime: limited(runtime, ctx.requestModel),
+		model,
+		thinkingLevel,
+		noTools: "all",
+		tools: tools.map((tool) => tool.name),
+		customTools: tools,
+		resourceLoader,
+		sessionManager: SessionManager.inMemory(ctx.cwd),
+		settingsManager,
+	});
+	return session;
+}
+
+/**
+ * `runtime`, with every model request (retries, compaction, and summaries included) passing the kernel's turn limit
+ * first: the session sends them all through `streamSimple`.
+ */
+function limited(runtime: ModelRuntime, requestModel: () => boolean): ModelRuntime {
+	return new Proxy(runtime, {
+		get(target, prop) {
+			if (prop === "streamSimple") {
+				const streamSimple: ModelRuntime["streamSimple"] = (model, context, options) =>
+					requestModel() ? target.streamSimple(model, context, options) : refused(model);
+				return streamSimple;
+			}
+			const value = Reflect.get(target, prop, target);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
 }
 
 /** Applies the Anthropic thinking token budget only for anthropic-messages models; others use effort levels. */
@@ -127,7 +195,7 @@ function refused(model: Model<Api>): AssistantMessageEventStream {
 }
 
 /** Translates Pi's events, naming each assistant message at its start so its deltas and final text share an ID. */
-function reporter(out: Report, model: Model<Api>): (event: AgentEvent) => void {
+function reporter(out: Report, model: Model<Api>): (event: AgentSessionEvent) => void {
 	let messages = 0;
 	let messageId = "";
 	return (event) => {
@@ -178,17 +246,12 @@ function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
 	return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { ...usage, cost_usd: cost } : usage;
 }
 
-/**
- * The loop ends only when every tool result in a batch sets `terminate`, so a submission batched with other
- * calls (e.g. `ls` + submit) would cost another LLM request. The submit tool terminates on acceptance;
- * this marks its siblings too. A rejected submission carries no `terminate`, so the model still gets to retry.
- */
-function endsBatch({ toolCall, assistantMessage }: AfterToolCallContext, submit: string): boolean {
-	return toolCall.name !== submit && assistantMessage.content.some((c) => c.type === "toolCall" && c.name === submit);
+function callsTool(message: AssistantMessage, name: string): boolean {
+	return message.content.some((c) => c.type === "toolCall" && c.name === name);
 }
 
-function lastAssistant(agent: Agent): AssistantMessage | undefined {
-	const messages = agent.state.messages;
+function lastAssistant(session: AgentSession): AssistantMessage | undefined {
+	const messages = session.messages;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
 		if (m?.role === "assistant") return m;

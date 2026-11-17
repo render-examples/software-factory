@@ -151,6 +151,13 @@ catalog, so a typo fails `npm run typecheck`. The `pi` adapter also takes
 `thinkingLevel` (`off`, `minimal`, `low`, `medium`, or `high`; default
 `medium`).
 
+The `pi` adapter runs Pi's coding agent SDK, `@earendil-works/pi-coding-agent`,
+with its model catalog from `@earendil-works/pi-ai`. `package.json` pins
+`pi-coding-agent`, `pi-ai`, and `pi-agent-core` to one exact version; upgrade
+them together. Pi retries a model request that fails transiently up to twice
+and compacts a conversation that nears the model's context window. Each retry
+and compaction request counts toward the agent's turn limit.
+
 Each harness declares the env var of its key, its `credential`. Setup and
 `doctor` derive the keys they manage from the agents' harnesses, so a harness that needs a new key
 needs no other configuration change. The `pi` adapter supports Anthropic
@@ -166,8 +173,10 @@ needs no other configuration change. The `pi` adapter supports Anthropic
 Each harness also declares its `egress`: the hosts its model requests go to.
 Every task Sandbox's allow-list includes the hosts of all registered agents.
 The `pi` adapter uses the host of the model's `baseUrl`, so switching
-providers needs no egress change. Pass `egress` to `pi()` when a custom
-`models` registry serves the model from another host, such as a proxy.
+providers needs no egress change. Pass `egress` to `pi()` when a provider from
+a custom `models` registry serves the model from another host, such as a
+proxy. That registry's providers are added to Pi's catalog, each replacing a
+built-in provider with the same ID.
 
 ### Tool support
 

@@ -197,6 +197,16 @@ depend on the library. In the runner, a kernel owns each run: its events, turn
 and time limits, tools, and submission. A harness's driver only translates its
 library.
 
+The built-in harness runs Pi's coding agent SDK
+(`@earendil-works/pi-coding-agent`) through `createAgentSession`
+(`app/runner/pi/driver.ts`). The session's working directory is the untrusted
+checkout, and the runner holds the model key in memory, so the driver turns
+off Pi's discovery: it loads no context file such as `AGENTS.md`, skill,
+prompt template, theme, or extension from the checkout or anywhere else. The
+system prompt is the agent's prompt file, and the tools are exactly the
+factory's. Every model request passes the kernel's turn limit before it is
+sent, including Pi's retries of transient errors and its context compaction.
+
 Every agent finishes through a typed `submit` tool. The runner validates the
 submission against JSON Schema. The host validates it again with the agent's
 Zod schema. Repositories, refs, issue numbers, pull requests, branches, and
@@ -311,6 +321,9 @@ Changes must preserve these properties:
     Nothing in a Sandbox holds one or writes events.
 13. Treat runner output as untrusted: record it only as display events on its
     own agent run, and take outcomes and costs from the host's summary.
+14. Load no repository file as a prompt, skill, prompt template, or
+    extension. An agent's instructions are its prompt file and task message,
+    and its tools are the factory's.
 
 Tests pin these invariants and the tool authority of every built-in agent.
 

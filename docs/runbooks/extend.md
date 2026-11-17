@@ -153,6 +153,9 @@ driver that only translates the library.
    - offer the model exactly `ctx.tools` and `ctx.submit`, bound to the
      library's tool type. Never offer the library's own shell, file, network,
      or subagent tools: their authority isn't the factory's;
+   - turn off the library's discovery of instructions, skills, prompt
+     templates, and plugins. `ctx.cwd` is the untrusted checkout, and a plugin
+     would run its code beside the key;
    - call `ctx.requestModel()` before every model request, retries included,
      and don't send the request when it returns false;
    - report text, usage, and tool calls and results through `ctx.report`; and

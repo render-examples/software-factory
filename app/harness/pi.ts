@@ -17,8 +17,8 @@ export interface PiOptions {
 	/** Default "medium". */
 	thinkingLevel?: ThinkingLevel;
 	/**
-	 * The Pi model registry the model is resolved and streamed through: a custom or self-hosted provider registered
-	 * on it. Default: Pi's built-in catalog.
+	 * Providers the model can be resolved and streamed through, such as a custom or self-hosted one. They're added to
+	 * Pi's built-in catalog, each replacing a built-in provider with the same ID.
 	 */
 	models?: () => MutableModels;
 	/** The env var holding the key. Default: the provider's, from PI_PROVIDER_KEY_ENV; required for other providers. */
@@ -30,7 +30,7 @@ export interface PiOptions {
 	egress?: string[];
 }
 
-/** Runs an agent on Pi (`@earendil-works/pi-agent-core`) with the factory's tools. */
+/** Runs an agent on Pi (`@earendil-works/pi-coding-agent`) with the factory's tools. */
 export function pi(opts: PiOptions): Harness {
 	const { provider, id } = opts.model;
 	const credential = opts.credential ?? PI_PROVIDER_KEY_ENV[provider];
