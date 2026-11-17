@@ -32,7 +32,7 @@ export interface HookConfig {
 }
 
 const hookDelivery = z.object({
-	id: z.number().int().positive(),
+	id: z.string().regex(/^[1-9]\d*$/),
 	delivered_at: z.iso.datetime(),
 	status_code: z.number().int().min(0).max(599),
 	event: z.string().min(1).max(100),
@@ -57,6 +57,14 @@ export function githubWebUrl(apiUrl: string): string {
 	const url = new URL(apiUrl);
 	if (url.hostname === "api.github.com") return "https://github.com";
 	return `${url.protocol}//${url.host}`;
+}
+
+/** Webhook delivery IDs exceed Number.MAX_SAFE_INTEGER, so keep each `id` as its exact source digits. */
+function parseWithExactIds(text: string): unknown {
+	if (!text) return undefined;
+	return JSON.parse(text, (key, value, context?: { source?: string }) =>
+		key === "id" && typeof value === "number" && context?.source ? context.source : value,
+	);
 }
 
 /** Reads and validates the App credentials. Throws a message that never includes the key. */
@@ -101,15 +109,15 @@ export class GitHubApp {
 
 	/** The most recent deliveries, newest first. */
 	async recentDeliveries(perPage = 10): Promise<HookDelivery[]> {
-		const response = await this.http.json<unknown>("GET", "/app/hook/deliveries", { query: { per_page: perPage } });
+		const response = parseWithExactIds(await this.http.text("GET", "/app/hook/deliveries", { query: { per_page: perPage } }));
 		const result = z.array(hookDelivery).max(100).safeParse(response);
 		if (!result.success) throw new Error("GitHub returned an invalid webhook delivery list");
 		return result.data;
 	}
 
 	/** Only retain delivery metadata: request/response payloads can contain private repository content. */
-	async hookDelivery(id: number): Promise<HookDelivery & { url: string }> {
-		const response = await this.http.json<unknown>("GET", `/app/hook/deliveries/${id}`);
+	async hookDelivery(id: string): Promise<HookDelivery & { url: string }> {
+		const response = parseWithExactIds(await this.http.text("GET", `/app/hook/deliveries/${id}`));
 		const result = hookDelivery.extend({ url: z.url() }).safeParse(response);
 		if (!result.success) throw new Error("GitHub returned invalid webhook delivery metadata");
 		return result.data;

@@ -49,6 +49,7 @@ const APP = {
 };
 const LABEL_NAMES = ["factory:triage", "factory:spec-approved", "factory:pr-review", "factory:autopilot", "factory:working"];
 const DELIVERY = { id: 1, delivered_at: "2026-10-28T11:59:00Z", status_code: 202, event: "issues" };
+const LARGE_DELIVERY_ID = "3851307323039416300";
 const TASK_NAMES = ["triage", "spec-to-pr", "pr-review", "autopilot", "cancel", "refresh-snapshot"];
 
 interface Call {
@@ -66,6 +67,7 @@ interface World {
 	delivery?: unknown;
 	deliveryStatus?: number;
 	deliveriesStatus?: number;
+	deliveriesJson?: string;
 	labels?: string[];
 	labelsResponse?: { status: number; body: unknown };
 	repositoryResponse?: { status?: number; body: unknown };
@@ -104,9 +106,12 @@ function fakeFetch(world: World = {}) {
 					},
 				);
 			case "GET api.github.com/app/hook/deliveries":
+				if (world.deliveriesJson !== undefined) return new Response(world.deliveriesJson);
 				return json(world.deliveries ?? [DELIVERY], world.deliveriesStatus ?? 200);
 			case "GET api.github.com/app/hook/deliveries/1":
 				return json(world.delivery ?? { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github" }, world.deliveryStatus ?? 200);
+			case `GET api.github.com/app/hook/deliveries/${LARGE_DELIVERY_ID}`:
+				return new Response(`{"id":${LARGE_DELIVERY_ID},"delivered_at":"2026-10-30T23:58:45.856Z","status_code":202,"event":"ping","url":"https://gw.onrender.com/webhooks/github"}`);
 			case "GET api.github.com/repos/acme/web/installation":
 				return world.installed === false ? json({ message: "Not Found" }, 404) : json({ id: 7, ...(world.installation ?? { permissions: APP.permissions, events: APP.events }) });
 			case "POST api.github.com/app/installations/7/access_tokens":
@@ -303,6 +308,14 @@ describe("doctor", () => {
 		expect(code).toBe(0);
 		expect(output).toContain("latest delivery to the configured gateway (issues, 2026-10-26T00:00:00Z) got 202");
 		expect(output).not.toContain("webhook is active");
+	});
+
+	it("verifies a delivery whose ID exceeds Number.MAX_SAFE_INTEGER", async () => {
+		const { code, find } = await doctor({
+			world: { deliveriesJson: `[{"id":${LARGE_DELIVERY_ID},"delivered_at":"2026-10-30T23:58:45.856Z","status_code":202,"event":"ping"}]` },
+		});
+		expect(code).toBe(0);
+		expect(find("pass", "latest delivery to the configured gateway (ping, 2026-10-30T23:58:45.856Z) got 202")).toBeDefined();
 	});
 
 	it("never prints a secret, even when everything fails", async () => {
