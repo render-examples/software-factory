@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
 import { type PreflightOptions, runPreflight, setupRenderWithPreflight } from "../scripts/lib/preflight.js";
+import { pgliteDb } from "./helpers/db.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -138,6 +139,15 @@ describe("deployment preflight", () => {
 		expect(output).toContain("Node 24 matches .node-version");
 		expect(output).not.toContain("is not set");
 		expect(api.calls).toEqual([]);
+	});
+
+	it("checks a local DATABASE_URL when one is set", async () => {
+		const { db } = await pgliteDb();
+		const env = { DATABASE_URL: "postgresql://localhost/factory" };
+		const { code, output } = await run(world(), { local: true, env, repos: {}, openDb: () => db }, false);
+		expect(code).toBe(0);
+		expect(output).toContain("DATABASE_URL connects");
+		expect(output).toContain("migrations are current");
 	});
 
 	it.each([

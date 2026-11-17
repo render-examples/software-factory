@@ -17,13 +17,15 @@ flowchart LR
   Snapshot -.->|restore| Sandbox
 ```
 
-The Blueprint deploys two services:
+The Blueprint deploys two services and a database:
 
 - **Gateway** verifies webhooks and maps each delivery to one task.
 - **Workflows** runs tasks, manages Sandboxes, and writes to GitHub.
+- **Postgres** (`factory-db`) holds an append-only event log. Both services
+  apply its migrations at startup.
 
 The application does not implement its own queue, dispatcher, heartbeat
-process, maintenance loop, or database.
+process, or maintenance loop.
 
 ## Workflow
 
@@ -82,6 +84,21 @@ Each system owns the state it already manages:
 
 Telemetry is not application state. Nothing reads log events to decide what a
 task may do.
+
+### Event log
+
+The `events` table in Postgres (`app/db/`) is append-only. No task writes to
+it yet; the owners above still hold their state. Each event belongs to a
+stream and takes the stream's next version. An append can require the stream
+to be at an expected version, so two writers can't both act on the same
+state. Events about an issue or pull request also record it as their subject.
+Payloads are validated against the types declared in `app/events/catalog.ts`.
+
+Projections are tables derived from the log, updated in the same transaction
+as each append, and `npm run db:rebuild` replays the log to recreate them.
+Listeners on the `events` channel hear of an event when its transaction
+commits. Readers page one stream by version and a subject by transaction
+order, so an event that commits late is never skipped.
 
 ## Coordination
 
@@ -185,13 +202,14 @@ are untrusted.
 ### Gateway
 
 The gateway verifies the webhook signature before parsing the body. It holds
-no GitHub credential and runs no model or repository code.
+no GitHub credential and runs no model or repository code. It holds the
+database credential.
 
 ### Workflows host
 
-The Workflows service holds GitHub and Render credentials. It selects every
-destination, checks claim ownership, validates Sandbox output, and performs
-GitHub writes.
+The Workflows service holds GitHub, Render, and database credentials. It
+selects every destination, checks claim ownership, validates Sandbox output,
+and performs GitHub writes.
 
 ### Sandbox
 
@@ -230,6 +248,8 @@ Changes must preserve these properties:
     GitHub task's Sandbox so cancellation can terminate it.
 11. Create every Sandbox with an egress allow-list built from trusted
     configuration. Only a repository's configured `egress: "allow-all"` lifts it.
+12. Give database credentials only to the gateway and Workflows services.
+    Nothing in a Sandbox holds one or writes events.
 
 Tests pin these invariants and the tool authority of every built-in agent.
 
@@ -247,13 +267,16 @@ Tests pin these invariants and the tool authority of every built-in agent.
 - Anyone with `minimumPermission` can start model spend.
 - PR Reviewer runs repository-defined commands from the labeled pull request.
 - The Render API key may have workspace-wide authority.
+- The gateway's database credential can write factory state, so a compromised
+  gateway can forge events. Before the database, it held only the webhook
+  secret and the Render API key.
 - Near-simultaneous triggers can both work until one loses the status-comment
   claim.
 - Workflows inputs and results are visible to people with service access.
 - Telemetry can include repository names, issue subjects, and errors that
   quote repository output.
 - The filesystem of each deployed Render service is ephemeral. Durable state
-  belongs in GitHub, Workflows, or Sandbox snapshots.
+  belongs in GitHub, Workflows, Postgres, or Sandbox snapshots.
 - A cancelled snapshot build can leave its builder Sandbox running until the
   one-hour provider timeout because builders are not recorded in a status
   comment.
@@ -285,6 +308,8 @@ Start with:
 8. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
 9. [`app/changeset/index.ts`](../app/changeset/index.ts) — validated
    publishing.
+10. [`app/db/store.ts`](../app/db/store.ts) — appending to the event log;
+    [`app/db/read.ts`](../app/db/read.ts) — reading it in order.
 
 Use the [extension runbook](runbooks/extend.md) to add agents, tasks, or
 triggers.

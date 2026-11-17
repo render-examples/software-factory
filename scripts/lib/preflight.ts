@@ -1,12 +1,13 @@
 import { z } from "zod";
 import type { RepoConfig } from "../../app/config/index.js";
+import { checkDatabase, type DatabaseDeps } from "./database.js";
 import { GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import type { Reporter } from "./output.js";
 import { checkRepositoryPrerequisites } from "./repo-prerequisites.js";
 import { ENV_GROUPS, HARNESS_KEY_ENV, SECRET_ENV } from "./requirements.js";
 import { setupRender } from "./setup-render.js";
 
-export interface PreflightOptions extends ScriptDeps {
+export interface PreflightOptions extends ScriptDeps, DatabaseDeps {
 	repos: Readonly<Record<string, RepoConfig>>;
 	nodeVersion: string;
 	requiredNodeMajor: number;
@@ -30,7 +31,13 @@ export async function runPreflight(opts: PreflightOptions, out: Reporter): Promi
 	if (Number(major) !== opts.requiredNodeMajor) {
 		out.fail(`Node ${opts.requiredNodeMajor} is required by .node-version`, `Activate the pinned Node version; currently ${opts.nodeVersion}`);
 	} else out.pass(`Node ${opts.requiredNodeMajor} matches .node-version`);
-	if (opts.local) return out.summary();
+	if (opts.local) {
+		// Before deployment there is no factory-db yet: the Blueprint creates it and links it to both services.
+		const databaseUrl = opts.env.DATABASE_URL?.trim();
+		if (databaseUrl) await checkDatabase(databaseUrl, opts, out);
+		else out.skip("Database: no DATABASE_URL here", "Set it to run the services locally; see docs/configuration.md#database");
+		return out.summary();
+	}
 
 	for (const key of new Set(ENV_GROUPS.flatMap((group) => group.keys))) {
 		if (!opts.env[key]?.trim()) out.fail(`${key} is not set`, "Complete App installation and local secret entry before deployment preflight");

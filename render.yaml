@@ -1,7 +1,9 @@
-# software-factory: two services in a software-factory project.
+# software-factory: two services and a database in a software-factory project.
 # - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task.
 # - factory-workflows: runs every task (agents, snapshot refresh, cancel). It has no `repo` field, so it
 #   deploys from the same repository as this Blueprint, including forks.
+# - factory-db: the event log. Both services apply its migrations at startup. It is a paid instance because
+#   free databases expire after 30 days.
 # Run and agent telemetry is logged as JSON lines; find it in each service's logs or a log stream.
 #
 # Secrets live in three environment groups that `npm run setup:render` creates from .env before this
@@ -29,6 +31,10 @@ projects:
                   type: workflow
                   name: factory-workflows
                   property: slug
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: factory-db
+                  property: connectionString
 
           - type: workflow
             name: factory-workflows
@@ -39,3 +45,13 @@ projects:
             envVars:
               - fromGroup: software-factory-shared
               - fromGroup: software-factory-workflows
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: factory-db
+                  property: connectionString
+
+        databases:
+          - name: factory-db
+            region: oregon
+            plan: basic-256mb
+            postgresMajorVersion: "17"

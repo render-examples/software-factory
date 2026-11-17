@@ -158,19 +158,20 @@ describe("setup:render", () => {
 describe("render.yaml env groups", () => {
 	const blueprint = readFileSync(new URL("../render.yaml", import.meta.url), "utf8");
 
-	/** The `fromGroup` names in one service's block of render.yaml. */
-	function linkedGroups(service: string): string[] {
+	/** One service's block of render.yaml, up to the next service or the databases. */
+	function serviceBlock(service: string): string {
 		const start = blueprint.search(new RegExp(`- type: \\w+\\n\\s+name: ${service}\\n`));
-		const next = blueprint.indexOf("- type:", start + 1);
-		const block = blueprint.slice(start, next < 0 ? undefined : next);
-		return [...block.matchAll(/fromGroup:\s*(\S+)/g)].map((m) => m[1] ?? "");
+		const next = blueprint.slice(start + 1).search(/- type:|databases:/);
+		return blueprint.slice(start, next < 0 ? undefined : start + 1 + next);
 	}
 
-	it("links each service to the groups setup:render creates for it, covering SERVICE_ENV", () => {
+	it("links each service to the groups setup:render creates for it and to factory-db, covering SERVICE_ENV", () => {
 		for (const service of ["gateway", "workflows"] as const) {
+			const block = serviceBlock(`factory-${service}`);
 			const expected = ENV_GROUPS.filter((g) => g.services.includes(service));
-			expect(linkedGroups(`factory-${service}`).sort()).toEqual(expected.map((g) => g.name).sort());
-			const keys = [...expected.flatMap((g) => g.keys), "RENDER_WORKFLOW_SLUG"];
+			expect([...block.matchAll(/fromGroup:\s*(\S+)/g)].map((m) => m[1]).sort()).toEqual(expected.map((g) => g.name).sort());
+			expect(block).toMatch(/key: DATABASE_URL\n\s+fromDatabase:\n\s+name: factory-db\n/);
+			const keys = [...expected.flatMap((g) => g.keys), "RENDER_WORKFLOW_SLUG", "DATABASE_URL"];
 			expect(keys.filter((k) => SERVICE_ENV[service].includes(k)).sort()).toEqual([...SERVICE_ENV[service]].sort());
 		}
 	});

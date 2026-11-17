@@ -66,8 +66,8 @@ export const HARNESS_KEY_ENV: readonly string[] = [...new Set(AGENTS.map((agent)
 
 /** Each service's env vars, exactly as render.yaml declares them (through its env groups or directly). */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
-	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
-	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", ...HARNESS_KEY_ENV],
+	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG", "DATABASE_URL"],
+	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "DATABASE_URL", ...HARNESS_KEY_ENV],
 };
 
 export interface EnvGroupSpec {
@@ -79,7 +79,8 @@ export interface EnvGroupSpec {
 
 /**
  * The environment groups setup:render creates from .env and render.yaml links. Each service gets every key in
- * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG, which the Blueprint wires from the Workflows service.
+ * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG and DATABASE_URL, which the Blueprint wires from the Workflows
+ * service and the factory-db database.
  * The gateway links no group that holds GitHub App credentials or a model key.
  */
 export const ENV_GROUPS: readonly EnvGroupSpec[] = [
@@ -98,7 +99,7 @@ export function envGroupFor(service: Service, key: string): EnvGroupSpec | undef
 }
 
 /** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];
+export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY", "DATABASE_URL"];
 
 const LEVELS = ["none", "read", "write", "admin"];
 

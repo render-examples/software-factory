@@ -18,7 +18,9 @@ npm ci
 cp .env.example .env
 ```
 
-Fill `.env` without committing it. Start each process in its own terminal:
+Fill `.env` without committing it. `DATABASE_URL` can point at a local
+Postgres; see [Database](docs/configuration.md#database). Start each process
+in its own terminal:
 
 ```bash
 # Terminal 1
@@ -67,6 +69,15 @@ calls. Vitest replaces `factory.config.ts` with the explicit configuration in
 subjects, permissions, or expected verification commands. Keep configuration
 compatibility cases in that fixture and exercise them through routing and tasks.
 
+Database tests run on PGlite, in-process Postgres, through
+`tests/helpers/db.ts`. PGlite runs one transaction at a time, so tests that
+need concurrent transactions run only when `TEST_DATABASE_URL` points at a
+Postgres server where the user can create databases. CI sets it:
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npx vitest run tests/db-postgres.test.ts
+```
+
 Run additional checks when relevant:
 
 ```bash
@@ -102,18 +113,20 @@ and architectural reasons in [Architecture](docs/architecture.md).
 
 ## Add persistent state
 
-The default template has no database. GitHub owns collaboration artifacts,
-Render Workflows owns task execution, and telemetry goes to logs.
+Persistent factory state goes in the event log in `app/db/`. GitHub owns
+collaboration artifacts, Render Workflows owns task execution, and telemetry
+goes to logs. To add state:
 
-Add a database only for new data with its own lifecycle, such as a searchable
-spec library, budgets, or retained run history:
-
-1. Add a Render Postgres database to the `production` environment's
-   `databases` list in `render.yaml`.
-2. Wire `DATABASE_URL` into only the services that need it.
-3. Run migrations from a service `preDeployCommand`.
-4. Use the internal connection string on Render. Local tools use the external
-   connection with TLS.
+1. Declare each event type with `defineEvent` in `app/events/catalog.ts`.
+   Bound every string and array; bump the version when a payload changes.
+2. Add tables in a new `app/db/migrations/NNN_name.sql`. Keep it additive:
+   both services migrate at startup, and the other may still run the previous
+   code. Mark operational columns, which hold metadata rather than state
+   derived from events.
+3. Add a projection to `PROJECTIONS` in `app/db/projections.ts`. Derive its
+   rows only from events, so `npm run db:rebuild` can recreate them.
+4. Append inside `withTx` and keep the transaction short: it holds back
+   readers of a subject's events until it ends.
 
 Do not move claim ownership into the database. The status comment must remain
 the single source of truth for the run that owns an issue or pull request.

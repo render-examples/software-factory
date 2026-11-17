@@ -1,8 +1,9 @@
-/** doctor: read-only checks of one or both services' environment, the GitHub App, and Workflows tasks. */
+/** doctor: read-only checks of one or both services' environment, the database, the GitHub App, and Workflows tasks. */
 import { z } from "zod";
 import type { Agent } from "../../app/agents/define.js";
 import { AGENTS } from "../../app/agents/registry.js";
 import { TASKS } from "../../app/config/index.js";
+import { checkDatabase, type DatabaseDeps } from "./database.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
@@ -10,7 +11,7 @@ import { checkRepositoryPrerequisites } from "./repo-prerequisites.js";
 import { envGroupFor, LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
-export interface DoctorOptions extends ScriptDeps {
+export interface DoctorOptions extends ScriptDeps, DatabaseDeps {
 	services: readonly Service[];
 	repos: readonly string[];
 	/** The CLI supplies configured branches; callers without branch checks still verify repository capabilities. */
@@ -26,6 +27,11 @@ export async function runDoctor(opts: DoctorOptions, out: Reporter): Promise<num
 	out.addSecrets(...SECRET_ENV.map((name) => env[name]), ...agents.map((agent) => env[agent.harness.credential]));
 
 	checkEnv(opts, out);
+	const databaseUrl = env.DATABASE_URL?.trim();
+	if (databaseUrl) {
+		out.heading("Database");
+		await checkDatabase(databaseUrl, opts, out);
+	}
 	if (opts.services.includes("workflows")) checkHarnesses(env, agents, out);
 	await checkGitHub(opts, out);
 	await checkTasks(opts, out);

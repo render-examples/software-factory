@@ -1,3 +1,5 @@
+export { defineEvent, type EventSpec } from "./catalog.js";
+
 /** One telemetry event: how a task run or an agent run ended. Nothing reads these back to decide what a run does. */
 export interface FactoryEvent {
 	/** The root task run of the task. */

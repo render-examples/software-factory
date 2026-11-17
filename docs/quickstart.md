@@ -16,8 +16,9 @@ Prepare:
 - Issues enabled on each target repository (Settings > General > Features); and
 - the Node.js version in [`.node-version`](../.node-version).
 
-The Blueprint creates paid resources: a Starter web service and a Workflows
-service. Sandbox and model usage are billed separately.
+The Blueprint creates paid resources: a Starter web service, a Workflows
+service, and a Basic-256mb Postgres database. Sandbox and model usage are
+billed separately.
 
 Setup checks the pinned Node version locally, then checks workspace and
 repository access before writing Render environment groups. Disabled Issues

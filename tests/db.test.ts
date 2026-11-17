@@ -1,0 +1,208 @@
+import { randomUUID } from "node:crypto";
+import type { PGlite } from "@electric-sql/pglite";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+	append,
+	appendMany,
+	type Db,
+	type LogEvent,
+	migrate,
+	type Projection,
+	pendingMigrations,
+	readStream,
+	readSubject,
+	rebuild,
+	type Tx,
+	VersionConflict,
+} from "../app/db/index.js";
+import { defineEvent } from "../app/events/index.js";
+import { pgliteDb } from "./helpers/db.js";
+
+const noted = defineEvent("test.noted", 1, z.strictObject({ text: z.string().max(300_000) }));
+const START = { tx: "0", seq: 0 };
+
+let db: Db;
+let pglite: PGlite;
+beforeAll(async () => {
+	({ db, pglite } = await pgliteDb());
+});
+afterAll(() => db.end());
+
+const newStream = () => `run:${randomUUID()}`;
+const body = (text: string, extra: { subject?: string; idempotencyKey?: string } = {}) => ({
+	type: noted,
+	source: "gateway",
+	payload: { text },
+	...extra,
+});
+const note = (stream: string, text: string, extra: { subject?: string; idempotencyKey?: string } = {}) => ({ stream, ...body(text, extra) });
+
+describe("append", () => {
+	it("assigns each stream consecutive versions from 1", async () => {
+		const [a, b] = [newStream(), newStream()];
+		const versions = await db.withTx(async (tx) => {
+			const logged = [await append(tx, note(a, "1")), await append(tx, note(b, "1")), await append(tx, note(a, "2"))];
+			return logged.map((event) => [event?.stream, event?.streamVersion]);
+		});
+		expect(versions).toEqual([
+			[a, 1],
+			[b, 1],
+			[a, 2],
+		]);
+	});
+
+	it("records the type, version, source, subject, and validated payload", async () => {
+		const stream = newStream();
+		const logged = await db.withTx((tx) => append(tx, note(stream, "hello", { subject: "acme/web#issue-12" })));
+		expect(logged).toMatchObject({
+			stream,
+			type: "test.noted",
+			version: 1,
+			source: "gateway",
+			subject: "acme/web#issue-12",
+			payload: { text: "hello" },
+		});
+		expect(await readStream(db, stream, 0)).toEqual([logged]);
+	});
+
+	it("appends at the expected version and fails with VersionConflict at any other", async () => {
+		const stream = newStream();
+		await db.withTx((tx) => append(tx, note(stream, "first"), { expectedVersion: 0 }));
+		await expect(db.withTx((tx) => append(tx, note(stream, "stale"), { expectedVersion: 0 }))).rejects.toBeInstanceOf(VersionConflict);
+		await expect(db.withTx((tx) => append(tx, note(stream, "ahead"), { expectedVersion: 2 }))).rejects.toBeInstanceOf(VersionConflict);
+		await db.withTx((tx) => append(tx, note(stream, "second"), { expectedVersion: 1 }));
+		expect((await readStream(db, stream, 0)).map((event) => event.payload)).toEqual([{ text: "first" }, { text: "second" }]);
+	});
+
+	it("returns null for a repeated idempotency key and changes nothing, even when the stream has moved on", async () => {
+		const stream = newStream();
+		const key = randomUUID();
+		await db.withTx((tx) => append(tx, note(stream, "once", { idempotencyKey: key }), { expectedVersion: 0 }));
+		expect(await db.withTx((tx) => append(tx, note(stream, "again", { idempotencyKey: key }), { expectedVersion: 0 }))).toBeNull();
+		expect(await db.withTx((tx) => append(tx, note(newStream(), "elsewhere", { idempotencyKey: key })))).toBeNull();
+		expect((await readStream(db, stream, 0)).map((event) => event.payload)).toEqual([{ text: "once" }]);
+	});
+
+	it("rejects a payload that doesn't parse or is larger than 256 KB, writing nothing", async () => {
+		const stream = newStream();
+		await expect(db.withTx((tx) => append(tx, { ...note(stream, ""), payload: { text: 1 } as never }))).rejects.toThrow();
+		await expect(db.withTx((tx) => append(tx, { ...note(stream, ""), payload: { text: "x", token: "secret" } as never }))).rejects.toThrow();
+		await expect(db.withTx((tx) => append(tx, note(stream, "x".repeat(256 * 1024))))).rejects.toThrow("larger than 256 KB");
+		expect(await readStream(db, stream, 0)).toEqual([]);
+	});
+
+	it("notifies listeners only when the transaction commits", async () => {
+		const heard: string[] = [];
+		const unlisten = await pglite.listen("events", (payload) => heard.push(payload));
+		const [committed, rolledBack] = [newStream(), newStream()];
+		await db.withTx(async (tx) => {
+			await append(tx, note(committed, "kept"));
+			await tx.query("select 1");
+			expect(heard).toEqual([]);
+		});
+		await expect(
+			db.withTx(async (tx) => {
+				await append(tx, note(rolledBack, "dropped"));
+				throw new Error("abort");
+			}),
+		).rejects.toThrow("abort");
+		await unlisten();
+		expect(heard).toEqual([`${committed} 1`]);
+		expect(await readStream(db, rolledBack, 0)).toEqual([]);
+	});
+
+	it("appendMany appends to one stream in order, fenced by the expected version, and skips repeats", async () => {
+		const stream = newStream();
+		const key = randomUUID();
+		await db.withTx((tx) => append(tx, note(stream, "first", { idempotencyKey: key })));
+		const logged = await db.withTx((tx) =>
+			appendMany(tx, stream, [body("first", { idempotencyKey: key }), body("a"), body("b")], { expectedVersion: 1 }),
+		);
+		expect(logged.map((event) => [event.streamVersion, event.payload])).toEqual([
+			[2, { text: "a" }],
+			[3, { text: "b" }],
+		]);
+		await expect(db.withTx((tx) => appendMany(tx, stream, [body("c")], { expectedVersion: 1 }))).rejects.toBeInstanceOf(VersionConflict);
+	});
+});
+
+describe("ordered reads", () => {
+	it("pages a stream by version", async () => {
+		const stream = newStream();
+		await db.withTx((tx) =>
+			appendMany(
+				tx,
+				stream,
+				["1", "2", "3"].map((text) => body(text)),
+			),
+		);
+		const first = await readStream(db, stream, 0, 2);
+		const rest = await readStream(db, stream, first.at(-1)?.streamVersion ?? 0, 2);
+		expect([...first, ...rest].map((event) => event.streamVersion)).toEqual([1, 2, 3]);
+	});
+
+	it("pages a subject across streams by (tx, seq)", async () => {
+		const subject = `acme/web#issue-${randomUUID()}`;
+		const [claims, run] = [`subject:${subject}`, newStream()];
+		await db.withTx((tx) => append(tx, note(claims, "claim", { subject })));
+		await db.withTx(async (tx) => {
+			await append(tx, note(run, "started", { subject }));
+			await append(tx, note(newStream(), "unrelated"));
+			await append(tx, note(run, "finished", { subject }));
+		});
+		const first = await readSubject(db, subject, START, 2);
+		const last = first.at(-1) as LogEvent;
+		const rest = await readSubject(db, subject, { tx: last.tx, seq: last.seq }, 2);
+		expect([...first, ...rest].map((event) => event.payload)).toEqual([{ text: "claim" }, { text: "started" }, { text: "finished" }]);
+	});
+});
+
+describe("rebuild", () => {
+	const counts: Projection = {
+		table: "test_counts",
+		key: ["stream"],
+		operational: ["comment_id"],
+		async apply(tx: Tx, event: LogEvent) {
+			if (event.type !== noted.type) return;
+			await tx.query(
+				`insert into test_counts (stream, notes, updated_seq) values ($1, 1, $2)
+				 on conflict (stream) do update set notes = test_counts.notes + 1, updated_seq = excluded.updated_seq`,
+				[event.stream, event.seq],
+			);
+		},
+	};
+
+	it("replays the log into empty projections and keeps operational columns", async () => {
+		const { db: fresh } = await pgliteDb();
+		await fresh.query("create table test_counts (stream text primary key, notes int not null, comment_id bigint, updated_seq bigint not null)");
+		const [a, b] = [newStream(), newStream()];
+		await fresh.withTx((tx) =>
+			appendMany(
+				tx,
+				a,
+				["1", "2"].map((text) => body(text)),
+			),
+		);
+		await fresh.withTx((tx) => append(tx, note(b, "1")));
+		await fresh.query("insert into test_counts values ($1, 99, 42, 0)", [a]);
+
+		expect(await rebuild(fresh, [counts])).toBe(3);
+		expect((await fresh.query("select stream, notes, comment_id from test_counts order by notes desc")).rows).toEqual([
+			{ stream: a, notes: 2, comment_id: 42 },
+			{ stream: b, notes: 1, comment_id: null },
+		]);
+		await fresh.end();
+	});
+
+	it("runs with no projections", async () => {
+		await expect(rebuild(db)).resolves.toBeGreaterThan(0);
+	});
+});
+
+describe("migrate", () => {
+	it("is idempotent", async () => {
+		expect(await pendingMigrations(db)).toEqual([]);
+		expect(await migrate(db)).toEqual([]);
+	});
+});

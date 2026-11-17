@@ -188,6 +188,7 @@ The factory has no hard dollar budget.
 | Label, App permission, or subscribed event | Run `npm run setup:github`; update the App when prompted |
 | `app/runner/` or `app/harness/` sources | Deploy `factory-workflows`; each Sandbox gets the new runner payload when it opens |
 | `sandbox/` | Deploy `factory-workflows`, then refresh each repository snapshot |
+| Database migration in `app/db/migrations/` | Deploy both services; whichever starts first applies it |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 
 ## Snapshots
@@ -306,12 +307,40 @@ npm run doctor -- --service workflows
 The [setup runbook](runbooks/setup.md#phase-10-run-doctor) lists the required
 values and common failures.
 
+## Database
+
+The Blueprint creates `factory-db`, a Render Postgres 17 database on the paid
+`basic-256mb` plan, because free databases expire after 30 days. It links the
+database's internal URL to both services as `DATABASE_URL`.
+
+Each service applies pending migrations from `app/db/migrations/` when it
+starts. An advisory lock lets only one apply them; the other waits and finds
+nothing to do. Keep migrations additive (new tables, new nullable columns),
+because the other service may still be running the previous code.
+
+To run the services locally, set `DATABASE_URL` in `.env` to a local Postgres
+or to `factory-db`'s external URL from its **Connect** tab with
+`?sslmode=require` appended. The local services migrate that database when
+they start. `npm run setup:preflight -- --local` and `doctor` check that
+`DATABASE_URL` connects and warn about migrations it hasn't applied yet.
+
+To recreate the projection tables from the event log:
+
+```bash
+npm run db:rebuild
+```
+
+It replays every event in one transaction and keeps operational columns:
+metadata a projection stores that isn't derived from events. Appends wait
+until it commits. Run it in the gateway's Render Shell, or locally with the
+external URL.
+
 ## Environment variables
 
 Local variables are listed in [`.env.example`](../.env.example). The
 Blueprint supplies `RENDER_WORKFLOW_SLUG` to the gateway from the Workflows
-service. Every other deployed value comes from an
-[environment group](#environment-groups).
+service and `DATABASE_URL` to both services from `factory-db`. Every other
+deployed value comes from an [environment group](#environment-groups).
 
 ### Gateway
 
@@ -320,6 +349,7 @@ service. Every other deployed value comes from an
 | `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
+| `DATABASE_URL` | Connect to the [database](#database) |
 | `PORT` | HTTP port; defaults to `3000` |
 
 ### Workflows
@@ -330,6 +360,7 @@ service. Every other deployed value comes from an
 | `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Authenticate the GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
+| `DATABASE_URL` | Connect to the [database](#database) |
 | `ANTHROPIC_API_KEY` | Call the default models; each agent's harness declares the key it needs |
 | `GITHUB_API_URL` | Optional GitHub API base URL |
 

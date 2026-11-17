@@ -29,14 +29,16 @@ software-factory deploys two processes:
 - `app/entrypoints/workflows.ts` registers and runs tasks.
 
 Agents run inside Render Sandboxes. Only code in the Workflows service writes
-to GitHub. GitHub and Render Workflows hold application state; there is no
-database.
+to GitHub. GitHub and Render Workflows hold application state. Postgres holds
+an append-only event log (`app/db/`); only the two services connect to it, and
+both apply its migrations at startup.
 
 Two dependency rules are mandatory:
 
 1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent
    definitions in `app/agents/registry.ts`, and `app/schemas/`) imports no
-   host-only code: GitHub, Sandboxes, Workflows, claims, events, or config.
+   host-only code: GitHub, Sandboxes, Workflows, claims, events, the
+   database, or config.
    `tests/agents-catalog.test.ts` enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
    workflows. The gateway holds no GitHub credential and runs no model.
@@ -104,6 +106,9 @@ strict output schemas.
   derive the key list, and Sandbox allow-lists include every harness's
   hosts. It must give the model only the factory's tools; add it to `HARNESSES` in
   `tests/helpers/runner.ts` if it can run the conformance suite.
+- Persistent state: follow
+  [Contributing](CONTRIBUTING.md#add-persistent-state). Migrations stay
+  additive, because one service can run old code while the other migrates.
 - `sandbox/`: refresh every repository snapshot after deployment. Changes to
   `app/runner/`, `app/harness/`, or agents reach Sandboxes with the Workflows
   deploy, because each Sandbox replaces a stale runner bundle when it opens.

@@ -1,7 +1,9 @@
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Db } from "../app/db/index.js";
 import { type DoctorOptions, runDoctor } from "../scripts/lib/doctor.js";
 import { type CheckResult, Reporter } from "../scripts/lib/output.js";
+import { pgliteDb } from "./helpers/db.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -11,12 +13,22 @@ const { privateKey } = generateKeyPairSync("rsa", {
 const PRIVATE_KEY_B64 = Buffer.from(privateKey).toString("base64");
 
 const TOKEN = "ghs_installationTOKEN123";
+const DB_PASSWORD = "db-SECRET-password";
 const SECRETS = {
 	GITHUB_WEBHOOK_SECRET: "whsec-super-secret-value",
 	RENDER_API_KEY: "rnd_renderSECRETkey",
 	ANTHROPIC_API_KEY: "sk-ant-SECRET-model-key",
 	GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY_B64,
+	DATABASE_URL: `postgresql://factory:${DB_PASSWORD}@dpg-abc/factory`,
 };
+
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
+});
+afterAll(() => db.end());
+/** The migrated test database, left open when doctor closes its connection. */
+const openTestDb = () => ({ ...db, end: async () => {} });
 
 const FULL_ENV = {
 	...SECRETS,
@@ -124,6 +136,7 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}
 			env: FULL_ENV,
 			fetch: fake.fetch,
 			sleep: async () => {},
+			openDb: openTestDb,
 			services: ["gateway", "workflows"],
 			repos: ["acme/web"],
 			...rest,
@@ -136,7 +149,7 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}
 }
 
 function expectNoSecrets(output: string) {
-	for (const value of [...Object.values(SECRETS), TOKEN, privateKey.split("\n")[1] ?? ""]) {
+	for (const value of [...Object.values(SECRETS), TOKEN, DB_PASSWORD, privateKey.split("\n")[1] ?? ""]) {
 		expect(output).not.toContain(value);
 	}
 }
@@ -183,10 +196,46 @@ describe("doctor", () => {
 	it("keeps the gateway's intentional lack of App credentials as a skip", async () => {
 		const { code, find } = await doctor({
 			services: ["gateway"],
-			env: { RENDER_API_KEY: SECRETS.RENDER_API_KEY, GITHUB_WEBHOOK_SECRET: SECRETS.GITHUB_WEBHOOK_SECRET, RENDER_WORKFLOW_SLUG: "factory-workflows" },
+			env: {
+				RENDER_API_KEY: SECRETS.RENDER_API_KEY,
+				GITHUB_WEBHOOK_SECRET: SECRETS.GITHUB_WEBHOOK_SECRET,
+				RENDER_WORKFLOW_SLUG: "factory-workflows",
+				DATABASE_URL: SECRETS.DATABASE_URL,
+			},
 		});
 		expect(code).toBe(0);
 		expect(find("skip", "no App credentials")).toBeDefined();
+	});
+
+	it("checks that DATABASE_URL connects and the migrations are current", async () => {
+		const { find } = await doctor();
+		expect(find("pass", "DATABASE_URL connects")).toBeDefined();
+		expect(find("pass", "migrations are current")).toBeDefined();
+	});
+
+	it("blocks readiness when the database is unreachable, without printing its password", async () => {
+		const unreachable = new Error(`connect ECONNREFUSED for factory:${DB_PASSWORD}`);
+		const { code, find, output } = await doctor({
+			openDb: () => ({ query: () => Promise.reject(unreachable), withTx: () => Promise.reject(unreachable), end: async () => {} }),
+		});
+		expect(code).toBe(1);
+		expect(find("fail", "database check failed")).toBeDefined();
+		expectNoSecrets(output);
+	});
+
+	it("warns about migrations the database hasn't applied yet", async () => {
+		const { db: behind } = await pgliteDb();
+		await behind.query("delete from schema_migrations");
+		const { code, find } = await doctor({ openDb: () => behind });
+		expect(code).toBe(0);
+		expect(find("warn", "migrations not applied yet: 001_events.sql")).toBeDefined();
+	});
+
+	it("fails when a service lacks DATABASE_URL", async () => {
+		const { DATABASE_URL: _, ...env } = FULL_ENV;
+		const { code, find } = await doctor({ env });
+		expect(code).toBe(1);
+		expect(find("fail", "DATABASE_URL is not set")).toBeDefined();
 	});
 
 	it.each([

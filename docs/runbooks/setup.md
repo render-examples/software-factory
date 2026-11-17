@@ -245,11 +245,12 @@ create the same groups in the Dashboard instead. See
 
 ## Phase 7: Deploy the Blueprint
 
-[`render.yaml`](../../render.yaml) creates two paid resources in the
+[`render.yaml`](../../render.yaml) creates three paid resources in the
 `production` environment of a `software-factory` project:
 
-- `factory-gateway`, a Starter web service in Oregon; and
-- `factory-workflows`, a Workflows service in Oregon.
+- `factory-gateway`, a Starter web service in Oregon;
+- `factory-workflows`, a Workflows service in Oregon; and
+- `factory-db`, a Basic-256mb Postgres 17 database in Oregon.
 
 If the Render CLI is signed in to the same workspace, confirm that the
 Blueprint resolves its env groups:
@@ -325,7 +326,10 @@ Local `.env` already holds the values `setup:render` copied into the
 `software-factory-shared` and `software-factory-workflows` groups. It also
 needs `RENDER_WORKFLOW_SLUG`, which is not a secret. Use the deployed workflow
 slug, including any suffix Render added: copy the exact value from
-`factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`.
+`factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`. It
+also needs `DATABASE_URL`: ask the user to paste `factory-db`'s external URL
+from its **Connect** tab into `.env` with `?sslmode=require` appended. It holds
+the database password; do not ask for it in chat.
 
 Run:
 
@@ -446,6 +450,10 @@ they can delete.
 ### `doctor` fails
 
 - Gateway: check the webhook secret, Render API key, and workflow slug.
+- Database: on Render, both services get `DATABASE_URL` from the Blueprint;
+  rerun the Blueprint sync if it is missing. Locally, use the external URL
+  with `?sslmode=require`. Migrations not yet applied mean neither service
+  has started on the current code.
 - Workflows: check the workspace ID, Render API key, App credentials,
   provider key, and registered tasks.
 - `No tasks found`: use the deployed workflow slug, not an assumed service
