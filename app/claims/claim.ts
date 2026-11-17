@@ -17,7 +17,6 @@ import {
 	type Subject,
 	showRejection,
 	stopRun,
-	subjectName,
 	syncStatus,
 	warn,
 	workflowRuns,
@@ -165,7 +164,7 @@ class ClaimedRun implements Claim {
 	}
 
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions {
-		return { sandbox, traceId: this.traceId, runId: this.runId, repo: this.repo.fullName, subject: subjectName(this.subject) };
+		return { sandbox, traceId: this.traceId, runId: this.runId, subject: this.#key };
 	}
 
 	async start(): Promise<void> {

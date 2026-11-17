@@ -24,9 +24,9 @@ export function scripted(turns: readonly TestTurn[]): Harness {
 async function play(ctx: DriverContext, turns: readonly TestTurn[]): Promise<void> {
 	const tools = new Map(ctx.tools.map((t) => [t.name as string, t]));
 	let callId = 0;
-	for (const turn of turns) {
+	for (const [index, turn] of turns.entries()) {
 		if (!ctx.requestModel()) return;
-		if (turn.text) ctx.report.text(turn.text);
+		if (turn.text) ctx.report.text(`m${index + 1}`, turn.text);
 		if (turn.calls.length === 0) return;
 		for (const call of turn.calls) {
 			const id = `call-${++callId}`;

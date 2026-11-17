@@ -208,7 +208,7 @@ describe("kernel", { timeout: 15_000 }, () => {
 				ctx.submit.call(GOOD);
 			}),
 		);
-		captured?.report.text("after the outcome");
+		captured?.report.text("m1", "after the outcome");
 		const events = await run.later();
 		const results = toolResults(events);
 		expect(results).toHaveLength(1);

@@ -55,7 +55,10 @@ export interface SubmitTool {
 
 /** What the library observed, for the event stream. */
 export interface Report {
-	text(text: string): void;
+	/** Text the model is streaming for message `messageId`, which the driver names uniquely within the run. */
+	delta(messageId: string, text: string): void;
+	/** The message's complete text. */
+	text(messageId: string, text: string): void;
 	usage(usage: Usage): void;
 	toolCall(id: string, tool: string, args: unknown): void;
 	/** Ignored unless `toolCall` announced `id`; the kernel truncates `text`. */

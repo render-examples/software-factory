@@ -30,6 +30,18 @@ describe("pi driver", { timeout: 30_000 }, () => {
 		expect(code).toBe(1);
 	});
 
+	it("streams each assistant message as deltas, then its final text under the same message ID", async () => {
+		const text = "Looking at the repository layout before I submit.";
+		const { harness } = fauxPi([fauxAssistantMessage([fauxText(text), fauxToolCall(SUBMIT, GOOD)], { stopReason: "toolUse" })]);
+		const { events } = await runContract(harness, makeInput(makeWorkspace()));
+		const messages = events.flatMap((e) => (e.type === "assistant_delta" || e.type === "assistant_text" ? [e] : []));
+		const deltas = messages.filter((e) => e.type === "assistant_delta");
+		expect(deltas.length).toBeGreaterThan(0);
+		expect(deltas.map((e) => e.text).join("")).toBe(text);
+		expect(messages.at(-1)).toMatchObject({ type: "assistant_text", message_id: deltas[0]?.message_id, text });
+		expect(new Set(messages.map((e) => e.message_id)).size).toBe(1);
+	});
+
 	it("ends a batch that submits without another model request", async () => {
 		const { harness, stub } = fauxPi([calls(["ls", {}], [SUBMIT, GOOD]), calls(["ls", {}])]);
 		const { code, events } = await runContract(harness, makeInput(makeWorkspace()));

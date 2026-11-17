@@ -236,19 +236,16 @@ update recreates it.
 Open that run under `factory-workflows` in the Render Dashboard to inspect its
 input, logs, and result.
 
-Every delivery, claim, and task run is recorded in the event log. The `runs`
-table holds each task run's state, outcome, summary, and Sandbox; `claims`
-holds the run that owns each issue or pull request:
+Every delivery, claim, task run, and agent run is recorded in the
+[database](#database). The `runs` table holds each task run's state, outcome,
+summary, and Sandbox; `claims` holds the run that owns each issue or pull
+request; `agent_runs` holds each agent run's agent, model, outcome, turns,
+token usage, and cost. Follow a run live over an [event stream](#event-streams),
+or query the tables:
 
 ```sql
 select run_id, task, state, outcome, summary from runs where subject = 'owner/name#issue-12' order by started_at;
-```
-
-The Workflows logs also carry `agent.finished`, which records the agent,
-model, turns, token usage, reported cost, and stop reason:
-
-```bash
-render logs -r <factory-workflows-id> --text agent.finished
+select subject, sum(cost_usd) from agent_runs group by subject order by 2 desc;
 ```
 
 To cancel a run, post this as the first line of an issue or pull request
@@ -271,6 +268,36 @@ labels. Triage may still clear a stale spec-approval label when it revises the
 spec. The trigger label is removed when a run starts. If Triage asks questions,
 the factory adds it back so a human reply can start the continuation. Use
 `/factory cancel` to stop an active root workflow.
+
+## Event streams
+
+The gateway serves server-sent events (SSE) to anyone with
+`EVENTS_READ_TOKEN`, sent as `Authorization: Bearer <token>`:
+
+| Endpoint | Delivers | Ends |
+|---|---|---|
+| `GET /subjects/<owner>/<repo>/<issue\|pr>/<number>/stream` | Every event recorded about the issue or pull request, including every agent run on it | Never; disconnect when done |
+| `GET /agent-runs/<id>/stream` | One agent run, whose ID is the `agent_run:<id>` stream of its events | After `agent_run.finished` |
+
+```bash
+curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
+  https://<gateway-host>/subjects/acme/web/issue/12/stream
+```
+
+Each stream sends the stored events first, then the text so far of each
+message the model is still writing as `live.partial`, then new events as they
+happen. The SSE event name is the event type, such as `agent_run.started`,
+`assistant.message`, `tool.call`, `tool.result`, `usage`, or
+`agent_run.finished`; its data is the event as JSON. The model's text arrives
+as `live.delta` events while it's written; they aren't stored, so replaying a
+finished run shows only final messages.
+
+Stored events carry an SSE ID. To resume after a dropped connection, send the
+last one you received as `Last-Event-ID`, or as `?after=`. Each endpoint keeps
+its own IDs, so don't reuse one across endpoints. Stream content includes
+model output, tool output, and repository text: treat it as untrusted, and
+share the token only with people allowed to read every repository the factory
+works on.
 
 ## Check a deployment
 
@@ -351,6 +378,7 @@ deployed value comes from an [environment group](#environment-groups).
 | Variable | Purpose |
 |---|---|
 | `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
+| `EVENTS_READ_TOKEN` | Authenticate readers of the [event streams](#event-streams); `npm run setup:render` generates it |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
 | `DATABASE_URL` | Connect to the [database](#database) |
@@ -384,7 +412,7 @@ instead:
 | Group | Linked to | Variables |
 |---|---|---|
 | `software-factory-shared` | both services | `RENDER_API_KEY` |
-| `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET` |
+| `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET`, `EVENTS_READ_TOKEN` |
 | `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY` |
 
 The gateway links no group that holds GitHub App credentials or a model key.

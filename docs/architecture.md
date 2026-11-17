@@ -19,10 +19,11 @@ flowchart LR
 
 The Blueprint deploys two services and a database:
 
-- **Gateway** verifies webhooks and maps each delivery to one task.
+- **Gateway** verifies webhooks, maps each delivery to one task, and streams
+  the event log to readers.
 - **Workflows** runs tasks, manages Sandboxes, and writes to GitHub.
-- **Postgres** (`factory-db`) holds an append-only event log. Both services
-  apply its migrations at startup.
+- **Postgres** (`factory-db`) holds an append-only event log, including every
+  agent run. Both services apply its migrations at startup.
 
 The application does not implement its own queue, dispatcher, heartbeat
 process, or maintenance loop.
@@ -80,11 +81,11 @@ Each system owns the state it already manages:
 | Issues, labels, specifications, pull requests, and reviews | GitHub |
 | Deliveries, claims, task runs, their outcomes, and their Sandboxes | Postgres event log |
 | Prepared repository filesystem | Render Sandbox snapshot |
-| Agent outcomes, usage, and cost | JSON lines in Workflows logs |
+| Agent runs: messages, tool calls, outcome, usage, and cost | Postgres event log |
 
 The status comment on an issue or pull request is a view of the claim and the
-current run, rendered from Postgres. Nothing reads it back. Log lines are
-telemetry: nothing reads them to decide what a task may do.
+current run, rendered from Postgres. Nothing reads it back, and nothing reads
+agent run events to decide what a task may do: they are for people to watch.
 
 ### Event log
 
@@ -201,6 +202,34 @@ submission against JSON Schema. The host validates it again with the agent's
 Zod schema. Repositories, refs, issue numbers, pull requests, branches, and
 write targets come from authenticated task input, never model output.
 
+### Agent run events
+
+`runAgent` records every agent run in the event log as an `agent_run:<id>`
+stream, whose subject is the task's issue or pull request. A recorder on the
+Workflows host (`app/events/recorder.ts`) is the stream's only writer. It
+translates the runner's events into `assistant.message`, `tool.call`,
+`tool.result`, and `usage` events and writes them every 250 ms in one
+transaction. Until the runner reports live, the host feeds it the downloaded
+output after the run. Runner output is untrusted: it becomes display events on
+the run's own stream and nothing else. `agent_run.finished`, with the outcome,
+turns, usage, and cost, comes from the host's own summary of the run, and the
+`agent_runs` table projects it. A database error never fails the agent run;
+the recorder keeps a bounded queue and logs what it couldn't write.
+
+The model's text as it streams travels as `NOTIFY` messages on the `live`
+channel, sent in the recorder's transactions and never stored. Each gateway
+instance holds one `LISTEN` connection for `events` and `live`
+(`app/gateway/hub.ts`) and keeps the text so far of every in-progress message
+in memory, so instances serve the same streams without sharing state. A
+notification only wakes readers, which then read from their own cursors, and
+readers also poll every 5 seconds, so a missed notification costs latency,
+never an event. A missed delta is lost; the final message is in the log.
+
+The gateway streams one agent run, or everything on an issue or pull request,
+as server-sent events to holders of `EVENTS_READ_TOKEN` (`app/gateway/stream.ts`).
+Each stream's event IDs are its log cursors: the stream version for an agent
+run, and `<tx>-<seq>` for a subject.
+
 ## Publishing
 
 The Sandbox has no GitHub write credential. It returns a candidate tree to
@@ -222,7 +251,8 @@ are untrusted.
 
 The gateway verifies the webhook signature before parsing the body. It holds
 no GitHub credential and runs no model or repository code. It holds the
-database credential.
+database credential. It serves event streams only to requests that present
+`EVENTS_READ_TOKEN`, compared in constant time.
 
 ### Workflows host
 
@@ -270,6 +300,8 @@ Changes must preserve these properties:
     configuration. Only a repository's configured `egress: "allow-all"` lifts it.
 12. Give database credentials only to the gateway and Workflows services.
     Nothing in a Sandbox holds one or writes events.
+13. Treat runner output as untrusted: record it only as display events on its
+    own agent run, and take outcomes and costs from the host's summary.
 
 Tests pin these invariants and the tool authority of every built-in agent.
 
@@ -290,6 +322,10 @@ Tests pin these invariants and the tool authority of every built-in agent.
 - The gateway's database credential can write factory state, so a compromised
   gateway can forge events. Before the database, it held only the webhook
   secret and the Render API key.
+- Anyone with `EVENTS_READ_TOKEN` can read every agent run's messages and tool
+  output, for every repository. Readers share the one token.
+- A process in a Sandbox that forges runner output can change what stream
+  readers see, though not what the task does or what the run cost.
 - Near-simultaneous triggers can both work until one fails its next ownership
   check.
 - Workflows inputs and results are visible to people with service access.
@@ -330,6 +366,8 @@ Start with:
    publishing.
 10. [`app/db/store.ts`](../app/db/store.ts) — appending to the event log;
     [`app/db/read.ts`](../app/db/read.ts) — reading it in order.
+11. [`app/events/recorder.ts`](../app/events/recorder.ts) — recording an agent
+    run; [`app/gateway/stream.ts`](../app/gateway/stream.ts) — streaming it.
 
 Use the [extension runbook](runbooks/extend.md) to add agents, tasks, or
 triggers.

@@ -1,4 +1,5 @@
 import { claimAcquired, claimReleased, runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
+import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
 
@@ -88,7 +89,7 @@ const claims: Projection = {
 	},
 };
 
-export const PROJECTIONS: readonly Projection[] = [runs, claims];
+export const PROJECTIONS: readonly Projection[] = [runs, claims, agentRuns];
 
 /** Applies an event to every projection, in the transaction that appends it. */
 export async function project(tx: Tx, event: LogEvent): Promise<void> {

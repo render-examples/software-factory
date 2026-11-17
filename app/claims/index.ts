@@ -10,7 +10,6 @@ export {
 	type StatusLink,
 	type Subject,
 	stopRun,
-	subjectName,
 	syncStatus,
 	WORKING_LABEL,
 	workflowRuns,

@@ -16,6 +16,7 @@ const TOKEN = "ghs_installationTOKEN123";
 const DB_PASSWORD = "db-SECRET-password";
 const SECRETS = {
 	GITHUB_WEBHOOK_SECRET: "whsec-super-secret-value",
+	EVENTS_READ_TOKEN: "events-reader-SECRET-token",
 	RENDER_API_KEY: "rnd_renderSECRETkey",
 	ANTHROPIC_API_KEY: "sk-ant-SECRET-model-key",
 	GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY_B64,
@@ -199,6 +200,7 @@ describe("doctor", () => {
 			env: {
 				RENDER_API_KEY: SECRETS.RENDER_API_KEY,
 				GITHUB_WEBHOOK_SECRET: SECRETS.GITHUB_WEBHOOK_SECRET,
+				EVENTS_READ_TOKEN: SECRETS.EVENTS_READ_TOKEN,
 				RENDER_WORKFLOW_SLUG: "factory-workflows",
 				DATABASE_URL: SECRETS.DATABASE_URL,
 			},

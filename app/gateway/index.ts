@@ -4,8 +4,11 @@ import { append, type Db } from "../db/index.js";
 import { readBody } from "./body.js";
 import { deliveryEvent, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
+import { agentRunStream, requireReader, type StreamDeps, subjectStream } from "./stream.js";
 
-export interface GatewayDeps {
+export { EventHub, listen } from "./hub.js";
+
+export interface GatewayDeps extends StreamDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	webhookSecret: string;
 	/** Records every authenticated delivery before the gateway acts on it. */
@@ -29,6 +32,10 @@ export function createGateway(deps: GatewayDeps): Hono {
 	);
 	app.get("/health", (c) => c.json({ status: "ok" }));
 	app.get("/ready", (c) => c.json({ status: "ready" }));
+
+	const reader = requireReader(deps.eventsReadToken);
+	app.get("/agent-runs/:id/stream", reader, agentRunStream(deps));
+	app.get("/subjects/:owner/:repo/:kind/:number/stream", reader, subjectStream(deps));
 
 	app.post("/webhooks/github", async (c) => {
 		const event = c.req.header("x-github-event") ?? "";

@@ -16,6 +16,7 @@ const TOKEN = "ghs_readonly_preflight_token";
 const SECRETS = {
 	RENDER_API_KEY: "rnd_preflight_render_key",
 	GITHUB_WEBHOOK_SECRET: "preflight_webhook_secret",
+	EVENTS_READ_TOKEN: "preflight_events_token",
 	GITHUB_APP_PRIVATE_KEY: Buffer.from(privateKey).toString("base64"),
 	ANTHROPIC_API_KEY: "sk-ant-preflight-model-key",
 };

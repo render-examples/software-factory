@@ -43,10 +43,6 @@ export function workflowRuns(): RunControl {
 	return defaultRuns;
 }
 
-export function subjectName(subject: Subject): string {
-	return `${subject.kind}#${subject.number}`;
-}
-
 /** An event on task run `runId`'s stream about `subject` (a `subjectKey`), written by task run `by`. */
 export function runEvent<S extends z.ZodType>(type: EventSpec<S>, runId: string, subject: string, payload: z.input<S>, by = runId): NewEvent<S> {
 	return { type, stream: `run:${runId}`, subject, source: `workflow:${by}`, payload };

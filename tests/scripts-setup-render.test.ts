@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
 import { ENV_GROUPS, SERVICE_ENV } from "../scripts/lib/requirements.js";
-import { setupRender } from "../scripts/lib/setup-render.js";
+import { newEventsReadToken, setupRender } from "../scripts/lib/setup-render.js";
 
 const WORKSPACE = "tea-abc123";
 const SECRETS = {
 	RENDER_API_KEY: "rnd_renderSECRETkey",
 	GITHUB_WEBHOOK_SECRET: "whsec-super-secret-value",
+	EVENTS_READ_TOKEN: "events-reader-SECRET-token",
 	GITHUB_APP_PRIVATE_KEY: "cHJpdmF0ZS1rZXktU0VDUkVU",
 	ANTHROPIC_API_KEY: "sk-ant-SECRET-model-key",
 };
@@ -86,7 +87,7 @@ describe("setup:render", () => {
 		const byName = Object.fromEntries(world.groups.map((g) => [g.name, Object.fromEntries(g.envVars.map((v) => [v.key, v.value]))]));
 		expect(byName).toEqual({
 			"software-factory-shared": { RENDER_API_KEY: SECRETS.RENDER_API_KEY },
-			"software-factory-gateway": { GITHUB_WEBHOOK_SECRET: SECRETS.GITHUB_WEBHOOK_SECRET },
+			"software-factory-gateway": { GITHUB_WEBHOOK_SECRET: SECRETS.GITHUB_WEBHOOK_SECRET, EVENTS_READ_TOKEN: SECRETS.EVENTS_READ_TOKEN },
 			"software-factory-workflows": {
 				RENDER_WORKSPACE_ID: WORKSPACE,
 				GITHUB_APP_ID: "1",
@@ -111,7 +112,15 @@ describe("setup:render", () => {
 		const world = renderWorld({
 			groups: [
 				{ id: "evg-a", name: "software-factory-shared", ownerId: WORKSPACE, envVars: [{ key: "RENDER_API_KEY", value: SECRETS.RENDER_API_KEY }] },
-				{ id: "evg-b", name: "software-factory-gateway", ownerId: WORKSPACE, envVars: [{ key: "GITHUB_WEBHOOK_SECRET", value: "old" }] },
+				{
+					id: "evg-b",
+					name: "software-factory-gateway",
+					ownerId: WORKSPACE,
+					envVars: [
+						{ key: "GITHUB_WEBHOOK_SECRET", value: "old" },
+						{ key: "EVENTS_READ_TOKEN", value: SECRETS.EVENTS_READ_TOKEN },
+					],
+				},
 				{
 					id: "evg-c",
 					name: "software-factory-workflows",
@@ -144,6 +153,12 @@ describe("setup:render", () => {
 		expect(output).toContain("2 env groups are named software-factory-gateway");
 		expect(world.groups.filter((g) => g.name === "software-factory-gateway")).toHaveLength(2);
 		expect(writes(world.calls).filter((c) => /evg-[12]/.test(c.path))).toEqual([]);
+	});
+
+	it("generates an events reader token only when there is none", () => {
+		expect(newEventsReadToken({})).toMatch(/^[a-f0-9]{64}$/);
+		expect(newEventsReadToken({})).not.toBe(newEventsReadToken({}));
+		expect(newEventsReadToken({ EVENTS_READ_TOKEN: "kept" })).toBeUndefined();
 	});
 
 	it("stops before any group work when the API key is rejected", async () => {

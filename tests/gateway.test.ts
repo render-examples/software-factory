@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } 
 import { config, type TaskName } from "../app/config/index.js";
 import { type Db, readStream } from "../app/db/index.js";
 import { TriageInput } from "../app/schemas/tasks.js";
-import { createGateway, type GatewayDeps } from "../app/gateway/index.js";
+import { createGateway, EventHub, type GatewayDeps } from "../app/gateway/index.js";
 import { REPO } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 
@@ -41,7 +41,7 @@ afterAll(() => db.end());
 beforeEach(async () => {
 	await resetDb(db);
 	startTask = vi.fn(async (_task: TaskName, _input: object, _key: string) => ({ id: "trn-123" }));
-	app = createGateway({ startTask, webhookSecret: SECRET, db });
+	app = createGateway({ startTask, webhookSecret: SECRET, db, hub: new EventHub(), eventsReadToken: "events-token" });
 });
 
 describe("gateway", () => {
@@ -131,7 +131,7 @@ describe("gateway", () => {
 	it("returns 502 without starting the task when the delivery can't be recorded", async () => {
 		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 		const down: Db = { ...db, withTx: async () => Promise.reject(new Error("connection refused")) };
-		const res = await createGateway({ startTask, webhookSecret: SECRET, db: down }).fetch(webhook(JSON.stringify(triagePayload)));
+		const res = await createGateway({ startTask, webhookSecret: SECRET, db: down, hub: new EventHub(), eventsReadToken: "events-token" }).fetch(webhook(JSON.stringify(triagePayload)));
 		expect(res.status).toBe(502);
 		expect(startTask).not.toHaveBeenCalled();
 		expect(JSON.parse(warn.mock.calls[0]?.[0] as string)).toMatchObject({ msg: "could not record delivery", deliveryId: "delivery-1" });

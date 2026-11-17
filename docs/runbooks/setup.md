@@ -232,7 +232,9 @@ definition of completed setup.
 After preflight passes, the command creates or updates:
 
 - `software-factory-shared`, for both services: `RENDER_API_KEY`;
-- `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET`; and
+- `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET` and
+  `EVENTS_READ_TOKEN`, which the command generates and saves to `.env` when
+  it's missing; and
 - `software-factory-workflows`, for Workflows: `RENDER_WORKSPACE_ID`,
   `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`.
 
@@ -488,12 +490,18 @@ verification.
 
 ### An agent submits an invalid result
 
-The runner accepts three attempts. Search Workflows logs for the last schema
-errors and submitted field names:
+The runner accepts three attempts. Each agent run's last schema errors are in
+its `agent_run.finished` event in `factory-db` (open a shell with
+`render psql <factory-db-id>`):
 
-```bash
-render logs -r <factory-workflows-id> --text invalid_submission
+```sql
+select stream, payload->>'message' from events
+where type = 'agent_run.finished' and payload->>'outcome' = 'invalid_submission'
+order by seq desc limit 5;
 ```
+
+The submitted arguments are its `tool.call` events: follow
+`/agent-runs/<id>/stream` (see [Event streams](../configuration.md#event-streams)).
 
 Repeated errors for one agent usually require a prompt or schema change.
 

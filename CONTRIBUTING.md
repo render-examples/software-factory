@@ -71,11 +71,13 @@ compatibility cases in that fixture and exercise them through routing and tasks.
 
 Database tests run on PGlite, in-process Postgres, through
 `tests/helpers/db.ts`. PGlite runs one transaction at a time, so tests that
-need concurrent transactions run only when `TEST_DATABASE_URL` points at a
-Postgres server where the user can create databases. CI sets it:
+need concurrent transactions or connections run only when `TEST_DATABASE_URL`
+points at a Postgres server where the user can create databases. CI sets it.
+Name those files `*-postgres.test.ts`: Vitest runs them one at a time, since a
+transaction anywhere on the server holds back readers of a subject's events.
 
 ```bash
-TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npx vitest run tests/db-postgres.test.ts
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npx vitest run --project postgres
 ```
 
 Run additional checks when relevant:

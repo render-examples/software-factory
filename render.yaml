@@ -4,7 +4,7 @@
 #   deploys from the same repository as this Blueprint, including forks.
 # - factory-db: the event log. Both services apply its migrations at startup. It is a paid instance because
 #   free databases expire after 30 days.
-# Run and agent telemetry is logged as JSON lines; find it in each service's logs or a log stream.
+# Deliveries, claims, task runs, and agent runs are recorded in factory-db; the gateway streams agent runs live.
 #
 # Secrets live in three environment groups that `npm run setup:render` creates from .env before this
 # Blueprint is applied. Blueprint groups can't hold `sync: false` values, so the groups are not defined here.

@@ -28,7 +28,7 @@ connects the webhook, verifies both services, and runs one Triage smoke test.
 2. Running agents and repository tools inside short-lived, isolated Render Sandboxes.
 3. Handling overlapping runs, cancellation, cleanup, and idempotency.
 4. Validating typed agent output and safely publishing proposed code to GitHub.
-5. Providing deployment configuration, setup scripts, health checks, and structured telemetry.
+5. Providing deployment configuration, setup scripts, health checks, structured telemetry, and live agent event streams.
 
 **What software-factory leaves for you:**
 1. The agents, prompts, and workflow logic for your use case.
@@ -57,6 +57,23 @@ The three labels above keep each transition human-gated. Apply
 Triage drafts the spec, Spec-to-PR opens a draft pull request, and PR Reviewer
 posts its review as child tasks in one Render Workflow. If Triage asks
 questions, the workflow stops and continues when a person replies.
+
+## Watch agents work
+
+Every agent run is recorded in Postgres with its messages, tool calls, usage,
+and cost. The gateway streams them as server-sent events, with the model's
+text as it's written. Follow everything on an issue or pull request with the
+`EVENTS_READ_TOKEN` that `npm run setup:render` saved to `.env`:
+
+```bash
+curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
+  https://<gateway-host>/subjects/<owner>/<repo>/issue/<number>/stream
+```
+
+Use `pr` for a pull request. A dropped connection resumes where it left off
+when the client sends the last event ID it saw as `Last-Event-ID`. See
+[Event streams](docs/configuration.md#event-streams) for the per-run endpoint
+and the event types.
 
 ## Extend the template
 
