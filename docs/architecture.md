@@ -9,7 +9,7 @@ and the gateway streams agent runs live to readers.
 
 - **Agents propose. Code acts.** The model never chooses a target or holds a write credential.
 - **Don’t trust agent output.** Parse, check and independently verify it before anything leaves the Sandbox.
-- **Make every run safe.** Expect duplicate and overlapping triggers; one run owns each subject at a time.
+- **Make every run safe.** Expect duplicate and overlapping triggers; one run owns each thread at a time.
 - **Limit every loop.** Bound turns, time, repairs and output; cap spend at the model provider.
 - **Record outcomes as data.** Structured events per run and per agent—not model-generated explanations of what happened.
 
