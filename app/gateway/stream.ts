@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Context, Handler, MiddlewareHandler } from "hono";
-import { streamSSE } from "hono/streaming";
+import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { type Db, type LogEvent, readStream, readThread } from "../db/index.js";
 import { agentRunFinished, assistantMessage } from "../events/index.js";
@@ -115,62 +115,59 @@ interface Feed {
  */
 function serve(c: Context, hub: EventHub, feed: Feed): Response {
 	return streamSSE(c, async (sse) => {
-		let disconnect = () => {};
-		const closed = new Promise<void>((resolve) => {
-			disconnect = resolve;
-			sse.onAbort(resolve);
-		});
-		// Every write goes through one chain, so events, partials, and deltas reach the client in order. A failed
-		// write or read ends the connection; the client resumes from its last event ID.
-		let chain = Promise.resolve();
-		const enqueue = (work: () => Promise<void>) => {
-			chain = chain.then(work).catch(disconnect);
-		};
-
-		let done = false;
+		const queue = writeQueue(sse);
+		let ended = false;
 		/** Messages whose final text this client already has, so a partial the cache hasn't dropped yet isn't sent. */
 		const finished = new Set<string>();
-		const drain = async () => {
-			for (let page = await feed.read(); !done; page = await feed.read()) {
+		let live = false;
+
+		/** Sends every stored event after the cursor, and ends the connection after the feed's last event. */
+		const drainBacklog = async () => {
+			for (let page = await feed.read(); !ended; page = await feed.read()) {
 				for (const { id, event } of page) {
 					await sse.writeSSE({ id, event: event.type, data: JSON.stringify(event) });
 					if (event.type === assistantMessage.type) finished.add(`${event.stream} ${assistantMessage.payload.parse(event.payload).message_id}`);
 					if (feed.ends?.(event)) {
-						done = true;
-						disconnect();
+						ended = true;
+						queue.close();
 					}
 				}
 				if (page.length < PAGE) return;
 			}
 		};
+
+		/** Sends each in-progress message the backlog didn't finish, then lets deltas through. */
+		const emitPartials = async () => {
+			if (ended) return;
+			// Deltas that arrived before now are in the snapshot; later ones are queued behind it.
+			live = true;
+			for (const partial of hub.partials(feed.key)) {
+				if (!finished.has(`${partial.stream} ${partial.message_id}`)) await sse.writeSSE({ event: "live.partial", data: JSON.stringify(partial) });
+			}
+		};
+
+		/** Queues a drain for a commit or a poll, unless one is already waiting to start. */
 		let woken = false;
 		const wake = () => {
-			if (woken || done) return;
+			if (woken || ended) return;
 			woken = true;
-			enqueue(async () => {
+			queue.enqueue(async () => {
 				woken = false;
-				await drain();
+				await drainBacklog();
 			});
 		};
 
-		let live = false;
+		// Subscribe before the first read, so nothing that commits or arrives from here on is missed.
 		const unsubscribe = hub.onEvents(feed.wakeOn, wake);
 		const unsubscribeDeltas = hub.onDelta(feed.key, ({ stream, thread, message_id, text }) => {
-			if (live) enqueue(() => sse.writeSSE({ event: "live.delta", data: JSON.stringify({ stream, thread, message_id, text }) }));
+			if (live) queue.enqueue(() => sse.writeSSE({ event: "live.delta", data: JSON.stringify({ stream, thread, message_id, text }) }));
 		});
 		const poll = setInterval(wake, POLL_MS);
-		const keepalive = setInterval(() => enqueue(() => sse.write(": keepalive\n\n").then(() => {})), KEEPALIVE_MS);
+		const keepalive = setInterval(() => queue.enqueue(() => sse.write(": keepalive\n\n").then(() => {})), KEEPALIVE_MS);
 		try {
 			wake();
-			enqueue(async () => {
-				if (done) return;
-				// Deltas that arrived before now are in the snapshot; later ones are queued behind it.
-				live = true;
-				for (const partial of hub.partials(feed.key)) {
-					if (!finished.has(`${partial.stream} ${partial.message_id}`)) await sse.writeSSE({ event: "live.partial", data: JSON.stringify(partial) });
-				}
-			});
-			await closed;
+			queue.enqueue(emitPartials);
+			await queue.closed;
 		} finally {
 			clearInterval(poll);
 			clearInterval(keepalive);
@@ -178,4 +175,25 @@ function serve(c: Context, hub: EventHub, feed: Feed): Response {
 			unsubscribeDeltas();
 		}
 	});
+}
+
+/**
+ * Runs writes one at a time in the order they were queued, so events, partials, and deltas reach the client in
+ * order. A failed write or read ends the connection; the client resumes from its last event ID.
+ */
+function writeQueue(sse: SSEStreamingApi) {
+	let close = () => {};
+	/** Resolves when the client disconnects, a queued write fails, or `close` is called. */
+	const closed = new Promise<void>((resolve) => {
+		close = resolve;
+		sse.onAbort(resolve);
+	});
+	let chain = Promise.resolve();
+	return {
+		closed,
+		close,
+		enqueue(work: () => Promise<void>) {
+			chain = chain.then(work).catch(close);
+		},
+	};
 }

@@ -181,7 +181,7 @@ class FakeApi {
 }
 
 let fake: FakeApi;
-const client = () => new SandboxClient(fake.api(), { minRequestIntervalMs: 0, pollMs: 1, bootTimeoutMs: 1_000 });
+const client = () => new SandboxClient(fake.api(), { pollMs: 1, bootTimeoutMs: 1_000 });
 const readToken = async () => TOKEN;
 
 beforeEach(() => {
@@ -433,7 +433,7 @@ describe("SandboxClient.execStream", () => {
 			},
 		} as unknown as SandboxApi;
 		const chunks: string[] = [];
-		const run = new SandboxClient(api, { minRequestIntervalMs: 0 }).execStream("sbx-1", "sleep 600", {
+		const run = new SandboxClient(api).execStream("sbx-1", "sleep 600", {
 			timeoutMs: 50,
 			onData: (_, data) => chunks.push(data),
 		});

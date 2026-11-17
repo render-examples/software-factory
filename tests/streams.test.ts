@@ -99,6 +99,23 @@ describe("GET /agent-runs/:id/stream", () => {
 		expect(hub.partials(r.stream)).toEqual([]);
 	});
 
+	it("skips the partial of a message the backlog already sent in full", async () => {
+		const r = startRun();
+		feed(r, text("Hello", "m1"), delta("Work", "m2"));
+		await vi.waitFor(() => expect(hub.partials(r.stream)).toEqual([expect.objectContaining({ message_id: "m2" })]), { timeout: 2000 });
+		// The cache still holds m1, as it does between the commit of its message and the arrival of its final.
+		hub.receive("live", JSON.stringify({ type: "delta", stream: r.stream, thread: THREAD, message_id: "m1", local_seq: 1, part: 0, text: "Hello" }));
+
+		const stream = readSse(await get(`/agent-runs/${r.id}/stream`));
+		expect((await stream.take(3)).map((f) => [f.event, (f.data as { message_id?: string }).message_id])).toEqual([
+			["agent_run.started", undefined],
+			["assistant.message", undefined],
+			["live.partial", "m2"],
+		]);
+		await r.finish(SUMMARY);
+		expect((await stream.take(3)).map((f) => f.event)).toEqual(["agent_run.finished"]);
+	});
+
 	it("resumes after Last-Event-ID, or ?after=, and replays a finished run with final messages only", async () => {
 		const r = startRun();
 		feed(r, delta("Hi", "m1"), text("Hi", "m1"), { type: "tool_call", at, tool_call_id: "c1", tool: "ls", args: {} });

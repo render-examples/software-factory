@@ -11,8 +11,6 @@ export type SandboxApi = Pick<SandboxesClient, "create" | "get" | "exec" | "uplo
 };
 
 export interface SandboxTimings {
-	/** Client-side pacing for the Sandbox API's limit of 100 requests a minute per workspace. */
-	minRequestIntervalMs: number;
 	/** Gap between status polls. */
 	pollMs: number;
 	bootTimeoutMs: number;
@@ -25,7 +23,6 @@ export interface SandboxTimings {
 }
 
 const DEFAULT_TIMINGS: SandboxTimings = {
-	minRequestIntervalMs: 1_000,
 	pollMs: 3_000,
 	bootTimeoutMs: 5 * 60_000,
 	prepareTimeoutMs: 40 * 60_000,
@@ -50,7 +47,6 @@ export interface ClientExecOptions {
 
 /**
  * The SDK's sandbox client (@renderinc/sdk 1.2.0, experimental) plus what it leaves to callers:
- * - pacing: the Sandbox API allows 100 requests/min per workspace and the SDK neither paces nor retries 429s;
  * - retries on 429/503, which the SDK surfaces as errors;
  * - `waitRunning`: `create` returns while the sandbox is still `creating`, and there is no wait helper;
  * - `exec` collection: the SDK returns the raw event stream; `exec` here gathers output and the exit code, and
@@ -58,7 +54,6 @@ export interface ClientExecOptions {
  */
 export class SandboxClient {
 	readonly t: SandboxTimings;
-	#nextRequestAt = 0;
 
 	constructor(
 		readonly api: SandboxApi,
@@ -67,15 +62,11 @@ export class SandboxClient {
 		this.t = { ...DEFAULT_TIMINGS, ...timings };
 	}
 
-	/** Paces every API call and retries the given statuses (429 by default, which is never processed server-side). */
+	/** Retries an API call on the given statuses (429 by default, which is never processed server-side). */
 	async call<T>(fn: () => Promise<T>, opts: { retryOn?: readonly number[]; attempts?: number; signal?: AbortSignal } = {}): Promise<T> {
 		const retryOn = opts.retryOn ?? [429];
 		const attempts = opts.attempts ?? 5;
 		for (let attempt = 1; ; attempt++) {
-			const now = Date.now();
-			const at = Math.max(now, this.#nextRequestAt);
-			this.#nextRequestAt = at + this.t.minRequestIntervalMs;
-			if (at > now) await sleep(at - now, undefined, { signal: opts.signal });
 			try {
 				return await fn();
 			} catch (err) {

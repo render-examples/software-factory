@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, wr
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
@@ -552,6 +553,50 @@ describe("publish against a subverted sandbox", () => {
 			sha: blobSha(Buffer.from("extra\n")),
 		});
 		await expect(h.run()).rejects.toThrow(/Tree mismatch/);
+		expect(h.gh.refs.size).toBe(0);
+	});
+});
+
+describe("publish blob uploads", () => {
+	/** A sandbox with 20 new files, and a Git Data client whose blob uploads go through `createBlob`. */
+	function setup(createBlob: (upload: () => Promise<string>, call: number) => Promise<string>) {
+		const { dir, base } = makeRepo();
+		for (let i = 0; i < 20; i++) write(dir, `many/${i}.txt`, `file ${i}\n`);
+		const h = harness(dir, base);
+		const inner = h.gh.client();
+		let calls = 0;
+		const gitData: GitDataClient = { ...inner, createBlob: (content) => createBlob(() => inner.createBlob(content), ++calls) };
+		return { h, gitData };
+	}
+
+	it("uploads at most 8 blobs at a time", async () => {
+		let active = 0;
+		let peak = 0;
+		const { h, gitData } = setup(async (upload) => {
+			peak = Math.max(peak, ++active);
+			await sleep(5);
+			active--;
+			return upload();
+		});
+		const result = await h.run({ gitData });
+		if ("refused" in result) throw new Error("refused");
+		expect(peak).toBe(8);
+		expect(h.gh.blobs.size).toBe(20);
+		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
+	});
+
+	it("starts no upload after a blob GitHub stores under another SHA, and builds no tree", async () => {
+		let started = 0;
+		const { h, gitData } = setup(async (upload, call) => {
+			started++;
+			if (call === 3) return "0".repeat(40);
+			await sleep(5);
+			return upload();
+		});
+		await expect(h.run({ gitData })).rejects.toThrow(`GitHub stored blob ${"0".repeat(40)}`);
+		await sleep(20);
+		expect(started).toBe(8);
+		expect(h.gh.calls.some((c) => c.path === "/trees")).toBe(false);
 		expect(h.gh.refs.size).toBe(0);
 	});
 });

@@ -19,6 +19,8 @@ const SHA = /^[0-9a-f]{40}$/;
 const COLLECT_TIMEOUT_MS = 10 * 60 * 1000;
 /** Slack per changed file in the output file for its diff record, size line, and blob header (paths cap at 4096). */
 const PER_FILE_OVERHEAD = 4096 + 300;
+/** Blob uploads in flight at once. */
+const BLOB_UPLOADS = 8;
 
 export interface PublishInput {
 	sandbox: Sandbox;
@@ -73,10 +75,10 @@ export async function publish(input: PublishInput, paths: PublishPaths = {}): Pr
 	const git = input.gitData ?? gitDataClient(repo);
 	const base = await git.getCommit(baseSha);
 
-	for (const [sha, content] of checked.blobs) {
+	await forEachConcurrently(checked.blobs, BLOB_UPLOADS, async ([sha, content]) => {
 		const created = await git.createBlob(content);
 		if (created !== sha) throw new Error(`GitHub stored blob ${created}, expected ${sha}`);
-	}
+	});
 
 	const treeSha = await git.createTree(base.treeSha, treeEntries(checked.files));
 	if (treeSha !== checked.treeSha) {
@@ -121,6 +123,23 @@ async function collect(sandbox: Sandbox, baseSha: string, limits: PublishLimits,
 	const file = await sandbox.download(outPath);
 	if (file.length !== bytes) throw new Error(`Downloaded ${file.length} bytes of a ${bytes}-byte changes file`);
 	return file;
+}
+
+/** Calls `fn` on every item, at most `limit` at a time. Rejects with the first failure and starts no call after it. */
+async function forEachConcurrently<T>(items: Iterable<T>, limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+	const queue = items[Symbol.iterator]();
+	let failed = false;
+	const worker = async () => {
+		for (let next = queue.next(); !next.done && !failed; next = queue.next()) {
+			try {
+				await fn(next.value);
+			} catch (err) {
+				failed = true;
+				throw err;
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: limit }, worker));
 }
 
 /**

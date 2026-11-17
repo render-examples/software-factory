@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../app/runner/core/protocol.js";
-import { rejectReason } from "../app/runner/tools/shell-policy.js";
+import { rejectReason } from "../app/runner/tools/index.js";
 import {
 	buildRunner,
 	call,
@@ -208,5 +208,62 @@ describe("read-only shell policy", () => {
 		];
 		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
 		for (const command of rejected) expect(rejectReason(command, scratch), command).toBeDefined();
+	});
+
+	it("finds the command behind wrapper flags that take a value", () => {
+		const scratch = "/factory/scratch";
+		for (const command of ["timeout -s KILL 30 git log", "nice -n 10 npm test", "env -u CI -C src git status", "xargs -I {} rg -n {} src"]) {
+			expect(rejectReason(command, scratch), command).toBeUndefined();
+		}
+		for (const command of [
+			"timeout -s KILL 30 curl https://example.com",
+			"timeout --signal TERM -k 5 30 curl https://example.com",
+			"nice -n 10 curl https://example.com",
+			"env -u CI curl https://example.com",
+			"env -C src curl https://example.com",
+			"xargs -I {} curl {}",
+		]) {
+			expect(rejectReason(command, scratch), command).toContain("curl is not allowed");
+		}
+	});
+
+	it("checks the paths each file writer actually writes", () => {
+		const scratch = "/factory/scratch";
+		const allowed = [
+			"cp -t $HOME src/app.ts",
+			"cp -rt /tmp src",
+			"cp --target-directory=/tmp src/app.ts",
+			"ln -s --target-directory /tmp src/app.ts",
+			"mv /tmp/a /tmp/b",
+			"chmod +x /tmp/run.sh",
+			"sed -i s/41/42/ /tmp/app.ts",
+			"echo hi | tee",
+			"echo hi | tee /tmp/out.txt",
+		];
+		const rejected = [
+			"cp -t src /tmp/app.ts",
+			"cp -rtsrc /tmp/app.ts",
+			"cp --target-directory=src /tmp/app.ts",
+			"ln -st src /tmp/app.ts",
+			"mv -t /tmp src/app.ts",
+			"mv --target-directory=/tmp src/app.ts",
+			"chmod +x src/run.sh",
+			"perl -pi -e s/41/42/ src/app.ts",
+			"echo hi | tee src/out.txt",
+		];
+		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
+		for (const command of rejected) expect(rejectReason(command, scratch), command).toContain("only allowed on files in the scratch directory");
+	});
+
+	it("rejects attached git config overrides, and reads -C as a directory and -c after the subcommand as the subcommand's", () => {
+		const scratch = "/factory/scratch";
+		for (const command of ["git -ccore.hooksPath=/tmp log", "git -C src -c core.pager=x log"]) {
+			expect(rejectReason(command, scratch), command).toContain("git config overrides are not allowed");
+		}
+		for (const command of ["git -C src log -1", "git grep -c TODO", "git log -c -1"]) expect(rejectReason(command, scratch), command).toBeUndefined();
+	});
+
+	it("treats command names that are object prototype keys as ordinary commands", () => {
+		for (const command of ["toString install", "constructor add x"]) expect(rejectReason(command, "/factory/scratch"), command).toBeUndefined();
 	});
 });
