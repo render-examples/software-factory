@@ -142,8 +142,8 @@ describe("AgentRunRecorder", () => {
 		await r.finish(SUMMARY);
 		const events = await logged(r);
 		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "assistant.message", "tool.call", "tool.result", "agent_run.finished"]);
-		const text = (events[1]?.payload as { text: string }).text;
-		const args = (events[2]?.payload as { args: string }).args;
+		const text = (events[1]?.payload as { text: string } | undefined)?.text ?? "";
+		const args = (events[2]?.payload as { args: string } | undefined)?.args ?? "";
 		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
 		expect(text.endsWith("…[truncated]")).toBe(true);
 		expect(jsonBytes(args)).toBeLessThanOrEqual(32 * 1024);
@@ -154,7 +154,7 @@ describe("AgentRunRecorder", () => {
 		const r = recorder();
 		feed(r, { type: "assistant_text", at, message_id: "m1", text: `${"字".repeat(20_000)}${"🙂".repeat(20_000)}` });
 		await r.finish(SUMMARY);
-		const text = ((await logged(r))[1]?.payload as { text: string }).text;
+		const text = ((await logged(r))[1]?.payload as { text: string } | undefined)?.text ?? "";
 		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
 		const kept = text.slice(0, -"…[truncated]".length);
 		expect(kept).toMatch(/^字+🙂*$/u);
