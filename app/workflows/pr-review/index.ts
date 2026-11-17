@@ -25,7 +25,7 @@ export const prReviewWorkflow = defineGitHubTask(
 		name: TASKS.prReview,
 		title: "PR Reviewer",
 		input: PrReviewInput,
-		subject: (input, ctx) => {
+		thread: (input, ctx) => {
 			if (input.workflowIssue && !ctx.metadata.parentTaskRunId) throw new Error("workflowIssue is valid only in a parent workflow");
 			return input.workflowIssue ? { kind: "issue", number: input.workflowIssue } : { kind: "pr", number: input.pr };
 		},

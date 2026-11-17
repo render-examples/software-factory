@@ -15,7 +15,6 @@ export {
 	runSandboxAttached,
 	runStarted,
 	runStopped,
-	subjectKey,
 	toolCall,
 	toolResult,
 	usage,

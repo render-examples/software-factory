@@ -21,7 +21,7 @@ export interface TriageDeps extends GitHubTaskDeps {
  * (or revise) the spec, or decline. Every GitHub write goes through the format helpers and carries a marker.
  */
 export const triageWorkflow = defineGitHubTask(
-	{ name: TASKS.triage, title: "Triage", input: TriageInput, subject: (input) => ({ kind: "issue", number: input.issue }), timeoutSeconds: 3600 },
+	{ name: TASKS.triage, title: "Triage", input: TriageInput, thread: (input) => ({ kind: "issue", number: input.issue }), timeoutSeconds: 3600 },
 	async (claim, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
 		const { gh, repo } = claim;
 		const [issue, comments, bot] = await Promise.all([gh.getIssue(input.issue), gh.listIssueComments(input.issue), gh.botLogin()]);

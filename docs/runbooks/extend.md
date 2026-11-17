@@ -188,7 +188,7 @@ of the task body.
 3. Export the schema from `app/schemas/index.ts`.
 
 Task input must carry trusted routing data from the authenticated webhook:
-repository, installation, actor, subject number, and any commit SHA the task
+repository, installation, actor, issue or pull request number, and any commit SHA the task
 must pin. Do not accept these values from agent output.
 
 ### 2. Declare the task
@@ -201,7 +201,7 @@ export const exampleWorkflow = defineGitHubTask(
     name: TASKS.example,
     title: "Example",
     input: ExampleInput,
-    subject: (input) => ({ kind: "issue", number: input.issue }),
+    thread: (input) => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
   async (claim, input, deps): Promise<Outcome> => {
@@ -256,7 +256,7 @@ export const pipeline = defineGitHubTask(
     name: "pipeline",
     title: "Pipeline",
     input: PipelineInput,
-    subject: input => ({ kind: "issue", number: input.issue }),
+    thread: input => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
   async (_claim, input, _deps, ctx) => {
@@ -272,7 +272,7 @@ export const pipeline = defineGitHubTask(
 ```
 
 Each `ctx.run()` starts a child task on separate compute and waits for its
-typed result. The parent owns the subject's root claim; its children continue
+typed result. The parent owns the thread's root claim; its children continue
 that claim, update the current stage and Sandbox, and run their own permission
 checks.
 

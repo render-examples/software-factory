@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { append, createDb, type Db, migrate, pendingMigrations, readStream, readSubject, type Tx, VersionConflict } from "../app/db/index.js";
+import { append, createDb, type Db, migrate, pendingMigrations, readStream, readThread, type Tx, VersionConflict } from "../app/db/index.js";
 import { defineEvent } from "../app/events/index.js";
+import type { ThreadKey } from "../app/threads/index.js";
 import { postgresDatabase, TEST_DATABASE_URL } from "./helpers/db.js";
 
 const noted = defineEvent("test.noted", 1, z.strictObject({ text: z.string().max(100) }));
-const note = (stream: string, text: string, subject?: string) => ({ type: noted, stream, subject, source: "gateway", payload: { text } });
+const note = (stream: string, text: string, thread?: ThreadKey) => ({ type: noted, stream, thread, source: "gateway", payload: { text } });
 const newStream = () => `run:${randomUUID()}`;
 
 describe.skipIf(!TEST_DATABASE_URL)("event log on Postgres", () => {
@@ -57,16 +58,16 @@ describe.skipIf(!TEST_DATABASE_URL)("event log on Postgres", () => {
 		throw new Error("no transaction is waiting on a lock");
 	}
 
-	it("delivers a subject's event whose transaction commits after a later one with a higher seq", async () => {
-		const subject = `acme/web#issue-${randomUUID()}`;
+	it("delivers a thread's event whose transaction commits after a later one with a higher seq", async () => {
+		const thread: ThreadKey = `github:acme/web#issue-${randomUUID()}`;
 		const start = { tx: "0", seq: 0 };
-		const late = await hold((tx) => append(tx, note("run:late", "late", subject)));
-		await db.withTx((tx) => append(tx, note("run:early", "early", subject)));
+		const late = await hold((tx) => append(tx, note("run:late", "late", thread)));
+		await db.withTx((tx) => append(tx, note("run:early", "early", thread)));
 
 		// Paging by seq alone would deliver the early event now and then skip the late one, whose seq is lower.
-		expect(await readSubject(db, subject, start)).toEqual([]);
+		expect(await readThread(db, thread, start)).toEqual([]);
 		await late.commit();
-		const events = await readSubject(db, subject, start);
+		const events = await readThread(db, thread, start);
 		expect(events.map((event) => event.stream)).toEqual(["run:late", "run:early"]);
 		expect(events[0]?.seq).toBeLessThan(events[1]?.seq ?? 0);
 	});

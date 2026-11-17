@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ThreadKey } from "../threads/index.js";
 
 /**
  * One type of event in the log. Bump `version` whenever the payload schema changes; readers handle every version
@@ -8,11 +9,6 @@ export interface EventSpec<S extends z.ZodType = z.ZodType> {
 	readonly type: string;
 	readonly version: number;
 	readonly payload: S;
-}
-
-/** The `subject` of every event about an issue or pull request: "owner/name#issue-12" or "owner/name#pr-34". */
-export function subjectKey(repo: string, subject: { kind: "issue" | "pr"; number: number }): string {
-	return `${repo}#${subject.kind}-${subject.number}`;
 }
 
 /** Every event type the factory writes is declared in this file with `defineEvent`. */
@@ -27,11 +23,14 @@ const id = z.string().min(1).max(ID_MAX);
 // Run coordination (plan 02)
 
 const name = z.string().min(1).max(100);
-/** Shown on GitHub, so already safe to publish. */
+/** Published to the thread's channel (on GitHub, the status comment), so it must be safe to publish. */
 const summary = z.string().max(16_000);
 const finalState = z.enum(["done", "failed", "cancelled"]);
 
-/** Stream `delivery:<id>`: an authenticated webhook delivery and the task it started or why it started none. */
+/**
+ * Stream `delivery:<channel>:<id>`: an authenticated delivery from a channel (a GitHub webhook today) and the task it
+ * started or why it started none. `event` is the channel's name for the event.
+ */
 export const deliveryReceived = defineEvent(
 	"delivery.received",
 	1,
@@ -45,7 +44,7 @@ export const runStarted = defineEvent(
 	z.strictObject({ trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
 );
 
-/** The actor lacked the permission to start the run, which never claimed its subject. */
+/** The actor lacked the permission to start the run, which never claimed its thread. */
 export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ actor: name, reason: summary }));
 
 export const runProgress = defineEvent("run.progress", 1, z.strictObject({ summary }));
@@ -71,7 +70,7 @@ export const runFinished = defineEvent(
 	}),
 );
 
-/** Stream `subject:<subject>`; its version fences claims. `run_id` is the trace's current task run. */
+/** Stream `thread:<thread>`; its version fences claims. `run_id` is the trace's current task run. */
 export const claimAcquired = defineEvent(
 	"claim.acquired",
 	1,
@@ -132,7 +131,7 @@ export const LiveNotice = z.discriminatedUnion("type", [
 	z.strictObject({
 		type: z.literal("delta"),
 		stream: id,
-		subject: z.string().max(400).nullable(),
+		thread: ThreadKey.nullable(),
 		message_id: id,
 		/** Orders one message's deltas; with `part`, lets a listener drop a repeat. */
 		local_seq: count,

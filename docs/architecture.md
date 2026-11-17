@@ -97,13 +97,20 @@ agent run events to decide what a task may do: they are for people to watch.
 The `events` table in Postgres (`app/db/`) is append-only. Each event belongs
 to a stream and takes the stream's next version. An append can require the
 stream to be at an expected version, so two writers can't both act on the same
-state. Events about an issue or pull request also record it as their subject.
-Payloads are validated against the types declared in `app/events/catalog.ts`.
+state. Payloads are validated against the types declared in `app/events/catalog.ts`.
+
+Events about a thread also record it, whatever their stream. A thread is a
+channel's unit of conversation that the factory runs work on: today a GitHub
+issue or pull request. Its key is `<channel>:<id>`, such as
+`github:owner/name#issue-12` or `github:owner/name#pr-34`. `app/threads/`
+owns the format and each channel's key builder; the log never parses the id,
+and an append rejects a key outside the format, so every thread is namespaced
+by its channel.
 
 Projections are tables derived from the log, updated in the same transaction
 as each append, and `npm run db:rebuild` replays the log to recreate them.
 Listeners on the `events` channel hear of an event when its transaction
-commits. Readers page one stream by version and a subject by transaction
+commits. Readers page one stream by version and a thread by transaction
 order, so an event that commits late is never skipped.
 
 ## Coordination
@@ -112,10 +119,11 @@ Webhook delivery is not exactly once. GitHub can redeliver events, and people
 can apply labels or post comments at the same time. The factory handles this
 at three boundaries:
 
-1. The gateway records each delivery in the log under its GitHub delivery ID,
-   which is also the Workflows idempotency key. If Postgres is unavailable it
+1. The gateway records each delivery in the log as the stream and idempotency
+   key `delivery:github:<delivery ID>`, so another channel's delivery IDs can't
+   collide with GitHub's. The bare delivery ID is the Workflows idempotency key. If Postgres is unavailable it
    returns 502, so GitHub marks the delivery failed and it can be redelivered.
-2. The subject stream's version fences claims on an issue or pull request.
+2. The version of a thread's `thread:<thread>` stream fences claims on it.
 3. Hidden markers identify App-authored specifications, pull requests, and
    reviews so writes can update or reuse them.
 
@@ -124,7 +132,7 @@ current task run, which is the root or one of its children. A child continues
 its root's claim and may not take over another's. Cancellation stops the root
 and closes the current child.
 
-A new GitHub task run appends `claim.acquired` to the subject's stream at the
+A new GitHub task run appends `claim.acquired` to the thread's stream at the
 version it read, so of two runs that read the same claim only one appends; the
 other rereads and tries again. After its claim commits, it cancels the
 previous trace if Render still has it running, terminates the Sandboxes that
@@ -144,7 +152,7 @@ is no sweeper.
 The status comment and `factory:working` are synced from Postgres after each
 claim, progress update, and finish. A GitHub failure while syncing is logged
 and never fails the run; the final sync retries. Editing or deleting the
-comment can't change who owns the subject.
+comment can't change who owns the issue or pull request.
 
 ## Sandboxes and snapshots
 
@@ -213,7 +221,7 @@ write targets come from authenticated task input, never model output.
 ### Agent run events
 
 `runAgent` records every agent run in the event log as an `agent_run:<id>`
-stream, whose subject is the task's issue or pull request. A recorder on the
+stream, whose thread is the task's issue or pull request. A recorder on the
 Workflows host (`app/events/recorder.ts`) is the stream's only writer. It
 translates the runner's events into `assistant.message`, `tool.call`,
 `tool.result`, and `usage` events and writes them every 250 ms in one
@@ -242,10 +250,11 @@ notification only wakes readers, which then read from their own cursors, and
 readers also poll every 5 seconds, so a missed notification costs latency,
 never an event. A missed delta is lost; the final message is in the log.
 
-The gateway streams one agent run, or everything on an issue or pull request,
+The gateway streams one agent run, or everything on a thread,
 as server-sent events to holders of `EVENTS_READ_TOKEN` (`app/gateway/stream.ts`).
 Each stream's event IDs are its log cursors: the stream version for an agent
-run, and `<tx>-<seq>` for a subject.
+run, and `<tx>-<seq>` for a thread. A GitHub issue or pull request also has a
+path by repository, kind, and number, which the status comment shows.
 
 ## Publishing
 
@@ -349,7 +358,7 @@ Tests pin these invariants and the tool authority of every built-in agent.
   check.
 - Workflows inputs and results are visible to people with service access.
 - Service logs and the event log can include repository names, issue
-  subjects, and errors that quote repository output.
+  titles, and errors that quote repository output.
 - The filesystem of each deployed Render service is ephemeral. Durable state
   belongs in GitHub, Workflows, Postgres, or Sandbox snapshots.
 - A cancelled snapshot build can leave its builder Sandbox running until the

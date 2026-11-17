@@ -1,9 +1,10 @@
 import { type TaskContext, type TaskDefinition, task as registerTask } from "@renderinc/sdk/workflows";
 import type { z } from "zod";
-import { type Claim, type Outcome, type RunControl, type Subject, type TaskResult, withClaim } from "../claims/index.js";
+import { type Claim, type Outcome, type RunControl, type TaskResult, withClaim } from "../claims/index.js";
 import { requireRepo } from "../config/index.js";
 import type { Db } from "../db/index.js";
 import type { GitHubClient } from "../github/index.js";
+import type { GitHubThread } from "../threads/index.js";
 
 /** Test seams shared by tasks attached to a GitHub issue or pull request. */
 export interface GitHubTaskDeps {
@@ -20,7 +21,7 @@ export interface GitHubTaskSpec<Input> {
 	/** Validates input before any work starts. */
 	input: z.ZodType<Input>;
 	/** Selects the issue or pull request this run owns. */
-	subject(input: Input, ctx: GitHubTaskContext): Subject;
+	thread(input: Input, ctx: GitHubTaskContext): GitHubThread;
 	timeoutSeconds: number;
 }
 
@@ -42,7 +43,7 @@ export interface GitHubTask<Deps, Data = undefined> {
 /**
  * Defines work attached to one GitHub issue or pull request. Every run validates
  * input, resolves the configured repository, checks the actor's permission, and
- * claims the subject until it finishes.
+ * claims its thread until it finishes.
  */
 export function defineGitHubTask<Input extends { repo: string; installationId: number; actor: string }, Data, Deps extends GitHubTaskDeps>(
 	spec: GitHubTaskSpec<Input>,
@@ -55,7 +56,7 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 			ctx,
 			{
 				repo,
-				subject: spec.subject(input, ctx),
+				thread: spec.thread(input, ctx),
 				task: spec.name,
 				title: spec.title,
 				actor: input.actor,

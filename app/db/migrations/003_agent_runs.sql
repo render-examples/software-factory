@@ -2,7 +2,7 @@
 create table agent_runs (
   id          text primary key,
   run_id      text not null,        -- the Workflows task run
-  subject     text,
+  thread      text,
   agent_id    text not null,
   model       text not null,
   state       text not null,        -- running, ok, or an error code

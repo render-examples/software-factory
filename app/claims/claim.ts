@@ -4,8 +4,9 @@ import type { z } from "zod";
 import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agents/index.js";
 import { config, type RepoContext } from "../config/index.js";
 import { append, type Db, workflowsDb } from "../db/index.js";
-import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached, runStarted, subjectKey } from "../events/index.js";
+import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached, runStarted } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
+import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 import { checkPermission } from "./permission.js";
 import {
 	acquire,
@@ -14,7 +15,6 @@ import {
 	release,
 	runEvent,
 	type StatusLink,
-	type Subject,
 	showRejection,
 	stopRun,
 	syncStatus,
@@ -27,7 +27,7 @@ import { traceIds } from "./trace.js";
 export interface Claim {
 	readonly gh: GitHubClient;
 	readonly repo: RepoContext;
-	readonly subject: Subject;
+	readonly thread: GitHubThread;
 	readonly traceId: string;
 	readonly runId: string;
 	/** Ends the run as superseded once a newer run owns this issue or PR. Call before durable writes. */
@@ -73,7 +73,7 @@ export class ExpectedFailure extends Error {
 
 export interface ClaimOptions {
 	repo: RepoContext;
-	subject: Subject;
+	thread: GitHubThread;
 	/** The task's registered name; recorded in its events. */
 	task: string;
 	/** The task's name in the status comment, such as "PR Reviewer". */
@@ -87,8 +87,8 @@ export interface ClaimOptions {
 }
 
 /**
- * Runs `work` while this task run claims the issue or PR. The claim is the subject's latest `claim.acquired` in
- * Postgres. withClaim checks the actor's permission, claims the subject and stops the previous holder, records
+ * Runs `work` while this task run claims the issue or PR. The claim is the thread's latest `claim.acquired` in
+ * Postgres. withClaim checks the actor's permission, claims the thread and stops the previous holder, records
  * progress and how the run ended, and keeps the status comment in sync as a view.
  */
 export async function withClaim<Data = undefined>(
@@ -125,13 +125,12 @@ const FINAL_SYNC_ATTEMPTS = 3;
 class ClaimedRun implements Claim {
 	readonly gh: GitHubClient;
 	readonly repo: RepoContext;
-	readonly subject: Subject;
+	readonly thread: GitHubThread;
 	readonly traceId: string;
 	readonly runId: string;
 	readonly #opts: ClaimOptions;
 	readonly #db: Db;
-	/** The subject's key in the log. */
-	readonly #key: string;
+	readonly #key: ThreadKey;
 	readonly #startedAt = Date.now();
 	/** The status body this run last wrote. */
 	#shown: string | undefined;
@@ -139,10 +138,10 @@ class ClaimedRun implements Claim {
 	constructor(ctx: Pick<TaskContext, "metadata">, opts: ClaimOptions) {
 		({ traceId: this.traceId, runId: this.runId } = traceIds(ctx));
 		this.repo = opts.repo;
-		this.subject = opts.subject;
+		this.thread = opts.thread;
 		this.gh = opts.gh ?? githubFor(opts.repo);
 		this.#db = opts.db ?? workflowsDb();
-		this.#key = subjectKey(opts.repo.fullName, opts.subject);
+		this.#key = githubThread(opts.repo.fullName, opts.thread);
 		this.#opts = opts;
 	}
 
@@ -158,13 +157,13 @@ class ClaimedRun implements Claim {
 	}
 
 	async trackSandbox(sandbox: { id: string }): Promise<void> {
-		// Recorded before the check: a run that claims the subject after the check sees this sandbox when it stops this run.
+		// Recorded before the check: a run that claims the thread after the check sees this sandbox when it stops this run.
 		await this.#append(runSandboxAttached, { sandbox_id: sandbox.id });
 		await this.assertCurrent();
 	}
 
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions {
-		return { sandbox, traceId: this.traceId, runId: this.runId, subject: this.#key };
+		return { sandbox, traceId: this.traceId, runId: this.runId, thread: this.#key };
 	}
 
 	async start(): Promise<void> {
@@ -180,18 +179,18 @@ class ClaimedRun implements Claim {
 		const { actor, task, title } = this.#opts;
 		const summary = `@${actor} needs \`${config.minimumPermission}\` permission on this repository to start it.`;
 		await this.#append(runRejected, { actor, reason: summary });
-		await showRejection(this.#db, this.gh, this.repo.fullName, this.subject, { runId: this.runId, task, title, summary }).catch((error) =>
+		await showRejection(this.#db, this.gh, this.repo.fullName, this.thread, { runId: this.runId, task, title, summary }).catch((error) =>
 			warn("could not show the rejection", error, { runId: this.runId }),
 		);
 		return this.#result("rejected", { outcome: "permission_denied", summary });
 	}
 
 	/**
-	 * Claims the subject, then stops the previous holder. Claiming first fences the previous run even when stopping
+	 * Claims the thread, then stops the previous holder. Claiming first fences the previous run even when stopping
 	 * it fails or is slow: its next ownership check fails.
 	 */
 	async acquire(): Promise<void> {
-		const claimed = await acquire(this.#db, { subject: this.#key, traceId: this.traceId, runId: this.runId, mode: this.#opts.mode ?? "replace" });
+		const claimed = await acquire(this.#db, { thread: this.#key, traceId: this.traceId, runId: this.runId, mode: this.#opts.mode ?? "replace" });
 		if (!claimed) throw new Superseded();
 		const { previous } = claimed;
 		if (previous?.held && previous.traceId !== this.traceId) {
@@ -255,10 +254,10 @@ class ClaimedRun implements Claim {
 	/** Best effort: the comment is a view, so a GitHub failure is logged and never fails the run. Returns whether it synced. */
 	async #sync(): Promise<boolean> {
 		try {
-			this.#shown = await syncStatus(this.#db, this.gh, this.repo.fullName, this.subject, this.#shown);
+			this.#shown = await syncStatus(this.#db, this.gh, this.repo.fullName, this.thread, this.#shown);
 			return true;
 		} catch (error) {
-			warn("could not update the status comment", error, { runId: this.runId, subject: this.#key });
+			warn("could not update the status comment", error, { runId: this.runId, thread: this.#key });
 			return false;
 		}
 	}

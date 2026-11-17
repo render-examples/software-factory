@@ -40,7 +40,7 @@ export const specToPrWorkflow = defineGitHubTask(
 		name: TASKS.specToPr,
 		title: "Spec-to-PR",
 		input: SpecToPrInput,
-		subject: (input) => ({ kind: "issue", number: input.issue }),
+		thread: (input) => ({ kind: "issue", number: input.issue }),
 		timeoutSeconds: 4 * 60 * 60,
 	},
 	async (claim, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {

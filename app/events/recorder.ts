@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendMany, type Db, type NewEvent, type Tx } from "../db/index.js";
 import { errorMessage } from "../runner/core/emit.js";
 import type { RunnerEvent, Usage } from "../runner/core/protocol.js";
+import type { ThreadKey } from "../threads/index.js";
 import {
 	agentRunFinished,
 	agentRunStarted,
@@ -27,8 +28,8 @@ export interface RecorderOptions {
 	db: Db;
 	/** The Workflows task run the agent runs in. */
 	runId: string;
-	/** "owner/name#issue-12", when the run is about an issue or pull request. */
-	subject?: string;
+	/** The thread the run works on, if any. */
+	thread?: ThreadKey;
 }
 
 export interface AgentRunSummary {
@@ -52,7 +53,7 @@ export class AgentRunRecorder {
 	readonly id = `ar_${randomUUID()}`;
 	readonly stream = `agent_run:${this.id}`;
 	readonly #db: Db;
-	readonly #subject?: string;
+	readonly #thread?: ThreadKey;
 	readonly #source: string;
 	readonly #runId: string;
 	#queue: Pending[] = [];
@@ -69,7 +70,7 @@ export class AgentRunRecorder {
 	constructor(opts: RecorderOptions) {
 		this.#db = opts.db;
 		this.#runId = opts.runId;
-		this.#subject = opts.subject;
+		this.#thread = opts.thread;
 		this.#source = `workflow:${opts.runId}`;
 	}
 
@@ -139,7 +140,7 @@ export class AgentRunRecorder {
 			warn("agent run event dropped: invalid payload", { agentRunId: this.id, type: type.type });
 			return;
 		}
-		const event = { type, subject: this.#subject, source: this.#source, payload: parsed.data };
+		const event = { type, thread: this.#thread, source: this.#source, payload: parsed.data };
 		if (this.#queue.length >= MAX_QUEUED && !lifecycle(event)) {
 			this.#dropped++;
 			return;
@@ -178,7 +179,7 @@ export class AgentRunRecorder {
 						await notify(tx, {
 							type: "delta",
 							stream: this.stream,
-							subject: this.#subject ?? null,
+							thread: this.#thread ?? null,
 							message_id: messageId,
 							local_seq: localSeq,
 							part,

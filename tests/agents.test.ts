@@ -69,7 +69,7 @@ describe("runAgent in a sandbox", () => {
 		const run = await runAgent(reviewer, "Review it.", {
 			traceId: "trace-2",
 			runId: "trn-7",
-			subject: "acme/web#issue-12",
+			thread: "github:acme/web#issue-12",
 			sandbox,
 			timeoutMs: 600_000,
 			db,
@@ -100,7 +100,7 @@ describe("runAgent in a sandbox", () => {
 		const { rows } = await db.query("select * from agent_runs where run_id = 'trn-7'");
 		expect(rows).toEqual([
 			expect.objectContaining({
-				subject: "acme/web#issue-12",
+				thread: "github:acme/web#issue-12",
 				agent_id: "reviewer",
 				model: "anthropic/claude-opus-5",
 				state: "ok",
@@ -112,7 +112,7 @@ describe("runAgent in a sandbox", () => {
 		expect(Number(rows[0]?.cost_usd)).toBeCloseTo(run.costUsd, 10);
 		const events = await readStream(db, `agent_run:${rows[0]?.id}`, 0);
 		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "usage", "tool.call", "usage", "agent_run.finished"]);
-		expect(events.every((e) => e.subject === "acme/web#issue-12" && e.source === "workflow:trn-7")).toBe(true);
+		expect(events.every((e) => e.thread === "github:acme/web#issue-12" && e.source === "workflow:trn-7")).toBe(true);
 		expect(events.at(-1)?.payload).toMatchObject({ outcome: "ok", turns: 2, harness_version: "0.83.0" });
 		expect(JSON.stringify(events)).not.toContain(HOST_KEY);
 	});
@@ -123,10 +123,10 @@ describe("runAgent in a sandbox", () => {
 			name: "AgentError",
 			code: "max_turns",
 		});
-		const { rows } = await db.query<{ id: string; state: string; subject: string | null }>(
-			"select id, state, subject from agent_runs where run_id = 'trn-8'",
+		const { rows } = await db.query<{ id: string; state: string; thread: string | null }>(
+			"select id, state, thread from agent_runs where run_id = 'trn-8'",
 		);
-		expect(rows).toEqual([expect.objectContaining({ state: "max_turns", subject: null })]);
+		expect(rows).toEqual([expect.objectContaining({ state: "max_turns", thread: null })]);
 		const [finished] = (await readStream(db, `agent_run:${rows[0]?.id}`, 0)).slice(-1);
 		expect(finished?.payload).toMatchObject({ outcome: "max_turns", message: "turn limit (40) reached" });
 	});

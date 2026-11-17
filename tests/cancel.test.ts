@@ -1,16 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readClaim, runEvent, syncStatus, WORKING_LABEL } from "../app/claims/index.js";
 import { append, type Db } from "../app/db/index.js";
-import { runFinished, subjectKey } from "../app/events/index.js";
+import { runFinished } from "../app/events/index.js";
 import type { IssueComment, Permission } from "../app/github/index.js";
+import { githubThread } from "../app/threads/index.js";
 import { cancelRun } from "../app/workflows/cancel.js";
 import { REPO } from "./fixtures/config.js";
 import { FakeRuns, holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const ctx = { metadata: { taskRunId: "trn-cancel" } };
-const subject = { kind: "issue" as const, number: 12 };
-const KEY = subjectKey(REPO, subject);
+const thread = { kind: "issue" as const, number: 12 };
+const KEY = githubThread(REPO, thread);
 const input = (actor = "alice") => ({ repo: REPO, installationId: 5, number: 12, kind: "issue", actor });
 
 function fakeGitHub(permission: Permission) {
@@ -55,13 +56,13 @@ beforeEach(() => resetDb(db));
 
 /** An autopilot root whose Spec-to-PR child holds the claim, with the status comment showing it. */
 async function autopilotAtSpecToPr(gh: ReturnType<typeof fakeGitHub>["gh"], childState: "running" | "done" = "running") {
-	await holdClaim(db, REPO, subject, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
-	await holdClaim(db, REPO, subject, { traceId: "trn-root", runId: "trn-1", task: "spec-to-pr", title: "Spec-to-PR", sandboxId: "sbx-1" });
+	await holdClaim(db, REPO, thread, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
+	await holdClaim(db, REPO, thread, { traceId: "trn-root", runId: "trn-1", task: "spec-to-pr", title: "Spec-to-PR", sandboxId: "sbx-1" });
 	if (childState === "done") {
 		const finished = { state: "done" as const, outcome: "pr_opened", summary: "opened draft PR #34.", links: [], duration_ms: 1 };
 		await db.withTx((tx) => append(tx, runEvent(runFinished, "trn-1", KEY, finished)));
 	}
-	await syncStatus(db, gh, REPO, subject);
+	await syncStatus(db, gh, REPO, thread);
 }
 
 describe("cancel task", () => {
@@ -87,7 +88,7 @@ describe("cancel task", () => {
 
 	it("closes a run left running by a trace that already stopped, and terminates its leftover sandbox", async () => {
 		const { gh, comments } = fakeGitHub("write");
-		await holdClaim(db, REPO, subject, { traceId: "trn-dead", sandboxId: "sbx-dead" });
+		await holdClaim(db, REPO, thread, { traceId: "trn-dead", sandboxId: "sbx-dead" });
 		const runs = new FakeRuns();
 
 		const result = await cancelRun(ctx, input(), { gh, runs, db });
@@ -123,7 +124,7 @@ describe("cancel task", () => {
 
 	it("refuses an actor without permission and leaves the run alone", async () => {
 		const { gh, comments } = fakeGitHub("read");
-		await holdClaim(db, REPO, subject, { traceId: "trn-1", sandboxId: "sbx-1" });
+		await holdClaim(db, REPO, thread, { traceId: "trn-1", sandboxId: "sbx-1" });
 		const runs = new FakeRuns({ "trn-1": "running" });
 
 		const result = await cancelRun(ctx, input("bob"), { gh, runs, db });

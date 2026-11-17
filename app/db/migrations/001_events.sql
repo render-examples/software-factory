@@ -4,7 +4,7 @@ create table events (
   tx              xid8 not null default pg_current_xact_id(),
   stream          text not null,
   stream_version  int  not null,
-  subject         text,
+  thread          text,
   type            text not null,
   version         int  not null default 1,
   source          text not null,
@@ -13,4 +13,4 @@ create table events (
   created_at      timestamptz not null default now(),
   unique (stream, stream_version)
 );
-create index events_subject_order on events (subject, tx, seq) where subject is not null;
+create index events_thread_order on events (thread, tx, seq) where thread is not null;

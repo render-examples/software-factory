@@ -238,7 +238,7 @@ Organization installations use the equivalent organization settings URL.
 
 While a factory run holds an issue or pull request, it has `factory:working`.
 The App-authored status comment shows progress, the run ID, the path of the
-subject's event stream, and the final result. It is a view of the
+issue or pull request's [event stream](#event-streams), and the final result. It is a view of the
 [database](#database): editing or deleting it changes nothing, and the next
 update recreates it.
 
@@ -250,11 +250,12 @@ Every delivery, claim, task run, and agent run is recorded in the
 summary, and Sandbox; `claims` holds the run that owns each issue or pull
 request; `agent_runs` holds each agent run's agent, model, outcome, turns,
 token usage, and cost. Follow a run live over an [event stream](#event-streams),
-or query the tables:
+or query the tables. Each row names its thread: `github:owner/name#issue-12`
+for an issue, `github:owner/name#pr-34` for a pull request.
 
 ```sql
-select run_id, task, state, outcome, summary from runs where subject = 'owner/name#issue-12' order by started_at;
-select subject, sum(cost_usd) from agent_runs group by subject order by 2 desc;
+select run_id, task, state, outcome, summary from runs where thread = 'github:owner/name#issue-12' order by started_at;
+select thread, sum(cost_usd) from agent_runs group by thread order by 2 desc;
 ```
 
 To cancel a run, post this as the first line of an issue or pull request
@@ -285,12 +286,19 @@ The gateway serves server-sent events (SSE) to anyone with
 
 | Endpoint | Delivers | Ends |
 |---|---|---|
-| `GET /subjects/<owner>/<repo>/<issue\|pr>/<number>/stream` | Every event recorded about the issue or pull request, including every agent run on it | Never; disconnect when done |
+| `GET /threads/github/<owner>/<repo>/<issue\|pr>/<number>/stream` | Every event recorded about the issue or pull request, including every agent run on it | Never; disconnect when done |
+| `GET /threads/<thread>/stream` | The same for any thread, by its URL-encoded key | Never; disconnect when done |
 | `GET /agent-runs/<id>/stream` | One agent run, whose ID is the `agent_run:<id>` stream of its events | After `agent_run.finished` |
+
+A thread is what the factory works on in a channel. Its key is
+`<channel>:<id>`; on GitHub, `github:<owner>/<repo>#issue-<number>` or
+`github:<owner>/<repo>#pr-<number>`. These two requests read the same stream:
 
 ```bash
 curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
-  https://<gateway-host>/subjects/acme/web/issue/12/stream
+  https://<gateway-host>/threads/github/acme/web/issue/12/stream
+curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
+  https://<gateway-host>/threads/github%3Aacme%2Fweb%23issue-12/stream
 ```
 
 Each stream sends the stored events first, then the text so far of each

@@ -30,7 +30,8 @@ software-factory deploys two processes:
 
 Agents run inside Render Sandboxes. Only code in the Workflows service writes
 to GitHub. Postgres holds factory state as an append-only event log
-(`app/db/`), including who owns each issue or pull request; only the two
+(`app/db/`), including who owns each thread (a GitHub issue or pull request,
+keyed `github:owner/name#issue-12`); only the two
 services connect to it, and both apply its migrations at startup. GitHub holds
 issues, specifications, pull requests, and reviews, and Render Workflows holds
 task execution. The status comment is a view and is never read back.
@@ -43,7 +44,8 @@ Two dependency rules are mandatory:
    database, or config.
    `tests/agents-catalog.test.ts` enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
-   workflows. The gateway holds no GitHub credential and runs no model.
+   workflows. The gateway holds no GitHub credential and runs no model. It
+   builds thread keys with the dependency-free `app/threads/`.
 
 Read the canonical
 [security invariants](docs/architecture.md#security-invariants) before

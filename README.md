@@ -69,7 +69,7 @@ text as it's written. Follow everything on an issue or pull request with the
 
 ```bash
 curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
-  https://<gateway-host>/subjects/<owner>/<repo>/issue/<number>/stream
+  https://<gateway-host>/threads/github/<owner>/<repo>/issue/<number>/stream
 ```
 
 Use `pr` for a pull request. A dropped connection resumes where it left off

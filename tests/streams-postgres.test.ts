@@ -50,9 +50,9 @@ describe.skipIf(!TEST_DATABASE_URL)("streams on Postgres", { timeout: 20_000 }, 
 	it("delivers the same deltas to readers on two gateway instances", async () => {
 		const [a, b] = [gateway(), gateway()];
 		await untilListening(2);
-		const r = new AgentRunRecorder({ db, runId: "trn-1", subject: "acme/web#issue-5" });
+		const r = new AgentRunRecorder({ db, runId: "trn-1", thread: "github:acme/web#issue-5" });
 		r.start({ agentId: "triage", harness: "pi", model: "anthropic/claude-opus-5" });
-		const streams = [readSse(await get(a, `/agent-runs/${r.id}/stream`)), readSse(await get(b, "/subjects/acme/web/issue/5/stream"))];
+		const streams = [readSse(await get(a, `/agent-runs/${r.id}/stream`)), readSse(await get(b, "/threads/github/acme/web/issue/5/stream"))];
 		for (const stream of streams) expect((await stream.next())?.event).toBe("agent_run.started");
 
 		r.onRunnerEvent({ type: "assistant_delta", at, message_id: "m1", text: "Hello" });
@@ -70,8 +70,8 @@ describe.skipIf(!TEST_DATABASE_URL)("streams on Postgres", { timeout: 20_000 }, 
 
 	it("catches up on a missed notification with the backstop poll", async () => {
 		const app = gateway({ deaf: true });
-		const r = new AgentRunRecorder({ db, runId: "trn-2", subject: "acme/web#issue-6" });
-		const stream = readSse(await get(app, "/subjects/acme/web/issue/6/stream"));
+		const r = new AgentRunRecorder({ db, runId: "trn-2", thread: "github:acme/web#issue-6" });
+		const stream = readSse(await get(app, "/threads/github/acme/web/issue/6/stream"));
 		r.start({ agentId: "triage", harness: "pi", model: "anthropic/claude-opus-5" });
 		const started = Date.now();
 		expect((await stream.next())?.event).toBe("agent_run.started");

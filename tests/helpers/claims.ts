@@ -1,16 +1,17 @@
 import { vi } from "vitest";
-import { acquire, type RunControl, runEvent, type Subject } from "../../app/claims/index.js";
+import { acquire, type RunControl, runEvent } from "../../app/claims/index.js";
 import { append, type Db } from "../../app/db/index.js";
-import { runSandboxAttached, runStarted, subjectKey } from "../../app/events/index.js";
+import { runSandboxAttached, runStarted } from "../../app/events/index.js";
+import { type GitHubThread, githubThread } from "../../app/threads/index.js";
 
-/** Records a running task run that holds the subject, as withClaim would. `runId` defaults to the trace's root. */
+/** Records a running task run that holds the thread, as withClaim would. `runId` defaults to the trace's root. */
 export async function holdClaim(
 	db: Db,
 	repo: string,
-	subject: Subject,
+	thread: GitHubThread,
 	run: { traceId: string; runId?: string; task?: string; title?: string; sandboxId?: string },
 ): Promise<void> {
-	const key = subjectKey(repo, subject);
+	const key = githubThread(repo, thread);
 	const runId = run.runId ?? run.traceId;
 	const mode = runId === run.traceId ? "replace" : "continue";
 	await db.withTx(async (tx) => {
@@ -18,7 +19,7 @@ export async function holdClaim(
 		await append(tx, runEvent(runStarted, runId, key, started));
 		if (run.sandboxId) await append(tx, runEvent(runSandboxAttached, runId, key, { sandbox_id: run.sandboxId }));
 	});
-	if (!(await acquire(db, { subject: key, traceId: run.traceId, runId, mode }))) throw new Error(`${runId} could not claim ${key}`);
+	if (!(await acquire(db, { thread: key, traceId: run.traceId, runId, mode }))) throw new Error(`${runId} could not claim ${key}`);
 }
 
 /** The runs projection's row for a task run. */

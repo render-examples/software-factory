@@ -109,7 +109,7 @@ export const autopilotWorkflow = defineGitHubTask(
 		name: TASKS.autopilot,
 		title: "Autopilot",
 		input: AutopilotInput,
-		subject: (input) => ({ kind: "issue", number: input.issue }),
+		thread: (input) => ({ kind: "issue", number: input.issue }),
 		timeoutSeconds: TIMEOUT_SECONDS,
 	},
 	autopilot,

@@ -4,7 +4,7 @@ import { append, type Db } from "../db/index.js";
 import { readBody } from "./body.js";
 import { deliveryEvent, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
-import { agentRunStream, requireReader, type StreamDeps, subjectStream } from "./stream.js";
+import { agentRunStream, githubThreadStream, requireReader, type StreamDeps, threadStream } from "./stream.js";
 
 export { EventHub, listen } from "./hub.js";
 
@@ -35,7 +35,8 @@ export function createGateway(deps: GatewayDeps): Hono {
 
 	const reader = requireReader(deps.eventsReadToken);
 	app.get("/agent-runs/:id/stream", reader, agentRunStream(deps));
-	app.get("/subjects/:owner/:repo/:kind/:number/stream", reader, subjectStream(deps));
+	app.get("/threads/:thread/stream", reader, threadStream(deps));
+	app.get("/threads/github/:owner/:repo/:kind/:number/stream", reader, githubThreadStream(deps));
 
 	app.post("/webhooks/github", async (c) => {
 		const event = c.req.header("x-github-event") ?? "";
@@ -66,17 +67,17 @@ export function createGateway(deps: GatewayDeps): Hono {
 		if (decision.kind === "ignore") return c.json({ ignored: decision.reason });
 
 		if (decision.kind === "invalid") {
-			const { task, subject, reason } = decision;
-			warn("authenticated delivery produced an invalid task input", { deliveryId, event, task, subject, reason });
+			const { task, thread, reason } = decision;
+			warn("authenticated delivery produced an invalid task input", { deliveryId, event, task, thread, reason });
 			return c.json({ error: "invalid task input", task }, 422);
 		}
 
-		const { task, subject, idempotencyKey, input } = decision;
+		const { task, thread, idempotencyKey, input } = decision;
 		try {
 			const run = await deps.startTask(task, input, idempotencyKey);
 			return c.json({ runId: run.id, task }, 202);
 		} catch (error) {
-			warn("could not start task", { deliveryId, event, task, subject, error: error instanceof Error ? error.message : String(error) });
+			warn("could not start task", { deliveryId, event, task, thread, error: error instanceof Error ? error.message : String(error) });
 			// A 5xx marks the delivery failed in GitHub, where it can be redelivered by hand.
 			return c.json({ error: "could not start task", task }, 502);
 		}

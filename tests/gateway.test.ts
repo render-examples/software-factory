@@ -104,10 +104,10 @@ describe("gateway", () => {
 
 	it("records the delivery and where it went before starting the task", async () => {
 		await app.fetch(webhook(JSON.stringify(triagePayload)));
-		expect(await readStream(db, "delivery:delivery-1", 0)).toMatchObject([
+		expect(await readStream(db, "delivery:github:delivery-1", 0)).toMatchObject([
 			{
 				type: "delivery.received",
-				subject: `${REPO}#issue-12`,
+				thread: `github:${REPO}#issue-12`,
 				source: "github",
 				payload: { event: "issues", repo: REPO, task: "triage" },
 			},
@@ -117,7 +117,7 @@ describe("gateway", () => {
 	it("records an ignored delivery with the reason", async () => {
 		const res = await app.fetch(webhook(JSON.stringify({ zen: "hi" }), { event: "ping", delivery: "delivery-ping" }));
 		expect(await res.json()).toEqual({ ignored: "ping" });
-		expect((await readStream(db, "delivery:delivery-ping", 0))[0]?.payload).toEqual({ event: "ping", ignored: "ping" });
+		expect((await readStream(db, "delivery:github:delivery-ping", 0))[0]?.payload).toEqual({ event: "ping", ignored: "ping" });
 	});
 
 	it("records a redelivery once and starts its task again, under the same idempotency key", async () => {
@@ -125,7 +125,7 @@ describe("gateway", () => {
 		const res = await app.fetch(webhook(JSON.stringify(triagePayload)));
 		expect(res.status).toBe(202);
 		expect(startTask.mock.calls.map(([, , key]) => key)).toEqual(["delivery-1", "delivery-1"]);
-		expect(await readStream(db, "delivery:delivery-1", 0)).toHaveLength(1);
+		expect(await readStream(db, "delivery:github:delivery-1", 0)).toHaveLength(1);
 	});
 
 	it("returns 502 without starting the task when the delivery can't be recorded", async () => {

@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { EventSpec } from "../events/index.js";
+import { ThreadKey } from "../threads/index.js";
 import type { Tx } from "./pool.js";
 import { project } from "./projections.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
@@ -9,8 +10,8 @@ const MAX_PAYLOAD_BYTES = 256 * 1024;
 export interface NewEvent<S extends z.ZodType = z.ZodType> {
 	type: EventSpec<S>;
 	stream: string;
-	/** "owner/name#issue-12": set on every event about an issue or pull request, whatever its stream. */
-	subject?: string;
+	/** Set on every event about a thread, whatever its stream. */
+	thread?: ThreadKey;
 	/** "github", "gateway", or "workflow:<run_id>". Nothing in a Sandbox writes events. */
 	source: string;
 	payload: z.input<NoInfer<S>>;
@@ -34,7 +35,7 @@ export class VersionConflict extends Error {
 }
 
 const INSERT = `
-	insert into events (stream, stream_version, subject, type, version, source, idempotency_key, payload)
+	insert into events (stream, stream_version, thread, type, version, source, idempotency_key, payload)
 	select $1::text, coalesce(max(stream_version), 0) + 1, $2::text, $3::text, $4::int, $5::text, $6::text, $7::jsonb
 	from events where stream = $1::text
 	having $8::int is null or coalesce(max(stream_version), 0) = $8::int
@@ -50,11 +51,12 @@ const INSERT = `
 export async function append<S extends z.ZodType>(tx: Tx, event: NewEvent<S>, { expectedVersion }: AppendOptions = {}): Promise<LogEvent | null> {
 	const payload = JSON.stringify(event.type.payload.parse(event.payload));
 	if (Buffer.byteLength(payload) > MAX_PAYLOAD_BYTES) throw new Error(`${event.type.type} payload is larger than 256 KB`);
+	if (event.thread !== undefined && !ThreadKey.safeParse(event.thread).success) throw new Error(`${event.type.type} has an invalid thread key`);
 	let rows: LogEvent[];
 	try {
 		({ rows } = await tx.query<LogEvent>(INSERT, [
 			event.stream,
-			event.subject ?? null,
+			event.thread ?? null,
 			event.type.type,
 			event.type.version,
 			event.source,

@@ -4,7 +4,7 @@ create table runs (
   trace_id    text not null,
   task        text not null,
   title       text not null,
-  subject     text not null,
+  thread      text not null,
   state       text not null,
   summary     text,
   outcome     text,
@@ -15,11 +15,11 @@ create table runs (
   updated_seq bigint not null
 );
 create index runs_trace on runs (trace_id);
-create index runs_subject on runs (subject);
+create index runs_thread on runs (thread);
 
--- The trace that owns each issue or pull request, derived from its subject:<subject> stream.
+-- The trace that owns each thread, such as an issue or pull request, derived from its thread:<thread> stream.
 create table claims (
-  subject           text primary key,
+  thread            text primary key,
   stream_version    int not null,
   trace_id          text not null,
   run_id            text not null,

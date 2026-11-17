@@ -2,8 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { Context, Handler, MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
-import { type Db, type LogEvent, readStream, readSubject } from "../db/index.js";
-import { agentRunFinished, assistantMessage, subjectKey } from "../events/index.js";
+import { type Db, type LogEvent, readStream, readThread } from "../db/index.js";
+import { agentRunFinished, assistantMessage } from "../events/index.js";
+import { githubThread, ThreadKey } from "../threads/index.js";
 import { ANY_STREAM, type EventHub } from "./hub.js";
 
 export interface StreamDeps {
@@ -20,7 +21,7 @@ const KEEPALIVE_MS = 15_000;
 
 const AgentRunParams = z.object({ id: z.string().regex(/^ar_[0-9a-f-]{36}$/) });
 const name = z.string().regex(/^[\w.-]{1,100}$/);
-const SubjectParams = z.object({ owner: name, repo: name, kind: z.enum(["issue", "pr"]), number: z.string().regex(/^[1-9]\d{0,9}$/) });
+const GitHubThreadParams = z.object({ owner: name, repo: name, kind: z.enum(["issue", "pr"]), number: z.string().regex(/^[1-9]\d{0,9}$/) });
 
 /** Requires `Authorization: Bearer <token>`. Digests make the comparison constant-time whatever the lengths. */
 export function requireReader(token: string): MiddlewareHandler {
@@ -55,26 +56,39 @@ export function agentRunStream({ db, hub }: StreamDeps): Handler {
 	};
 }
 
-/** Every event on an issue or pull request, from every stream; the SSE ID is `<tx>-<seq>`. Never ends. */
-export function subjectStream({ db, hub }: StreamDeps): Handler {
+/** Every event on a thread, from every stream; `:thread` is the URL-encoded thread key. */
+export function threadStream(deps: StreamDeps): Handler {
 	return (c) => {
-		const params = SubjectParams.safeParse(c.req.param());
-		const after = cursor(c, /^(\d{1,20})-(\d{1,15})$/);
-		if (!params.success || !after) return c.json({ error: "invalid subject or cursor" }, 400);
-		const { owner, repo, kind, number } = params.data;
-		const subject = subjectKey(`${owner}/${repo}`, { kind, number: Number(number) });
-		let position = { tx: after[1] ?? "0", seq: Number(after[2] ?? 0) };
-		return serve(c, hub, {
-			key: subject,
-			wakeOn: ANY_STREAM,
-			async read() {
-				const events = await readSubject(db, subject, position, PAGE);
-				const last = events.at(-1);
-				if (last) position = { tx: last.tx, seq: last.seq };
-				return events.map((event) => ({ id: `${event.tx}-${event.seq}`, event }));
-			},
-		});
+		const thread = ThreadKey.safeParse(c.req.param("thread"));
+		return serveThread(c, deps, thread.success ? thread.data : null);
 	};
+}
+
+/** `threadStream` for a GitHub issue or pull request, addressed by its repository, kind, and number. */
+export function githubThreadStream(deps: StreamDeps): Handler {
+	return (c) => {
+		const params = GitHubThreadParams.safeParse(c.req.param());
+		if (!params.success) return serveThread(c, deps, null);
+		const { owner, repo, kind, number } = params.data;
+		return serveThread(c, deps, githubThread(`${owner}/${repo}`, { kind, number: Number(number) }));
+	};
+}
+
+/** The SSE ID is `<tx>-<seq>`. Never ends. */
+function serveThread(c: Context, { db, hub }: StreamDeps, thread: ThreadKey | null): Response {
+	const after = cursor(c, /^(\d{1,20})-(\d{1,15})$/);
+	if (!thread || !after) return c.json({ error: "invalid thread or cursor" }, 400);
+	let position = { tx: after[1] ?? "0", seq: Number(after[2] ?? 0) };
+	return serve(c, hub, {
+		key: thread,
+		wakeOn: ANY_STREAM,
+		async read() {
+			const events = await readThread(db, thread, position, PAGE);
+			const last = events.at(-1);
+			if (last) position = { tx: last.tx, seq: last.seq };
+			return events.map((event) => ({ id: `${event.tx}-${event.seq}`, event }));
+		},
+	});
 }
 
 /** `Last-Event-ID`, else `?after=`, matched against `pattern`; an empty match when neither is set, null when invalid. */
@@ -84,7 +98,7 @@ function cursor(c: Context, pattern: RegExp): string[] | null {
 }
 
 interface Feed {
-	/** The stream or subject that live deltas and partial messages are keyed by. */
+	/** The stream or thread that live deltas and partial messages are keyed by. */
 	key: string;
 	/** The stream whose commits wake the reader, or ANY_STREAM. */
 	wakeOn: string;
@@ -139,8 +153,8 @@ function serve(c: Context, hub: EventHub, feed: Feed): Response {
 
 		let live = false;
 		const unsubscribe = hub.onEvents(feed.wakeOn, wake);
-		const unsubscribeDeltas = hub.onDelta(feed.key, ({ stream, subject, message_id, text }) => {
-			if (live) enqueue(() => sse.writeSSE({ event: "live.delta", data: JSON.stringify({ stream, subject, message_id, text }) }));
+		const unsubscribeDeltas = hub.onDelta(feed.key, ({ stream, thread, message_id, text }) => {
+			if (live) enqueue(() => sse.writeSSE({ event: "live.delta", data: JSON.stringify({ stream, thread, message_id, text }) }));
 		});
 		const poll = setInterval(wake, POLL_MS);
 		const keepalive = setInterval(() => enqueue(() => sse.write(": keepalive\n\n").then(() => {})), KEEPALIVE_MS);

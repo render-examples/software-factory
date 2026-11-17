@@ -42,7 +42,7 @@ describe("route: starts", () => {
 			task: "triage",
 			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer" },
 			idempotencyKey: DELIVERY,
-			subject: `${REPO}#issue-12`,
+			thread: `github:${REPO}#issue-12`,
 		});
 		if (r.kind === "start") expect(TriageInput.safeParse(r.input).success).toBe(true);
 	});
@@ -71,7 +71,7 @@ describe("route: starts", () => {
 			task: "autopilot",
 			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer" },
 			idempotencyKey: DELIVERY,
-			subject: `${REPO}#issue-12`,
+			thread: `github:${REPO}#issue-12`,
 		});
 		if (r.kind === "start") expect(AutopilotInput.safeParse(r.input).success).toBe(true);
 	});
@@ -82,7 +82,7 @@ describe("route: starts", () => {
 			kind: "start",
 			task: "autopilot",
 			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
-			subject: `${REPO}#issue-12`,
+			thread: `github:${REPO}#issue-12`,
 		});
 	});
 
@@ -98,7 +98,7 @@ describe("route: starts", () => {
 			task: "pr-review",
 			input: { repo: REPO, installationId: 7, pr: 34, headSha: SHA, actor: "maintainer" },
 			idempotencyKey: DELIVERY,
-			subject: `${REPO}#pr-34`,
+			thread: `github:${REPO}#pr-34`,
 		});
 		if (r.kind === "start") expect(PrReviewInput.safeParse(r.input).success).toBe(true);
 	});
@@ -109,7 +109,7 @@ describe("route: starts", () => {
 			kind: "start",
 			task: "cancel",
 			input: { repo: REPO, installationId: 7, number: 12, kind: "issue", actor: "maintainer" },
-			subject: `${REPO}#issue-12`,
+			thread: `github:${REPO}#issue-12`,
 		});
 	});
 

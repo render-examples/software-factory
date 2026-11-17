@@ -2,7 +2,7 @@ import pg from "pg";
 import { LIVE_CHANNEL, LiveNotice } from "../events/index.js";
 import { type Delta, LiveCache, type PartialMessage } from "./live.js";
 
-/** Subscribes to commits on every stream. The `events` channel names only the stream, so subject readers use it. */
+/** Subscribes to commits on every stream. The `events` channel names only the stream, so thread readers use it. */
 export const ANY_STREAM = "*";
 const RECONNECT_MS = 5_000;
 
@@ -20,7 +20,7 @@ export class EventHub {
 		return add(this.#events, stream, listener);
 	}
 
-	/** Calls `listener` with each new delta on a stream or subject. Returns an unsubscribe. */
+	/** Calls `listener` with each new delta on a stream or thread. Returns an unsubscribe. */
 	onDelta(key: string, listener: (delta: Delta) => void): () => void {
 		return add(this.#deltas, key, listener);
 	}
@@ -48,8 +48,8 @@ export class EventHub {
 		}
 		const delta = this.#cache.apply(notice);
 		if (!delta) return;
-		const bySubject = delta.subject ? this.#deltas.get(delta.subject) : undefined;
-		for (const listener of [...(this.#deltas.get(delta.stream) ?? []), ...(bySubject ?? [])]) listener(delta);
+		const byThread = delta.thread ? this.#deltas.get(delta.thread) : undefined;
+		for (const listener of [...(this.#deltas.get(delta.stream) ?? []), ...(byThread ?? [])]) listener(delta);
 	}
 }
 

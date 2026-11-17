@@ -1,8 +1,9 @@
 import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
 import type { NewEvent } from "../db/index.js";
-import { deliveryReceived, subjectKey } from "../events/index.js";
+import { deliveryReceived } from "../events/index.js";
 import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
+import { githubThread, type ThreadKey } from "../threads/index.js";
 
 export type Route =
 	| {
@@ -11,12 +12,12 @@ export type Route =
 			/** Already validated with the task's input schema; every one names the repository. */
 			input: { repo: string };
 			idempotencyKey: string;
-			/** "owner/name#issue-12" or "owner/name#pr-34", for the delivery event. */
-			subject?: string;
+			/** The issue or pull request, for the delivery event. */
+			thread?: ThreadKey;
 	  }
 	| { kind: "ignore"; reason: string }
 	/** An authenticated delivery that maps to a task but not to a valid input for it: a bug worth a failed delivery. */
-	| { kind: "invalid"; task: TaskName; reason: string; subject?: string };
+	| { kind: "invalid"; task: TaskName; reason: string; thread?: ThreadKey };
 
 const Envelope = z.object({
 	action: z.string().optional(),
@@ -77,11 +78,11 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 
 	const base = { repo: repo.fullName, installationId: repo.installationId };
 	const actor = sender?.login ?? "";
-	const on = (kind: "issue" | "pr", number: number) => subjectKey(repo.fullName, { kind, number });
-	const start = (task: TaskName, schema: ZodType, input: Record<string, unknown>, subject?: string, idempotencyKey = deliveryId): Route => {
+	const on = (kind: "issue" | "pr", number: number) => githubThread(repo.fullName, { kind, number });
+	const start = (task: TaskName, schema: ZodType, input: Record<string, unknown>, thread?: ThreadKey, idempotencyKey = deliveryId): Route => {
 		const parsed = schema.safeParse({ ...base, ...input });
-		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, subject };
-		return { kind: "start", task, input: parsed.data as { repo: string }, idempotencyKey, subject };
+		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, thread };
+		return { kind: "start", task, input: parsed.data as { repo: string }, idempotencyKey, thread };
 	};
 
 	switch (event) {
@@ -91,21 +92,16 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (!parsed.success) return ignore("malformed payload");
 			const { label, issue } = parsed.data;
 			if (isPullRequest(issue)) return ignore("pull request");
-			const subject = on("issue", issue.number);
+			const thread = on("issue", issue.number);
 			if (label?.name === config.labels.triage) {
-				return start(TASKS.triage, TriageInput, { issue: issue.number, actor }, subject);
+				return start(TASKS.triage, TriageInput, { issue: issue.number, actor }, thread);
 			}
 			if (label?.name === config.labels.specApproved) {
 				// GitHub bumps updated_at when the label is applied.
-				return start(
-					TASKS.specToPr,
-					SpecToPrInput,
-					{ issue: issue.number, actor, approval: { kind: "label", labeledAt: issue.updated_at } },
-					subject,
-				);
+				return start(TASKS.specToPr, SpecToPrInput, { issue: issue.number, actor, approval: { kind: "label", labeledAt: issue.updated_at } }, thread);
 			}
 			if (label?.name === config.labels.autopilot) {
-				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor }, subject);
+				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor }, thread);
 			}
 			return ignore("unhandled label");
 		}
@@ -126,17 +122,17 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (!parsed.success) return ignore("malformed payload");
 			const { issue, comment } = parsed.data;
 			const isPr = isPullRequest(issue);
-			const subject = on(isPr ? "pr" : "issue", issue.number);
+			const thread = on(isPr ? "pr" : "issue", issue.number);
 			const firstLine = (comment.body ?? "").split(/\r?\n/, 1)[0]?.trim();
 			if (firstLine === `${config.commandPrefix} cancel`) {
-				return start(TASKS.cancel, CancelInput, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
+				return start(TASKS.cancel, CancelInput, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, thread);
 			}
 			if (isPr) return ignore("comment on pull request");
 			if (issue.labels.some((l) => l.name === config.labels.autopilot)) {
-				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor, commentId: comment.id }, subject);
+				return start(TASKS.autopilot, AutopilotInput, { issue: issue.number, actor, commentId: comment.id }, thread);
 			}
 			if (!issue.labels.some((l) => l.name === config.labels.triage)) return ignore("issue not in triage");
-			return start(TASKS.triage, TriageInput, { issue: issue.number, actor, commentId: comment.id }, subject);
+			return start(TASKS.triage, TriageInput, { issue: issue.number, actor, commentId: comment.id }, thread);
 		}
 
 		case "push": {
@@ -162,6 +158,7 @@ export function deliveryEvent(deliveryId: string, event: string, decision: Route
 			: decision.kind === "invalid"
 				? { event, task: decision.task, ignored: "invalid task input" }
 				: { event, repo: decision.input.repo, task: decision.task };
-	const subject = decision.kind === "ignore" ? undefined : decision.subject;
-	return { type: deliveryReceived, stream: `delivery:${deliveryId}`, subject, source: "github", payload, idempotencyKey: deliveryId };
+	const thread = decision.kind === "ignore" ? undefined : decision.thread;
+	const stream = `delivery:github:${deliveryId}`;
+	return { type: deliveryReceived, stream, thread, source: "github", payload, idempotencyKey: stream };
 }

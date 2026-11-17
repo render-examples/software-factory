@@ -3,16 +3,16 @@ import { AgentError } from "../app/agents/index.js";
 import { type Claim, type ClaimOptions, readClaim, WORKING_LABEL, withClaim } from "../app/claims/index.js";
 import { requireRepo } from "../app/config/index.js";
 import { type Db, readStream, rebuild } from "../app/db/index.js";
-import { subjectKey } from "../app/events/index.js";
 import { type GitHubClient, GitHubError, type IssueComment, parseMarker, type Permission } from "../app/github/index.js";
+import { githubThread } from "../app/threads/index.js";
 import { REPO as REPO_NAME } from "./fixtures/config.js";
 import { FakeRuns, holdClaim, runRow } from "./helpers/claims.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const BOT = "software-factory[bot]";
 const REPO = requireRepo(REPO_NAME, 5);
-const subject = { kind: "issue" as const, number: 12 };
-const KEY = subjectKey(REPO.fullName, subject);
+const thread = { kind: "issue" as const, number: 12 };
+const KEY = githubThread(REPO.fullName, thread);
 
 class FakeGitHub {
 	comments: IssueComment[] = [];
@@ -73,7 +73,7 @@ const root = (taskRunId: string) => ({ metadata: { taskRunId, rootTaskRunId: tas
 const child = (taskRunId: string, rootTaskRunId: string) => ({ metadata: { taskRunId, rootTaskRunId, parentTaskRunId: rootTaskRunId } });
 const options = (gh: FakeGitHub, overrides: Partial<ClaimOptions> = {}): ClaimOptions => ({
 	repo: REPO,
-	subject,
+	thread,
 	task: "triage",
 	title: "Triage",
 	actor: "maintainer",
@@ -86,7 +86,7 @@ const done = async () => ({ outcome: "done", summary: "done." });
 const types = async (stream: string) => (await readStream(db, stream, 0)).map((event) => event.type);
 
 describe("withClaim", () => {
-	it("claims the subject and shows the run's progress in the status comment until it finishes", async () => {
+	it("claims the thread and shows the run's progress in the status comment until it finishes", async () => {
 		const gh = new FakeGitHub();
 		const outcome = await withClaim(root("trn-run"), options(gh), async (claim) => {
 			expect(gh.status()).toContain("**Triage** is running");
@@ -102,15 +102,15 @@ describe("withClaim", () => {
 		expect(gh.comments).toHaveLength(1);
 		const body = gh.status();
 		expect(body).toContain("**Triage** finished: asked 2 questions.\n\n- [Questions](https://github.test/q)");
-		expect(body).toContain(`run \`trn-run\` · events: \`/subjects/${REPO.fullName}/issue/12/stream\``);
+		expect(body).toContain(`run \`trn-run\` · events: \`/threads/github/${REPO.fullName}/issue/12/stream\``);
 		expect(parseMarker(body, "status")).toEqual({ runId: "trn-run", traceId: "trn-run", stage: "triage", title: "Triage", state: "done" });
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(await types("run:trn-run")).toEqual(["run.started", "run.sandbox_attached", "run.progress", "run.finished"]);
-		expect(await types(`subject:${KEY}`)).toEqual(["claim.acquired", "claim.released"]);
+		expect(await types(`thread:${KEY}`)).toEqual(["claim.acquired", "claim.released"]);
 		expect((await readStream(db, "run:trn-run", 3))[0]?.payload).toMatchObject({ state: "done", outcome: "asked", duration_ms: expect.any(Number) });
 	});
 
-	it("rejects an actor without permission without claiming, and says so only the first time on an unclaimed subject", async () => {
+	it("rejects an actor without permission without claiming, and says so only the first time on an unclaimed thread", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions = { reader: "read" };
 		const work = vi.fn();
@@ -128,7 +128,7 @@ describe("withClaim", () => {
 
 	it("supersedes the previous trace: cancels it, terminates its sandbox, and records it stopped", async () => {
 		const gh = new FakeGitHub();
-		await holdClaim(db, REPO.fullName, subject, { traceId: "trn-old", sandboxId: "sbx-old" });
+		await holdClaim(db, REPO.fullName, thread, { traceId: "trn-old", sandboxId: "sbx-old" });
 		const runs = new FakeRuns({ "trn-old": "running" });
 		await withClaim(root("trn-new"), options(gh, { runs }), done);
 
@@ -140,13 +140,13 @@ describe("withClaim", () => {
 			source: "workflow:trn-new",
 			payload: { by: "trn-new", outcome: "superseded", active: true },
 		});
-		expect((await readStream(db, `subject:${KEY}`, 1))[0]?.payload).toMatchObject({ trace_id: "trn-new", previous_trace_id: "trn-old" });
+		expect((await readStream(db, `thread:${KEY}`, 1))[0]?.payload).toMatchObject({ trace_id: "trn-new", previous_trace_id: "trn-old" });
 	});
 
 	it("cancels the previous root and closes its child when the child holds the claim", async () => {
 		const gh = new FakeGitHub();
-		await holdClaim(db, REPO.fullName, subject, { traceId: "trn-root-old", task: "autopilot", title: "Autopilot" });
-		await holdClaim(db, REPO.fullName, subject, { traceId: "trn-root-old", runId: "trn-child-old", sandboxId: "sbx-child" });
+		await holdClaim(db, REPO.fullName, thread, { traceId: "trn-root-old", task: "autopilot", title: "Autopilot" });
+		await holdClaim(db, REPO.fullName, thread, { traceId: "trn-root-old", runId: "trn-child-old", sandboxId: "sbx-child" });
 		const runs = new FakeRuns({ "trn-root-old": "running" });
 		await withClaim(root("trn-new"), options(gh, { runs }), done);
 
@@ -185,7 +185,7 @@ describe("withClaim", () => {
 
 	it("lets a subtask continue its root's claim and turns away one from an older root", async () => {
 		const gh = new FakeGitHub();
-		await holdClaim(db, REPO.fullName, subject, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
+		await holdClaim(db, REPO.fullName, thread, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
 		const runs = new FakeRuns({ "trn-root": "running" });
 		const stage = await withClaim(child("trn-triage", "trn-root"), options(gh, { runs, mode: "continue" }), async () => ({
 			outcome: "drafted",
@@ -205,10 +205,10 @@ describe("withClaim", () => {
 		expect(await readClaim(db, KEY)).toMatchObject({ traceId: "trn-root", runId: "trn-triage" });
 	});
 
-	it("stops at a checkpoint after a newer run claims the subject", async () => {
+	it("stops at a checkpoint after a newer run claims the thread", async () => {
 		const gh = new FakeGitHub();
 		const outcome = await withClaim(root("trn-run"), options(gh), async (claim: Claim) => {
-			await holdClaim(db, REPO.fullName, subject, { traceId: "trn-new" });
+			await holdClaim(db, REPO.fullName, thread, { traceId: "trn-new" });
 			await claim.reportProgress("doing expensive work");
 			return { outcome: "done", summary: "done." };
 		});
@@ -282,7 +282,7 @@ describe("withClaim", () => {
 describe("db:rebuild", () => {
 	it("recreates runs and claims from the log and keeps the status comment's ID", async () => {
 		const gh = new FakeGitHub();
-		await holdClaim(db, REPO.fullName, subject, { traceId: "trn-old", sandboxId: "sbx-old" });
+		await holdClaim(db, REPO.fullName, thread, { traceId: "trn-old", sandboxId: "sbx-old" });
 		await withClaim(root("trn-new"), options(gh, { runs: new FakeRuns({ "trn-old": "running" }) }), async (claim) => {
 			await claim.reportProgress("working");
 			return { outcome: "done", summary: "done.", links: [{ label: "Spec v1", url: "https://github.test/s" }] };

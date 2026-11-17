@@ -5,6 +5,7 @@ import { AgentRunRecorder } from "../events/index.js";
 import { errorMessage } from "../runner/core/emit.js";
 import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/core/protocol.js";
 import { APP_DIR, type ExecStreamOptions, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
+import type { ThreadKey } from "../threads/index.js";
 import type { Agent, OutputSchema } from "./define.js";
 import { followRun, LineRelay } from "./relay.js";
 
@@ -33,8 +34,8 @@ export interface RunAgentOptions {
 	/** Root task run of the GitHub task; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
-	/** "owner/name#issue-12" (a `subjectKey`), when the run is about an issue or pull request. */
-	subject?: string;
+	/** The thread the run works on, if any; its events carry it. */
+	thread?: ThreadKey;
 	/** Default 30 minutes. */
 	timeoutMs?: number;
 	signal?: AbortSignal;
@@ -65,7 +66,7 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const recorder = new AgentRunRecorder({
 		db: base.db ?? workflowsDb(),
 		runId: base.runId ?? base.traceId,
-		subject: base.subject,
+		thread: base.thread,
 	});
 	recorder.start({ agentId: agent.id, harness: harness.name, model: harness.label });
 	const finish = (outcome: string, summary: Summary, message?: string) =>

@@ -8,7 +8,6 @@ export {
 	runEvent,
 	type StatusGitHub,
 	type StatusLink,
-	type Subject,
 	stopRun,
 	syncStatus,
 	WORKING_LABEL,

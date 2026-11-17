@@ -11,12 +11,13 @@ import {
 	type Projection,
 	pendingMigrations,
 	readStream,
-	readSubject,
+	readThread,
 	rebuild,
 	type Tx,
 	VersionConflict,
 } from "../app/db/index.js";
 import { defineEvent } from "../app/events/index.js";
+import type { ThreadKey } from "../app/threads/index.js";
 import { pgliteDb } from "./helpers/db.js";
 
 const noted = defineEvent("test.noted", 1, z.strictObject({ text: z.string().max(300_000) }));
@@ -30,13 +31,13 @@ beforeAll(async () => {
 afterAll(() => db.end());
 
 const newStream = () => `run:${randomUUID()}`;
-const body = (text: string, extra: { subject?: string; idempotencyKey?: string } = {}) => ({
+const body = (text: string, extra: { thread?: ThreadKey; idempotencyKey?: string } = {}) => ({
 	type: noted,
 	source: "gateway",
 	payload: { text },
 	...extra,
 });
-const note = (stream: string, text: string, extra: { subject?: string; idempotencyKey?: string } = {}) => ({ stream, ...body(text, extra) });
+const note = (stream: string, text: string, extra: { thread?: ThreadKey; idempotencyKey?: string } = {}) => ({ stream, ...body(text, extra) });
 
 describe("append", () => {
 	it("assigns each stream consecutive versions from 1", async () => {
@@ -52,15 +53,15 @@ describe("append", () => {
 		]);
 	});
 
-	it("records the type, version, source, subject, and validated payload", async () => {
+	it("records the type, version, source, thread, and validated payload", async () => {
 		const stream = newStream();
-		const logged = await db.withTx((tx) => append(tx, note(stream, "hello", { subject: "acme/web#issue-12" })));
+		const logged = await db.withTx((tx) => append(tx, note(stream, "hello", { thread: "github:acme/web#issue-12" })));
 		expect(logged).toMatchObject({
 			stream,
 			type: "test.noted",
 			version: 1,
 			source: "gateway",
-			subject: "acme/web#issue-12",
+			thread: "github:acme/web#issue-12",
 			payload: { text: "hello" },
 		});
 		expect(await readStream(db, stream, 0)).toEqual([logged]);
@@ -89,6 +90,14 @@ describe("append", () => {
 		await expect(db.withTx((tx) => append(tx, { ...note(stream, ""), payload: { text: 1 } as never }))).rejects.toThrow();
 		await expect(db.withTx((tx) => append(tx, { ...note(stream, ""), payload: { text: "x", token: "secret" } as never }))).rejects.toThrow();
 		await expect(db.withTx((tx) => append(tx, note(stream, "x".repeat(256 * 1024))))).rejects.toThrow("larger than 256 KB");
+		expect(await readStream(db, stream, 0)).toEqual([]);
+	});
+
+	it("rejects a thread that isn't namespaced as <channel>:<id>, writing nothing", async () => {
+		const stream = newStream();
+		for (const thread of ["acme/web#issue-12", "GitHub:acme/web#issue-12", "github:", "github:acme web"]) {
+			await expect(db.withTx((tx) => append(tx, note(stream, "x", { thread: thread as ThreadKey })))).rejects.toThrow("invalid thread key");
+		}
 		expect(await readStream(db, stream, 0)).toEqual([]);
 	});
 
@@ -142,18 +151,18 @@ describe("ordered reads", () => {
 		expect([...first, ...rest].map((event) => event.streamVersion)).toEqual([1, 2, 3]);
 	});
 
-	it("pages a subject across streams by (tx, seq)", async () => {
-		const subject = `acme/web#issue-${randomUUID()}`;
-		const [claims, run] = [`subject:${subject}`, newStream()];
-		await db.withTx((tx) => append(tx, note(claims, "claim", { subject })));
+	it("pages a thread across streams by (tx, seq)", async () => {
+		const thread: ThreadKey = `github:acme/web#issue-${randomUUID()}`;
+		const [claims, run] = [`thread:${thread}`, newStream()];
+		await db.withTx((tx) => append(tx, note(claims, "claim", { thread })));
 		await db.withTx(async (tx) => {
-			await append(tx, note(run, "started", { subject }));
+			await append(tx, note(run, "started", { thread }));
 			await append(tx, note(newStream(), "unrelated"));
-			await append(tx, note(run, "finished", { subject }));
+			await append(tx, note(run, "finished", { thread }));
 		});
-		const first = await readSubject(db, subject, START, 2);
+		const first = await readThread(db, thread, START, 2);
 		const last = first.at(-1) as LogEvent;
-		const rest = await readSubject(db, subject, { tx: last.tx, seq: last.seq }, 2);
+		const rest = await readThread(db, thread, { tx: last.tx, seq: last.seq }, 2);
 		expect([...first, ...rest].map((event) => event.payload)).toEqual([{ text: "claim" }, { text: "started" }, { text: "finished" }]);
 	});
 });

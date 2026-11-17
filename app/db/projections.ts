@@ -31,9 +31,9 @@ const runs: Projection = {
 			case runStarted.type: {
 				const { trace_id, task, title } = runStarted.payload.parse(event.payload);
 				await tx.query(
-					`insert into runs (run_id, trace_id, task, title, subject, state, started_at, updated_seq)
+					`insert into runs (run_id, trace_id, task, title, thread, state, started_at, updated_seq)
 					 values ($1, $2, $3, $4, $5, 'running', $6, $7)`,
-					[runId, trace_id, task, title, event.subject, event.createdAt, event.seq],
+					[runId, trace_id, task, title, event.thread, event.createdAt, event.seq],
 				);
 				return;
 			}
@@ -65,23 +65,23 @@ const runs: Projection = {
 	},
 };
 
-/** Which trace holds each subject, and the subject stream's version at its latest claim event. */
+/** Which trace holds each thread, and the thread stream's version at its latest claim event. */
 const claims: Projection = {
 	table: "claims",
-	key: ["subject"],
+	key: ["thread"],
 	operational: ["status_comment_id"],
 	async apply(tx, event) {
 		if (event.type === claimAcquired.type) {
 			const { trace_id, run_id } = claimAcquired.payload.parse(event.payload);
 			await tx.query(
-				`insert into claims (subject, stream_version, trace_id, run_id, state, updated_seq) values ($1, $2, $3, $4, 'held', $5)
-				 on conflict (subject) do update set stream_version = excluded.stream_version, trace_id = excluded.trace_id,
+				`insert into claims (thread, stream_version, trace_id, run_id, state, updated_seq) values ($1, $2, $3, $4, 'held', $5)
+				 on conflict (thread) do update set stream_version = excluded.stream_version, trace_id = excluded.trace_id,
 				   run_id = excluded.run_id, state = 'held', updated_seq = excluded.updated_seq`,
-				[event.subject, event.streamVersion, trace_id, run_id, event.seq],
+				[event.thread, event.streamVersion, trace_id, run_id, event.seq],
 			);
 		} else if (event.type === claimReleased.type) {
-			await tx.query("update claims set stream_version = $2, state = 'released', updated_seq = $3 where subject = $1", [
-				event.subject,
+			await tx.query("update claims set stream_version = $2, state = 'released', updated_seq = $3 where thread = $1", [
+				event.thread,
 				event.streamVersion,
 				event.seq,
 			]);

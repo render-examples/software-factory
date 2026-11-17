@@ -14,9 +14,10 @@ import {
 } from "../claims/index.js";
 import { config, requireRepo, TASKS } from "../config/index.js";
 import { append, type Db, type NewEvent, workflowsDb } from "../db/index.js";
-import { runFinished, runRejected, runStarted, subjectKey } from "../events/index.js";
+import { runFinished, runRejected, runStarted } from "../events/index.js";
 import { type GitHubClient, githubFor } from "../github/index.js";
 import { CancelInput } from "../schemas/index.js";
+import { githubThread, type ThreadKey } from "../threads/index.js";
 
 type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
 
@@ -41,8 +42,8 @@ export async function cancelRun(
 	const db = deps.db ?? workflowsDb();
 	const { traceId, runId } = traceIds(ctx);
 	const { actor } = input;
-	const subject = { kind: input.kind, number: input.number };
-	const key = subjectKey(repo.fullName, subject);
+	const thread = { kind: input.kind, number: input.number };
+	const key = githubThread(repo.fullName, thread);
 	const startedAt = Date.now();
 	const record = (event: NewEvent) => db.withTx((tx) => append(tx, event));
 
@@ -55,7 +56,7 @@ export async function cancelRun(
 	}
 
 	const result = await cancelClaim(db, deps.runs ?? workflowRuns(), key, runId, actor);
-	await syncStatus(db, gh, repo.fullName, subject);
+	await syncStatus(db, gh, repo.fullName, thread);
 	if (result.reason === "nothing_running") await gh.createComment(input.number, `@${actor} no factory run is in progress here.`);
 	const summary = result.runId ? `${result.cancelled ? "cancelled" : "cleared"} \`${result.runId}\`.` : "no factory run was in progress.";
 	await record(
@@ -74,12 +75,12 @@ export async function cancelRun(
  * Stops the trace holding the claim and releases it. Runs still recorded as running after their trace stopped
  * (Render killed it before it could finish) are closed as cancelled too, so their status doesn't linger.
  */
-async function cancelClaim(db: Db, runs: RunControl, subject: string, by: string, actor: string): Promise<CancelResult> {
-	const claim = await readClaim(db, subject);
+async function cancelClaim(db: Db, runs: RunControl, thread: ThreadKey, by: string, actor: string): Promise<CancelResult> {
+	const claim = await readClaim(db, thread);
 	if (!claim?.held) return { cancelled: false, reason: "nothing_running" };
 	const summary = (active: boolean) => (active ? `cancelled by @${actor}.` : `cleared by @${actor}; the run had already stopped without finishing.`);
 	const { active, stopped } = await stopRun(db, runs, claim.traceId, { by, outcome: "cancelled", summary });
-	await release(db, subject, claim.traceId, by, "cancelled");
+	await release(db, thread, claim.traceId, by, "cancelled");
 	if (!active && !stopped.length) return { cancelled: false, reason: "nothing_running" };
 	const child = claim.runId !== claim.traceId && stopped.includes(claim.runId) ? { currentRunId: claim.runId } : {};
 	return active

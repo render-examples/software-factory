@@ -5,12 +5,13 @@ import { append, type Db } from "../app/db/index.js";
 import { type AgentRunSummary, AgentRunRecorder, defineEvent } from "../app/events/index.js";
 import { createGateway, EventHub } from "../app/gateway/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
+import type { ThreadKey } from "../app/threads/index.js";
 import { pgliteDb } from "./helpers/db.js";
 import { readSse } from "./helpers/sse.js";
 
 const TOKEN = "reader-token";
-const SUBJECT = "acme/web#issue-12";
-const SUBJECT_PATH = "/subjects/acme/web/issue/12/stream";
+const THREAD = "github:acme/web#issue-12";
+const THREAD_PATH = "/threads/github/acme/web/issue/12/stream";
 const at = new Date().toISOString();
 const SUMMARY: AgentRunSummary = {
 	outcome: "ok",
@@ -40,8 +41,8 @@ const feed = (r: AgentRunRecorder, ...events: RunnerEvent[]) => {
 const delta = (text: string, message_id: string): RunnerEvent => ({ type: "assistant_delta", at, message_id, text });
 const text = (text: string, message_id: string): RunnerEvent => ({ type: "assistant_text", at, message_id, text });
 
-function startRun(subject = SUBJECT): AgentRunRecorder {
-	const r = new AgentRunRecorder({ db, runId: "trn-1", subject });
+function startRun(thread: ThreadKey = THREAD): AgentRunRecorder {
+	const r = new AgentRunRecorder({ db, runId: "trn-1", thread });
 	r.start({ agentId: "triage", harness: "pi", model: "anthropic/claude-opus-5" });
 	return r;
 }
@@ -52,17 +53,19 @@ describe("stream authentication", () => {
 		["a wrong token", { authorization: "Bearer not-the-token" }],
 		["another scheme", { authorization: `Basic ${TOKEN}` }],
 	])("rejects a request with %s", async (_, headers) => {
-		for (const path of ["/agent-runs/ar_00000000-0000-0000-0000-000000000000/stream", SUBJECT_PATH]) {
+		for (const path of ["/agent-runs/ar_00000000-0000-0000-0000-000000000000/stream", THREAD_PATH]) {
 			const res = await app.request(path, { headers });
 			expect(res.status).toBe(401);
 			expect(res.headers.get("www-authenticate")).toBe("Bearer");
 		}
 	});
 
-	it("rejects malformed IDs, subjects, and cursors before streaming", async () => {
+	it("rejects malformed IDs, threads, and cursors before streaming", async () => {
 		expect((await get("/agent-runs/run-1/stream")).status).toBe(400);
-		expect((await get("/subjects/acme/web/discussion/12/stream")).status).toBe(400);
-		expect((await get(SUBJECT_PATH, { "last-event-id": "12" })).status).toBe(400);
+		expect((await get("/threads/github/acme/web/discussion/12/stream")).status).toBe(400);
+		expect((await get(`/threads/${encodeURIComponent("acme/web#issue-12")}/stream`)).status).toBe(400);
+		expect((await get(`/threads/${encodeURIComponent("GitHub:acme/web#issue-12")}/stream`)).status).toBe(400);
+		expect((await get(THREAD_PATH, { "last-event-id": "12" })).status).toBe(400);
 		expect((await get("/agent-runs/ar_00000000-0000-0000-0000-000000000000/stream?after=1-2")).status).toBe(400);
 	});
 });
@@ -77,14 +80,14 @@ describe("GET /agent-runs/:id/stream", () => {
 		expect(await stream.take(3)).toEqual([
 			{ event: "agent_run.started", id: "1", data: expect.objectContaining({ stream: r.stream, streamVersion: 1 }) },
 			{ event: "assistant.message", id: "2", data: expect.objectContaining({ payload: { message_id: "m1", text: "Hello" } }) },
-			{ event: "live.partial", id: undefined, data: { stream: r.stream, subject: SUBJECT, message_id: "m2", text: "Work" } },
+			{ event: "live.partial", id: undefined, data: { stream: r.stream, thread: THREAD, message_id: "m2", text: "Work" } },
 		]);
 
 		feed(r, delta("ing", "m2"));
 		expect(await stream.next()).toEqual({
 			event: "live.delta",
 			id: undefined,
-			data: { stream: r.stream, subject: SUBJECT, message_id: "m2", text: "ing" },
+			data: { stream: r.stream, thread: THREAD, message_id: "m2", text: "ing" },
 		});
 
 		feed(r, text("Working", "m2"));
@@ -114,20 +117,26 @@ describe("GET /agent-runs/:id/stream", () => {
 	});
 });
 
-describe("GET /subjects/:owner/:repo/:kind/:number/stream", () => {
-	it("shows every stream's events on the subject in commit order, with live deltas, and resumes from a <tx>-<seq> ID", async () => {
-		const subject = "acme/web#issue-77";
-		const path = "/subjects/acme/web/issue/77/stream";
+describe("GET /threads/:thread/stream", () => {
+	it("shows every stream's events on the thread in commit order, with live deltas, and resumes from a <tx>-<seq> ID", async () => {
+		const thread = "github:acme/web#issue-77";
+		const path = `/threads/${encodeURIComponent(thread)}/stream`;
 		await db.withTx((tx) =>
-			append(tx, { type: claimed, stream: `subject:${subject}`, subject, source: "workflow:trn-1", payload: { run_id: "trn-1" } }),
+			append(tx, { type: claimed, stream: `thread:${thread}`, thread, source: "workflow:trn-1", payload: { run_id: "trn-1" } }),
 		);
 		await db.withTx((tx) =>
-			append(tx, { type: progressed, stream: "run:trn-1", subject, source: "workflow:trn-1", payload: { summary: "triaging" } }),
+			append(tx, { type: progressed, stream: "run:trn-1", thread, source: "workflow:trn-1", payload: { summary: "triaging" } }),
 		);
 		await db.withTx((tx) =>
-			append(tx, { type: progressed, stream: "run:trn-2", subject: "acme/web#issue-78", source: "workflow:trn-2", payload: { summary: "other" } }),
+			append(tx, {
+				type: progressed,
+				stream: "run:trn-2",
+				thread: "github:acme/web#issue-78",
+				source: "workflow:trn-2",
+				payload: { summary: "other" },
+			}),
 		);
-		const r = startRun(subject);
+		const r = startRun(thread);
 		feed(r, text("Reading the issue.", "m1"));
 		await vi.waitFor(async () => expect((await db.query("select 1 from events where stream = $1", [r.stream])).rows).toHaveLength(2), {
 			timeout: 2000,
@@ -139,7 +148,7 @@ describe("GET /subjects/:owner/:repo/:kind/:number/stream", () => {
 		for (const frame of backlog) expect(frame.id).toMatch(/^\d+-\d+$/);
 
 		feed(r, delta("Draft", "m2"));
-		expect(await stream.next()).toEqual({ event: "live.delta", id: undefined, data: { stream: r.stream, subject, message_id: "m2", text: "Draft" } });
+		expect(await stream.next()).toEqual({ event: "live.delta", id: undefined, data: { stream: r.stream, thread, message_id: "m2", text: "Draft" } });
 		await r.finish(SUMMARY);
 		expect((await stream.next())?.event).toBe("agent_run.finished");
 		await stream.close();
@@ -147,5 +156,20 @@ describe("GET /subjects/:owner/:repo/:kind/:number/stream", () => {
 		const resumed = readSse(await get(path, { "last-event-id": backlog[1]?.id as string }));
 		expect((await resumed.take(3)).map((f) => f.event)).toEqual(["agent_run.started", "assistant.message", "agent_run.finished"]);
 		await resumed.close();
+	});
+
+	it("serves a GitHub issue or pull request at its alias path, the same as at its thread key", async () => {
+		const thread = "github:acme/web#pr-34";
+		await db.withTx((tx) =>
+			append(tx, { type: claimed, stream: `thread:${thread}`, thread, source: "workflow:trn-3", payload: { run_id: "trn-3" } }),
+		);
+		const frames = [];
+		for (const path of [`/threads/${encodeURIComponent(thread)}/stream`, "/threads/github/acme/web/pr/34/stream"]) {
+			const stream = readSse(await get(path));
+			frames.push(await stream.take(1));
+			await stream.close();
+		}
+		expect(frames[0]).toEqual([expect.objectContaining({ event: "test.claimed", data: expect.objectContaining({ thread }) })]);
+		expect(frames[1]).toEqual(frames[0]);
 	});
 });

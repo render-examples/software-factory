@@ -28,7 +28,7 @@ const usage = (cost: number) => ({ input_tokens: 100, output_tokens: 10, cache_r
 const SUMMARY: AgentRunSummary = { outcome: "ok", turns: 1, usage: usage(0.01), costUsd: 0.01 };
 
 function recorder(database = db) {
-	const r = new AgentRunRecorder({ db: database, runId: "trn-1", subject: "acme/web#issue-12" });
+	const r = new AgentRunRecorder({ db: database, runId: "trn-1", thread: "github:acme/web#issue-12" });
 	r.start({ agentId: "triage", harness: "pi", model: "anthropic/claude-opus-5" });
 	return r;
 }
@@ -72,7 +72,7 @@ describe("AgentRunRecorder", () => {
 			["usage", usage(0.01)],
 			["agent_run.finished", { outcome: "ok", turns: 1, usage: usage(0.01), cost_usd: 0.01 }],
 		]);
-		expect(events.every((e) => e.subject === "acme/web#issue-12" && e.source === "workflow:trn-1")).toBe(true);
+		expect(events.every((e) => e.thread === "github:acme/web#issue-12" && e.source === "workflow:trn-1")).toBe(true);
 	});
 
 	it("writes what arrives within 250 ms in one transaction, combining each message's deltas into one notification", async () => {
@@ -82,8 +82,8 @@ describe("AgentRunRecorder", () => {
 		expect(new Set((await logged(r)).map((e) => e.tx)).size).toBe(1);
 		await vi.waitFor(() => expect(notices).toHaveLength(2));
 		expect(notices).toEqual([
-			{ type: "delta", stream: r.stream, subject: "acme/web#issue-12", message_id: "m1", local_seq: 1, part: 0, text: "Hello world" },
-			{ type: "delta", stream: r.stream, subject: "acme/web#issue-12", message_id: "m2", local_seq: 2, part: 0, text: "Other" },
+			{ type: "delta", stream: r.stream, thread: "github:acme/web#issue-12", message_id: "m1", local_seq: 1, part: 0, text: "Hello world" },
+			{ type: "delta", stream: r.stream, thread: "github:acme/web#issue-12", message_id: "m2", local_seq: 2, part: 0, text: "Other" },
 		]);
 
 		feed(r, { type: "assistant_text", at, message_id: "m1", text: "Hello world" });

@@ -1,11 +1,12 @@
 import type { LiveNotice } from "../events/index.js";
+import type { ThreadKey } from "../threads/index.js";
 
 export type Delta = Extract<LiveNotice, { type: "delta" }>;
 
 /** An assistant message still being streamed, with its text so far. */
 export interface PartialMessage {
 	stream: string;
-	subject: string | null;
+	thread: ThreadKey | null;
 	message_id: string;
 	text: string;
 }
@@ -30,7 +31,7 @@ export class LiveCache {
 		if (current && (notice.local_seq < current.localSeq || (notice.local_seq === current.localSeq && notice.part <= current.part))) return null;
 		this.#messages.set(key, {
 			stream: notice.stream,
-			subject: notice.subject,
+			thread: notice.thread,
 			message_id: notice.message_id,
 			text: (current?.text ?? "") + notice.text,
 			localSeq: notice.local_seq,
@@ -41,11 +42,11 @@ export class LiveCache {
 		return notice;
 	}
 
-	/** In-progress messages on a stream or a subject. */
+	/** In-progress messages on a stream or a thread. */
 	partials(key: string): PartialMessage[] {
 		return [...this.#messages.values()]
-			.filter((message) => message.stream === key || message.subject === key)
-			.map(({ stream, subject, message_id, text }) => ({ stream, subject, message_id, text }));
+			.filter((message) => message.stream === key || message.thread === key)
+			.map(({ stream, thread, message_id, text }) => ({ stream, thread, message_id, text }));
 	}
 
 	/** Drops messages whose final was missed, e.g. while the listener was reconnecting. */

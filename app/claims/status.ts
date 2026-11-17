@@ -1,14 +1,10 @@
 import { ClientError, Render } from "@renderinc/sdk";
 import type { z } from "zod";
 import { append, type Db, type NewEvent, type Queryable, VersionConflict } from "../db/index.js";
-import { claimAcquired, claimReleased, type EventSpec, runStopped, subjectKey } from "../events/index.js";
+import { claimAcquired, claimReleased, type EventSpec, runStopped } from "../events/index.js";
 import { type GitHubClient, GitHubError, type RunState, renderMarker } from "../github/index.js";
 import { sandboxClient } from "../sandbox/index.js";
-
-export interface Subject {
-	kind: "issue" | "pr";
-	number: number;
-}
+import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 
 export interface StatusLink {
 	label: string;
@@ -43,12 +39,12 @@ export function workflowRuns(): RunControl {
 	return defaultRuns;
 }
 
-/** An event on task run `runId`'s stream about `subject` (a `subjectKey`), written by task run `by`. */
-export function runEvent<S extends z.ZodType>(type: EventSpec<S>, runId: string, subject: string, payload: z.input<S>, by = runId): NewEvent<S> {
-	return { type, stream: `run:${runId}`, subject, source: `workflow:${by}`, payload };
+/** An event on task run `runId`'s stream about `thread`, written by task run `by`. */
+export function runEvent<S extends z.ZodType>(type: EventSpec<S>, runId: string, thread: ThreadKey, payload: z.input<S>, by = runId): NewEvent<S> {
+	return { type, stream: `run:${runId}`, thread, source: `workflow:${by}`, payload };
 }
 
-/** The trace (root task run) that holds or last held a subject, and its current task run. */
+/** The trace (root task run) that holds or last held a thread, and its current task run. */
 export interface ClaimRecord {
 	traceId: string;
 	runId: string;
@@ -56,10 +52,10 @@ export interface ClaimRecord {
 	streamVersion: number;
 }
 
-export async function readClaim(db: Queryable, subject: string): Promise<ClaimRecord | null> {
+export async function readClaim(db: Queryable, thread: ThreadKey): Promise<ClaimRecord | null> {
 	const { rows } = await db.query<ClaimRecord>(
-		`select trace_id as "traceId", run_id as "runId", state = 'held' as held, stream_version as "streamVersion" from claims where subject = $1`,
-		[subject],
+		`select trace_id as "traceId", run_id as "runId", state = 'held' as held, stream_version as "streamVersion" from claims where thread = $1`,
+		[thread],
 	);
 	return rows[0] ?? null;
 }
@@ -67,25 +63,25 @@ export async function readClaim(db: Queryable, subject: string): Promise<ClaimRe
 const ACQUIRE_ATTEMPTS = 4;
 
 /**
- * Claims `subject` for the run by appending `claim.acquired` at the subject stream's current version: of two runs
+ * Claims `thread` for the run by appending `claim.acquired` at the thread stream's current version: of two runs
  * that read the same claim, only one appends, and the other rereads. A subtask may only continue the trace that
- * holds the claim. Returns the claim it replaced, or null when the run may not claim the subject.
+ * holds the claim. Returns the claim it replaced, or null when the run may not claim the thread.
  */
 export async function acquire(
 	db: Db,
-	run: { subject: string; traceId: string; runId: string; mode: "replace" | "continue" },
+	run: { thread: ThreadKey; traceId: string; runId: string; mode: "replace" | "continue" },
 ): Promise<{ previous: ClaimRecord | null } | null> {
 	for (let attempt = 1; attempt <= ACQUIRE_ATTEMPTS; attempt++) {
 		try {
 			return await db.withTx(async (tx) => {
-				const previous = await readClaim(tx, run.subject);
+				const previous = await readClaim(tx, run.thread);
 				if (run.mode === "continue" && !(previous?.held && previous.traceId === run.traceId)) return null;
 				await append(
 					tx,
 					{
 						type: claimAcquired,
-						stream: `subject:${run.subject}`,
-						subject: run.subject,
+						stream: `thread:${run.thread}`,
+						thread: run.thread,
 						source: `workflow:${run.runId}`,
 						payload: {
 							trace_id: run.traceId,
@@ -106,15 +102,15 @@ export async function acquire(
 	return null;
 }
 
-/** Releases the claim if `traceId` still holds it. A run that claims the subject first wins, and nothing is released. */
-export async function release(db: Db, subject: string, traceId: string, by: string, state: "done" | "failed" | "cancelled"): Promise<void> {
+/** Releases the claim if `traceId` still holds it. A run that claims the thread first wins, and nothing is released. */
+export async function release(db: Db, thread: ThreadKey, traceId: string, by: string, state: "done" | "failed" | "cancelled"): Promise<void> {
 	try {
 		await db.withTx(async (tx) => {
-			const claim = await readClaim(tx, subject);
+			const claim = await readClaim(tx, thread);
 			if (!claim?.held || claim.traceId !== traceId) return;
 			await append(
 				tx,
-				{ type: claimReleased, stream: `subject:${subject}`, subject, source: `workflow:${by}`, payload: { trace_id: traceId, state } },
+				{ type: claimReleased, stream: `thread:${thread}`, thread, source: `workflow:${by}`, payload: { trace_id: traceId, state } },
 				{ expectedVersion: claim.streamVersion },
 			);
 		});
@@ -138,8 +134,8 @@ export interface Stop {
  * active and which task runs were still running.
  */
 export async function stopRun(db: Db, runs: RunControl, traceId: string, stop: Stop): Promise<{ active: boolean; stopped: string[] }> {
-	const { rows } = await db.query<{ runId: string; subject: string; sandboxId: string | null }>(
-		`select run_id as "runId", subject, sandbox_id as "sandboxId" from runs where trace_id = $1 and state = 'running' order by started_at`,
+	const { rows } = await db.query<{ runId: string; thread: ThreadKey; sandboxId: string | null }>(
+		`select run_id as "runId", thread, sandbox_id as "sandboxId" from runs where trace_id = $1 and state = 'running' order by started_at`,
 		[traceId],
 	);
 	if (!rows.length) return { active: false, stopped: [] };
@@ -152,7 +148,7 @@ export async function stopRun(db: Db, runs: RunControl, traceId: string, stop: S
 	const payload = { by: stop.by, outcome: stop.outcome, active, summary: stop.summary(active) };
 	// Oldest first, so the current task run is updated last and the status view shows it.
 	await db.withTx(async (tx) => {
-		for (const row of rows) await append(tx, runEvent(runStopped, row.runId, row.subject, payload, stop.by));
+		for (const row of rows) await append(tx, runEvent(runStopped, row.runId, row.thread, payload, stop.by));
 	});
 	return { active, stopped: rows.map((row) => row.runId) };
 }
@@ -189,57 +185,57 @@ interface StatusView {
 }
 
 /**
- * Renders the status comment from the subject's claim and whichever of its current task run and root was updated
+ * Renders the status comment from the thread's claim and whichever of its current task run and root was updated
  * last, then writes the comment and the working label to GitHub, unless the body equals `shown`, the last one this
  * caller wrote. Returns the body. The comment is a view: nothing reads it back.
  */
-export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, subject: Subject, shown?: string): Promise<string | undefined> {
-	const key = subjectKey(repo, subject);
+export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, thread: GitHubThread, shown?: string): Promise<string | undefined> {
+	const key = githubThread(repo, thread);
 	const { rows } = await db.query<StatusView & { commentId: string | number | null; held: boolean }>(
 		`select c.status_comment_id as "commentId", c.state = 'held' as held, c.trace_id as "traceId",
 		   r.run_id as "runId", r.task, r.title, r.state, r.summary, coalesce(r.links, '[]') as links
 		 from claims c join runs r on r.run_id in (c.run_id, c.trace_id)
-		 where c.subject = $1 order by r.updated_seq desc limit 1`,
+		 where c.thread = $1 order by r.updated_seq desc limit 1`,
 		[key],
 	);
 	const view = rows[0];
 	if (!view) return undefined;
-	const body = statusBody(view, repo, subject);
+	const body = statusBody(view, repo, thread);
 	if (body === shown) return body;
 	// `pg` returns bigint as a string.
 	const commentId = view.commentId === null ? null : Number(view.commentId);
-	const written = await writeComment(gh, subject.number, commentId, body);
-	if (written !== commentId) await db.query("update claims set status_comment_id = $2 where subject = $1", [key, written]);
+	const written = await writeComment(gh, thread.number, commentId, body);
+	if (written !== commentId) await db.query("update claims set status_comment_id = $2 where thread = $1", [key, written]);
 	if (view.held) {
 		await gh.ensureLabel(WORKING_LABEL, "fbca04", "software-factory is working on this");
-		await gh.addLabels(subject.number, [WORKING_LABEL]);
+		await gh.addLabels(thread.number, [WORKING_LABEL]);
 	} else {
-		await gh.removeLabel(subject.number, WORKING_LABEL);
+		await gh.removeLabel(thread.number, WORKING_LABEL);
 	}
 	return body;
 }
 
 /**
- * Shows a rejected run on a subject nothing has claimed, the first time a run is rejected there. A rejected run
+ * Shows a rejected run on a thread nothing has claimed, the first time a run is rejected there. A rejected run
  * never holds the claim, and showing every one would let anyone who can comment make the bot comment.
  */
 export async function showRejection(
 	db: Db,
 	gh: StatusGitHub,
 	repo: string,
-	subject: Subject,
+	thread: GitHubThread,
 	run: { runId: string; task: string; title: string; summary: string },
 ): Promise<void> {
 	const { rows } = await db.query<{ first: boolean }>(
-		`select not exists (select 1 from claims where subject = $1)
-		   and not exists (select 1 from runs where subject = $1 and state = 'rejected' and run_id <> $2) as first`,
-		[subjectKey(repo, subject), run.runId],
+		`select not exists (select 1 from claims where thread = $1)
+		   and not exists (select 1 from runs where thread = $1 and state = 'rejected' and run_id <> $2) as first`,
+		[githubThread(repo, thread), run.runId],
 	);
 	if (!rows[0]?.first) return;
-	await gh.createComment(subject.number, statusBody({ ...run, traceId: run.runId, state: "rejected", links: [] }, repo, subject));
+	await gh.createComment(thread.number, statusBody({ ...run, traceId: run.runId, state: "rejected", links: [] }, repo, thread));
 }
 
-function statusBody(s: StatusView, repo: string, subject: Subject): string {
+function statusBody(s: StatusView, repo: string, thread: GitHubThread): string {
 	const detail = s.summary ? `: ${s.summary}` : "";
 	const line = {
 		running: `**${s.title}** is running${detail}`,
@@ -249,7 +245,7 @@ function statusBody(s: StatusView, repo: string, subject: Subject): string {
 		rejected: `**${s.title}** did not run${detail}`,
 	}[s.state];
 	const links = s.links.map((link) => `- [${link.label}](${link.url})`);
-	const footer = `<sub>run \`${s.runId}\` · events: \`/subjects/${repo}/${subject.kind}/${subject.number}/stream\`</sub>`;
+	const footer = `<sub>run \`${s.runId}\` · events: \`/threads/github/${repo}/${thread.kind}/${thread.number}/stream\`</sub>`;
 	const marker = renderMarker("status", { runId: s.runId, traceId: s.traceId, stage: s.task, title: s.title, state: s.state });
 	return [line, ...(links.length ? ["", ...links] : []), "", footer, "", marker].join("\n");
 }

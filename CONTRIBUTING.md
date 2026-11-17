@@ -74,7 +74,7 @@ Database tests run on PGlite, in-process Postgres, through
 need concurrent transactions or connections run only when `TEST_DATABASE_URL`
 points at a Postgres server where the user can create databases. CI sets it.
 Name those files `*-postgres.test.ts`: Vitest runs them one at a time, since a
-transaction anywhere on the server holds back readers of a subject's events.
+transaction anywhere on the server holds back readers of a thread's events.
 
 ```bash
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npx vitest run --project postgres
@@ -128,7 +128,7 @@ go to the service logs. To add state:
 3. Add a projection to `PROJECTIONS` in `app/db/projections.ts`. Derive its
    rows only from events, so `npm run db:rebuild` can recreate them.
 4. Append inside `withTx` and keep the transaction short: it holds back
-   readers of a subject's events until it ends.
+   readers of a thread's events until it ends.
 
 ## Documentation ownership
 
