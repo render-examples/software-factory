@@ -128,9 +128,6 @@ goes to logs. To add state:
 4. Append inside `withTx` and keep the transaction short: it holds back
    readers of a subject's events until it ends.
 
-Do not move claim ownership into the database. The status comment must remain
-the single source of truth for the run that owns an issue or pull request.
-
 ## Documentation ownership
 
 - `README.md`: product entry point.

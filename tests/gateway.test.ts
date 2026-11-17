@@ -1,9 +1,11 @@
 import { createHmac } from "node:crypto";
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { config, type TaskName } from "../app/config/index.js";
+import { type Db, readStream } from "../app/db/index.js";
 import { TriageInput } from "../app/schemas/tasks.js";
 import { createGateway, type GatewayDeps } from "../app/gateway/index.js";
 import { REPO } from "./fixtures/config.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const SECRET = "webhook-secret";
 
@@ -30,10 +32,16 @@ function webhook(body: string, { event = "issues", delivery = "delivery-1" as st
 
 let startTask: Mock<GatewayDeps["startTask"]>;
 let app: ReturnType<typeof createGateway>;
+let db: Db;
 
-beforeEach(() => {
+beforeAll(async () => {
+	({ db } = await pgliteDb());
+});
+afterAll(() => db.end());
+beforeEach(async () => {
+	await resetDb(db);
 	startTask = vi.fn(async (_task: TaskName, _input: object, _key: string) => ({ id: "trn-123" }));
-	app = createGateway({ startTask, webhookSecret: SECRET });
+	app = createGateway({ startTask, webhookSecret: SECRET, db });
 });
 
 describe("gateway", () => {
@@ -91,6 +99,42 @@ describe("gateway", () => {
 			deliveryId: "delivery-1",
 			error: "render down",
 		});
+		warn.mockRestore();
+	});
+
+	it("records the delivery and where it went before starting the task", async () => {
+		await app.fetch(webhook(JSON.stringify(triagePayload)));
+		expect(await readStream(db, "delivery:delivery-1", 0)).toMatchObject([
+			{
+				type: "delivery.received",
+				subject: `${REPO}#issue-12`,
+				source: "github",
+				payload: { event: "issues", repo: REPO, task: "triage" },
+			},
+		]);
+	});
+
+	it("records an ignored delivery with the reason", async () => {
+		const res = await app.fetch(webhook(JSON.stringify({ zen: "hi" }), { event: "ping", delivery: "delivery-ping" }));
+		expect(await res.json()).toEqual({ ignored: "ping" });
+		expect((await readStream(db, "delivery:delivery-ping", 0))[0]?.payload).toEqual({ event: "ping", ignored: "ping" });
+	});
+
+	it("records a redelivery once and starts its task again, under the same idempotency key", async () => {
+		await app.fetch(webhook(JSON.stringify(triagePayload)));
+		const res = await app.fetch(webhook(JSON.stringify(triagePayload)));
+		expect(res.status).toBe(202);
+		expect(startTask.mock.calls.map(([, , key]) => key)).toEqual(["delivery-1", "delivery-1"]);
+		expect(await readStream(db, "delivery:delivery-1", 0)).toHaveLength(1);
+	});
+
+	it("returns 502 without starting the task when the delivery can't be recorded", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const down: Db = { ...db, withTx: async () => Promise.reject(new Error("connection refused")) };
+		const res = await createGateway({ startTask, webhookSecret: SECRET, db: down }).fetch(webhook(JSON.stringify(triagePayload)));
+		expect(res.status).toBe(502);
+		expect(startTask).not.toHaveBeenCalled();
+		expect(JSON.parse(warn.mock.calls[0]?.[0] as string)).toMatchObject({ msg: "could not record delivery", deliveryId: "delivery-1" });
 		warn.mockRestore();
 	});
 });

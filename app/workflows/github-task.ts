@@ -2,12 +2,14 @@ import { type TaskContext, type TaskDefinition, task as registerTask } from "@re
 import type { z } from "zod";
 import { type Claim, type Outcome, type RunControl, type Subject, type TaskResult, withClaim } from "../claims/index.js";
 import { requireRepo } from "../config/index.js";
+import type { Db } from "../db/index.js";
 import type { GitHubClient } from "../github/index.js";
 
 /** Test seams shared by tasks attached to a GitHub issue or pull request. */
 export interface GitHubTaskDeps {
 	gh?: GitHubClient;
 	runs?: RunControl;
+	db?: Db;
 }
 
 export interface GitHubTaskSpec<Input> {
@@ -40,7 +42,7 @@ export interface GitHubTask<Deps, Data = undefined> {
 /**
  * Defines work attached to one GitHub issue or pull request. Every run validates
  * input, resolves the configured repository, checks the actor's permission, and
- * owns the subject's status comment until it finishes.
+ * claims the subject until it finishes.
  */
 export function defineGitHubTask<Input extends { repo: string; installationId: number; actor: string }, Data, Deps extends GitHubTaskDeps>(
 	spec: GitHubTaskSpec<Input>,
@@ -60,6 +62,7 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 				mode: ctx.metadata.parentTaskRunId ? "continue" : "replace",
 				gh: deps.gh,
 				runs: deps.runs,
+				db: deps.db,
 			},
 			(claim) => work(claim, input, deps, ctx),
 		);

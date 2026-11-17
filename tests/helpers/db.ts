@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { PGlite, type Transaction } from "@electric-sql/pglite";
 import type { QueryResultRow } from "pg";
 import { createDb, type Db, migrate } from "../../app/db/index.js";
+import { PROJECTIONS } from "../../app/db/projections.js";
 
 /** A fresh, migrated, in-memory database. PGlite runs one transaction at a time; concurrency tests use `postgresDatabase`. */
 export async function pgliteDb(): Promise<{ db: Db; pglite: PGlite }> {
@@ -13,6 +14,11 @@ export async function pgliteDb(): Promise<{ db: Db; pglite: PGlite }> {
 	};
 	await migrate(db);
 	return { db, pglite };
+}
+
+/** Empties the log and every projection, so tests sharing a database can reuse task run IDs. */
+export async function resetDb(db: Db): Promise<void> {
+	await db.query(`truncate events, ${PROJECTIONS.map((projection) => projection.table).join(", ")}`);
 }
 
 // `pg` sends a query without values over the simple protocol, which allows several statements; PGlite needs exec for that.

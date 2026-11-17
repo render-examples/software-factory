@@ -76,21 +76,21 @@ Each system owns the state it already manages:
 
 | State | Owner |
 |---|---|
-| Task status, timing, input, and result | Render Workflows |
+| Whether a task process is alive, and its input and result | Render Workflows |
 | Issues, labels, specifications, pull requests, and reviews | GitHub |
-| Current run and Sandbox for an issue or pull request | App-authored status comment |
+| Deliveries, claims, task runs, their outcomes, and their Sandboxes | Postgres event log |
 | Prepared repository filesystem | Render Sandbox snapshot |
-| Run and agent outcomes, usage, and cost | JSON lines in Workflows logs |
+| Agent outcomes, usage, and cost | JSON lines in Workflows logs |
 
-Telemetry is not application state. Nothing reads log events to decide what a
-task may do.
+The status comment on an issue or pull request is a view of the claim and the
+current run, rendered from Postgres. Nothing reads it back. Log lines are
+telemetry: nothing reads them to decide what a task may do.
 
 ### Event log
 
-The `events` table in Postgres (`app/db/`) is append-only. No task writes to
-it yet; the owners above still hold their state. Each event belongs to a
-stream and takes the stream's next version. An append can require the stream
-to be at an expected version, so two writers can't both act on the same
+The `events` table in Postgres (`app/db/`) is append-only. Each event belongs
+to a stream and takes the stream's next version. An append can require the
+stream to be at an expected version, so two writers can't both act on the same
 state. Events about an issue or pull request also record it as their subject.
 Payloads are validated against the types declared in `app/events/catalog.ts`.
 
@@ -106,27 +106,46 @@ Webhook delivery is not exactly once. GitHub can redeliver events, and people
 can apply labels or post comments at the same time. The factory handles this
 at three boundaries:
 
-1. The GitHub delivery ID becomes the Workflows idempotency key.
-2. The status comment names the run that holds the claim on an issue or pull
-   request.
+1. The gateway records each delivery in the log under its GitHub delivery ID,
+   which is also the Workflows idempotency key. If Postgres is unavailable it
+   returns 502, so GitHub marks the delivery failed and it can be redelivered.
+2. The subject stream's version fences claims on an issue or pull request.
 3. Hidden markers identify App-authored specifications, pull requests, and
    reviews so writes can update or reuse them.
 
-For a composed workflow, the status marker records both the root workflow run
-and the current child task. Cancellation stops the root; the child ID still
-identifies the current stage and Sandbox.
+A claim belongs to a trace: the root workflow run. It also names the trace's
+current task run, which is the root or one of its children. A child continues
+its root's claim and may not take over another's. Cancellation stops the root
+and closes the current child.
 
-A new GitHub task run cancels the run named in the status comment, terminates
-its recorded Sandbox, and writes its own run ID to the comment. The run whose
-write remains visible holds the claim. Other runs stop when they next check
-the comment.
+A new GitHub task run appends `claim.acquired` to the subject's stream at the
+version it read, so of two runs that read the same claim only one appends; the
+other rereads and tries again. After its claim commits, it cancels the
+previous trace if Render still has it running, terminates the Sandboxes that
+trace recorded, and records it stopped. Claiming first fences the previous
+run even when cancelling it fails: it stops at its next ownership check.
 
-GitHub tasks check ownership before progress updates and durable writes.
-Publishing also uses a deterministic branch and refuses to overwrite human
-commits.
+GitHub tasks check ownership immediately before progress updates and durable
+writes. The GitHub write happens after the check, outside the transaction, so a
+run can still lose its claim in between. Publishing also uses a deterministic
+branch and refuses to overwrite human commits.
 
-This design keeps coordination beside the GitHub object it controls. Adding a
-database would create a second owner for the same claim.
+Render Workflows decides whether a task process is alive. Render can cancel a
+task without running its `finally`, which leaves its run recorded as running
+and its claim held until the next claim or `/factory cancel` closes it. There
+is no sweeper.
+
+The status comment and `factory:working` are synced from Postgres after each
+claim, progress update, and finish. A GitHub failure while syncing is logged
+and never fails the run; the final sync retries. Editing or deleting the
+comment can't change who owns the subject.
+
+### Upgrading from status-comment claims
+
+Before this release, the status comment was the claim. The upgrade does not
+read old comments: let running factory tasks finish, or cancel them, before
+deploying both services. The first run on each issue or pull request after the
+upgrade posts a new status comment.
 
 ## Sandboxes and snapshots
 
@@ -144,8 +163,8 @@ checkout, and installed dependencies. A GitHub task then:
 8. closes the Sandbox in `finally`.
 
 Render terminates a cancelled task without running `finally`. For that case,
-each GitHub task records its Sandbox ID in the status comment. A replacement
-run or `/factory cancel` terminates the recorded Sandbox. The provider timeout
+each GitHub task records its Sandbox ID in Postgres. A replacement run or
+`/factory cancel` terminates the recorded Sandbox. The provider timeout
 is the final cleanup backstop.
 
 Snapshots avoid reinstalling dependencies on every run. Restored Sandboxes
@@ -245,7 +264,8 @@ Changes must preserve these properties:
 8. Stop automation at a draft pull request and a COMMENT review.
 9. Implement the specification as it existed when approved.
 10. Give every Sandbox a provider timeout and `finally` cleanup. Record a
-    GitHub task's Sandbox so cancellation can terminate it.
+    GitHub task's Sandbox in Postgres before its next ownership check, so
+    cancellation can terminate it.
 11. Create every Sandbox with an egress allow-list built from trusted
     configuration. Only a repository's configured `egress: "allow-all"` lifts it.
 12. Give database credentials only to the gateway and Workflows services.
@@ -270,16 +290,15 @@ Tests pin these invariants and the tool authority of every built-in agent.
 - The gateway's database credential can write factory state, so a compromised
   gateway can forge events. Before the database, it held only the webhook
   secret and the Render API key.
-- Near-simultaneous triggers can both work until one loses the status-comment
-  claim.
+- Near-simultaneous triggers can both work until one fails its next ownership
+  check.
 - Workflows inputs and results are visible to people with service access.
 - Telemetry can include repository names, issue subjects, and errors that
   quote repository output.
 - The filesystem of each deployed Render service is ephemeral. Durable state
   belongs in GitHub, Workflows, Postgres, or Sandbox snapshots.
 - A cancelled snapshot build can leave its builder Sandbox running until the
-  one-hour provider timeout because builders are not recorded in a status
-  comment.
+  one-hour provider timeout because builders are not recorded.
 
 Use a dedicated Render workspace and a spend-capped model key when stronger
 isolation matters.
@@ -297,7 +316,8 @@ Start with:
 2. [`app/workflows/github-task.ts`](../app/workflows/github-task.ts) —
    GitHub task declaration.
 3. [`app/claims/claim.ts`](../app/claims/claim.ts) — permission, ownership,
-   progress, and completion.
+   progress, and completion; [`app/claims/status.ts`](../app/claims/status.ts)
+   — claims, stopping runs, and the status comment view.
 4. [`app/workflows/triage/index.ts`](../app/workflows/triage/index.ts) — one
    complete GitHub task.
 5. [`app/workflows/autopilot/index.ts`](../app/workflows/autopilot/index.ts) —

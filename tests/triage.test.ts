@@ -1,13 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FactoryEvent } from "../app/events/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../app/db/index.js";
 import { REPO } from "./fixtures/config.js";
-
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
+import { holdClaim, runRow } from "./helpers/claims.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
@@ -183,7 +178,7 @@ function setup(steps: Record<string, Step[]>, files = ["src/theme.ts", "package.
 	});
 	const runner = fakeRunner(steps);
 	const runs = { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {}, terminateSandbox: async () => {} };
-	const deps = { gh: gh.asClient(), runs, openSandbox, runAgent: runner.run };
+	const deps = { gh: gh.asClient(), runs, db, openSandbox, runAgent: runner.run };
 	return { gh, sandbox, opened, openSandbox, calls: runner.calls, deps };
 }
 
@@ -191,11 +186,22 @@ function specComment(gh: FakeGitHub, s: Spec, version: number, login = BOT, note
 	return gh.add(login, `## Specification v${version}\n\n${renderMarker("spec", { spec: s, hash: contentHash(s), version, notes })}`);
 }
 
-const finished = () => events.find((e) => e.type === "run.finished");
+/** Wraps the agent runner so a newer run claims the issue as soon as `agentId` returns. */
+function loseClaimAfter(deps: { runAgent: AgentRunner }, agentId: string): void {
+	const run = deps.runAgent;
+	deps.runAgent = (async (...args: Parameters<AgentRunner>) => {
+		const result = await run(...args);
+		if (args[0].id === agentId) await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
+		return result;
+	}) as AgentRunner;
+}
 
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
+beforeEach(() => resetDb(db));
 
 describe("triage task", () => {
 	it("asks questions in a marked comment, from a sandbox at the base branch", async () => {
@@ -224,7 +230,7 @@ describe("triage task", () => {
 		expect(gh.status()).toContain(`(${questions?.htmlUrl})`);
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(sandbox.closed).toBe(1);
-		expect(finished()?.payload).toMatchObject({ outcome: "asked" });
+		expect(await runRow(db, "trn-triage")).toMatchObject({ state: "done", outcome: "asked" });
 	});
 
 	it("updates the same questions comment on the next round and shows the earlier questions as the factory's", async () => {
@@ -363,5 +369,24 @@ describe("triage task", () => {
 		expect(gh.written()).toEqual([]);
 		expect(gh.status()).toContain("**Triage** failed: the spec failed validation twice");
 		expect(sandbox.closed).toBe(1);
+	});
+
+	it("posts no questions once a newer run claims the issue", async () => {
+		const { gh, deps } = setup({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
+		loseClaimAfter(deps, "triage");
+
+		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(gh.written()).toEqual([]);
+	});
+
+	it("neither revises the spec nor removes its approval once a newer run claims the issue", async () => {
+		const { gh, deps } = setup({ triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] });
+		const original = specComment(gh, spec(), 1);
+		gh.labels.add(APPROVED);
+		loseClaimAfter(deps, "spec-writer");
+
+		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(gh.written().map((c) => c.body)).toEqual([original.body]);
+		expect(gh.labels.has(APPROVED)).toBe(true);
 	});
 });

@@ -29,9 +29,11 @@ software-factory deploys two processes:
 - `app/entrypoints/workflows.ts` registers and runs tasks.
 
 Agents run inside Render Sandboxes. Only code in the Workflows service writes
-to GitHub. GitHub and Render Workflows hold application state. Postgres holds
-an append-only event log (`app/db/`); only the two services connect to it, and
-both apply its migrations at startup.
+to GitHub. Postgres holds factory state as an append-only event log
+(`app/db/`), including who owns each issue or pull request; only the two
+services connect to it, and both apply its migrations at startup. GitHub holds
+issues, specifications, pull requests, and reviews, and Render Workflows holds
+task execution. The status comment is a view and is never read back.
 
 Two dependency rules are mandatory:
 

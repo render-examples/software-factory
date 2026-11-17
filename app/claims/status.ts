@@ -1,6 +1,8 @@
 import { ClientError, Render } from "@renderinc/sdk";
-import { emit } from "../events/index.js";
-import { findMarkedComment, type GitHubClient, type IssueComment, type RunState, renderMarker, type StatusMarker } from "../github/index.js";
+import type { z } from "zod";
+import { append, type Db, type NewEvent, type Queryable, VersionConflict } from "../db/index.js";
+import { claimAcquired, claimReleased, type EventSpec, runStopped, subjectKey } from "../events/index.js";
+import { type GitHubClient, GitHubError, type RunState, renderMarker } from "../github/index.js";
 import { sandboxClient } from "../sandbox/index.js";
 
 export interface Subject {
@@ -13,13 +15,10 @@ export interface StatusLink {
 	url: string;
 }
 
-/** On the issue or PR while a GitHub task runs. */
+/** On the issue or PR while a trace holds its claim. */
 export const WORKING_LABEL = "factory:working";
 
-export type StatusGitHub = Pick<
-	GitHubClient,
-	"botLogin" | "listIssueComments" | "createComment" | "updateComment" | "ensureLabel" | "addLabels" | "removeLabel"
->;
+export type StatusGitHub = Pick<GitHubClient, "createComment" | "updateComment" | "ensureLabel" | "addLabels" | "removeLabel">;
 
 /** The Render calls that stop a previous run, injectable for tests. */
 export interface RunControl {
@@ -48,54 +47,118 @@ export function subjectName(subject: Subject): string {
 	return `${subject.kind}#${subject.number}`;
 }
 
-/** The bot's status comment on the issue or PR, and the run it records. */
-export async function readStatus(gh: StatusGitHub, number: number): Promise<{ comment: IssueComment; data: StatusMarker } | null> {
-	return findMarkedComment(await gh.listIssueComments(number), "status", await gh.botLogin());
+/** An event on task run `runId`'s stream about `subject` (a `subjectKey`), written by task run `by`. */
+export function runEvent<S extends z.ZodType>(type: EventSpec<S>, runId: string, subject: string, payload: z.input<S>, by = runId): NewEvent<S> {
+	return { type, stream: `run:${runId}`, subject, source: `workflow:${by}`, payload };
 }
 
-/** Who stops a run and why, for the `run.finished` event recorded on the stopped run's behalf. */
-export interface StopContext {
-	/** "owner/name" */
-	repo: string;
-	/** "issue#12" or "pr#34" */
-	subject: string;
+/** The trace (root task run) that holds or last held a subject, and its current task run. */
+export interface ClaimRecord {
+	traceId: string;
+	runId: string;
+	held: boolean;
+	streamVersion: number;
+}
+
+export async function readClaim(db: Queryable, subject: string): Promise<ClaimRecord | null> {
+	const { rows } = await db.query<ClaimRecord>(
+		`select trace_id as "traceId", run_id as "runId", state = 'held' as held, stream_version as "streamVersion" from claims where subject = $1`,
+		[subject],
+	);
+	return rows[0] ?? null;
+}
+
+const ACQUIRE_ATTEMPTS = 4;
+
+/**
+ * Claims `subject` for the run by appending `claim.acquired` at the subject stream's current version: of two runs
+ * that read the same claim, only one appends, and the other rereads. A subtask may only continue the trace that
+ * holds the claim. Returns the claim it replaced, or null when the run may not claim the subject.
+ */
+export async function acquire(
+	db: Db,
+	run: { subject: string; traceId: string; runId: string; mode: "replace" | "continue" },
+): Promise<{ previous: ClaimRecord | null } | null> {
+	for (let attempt = 1; attempt <= ACQUIRE_ATTEMPTS; attempt++) {
+		try {
+			return await db.withTx(async (tx) => {
+				const previous = await readClaim(tx, run.subject);
+				if (run.mode === "continue" && !(previous?.held && previous.traceId === run.traceId)) return null;
+				await append(
+					tx,
+					{
+						type: claimAcquired,
+						stream: `subject:${run.subject}`,
+						subject: run.subject,
+						source: `workflow:${run.runId}`,
+						payload: {
+							trace_id: run.traceId,
+							run_id: run.runId,
+							previous_trace_id: previous?.traceId ?? null,
+							previous_run_id: previous?.runId ?? null,
+						},
+					},
+					{ expectedVersion: previous?.streamVersion ?? 0 },
+				);
+				return { previous };
+			});
+		} catch (error) {
+			if (!(error instanceof VersionConflict)) throw error;
+		}
+	}
+	// Newer claims won every attempt.
+	return null;
+}
+
+/** Releases the claim if `traceId` still holds it. A run that claims the subject first wins, and nothing is released. */
+export async function release(db: Db, subject: string, traceId: string, by: string, state: "done" | "failed" | "cancelled"): Promise<void> {
+	try {
+		await db.withTx(async (tx) => {
+			const claim = await readClaim(tx, subject);
+			if (!claim?.held || claim.traceId !== traceId) return;
+			await append(
+				tx,
+				{ type: claimReleased, stream: `subject:${subject}`, subject, source: `workflow:${by}`, payload: { trace_id: traceId, state } },
+				{ expectedVersion: claim.streamVersion },
+			);
+		});
+	} catch (error) {
+		if (!(error instanceof VersionConflict)) throw error;
+	}
+}
+
+export interface Stop {
 	/** The task run doing the stopping. */
 	by: string;
 	outcome: "superseded" | "cancelled";
+	/** What the stopped runs' status says, given whether Render still had the trace running. */
+	summary(active: boolean): string;
 }
 
 /**
- * Stops the run a status marker records: cancels it if it's still active, then terminates the sandbox it recorded.
- * Render kills a cancelled task without running its `finally`, so the sandbox would otherwise live until its
- * timeout, and the run never records how it ended; this records `run.finished` for it. Returns whether the run
- * was still active.
+ * Stops a trace: cancels its root run if Render still has it active, terminates the Sandboxes its running task runs
+ * recorded, and records those runs stopped. Render kills a cancelled task without running its `finally`, so its
+ * Sandbox would otherwise live until its timeout and its runs would stay `running`. Returns whether the root was
+ * active and which task runs were still running.
  */
-export async function stopRun(runs: RunControl, status: StatusMarker, context: StopContext): Promise<boolean> {
-	const rootRunId = status.traceId ?? status.runId;
-	const active = await isRunActive(runs, rootRunId);
-	if (active) {
-		await cancelActiveRun(runs, rootRunId);
-		const { repo, subject, by, outcome } = context;
-		if (status.state === "running") {
-			const payload = { stage: status.stage, state: "cancelled", outcome, stoppedBy: by };
-			emit({ traceId: rootRunId, runId: status.runId, repo, subject, type: "run.finished", payload });
-		}
-		if (rootRunId !== status.runId) {
-			emit({
-				traceId: rootRunId,
-				runId: rootRunId,
-				repo,
-				subject,
-				type: "run.finished",
-				payload: { stage: status.rootStage ?? "workflow", state: "cancelled", outcome, stoppedBy: by, currentRunId: status.runId },
-			});
-		}
+export async function stopRun(db: Db, runs: RunControl, traceId: string, stop: Stop): Promise<{ active: boolean; stopped: string[] }> {
+	const { rows } = await db.query<{ runId: string; subject: string; sandboxId: string | null }>(
+		`select run_id as "runId", subject, sandbox_id as "sandboxId" from runs where trace_id = $1 and state = 'running' order by started_at`,
+		[traceId],
+	);
+	if (!rows.length) return { active: false, stopped: [] };
+	const active = await isRunActive(runs, traceId);
+	if (active) await cancelActiveRun(runs, traceId);
+	for (const { sandboxId } of rows) {
+		if (sandboxId)
+			await runs.terminateSandbox(sandboxId).catch((error) => warn("could not terminate the stopped run's sandbox", error, { sandboxId }));
 	}
-	if (status.state === "running" && status.sandboxId) {
-		const { sandboxId } = status;
-		await runs.terminateSandbox(sandboxId).catch((error) => warn("could not terminate the stopped run's sandbox", error, { sandboxId }));
-	}
-	return active;
+	const payload = { by: stop.by, outcome: stop.outcome, active, summary: stop.summary(active) };
+	// Oldest first, so the current task run is updated last and the status view shows it.
+	await db.withTx(async (tx) => {
+		for (const row of rows) await append(tx, runEvent(runStopped, row.runId, row.subject, payload, stop.by));
+	});
+	return { active, stopped: rows.map((row) => row.runId) };
 }
 
 /** Whether a task run is pending or running. A confirmed 404 is finished; unknown state fails closed. */
@@ -119,134 +182,95 @@ async function cancelActiveRun(runs: RunControl, taskRunId: string): Promise<voi
 	}
 }
 
-/**
- * Claims the issue or PR for this run: stops the run the status comment names, then rewrites the comment to name
- * this run. The comment is the claim, so the caller must confirm it still names this run before relying on it.
- */
-export async function takeOver(opts: {
-	gh: StatusGitHub;
-	/** "owner/name" */
-	repo: string;
-	subject: Subject;
-	task: string;
-	title: string;
+interface StatusView {
 	traceId: string;
 	runId: string;
-	/** A subtask may continue only the root workflow that already owns the subject. */
-	mode?: "replace" | "continue";
-	runs?: RunControl;
-}): Promise<{ acquired: boolean; commentId: number | null; previousRunId: string | null; cancelledPrevious: boolean }> {
-	const { gh, repo, subject, task, title, traceId, runId, mode = "replace" } = opts;
-	const current = await readStatus(gh, subject.number);
-	const currentTraceId = current ? (current.data.traceId ?? current.data.runId) : null;
-	if (mode === "continue" && currentTraceId !== traceId) {
-		return { acquired: false, commentId: current?.comment.id ?? null, previousRunId: current?.data.runId ?? null, cancelledPrevious: false };
-	}
-	const previous = current && current.data.runId !== runId ? current.data : null;
-	const stop = { repo, subject: subjectName(subject), by: runId, outcome: "superseded" } as const;
-	const previousTraceId = previous ? (previous.traceId ?? previous.runId) : null;
-	const cancelledPrevious = previous && previousTraceId !== traceId ? await stopRun(opts.runs ?? workflowRuns(), previous, stop) : false;
-	const rootStage = currentTraceId === traceId ? (current?.data.rootStage ?? current?.data.stage ?? task) : task;
-	const body = statusBody({ task, title, traceId, rootStage, runId, state: "running" });
-	const comment = current ? await gh.updateComment(current.comment.id, body) : await gh.createComment(subject.number, body);
-	await addWorkingLabel(gh, subject.number);
-	return { acquired: true, commentId: comment.id, previousRunId: previous?.runId ?? null, cancelledPrevious };
-}
-
-export interface StatusUpdate {
-	gh: StatusGitHub;
-	number: number;
-	runId: string;
-	/** Root Workflows run. Differs from runId when this task is a subtask. */
-	traceId?: string;
-	/** Registered name of the root task. */
-	rootStage?: string;
-	/** The task's registered name. */
 	task: string;
-	/** The task's name in the comment, such as "PR Reviewer". */
 	title: string;
 	state: RunState;
-	summary?: string;
-	links?: StatusLink[];
-	/** The run's open sandbox, recorded while it's running so a run that stops this one can terminate it. */
-	sandboxId?: string;
+	summary: string | null;
+	links: StatusLink[];
 }
 
 /**
- * Updates the status comment. Never overwrites a newer run's status, and a rejected trigger never overwrites a
- * real run's record. Returns whether it wrote.
+ * Renders the status comment from the subject's claim and whichever of its current task run and root was updated
+ * last, then writes the comment and the working label to GitHub, unless the body equals `shown`, the last one this
+ * caller wrote. Returns the body. The comment is a view: nothing reads it back.
  */
-export async function setStatus(update: StatusUpdate): Promise<boolean> {
-	const current = await readStatus(update.gh, update.number);
-	if (!current) {
-		await update.gh.createComment(update.number, statusBody(update));
-		return true;
+export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, subject: Subject, shown?: string): Promise<string | undefined> {
+	const key = subjectKey(repo, subject);
+	const { rows } = await db.query<StatusView & { commentId: string | number | null; held: boolean }>(
+		`select c.status_comment_id as "commentId", c.state = 'held' as held, c.trace_id as "traceId",
+		   r.run_id as "runId", r.task, r.title, r.state, r.summary, coalesce(r.links, '[]') as links
+		 from claims c join runs r on r.run_id in (c.run_id, c.trace_id)
+		 where c.subject = $1 order by r.updated_seq desc limit 1`,
+		[key],
+	);
+	const view = rows[0];
+	if (!view) return undefined;
+	const body = statusBody(view, repo, subject);
+	if (body === shown) return body;
+	// `pg` returns bigint as a string.
+	const commentId = view.commentId === null ? null : Number(view.commentId);
+	const written = await writeComment(gh, subject.number, commentId, body);
+	if (written !== commentId) await db.query("update claims set status_comment_id = $2 where subject = $1", [key, written]);
+	if (view.held) {
+		await gh.ensureLabel(WORKING_LABEL, "fbca04", "software-factory is working on this");
+		await gh.addLabels(subject.number, [WORKING_LABEL]);
+	} else {
+		await gh.removeLabel(subject.number, WORKING_LABEL);
 	}
-	const ours = current.data.runId === update.runId;
-	if (!ours && (current.data.state === "running" || (update.state === "rejected" && current.data.state !== "rejected"))) {
-		return false;
-	}
-	const currentTraceId = current.data.traceId ?? current.data.runId;
-	const rootStage = update.rootStage ?? (currentTraceId === update.traceId ? current.data.rootStage : undefined);
-	await update.gh.updateComment(current.comment.id, statusBody({ ...update, rootStage }));
-	return true;
+	return body;
 }
 
-/** Records a terminal state and removes the working label. */
-export async function finishStatus(
-	update: StatusUpdate & { state: Exclude<RunState, "running"> },
-	opts: { rootFinished?: boolean } = {},
-): Promise<boolean> {
-	const wrote = await setStatus(update);
-	const isRoot = !update.traceId || update.traceId === update.runId;
-	if (wrote && (isRoot || opts.rootFinished)) await removeWorkingLabel(update.gh, update.number);
-	return wrote;
+/**
+ * Shows a rejected run on a subject nothing has claimed, the first time a run is rejected there. A rejected run
+ * never holds the claim, and showing every one would let anyone who can comment make the bot comment.
+ */
+export async function showRejection(
+	db: Db,
+	gh: StatusGitHub,
+	repo: string,
+	subject: Subject,
+	run: { runId: string; task: string; title: string; summary: string },
+): Promise<void> {
+	const { rows } = await db.query<{ first: boolean }>(
+		`select not exists (select 1 from claims where subject = $1)
+		   and not exists (select 1 from runs where subject = $1 and state = 'rejected' and run_id <> $2) as first`,
+		[subjectKey(repo, subject), run.runId],
+	);
+	if (!rows[0]?.first) return;
+	await gh.createComment(subject.number, statusBody({ ...run, traceId: run.runId, state: "rejected", links: [] }, repo, subject));
 }
 
-function statusBody(s: Omit<StatusUpdate, "gh" | "number">): string {
+function statusBody(s: StatusView, repo: string, subject: Subject): string {
 	const detail = s.summary ? `: ${s.summary}` : "";
 	const line = {
-		running: `**${s.title}** is running (run \`${s.runId}\`)${detail}`,
+		running: `**${s.title}** is running${detail}`,
 		done: `**${s.title}** finished${detail}`,
 		failed: `**${s.title}** failed${detail}`,
 		cancelled: `**${s.title}** was cancelled${detail}`,
 		rejected: `**${s.title}** did not run${detail}`,
 	}[s.state];
-	const links = (s.links ?? []).map((link) => `- [${link.label}](${link.url})`);
-	const footer = s.state === "running" ? [] : [`<sub>run \`${s.runId}\`</sub>`];
-	const sandboxId = s.state === "running" ? s.sandboxId : undefined;
-	const marker = renderMarker("status", {
-		runId: s.runId,
-		traceId: s.traceId,
-		rootStage: s.rootStage,
-		stage: s.task,
-		title: s.title,
-		state: s.state,
-		at: new Date().toISOString(),
-		sandboxId,
-	});
-	return [line, ...(links.length ? ["", ...links] : []), ...(footer.length ? ["", ...footer] : []), "", marker].join("\n");
+	const links = s.links.map((link) => `- [${link.label}](${link.url})`);
+	const footer = `<sub>run \`${s.runId}\` · events: \`/subjects/${repo}/${subject.kind}/${subject.number}/stream\`</sub>`;
+	const marker = renderMarker("status", { runId: s.runId, traceId: s.traceId, stage: s.task, title: s.title, state: s.state });
+	return [line, ...(links.length ? ["", ...links] : []), "", footer, "", marker].join("\n");
 }
 
-/** Labels are cosmetic: failures are logged, never fail a run. */
-async function addWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
-	try {
-		await gh.ensureLabel(WORKING_LABEL, "fbca04", "software-factory is working on this");
-		await gh.addLabels(number, [WORKING_LABEL]);
-	} catch (error) {
-		warn("could not add working label", error, { number });
+/** Updates the status comment, or creates it when there is none or someone deleted it. Returns its ID. */
+async function writeComment(gh: StatusGitHub, number: number, commentId: number | null, body: string): Promise<number> {
+	if (commentId !== null) {
+		try {
+			return (await gh.updateComment(commentId, body)).id;
+		} catch (error) {
+			if (!(error instanceof GitHubError && error.status === 404)) throw error;
+		}
 	}
+	return (await gh.createComment(number, body)).id;
 }
 
-async function removeWorkingLabel(gh: StatusGitHub, number: number): Promise<void> {
-	try {
-		await gh.removeLabel(number, WORKING_LABEL);
-	} catch (error) {
-		warn("could not remove working label", error, { number });
-	}
-}
-
-function warn(msg: string, error: unknown, fields: Record<string, unknown>): void {
+export function warn(msg: string, error: unknown, fields: Record<string, unknown>): void {
 	const message = error instanceof Error ? error.message : String(error);
 	console.error(JSON.stringify({ level: "warn", msg, ...fields, error: message }));
 }

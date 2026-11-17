@@ -1,13 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FactoryEvent } from "../app/events/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
-
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
+import { holdClaim, runRow } from "./helpers/claims.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const { AgentError } = await import("../app/agents/index.js");
 const { config } = await import("../app/config/index.js");
@@ -195,6 +190,7 @@ function setup(
 	const deps: SpecToPrDeps = {
 		gh: github.gh as unknown as GitHubClient,
 		runs: { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {}, terminateSandbox: async () => {} },
+		db,
 		gitData: git,
 		openSandbox,
 		runAgent: agents.runAgent,
@@ -206,11 +202,15 @@ function setup(
 }
 
 const verifyCommands = (execs: Array<{ command: string }>) => execs.filter((e) => !e.command.startsWith("git status")).map((e) => e.command);
-const finished = () => events.find((e) => e.type === "run.finished")?.payload as Record<string, unknown>;
+const finished = () => runRow(db, "trn-spec");
+const loseClaim = () => holdClaim(db, REPO, { kind: "issue", number: ISSUE }, { traceId: "trn-newer" });
 
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
+beforeEach(() => resetDb(db));
 
 describe("approval", () => {
 	it("refuses when there is no spec comment, before opening a sandbox", async () => {
@@ -271,7 +271,7 @@ describe("implement, verify, and publish", () => {
 		expect(impl?.message).toContain("GET /health returns 200");
 		expect(impl?.message).toContain(`## Verify commands\n\n- \`${BUILD_COMMAND}\`\n- \`${TEST_COMMAND}\``);
 		expect(impl?.opts).toMatchObject({ sandbox: t.sandbox, traceId: "trn-spec" });
-		expect(finished()).toMatchObject({ outcome: "pr_opened" });
+		expect(await finished()).toMatchObject({ state: "done", outcome: "pr_opened" });
 
 		expect(t.execs.filter((e) => !e.command.startsWith("git status"))).toEqual([
 			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: expect.any(Number) } },
@@ -339,7 +339,7 @@ describe("implement, verify, and publish", () => {
 		expect(t.gh.ensurePull).not.toHaveBeenCalled();
 		expect(t.status().body).toContain(`\`${TEST_COMMAND}\` (exit 1)`);
 		expect(t.status().body).not.toContain("SECRET-LOOKING");
-		expect(finished()).toMatchObject({ state: "failed" });
+		expect(await finished()).toMatchObject({ state: "failed", outcome: "verification_failed" });
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 });
@@ -352,5 +352,29 @@ describe("rerunning on an existing branch", () => {
 		expect(t.publish).not.toHaveBeenCalled();
 		expect(t.status().body).toContain(`\`${BRANCH}\` has commits the factory didn't make`);
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
+	});
+});
+
+describe("losing the claim", () => {
+	it("does not move the branch once a newer run claims the issue", async () => {
+		const t = setup();
+		vi.mocked(t.runAgent as NonNullable<SpecToPrDeps["runAgent"]>).mockImplementationOnce(async () => {
+			await loseClaim();
+			return { output: implementation(), costUsd: 0, usage: {}, turns: 1 } as never;
+		});
+		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(t.publish).not.toHaveBeenCalled();
+		expect(t.gh.ensurePull).not.toHaveBeenCalled();
+	});
+
+	it("does not open the pull request once a newer run claims the issue", async () => {
+		const t = setup();
+		t.publish.mockImplementationOnce(async () => {
+			await loseClaim();
+			return PUBLISHED;
+		});
+		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(t.publish).toHaveBeenCalledOnce();
+		expect(t.gh.ensurePull).not.toHaveBeenCalled();
 	});
 });

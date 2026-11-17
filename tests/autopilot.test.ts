@@ -1,25 +1,17 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskResult } from "../app/claims/index.js";
-import type { FactoryEvent } from "../app/events/index.js";
+import { config } from "../app/config/index.js";
+import type { Db } from "../app/db/index.js";
 import type { GitHubClient, IssueComment } from "../app/github/index.js";
-import { renderMarker } from "../app/github/index.js";
-import type { SpecToPrHandoff } from "../app/workflows/spec-to-pr/index.js";
+import { runAutopilot } from "../app/workflows/autopilot/index.js";
+import { prReviewWorkflow } from "../app/workflows/pr-review/index.js";
+import { type SpecToPrHandoff, specToPrWorkflow } from "../app/workflows/spec-to-pr/index.js";
+import { triageWorkflow } from "../app/workflows/triage/index.js";
 import type { TriageHandoff } from "../app/workflows/triage/spec.js";
 import { REPO } from "./fixtures/config.js";
-
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
-
-const { config } = await import("../app/config/index.js");
-const { runAutopilot } = await import("../app/workflows/autopilot/index.js");
-const { triageWorkflow } = await import("../app/workflows/triage/index.js");
-const { specToPrWorkflow } = await import("../app/workflows/spec-to-pr/index.js");
-const { prReviewWorkflow } = await import("../app/workflows/pr-review/index.js");
+import { holdClaim, runRow } from "./helpers/claims.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const SPEC_HASH = "b".repeat(64);
 
@@ -85,19 +77,16 @@ class FakeGitHub {
 	removeLabel = async (number: number, label: string) => {
 		this.labels.get(number)?.delete(label);
 	};
-
-	replaceOwner(traceId: string) {
-		const comment = this.comments[0];
-		if (!comment) throw new Error("status comment does not exist");
-		comment.body = renderMarker("status", { runId: `${traceId}-child`, traceId, stage: "triage", title: "Triage", state: "running" });
-	}
 }
 
 const asClient = (gh: FakeGitHub) => gh as unknown as GitHubClient;
 
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
+beforeEach(() => resetDb(db));
 
 describe("autopilot", () => {
 	it("runs the registered GitHub task definitions as Workflows children", async () => {
@@ -127,7 +116,7 @@ describe("autopilot", () => {
 			},
 		} as unknown as Pick<TaskContext, "metadata" | "run">;
 
-		const output = await runAutopilot(workflowCtx, input, { gh: asClient(gh) });
+		const output = await runAutopilot(workflowCtx, input, { gh: asClient(gh), db });
 		expect(names).toEqual(["triage", "spec-to-pr", "pr-review"]);
 		expect(output.outcome).toBe("completed");
 	});
@@ -137,6 +126,7 @@ describe("autopilot", () => {
 		const order: string[] = [];
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
+			db,
 			triage: async () => {
 				order.push("triage");
 				return result<TriageHandoff>("trn-triage", "drafted", {
@@ -165,9 +155,7 @@ describe("autopilot", () => {
 			["pr-review", "trn-review"],
 		]);
 		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(events).toContainEqual(
-			expect.objectContaining({ type: "run.finished", payload: expect.objectContaining({ stage: "autopilot", outcome: "completed" }) }),
-		);
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "done", outcome: "completed" });
 	});
 
 	it("keeps the autopilot label while Triage waits for answers", async () => {
@@ -178,6 +166,7 @@ describe("autopilot", () => {
 			{ ...input, commentId: 99 },
 			{
 				gh: asClient(gh),
+				db,
 				triage: async (stageInput) => {
 					expect(stageInput.commentId).toBe(99);
 					return result("trn-triage", "asked", { summary: "asked one question." });
@@ -191,11 +180,27 @@ describe("autopilot", () => {
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
+	it("does not put the autopilot label back after a newer run claims the issue", async () => {
+		const gh = new FakeGitHub();
+		const output = await runAutopilot(ctx, input, {
+			gh: asClient(gh),
+			db,
+			triage: async () => {
+				await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
+				return result("trn-triage", "asked", { summary: "asked one question." });
+			},
+		});
+
+		expect(output).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
+	});
+
 	it("stops after a terminal stage result and removes the autopilot label", async () => {
 		const gh = new FakeGitHub();
 		const prReview = vi.fn();
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
+			db,
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "unchanged", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 2 },
@@ -214,8 +219,9 @@ describe("autopilot", () => {
 		const specToPr = vi.fn();
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
+			db,
 			triage: async () => {
-				gh.replaceOwner("trn-new-autopilot");
+				await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
 				return result("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." });
 			},
 			specToPr,
@@ -231,6 +237,7 @@ describe("autopilot", () => {
 		const prReview = vi.fn();
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
+			db,
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "drafted", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 },
@@ -250,13 +257,14 @@ describe("autopilot", () => {
 		await expect(
 			runAutopilot(ctx, input, {
 				gh: asClient(gh),
+				db,
 				triage: async () => {
 					throw new Error("task transport failed");
 				},
 			}),
 		).rejects.toThrow("task transport failed");
 		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(events).toContainEqual(expect.objectContaining({ type: "run.finished", payload: expect.objectContaining({ outcome: "error" }) }));
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "failed", outcome: "error" });
 	});
 });
 

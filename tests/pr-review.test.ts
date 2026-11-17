@@ -1,13 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FactoryEvent } from "../app/events/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
-
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
+import { holdClaim, runRow } from "./helpers/claims.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
 
 const { AgentError } = await import("../app/agents/index.js");
 const { GitHubError, parseMarker, renderMarker } = await import("../app/github/index.js");
@@ -248,6 +243,7 @@ const deps = (extra: Partial<PrReviewDeps> = {}): PrReviewDeps => ({
 		cancelTaskRun: async () => {},
 		terminateSandbox: async () => {},
 	},
+	db,
 	openSandbox: async (_repo, ref) => {
 		opened.push(ref);
 		return sandbox;
@@ -256,8 +252,14 @@ const deps = (extra: Partial<PrReviewDeps> = {}): PrReviewDeps => ({
 	...extra,
 });
 
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
+});
+afterAll(() => db.end());
+
+beforeEach(async () => {
+	await resetDb(db);
 	gh = new FakeGitHub();
 	sandbox = new FakeSandbox();
 	agents = new FakeAgents();
@@ -397,20 +399,29 @@ describe("runPrReview", () => {
 	});
 
 	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {
-		await gh.createComment(
-			12,
-			renderMarker("status", {
-				runId: "trn-root",
-				traceId: "trn-root",
-				rootStage: "autopilot",
-				stage: "autopilot",
-				title: "Autopilot",
-				state: "running",
-			}),
-		);
+		await holdClaim(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
 		const result = await runPrReview(childCtx, { ...input, workflowIssue: 12 }, deps());
 		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
 		expect(gh.statusNumbers).toEqual([12]);
+		expect(await runRow(db, "trn-run")).toMatchObject({ sandbox_id: "sbx-pr" });
+	});
+
+	it("posts no review once a newer run claims the pull request", async () => {
+		const review = agents.run;
+		const result = await runPrReview(
+			ctx,
+			input,
+			deps({
+				runAgent: (async (...args: Parameters<RunAgent>) => {
+					const output = await review(...args);
+					await holdClaim(db, REPO, { kind: "pr", number: 34 }, { traceId: "trn-newer" });
+					return output;
+				}) as RunAgent,
+			}),
+		);
+		expect(result).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(gh.createReview).not.toHaveBeenCalled();
+		expect(sandbox.closed).toBe(1);
 	});
 
 	it("rejects workflowIssue on a directly started PR Reviewer task", async () => {

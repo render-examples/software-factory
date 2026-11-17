@@ -16,6 +16,7 @@ if (applied.length) console.log(`applied migrations: ${applied.join(", ")}`);
 
 const app = createGateway({
 	webhookSecret,
+	db,
 	async startTask(task, input, idempotencyKey) {
 		const run = await render.workflows.startTask(`${workflowSlug}/${task}`, [input], { idempotencyKey });
 		return { id: run.taskRunId };

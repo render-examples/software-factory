@@ -383,10 +383,10 @@ The smoke test passes when:
   and
 - the status comment shows the final outcome or a useful failure.
 
-Optionally confirm that the Workflows logs contain `run.finished`:
+Optionally confirm in `factory-db` that the run was recorded:
 
-```bash
-render logs -r <factory-workflows-id> --text run.finished
+```sql
+select task, state, outcome from runs order by started_at desc limit 1;
 ```
 
 ## Optional: Run the full pipeline
@@ -468,7 +468,9 @@ Open the App's **Advanced** settings and inspect **Recent Deliveries**.
 - `401`: GitHub and `factory-gateway` have different webhook secrets.
 - `422`: inspect the gateway log entry
   `authenticated delivery produced an invalid task input`.
-- `502`: inspect `could not start task`; then check `RENDER_API_KEY`,
+- `502` with `could not record delivery`: the gateway can't reach Postgres;
+  check `DATABASE_URL` on `factory-gateway` and the `factory-db` status.
+- `502` with `could not start task`: check `RENDER_API_KEY`,
   `RENDER_WORKFLOW_SLUG`, and the Workflows deployment.
 - `200` with `{"ignored":"<reason>"}`: the event did not start a task. Common
   reasons are `unconfigured repo`, `unhandled label`, `issue not in triage`,

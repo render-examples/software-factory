@@ -1,15 +1,17 @@
 import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
+import type { NewEvent } from "../db/index.js";
+import { deliveryReceived, subjectKey } from "../events/index.js";
 import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
 
 export type Route =
 	| {
 			kind: "start";
 			task: TaskName;
-			/** Already validated with the task's input schema. */
-			input: object;
+			/** Already validated with the task's input schema; every one names the repository. */
+			input: { repo: string };
 			idempotencyKey: string;
-			/** "issue#12" or "pr#34", for the delivery event. */
+			/** "owner/name#issue-12" or "owner/name#pr-34", for the delivery event. */
 			subject?: string;
 	  }
 	| { kind: "ignore"; reason: string }
@@ -75,10 +77,11 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 
 	const base = { repo: repo.fullName, installationId: repo.installationId };
 	const actor = sender?.login ?? "";
+	const on = (kind: "issue" | "pr", number: number) => subjectKey(repo.fullName, { kind, number });
 	const start = (task: TaskName, schema: ZodType, input: Record<string, unknown>, subject?: string, idempotencyKey = deliveryId): Route => {
 		const parsed = schema.safeParse({ ...base, ...input });
 		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, subject };
-		return { kind: "start", task, input: parsed.data as object, idempotencyKey, subject };
+		return { kind: "start", task, input: parsed.data as { repo: string }, idempotencyKey, subject };
 	};
 
 	switch (event) {
@@ -88,7 +91,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (!parsed.success) return ignore("malformed payload");
 			const { label, issue } = parsed.data;
 			if (isPullRequest(issue)) return ignore("pull request");
-			const subject = `issue#${issue.number}`;
+			const subject = on("issue", issue.number);
 			if (label?.name === config.labels.triage) {
 				return start(TASKS.triage, TriageInput, { issue: issue.number, actor }, subject);
 			}
@@ -114,7 +117,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const { label, pull_request: pr } = parsed.data;
 			if (label?.name !== config.labels.prReview) return ignore("unhandled label");
 			if (pr.state !== "open") return ignore("pull request not open");
-			return start(TASKS.prReview, PrReviewInput, { pr: pr.number, headSha: pr.head.sha, actor }, `pr#${pr.number}`);
+			return start(TASKS.prReview, PrReviewInput, { pr: pr.number, headSha: pr.head.sha, actor }, on("pr", pr.number));
 		}
 
 		case "issue_comment": {
@@ -123,7 +126,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			if (!parsed.success) return ignore("malformed payload");
 			const { issue, comment } = parsed.data;
 			const isPr = isPullRequest(issue);
-			const subject = `${isPr ? "pr" : "issue"}#${issue.number}`;
+			const subject = on(isPr ? "pr" : "issue", issue.number);
 			const firstLine = (comment.body ?? "").split(/\r?\n/, 1)[0]?.trim();
 			if (firstLine === `${config.commandPrefix} cancel`) {
 				return start(TASKS.cancel, CancelInput, { number: issue.number, kind: isPr ? "pr" : "issue", actor }, subject);
@@ -149,4 +152,16 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 		default:
 			return ignore("unhandled event");
 	}
+}
+
+/** The `delivery.received` event the gateway appends before acting on a delivery. */
+export function deliveryEvent(deliveryId: string, event: string, decision: Route): NewEvent<typeof deliveryReceived.payload> {
+	const payload =
+		decision.kind === "ignore"
+			? { event, ignored: decision.reason }
+			: decision.kind === "invalid"
+				? { event, task: decision.task, ignored: "invalid task input" }
+				: { event, repo: decision.input.repo, task: decision.task };
+	const subject = decision.kind === "ignore" ? undefined : decision.subject;
+	return { type: deliveryReceived, stream: `delivery:${deliveryId}`, subject, source: "github", payload, idempotencyKey: deliveryId };
 }

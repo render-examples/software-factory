@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import type { TaskName } from "../config/index.js";
+import { append, type Db } from "../db/index.js";
 import { readBody } from "./body.js";
-import { route } from "./routes.js";
+import { deliveryEvent, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
 
 export interface GatewayDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	webhookSecret: string;
+	/** Records every authenticated delivery before the gateway acts on it. */
+	db: Db;
 }
 
 /**
@@ -46,6 +49,13 @@ export function createGateway(deps: GatewayDeps): Hono {
 		}
 
 		const decision = route(event, payload, deliveryId);
+		try {
+			// A redelivery is already recorded and appends nothing, but still starts its task: the first attempt may have failed.
+			await deps.db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
+		} catch (error) {
+			warn("could not record delivery", { deliveryId, event, error: error instanceof Error ? error.message : String(error) });
+			return c.json({ error: "could not record delivery" }, 502);
+		}
 		if (decision.kind === "ignore") return c.json({ ignored: decision.reason });
 
 		if (decision.kind === "invalid") {

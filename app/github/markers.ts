@@ -10,20 +10,15 @@ import type { IssueComment } from "./types.js";
 export const RUN_STATES = ["running", "done", "failed", "cancelled", "rejected"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
+/** Written on the status comment for people and tools that read it. The factory never reads it back: ownership is in Postgres. */
 const StatusMarker = z.object({
 	runId: z.string().min(1),
 	/** Root Workflows run. Differs from runId when this task is a subtask. */
 	traceId: z.string().min(1).optional(),
-	/** Registered name of the root task, for cancellation telemetry. */
-	rootStage: z.string().min(1).optional(),
 	stage: z.string().min(1),
-	/** The task's name as the comment shows it. Comments written before it existed lack it. */
+	/** The task's name as the comment shows it. */
 	title: z.string().min(1).optional(),
 	state: z.enum(RUN_STATES),
-	/** ISO 8601 */
-	at: z.string().optional(),
-	/** The running run's sandbox, so the run that stops it can terminate it. */
-	sandboxId: z.string().min(1).optional(),
 });
 
 const SpecMarker = z.object({
@@ -49,7 +44,6 @@ const SCHEMAS = { status: StatusMarker, spec: SpecMarker, questions: QuestionsMa
 
 export type MarkerKind = keyof typeof SCHEMAS;
 export type MarkerData = { [K in MarkerKind]: z.infer<(typeof SCHEMAS)[K]> };
-export type StatusMarker = MarkerData["status"];
 export type SpecMarker = MarkerData["spec"];
 
 /** GitHub caps a comment at 65,536 characters; the marker leaves room for the readable part. */
