@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { Harness } from "../harness/types.js";
+import type { Harness } from "../harness/index.js";
 import type { ToolName } from "../runner/core/protocol.js";
 import { outputSchemaProblem } from "../runner/core/submit.js";
 

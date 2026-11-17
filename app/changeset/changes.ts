@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { SHA } from "../util/index.js";
 
-const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = "0".repeat(40);
 const RAW_HEADER = /^:(\d{6}) (\d{6}) ([0-9a-f]{40}) ([0-9a-f]{40}) ([ADMT])$/;
 const MAGIC = "software-factory-changes 1";

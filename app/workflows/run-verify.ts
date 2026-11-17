@@ -1,5 +1,6 @@
 import type { VerifyResult } from "../format/index.js";
 import type { Sandbox } from "../sandbox/index.js";
+import { errorMessage } from "../util/index.js";
 
 const COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
 /** How much of a command's output an agent sees. */
@@ -23,7 +24,7 @@ export async function runVerify(sandbox: Sandbox, commands: readonly string[]): 
 			const output = [res.stdout.trimEnd(), res.stderr.trimEnd()].filter(Boolean).join("\n");
 			runs.push({ command, passed: res.exitCode === 0, exitCode: res.exitCode, output: tail(output), durationMs: Date.now() - started });
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorMessage(err);
 			runs.push({ command, passed: false, exitCode: null, output: tail(`The command did not finish: ${message}`), durationMs: Date.now() - started });
 		}
 	}

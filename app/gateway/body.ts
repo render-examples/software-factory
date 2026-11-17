@@ -1,10 +1,10 @@
 const MAX_BODY_BYTES = 256 * 1024;
 
-/** Reads the body with a hard cap. Returns null when exceeded. */
-export async function readBody(request: Request, maxBytes = MAX_BODY_BYTES): Promise<string | null> {
+/** Reads the raw body bytes with a hard cap. Returns null when exceeded. */
+export async function readBody(request: Request, maxBytes = MAX_BODY_BYTES): Promise<Buffer | null> {
 	const declared = Number(request.headers.get("content-length"));
 	if (Number.isFinite(declared) && declared > maxBytes) return null;
-	if (!request.body) return "";
+	if (!request.body) return Buffer.alloc(0);
 
 	const reader = request.body.getReader();
 	const chunks: Buffer[] = [];
@@ -21,5 +21,5 @@ export async function readBody(request: Request, maxBytes = MAX_BODY_BYTES): Pro
 		chunks.push(Buffer.from(value));
 	}
 
-	return Buffer.concat(chunks, total).toString("utf8");
+	return Buffer.concat(chunks, total);
 }

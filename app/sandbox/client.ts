@@ -2,7 +2,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ClientError, Render, ServerError } from "@renderinc/sdk";
 import type { SandboxesClient, SandboxUploadContentType } from "@renderinc/sdk/experimental";
 import { requireEnv } from "../config/index.js";
-import { errorMessage, log } from "./shell.js";
+import { errorMessage } from "../util/index.js";
+import { log } from "./shell.js";
 import type { ExecResult, ExecStreamOptions } from "./types.js";
 
 /** The subset of the SDK's SandboxesClient used here; tests substitute a fake. */

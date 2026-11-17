@@ -1,5 +1,7 @@
 /** Terminal output for the setup scripts and doctor: colors, check lines, and secret redaction. */
 
+export { errorMessage } from "../../app/util/index.js";
+
 const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
 
 function paint(code: string, text: string): string {
@@ -101,8 +103,4 @@ export class Reporter {
 	private clean(text: string): string {
 		return redact(text, this.secrets);
 	}
-}
-
-export function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

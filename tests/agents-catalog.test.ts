@@ -13,7 +13,9 @@ describe("agent registry", () => {
 	it("keeps host-only code out of the sandbox runner bundle", { timeout: 60_000 }, async () => {
 		const app = (await bundleInputs()).filter((path) => !path.includes("node_modules/"));
 		const hostOnly = app.filter(
-			(path) => /^app\/(github|sandbox|workflows|runs|gateway|events|db|config|entrypoints)\//.test(path) || path === "app/agents/run.ts",
+			(path) =>
+				/^app\/(github|sandbox|workflows|runs|gateway|events|db|config|entrypoints)\//.test(path) ||
+				["app/agents/run.ts", "app/runner/index.ts", "app/runner/bundle.ts"].includes(path),
 		);
 		expect(hostOnly).toEqual([]);
 		expect(app).toContain("app/agents/registry.ts");

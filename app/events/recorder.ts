@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { appendMany, type Db, MAX_PAYLOAD_BYTES, type NewEvent, type Tx } from "../db/index.js";
-import { errorMessage } from "../runner/core/emit.js";
-import type { RunnerEvent, Usage } from "../runner/core/protocol.js";
+import type { RunnerEvent, Usage } from "../runner/index.js";
 import { ThreadKey } from "../threads/index.js";
+import { errorMessage } from "../util/index.js";
 import {
 	agentRunFinished,
 	agentRunStarted,

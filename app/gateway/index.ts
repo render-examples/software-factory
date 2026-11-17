@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { TaskName } from "../config/index.js";
 import { append, type Db } from "../db/index.js";
+import { errorMessage } from "../util/index.js";
 import { readBody } from "./body.js";
 import { type Decision, deliveryEvent, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
@@ -52,7 +53,7 @@ export function createGateway(deps: GatewayDeps): Hono {
 
 		let payload: unknown;
 		try {
-			payload = JSON.parse(body);
+			payload = JSON.parse(body.toString("utf8"));
 		} catch {
 			return c.json({ error: "invalid json" }, 400);
 		}
@@ -64,7 +65,7 @@ export function createGateway(deps: GatewayDeps): Hono {
 			// A redelivery is already recorded and appends nothing, but still starts its task: the first attempt may have failed.
 			await deps.db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
 		} catch (error) {
-			warn("could not record delivery", { deliveryId, event, error: error instanceof Error ? error.message : String(error) });
+			warn("could not record delivery", { deliveryId, event, error: errorMessage(error) });
 			return c.json({ error: "could not record delivery" }, 502);
 		}
 		if (decision.kind === "ignore") return c.json({ ignored: decision.reason });
@@ -80,7 +81,7 @@ export function createGateway(deps: GatewayDeps): Hono {
 			const run = await deps.startTask(task, input, idempotencyKey);
 			return c.json({ runId: run.id, task }, 202);
 		} catch (error) {
-			warn("could not start task", { deliveryId, event, task, thread, error: error instanceof Error ? error.message : String(error) });
+			warn("could not start task", { deliveryId, event, task, thread, error: errorMessage(error) });
 			// A 5xx marks the delivery failed in GitHub, where it can be redelivered by hand.
 			return c.json({ error: "could not start task", task }, 502);
 		}

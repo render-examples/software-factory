@@ -328,10 +328,10 @@ are untrusted.
 
 ### Gateway
 
-The gateway verifies the webhook signature before parsing the body. It holds
-no GitHub credential and runs no model or repository code. It holds the
-database credential. It serves event streams only to requests that present
-`EVENTS_READ_TOKEN`, compared in constant time.
+The gateway verifies the webhook signature over the raw body bytes before
+decoding or parsing them. It holds no GitHub credential and runs no model or
+repository code. It holds the database credential. It serves event streams
+only to requests that present `EVENTS_READ_TOKEN`, compared in constant time.
 
 ### Workflows host
 
@@ -362,7 +362,8 @@ the allow-list reduce exposure; they do not make untrusted code safe.
 
 Changes must preserve these properties:
 
-1. Verify a webhook signature before parsing its body.
+1. Verify a webhook signature over its raw bytes before decoding or parsing
+   its body.
 2. Check the triggering actor's current repository permission for every
    GitHub task run before it starts on its thread.
 3. Let only code in the Workflows service write to GitHub.

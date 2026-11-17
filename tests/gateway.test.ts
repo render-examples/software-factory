@@ -38,9 +38,12 @@ async function finishRun(runId: string, outcome: string, waiting?: "reply"): Pro
 	await db.withTx((tx) => append(tx, runEvent(runFinished, runId, githubThread(REPO, ISSUE), finished)));
 }
 
-const sign = (body: string, secret = SECRET) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+const sign = (body: string | Buffer, secret = SECRET) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 
-function webhook(body: string, { event = "issues", delivery = "delivery-1" as string | null, signature = sign(body) } = {}): Request {
+function webhook(
+	body: string | Buffer<ArrayBuffer>,
+	{ event = "issues", delivery = "delivery-1" as string | null, signature = sign(body) } = {},
+): Request {
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 		"x-github-event": event,
@@ -89,6 +92,18 @@ describe("gateway", () => {
 		expect(parse).not.toHaveBeenCalled();
 		parse.mockRestore();
 		expect(startTask).not.toHaveBeenCalled();
+	});
+
+	it("verifies the signature over the raw body bytes, not their UTF-8 decoding", async () => {
+		const [head, tail] = JSON.stringify({ ...triagePayload, note: "@@" }).split("@@");
+		const body = Buffer.concat([Buffer.from(head), Buffer.from([0xc3, 0x28, 0xff]), Buffer.from(tail)]);
+		const decoded = await app.fetch(webhook(body, { signature: sign(body.toString("utf8")) }));
+		expect(decoded.status).toBe(401);
+		expect(startTask).not.toHaveBeenCalled();
+
+		const res = await app.fetch(webhook(body));
+		expect(res.status).toBe(202);
+		expect(startTask).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects webhook bodies over 256 KB before starting work", async () => {

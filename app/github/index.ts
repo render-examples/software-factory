@@ -1,4 +1,4 @@
-export type { GitHubTokenOptions } from "./auth.js";
+export { appJwt, githubApiUrl, githubToken, type GitHubTokenOptions, normalizePrivateKey } from "./auth.js";
 export { GitHubClient, type GitHubForOptions, githubFor } from "./client.js";
 export {
 	contentHash,

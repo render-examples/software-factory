@@ -53,5 +53,3 @@ const TRUNCATED = "…[truncated]";
 export function previewText(text: string): string {
 	return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS - TRUNCATED.length) + TRUNCATED : text;
 }
-
-export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));

@@ -1,5 +1,5 @@
 import type { SandboxNetworkPolicy } from "@renderinc/sdk/experimental";
-import { AGENTS } from "../agents/registry.js";
+import { AGENTS } from "../agents/index.js";
 import { assertEgressHosts, type RepoContext } from "../config/index.js";
 
 /** Clone and fetch reach GitHub over HTTPS. */

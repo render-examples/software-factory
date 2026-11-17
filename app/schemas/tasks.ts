@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SHA } from "../util/index.js";
 
 /** Every task input names its repository and the App installation to act through. */
 const RepoInput = z.object({
@@ -45,7 +46,7 @@ export const SpecToPrInput = RepoInput.extend({
 
 export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
-	headSha: z.string().regex(/^[0-9a-f]{40}$/),
+	headSha: z.string().regex(SHA),
 	actor: ActorLogin,
 	/** The issue whose thread a factory pull request shares; the run starts there instead of on the pull request. */
 	issue: z.number().int().positive().optional(),
@@ -59,7 +60,7 @@ export const CancelInput = RepoInput.extend({
 });
 
 export const RefreshSnapshotInput = RepoInput.extend({
-	sha: z.string().regex(/^[0-9a-f]{40}$/),
+	sha: z.string().regex(SHA),
 });
 
 export type TriageInput = z.infer<typeof TriageInput>;

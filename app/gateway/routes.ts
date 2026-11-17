@@ -4,6 +4,7 @@ import type { NewEvent } from "../db/index.js";
 import { deliveryReceived } from "../events/index.js";
 import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
 import { type GitHubThread, githubThread, parseGitHubThread, type ThreadKey } from "../threads/index.js";
+import { SHA } from "../util/index.js";
 
 /** What a delivery does. */
 export type Decision =
@@ -70,7 +71,6 @@ const PushEvent = z.object({
 	deleted: z.boolean().default(false),
 });
 
-const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = "0".repeat(40);
 
 const ignore = (reason: string): Decision => ({ kind: "ignore", reason });

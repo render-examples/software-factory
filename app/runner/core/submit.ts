@@ -1,5 +1,6 @@
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
+import { errorMessage } from "../../util/index.js";
 
 export const SUBMIT_TOOL = "submit";
 export const MAX_SUBMIT_ATTEMPTS = 3;
@@ -19,7 +20,7 @@ export function outputSchemaProblem(schema: JsonOutputSchema): string | undefine
 	try {
 		Value.Check(schema as TSchema, {});
 	} catch (err) {
-		return `output_schema is not a usable JSON Schema: ${err instanceof Error ? err.message : String(err)}`;
+		return `output_schema is not a usable JSON Schema: ${errorMessage(err)}`;
 	}
 	return undefined;
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { SHA } from "../util/index.js";
 import type { IssueComment } from "./types.js";
 
 /**
@@ -36,7 +37,7 @@ const QuestionsMarker = z.object({
 });
 
 const ReviewMarker = z.object({
-	headSha: z.string().regex(/^[0-9a-f]{40}$/),
+	headSha: z.string().regex(SHA),
 	runId: z.string().min(1),
 });
 

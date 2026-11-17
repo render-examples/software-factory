@@ -10,6 +10,8 @@ import { type AgentRunner, triageAgents } from "./agents.js";
 import { draftSpec, publishSpec, type TriageHandoff } from "./spec.js";
 import { readThread, specWriterMessage, triageMessage } from "./thread.js";
 
+export type { TriageHandoff };
+
 /** Test seams; production uses the real GitHub client, sandboxes, and runAgent. */
 export interface TriageDeps extends GitHubTaskDeps {
 	openSandbox?: (repo: RepoContext, ref: SandboxRef) => Promise<Sandbox>;

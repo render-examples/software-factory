@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";
-import { githubApiUrl } from "../app/github/auth.js";
+import { githubApiUrl } from "../app/github/index.js";
 import { writeEnvFile } from "./lib/env-file.js";
 import { githubWebUrl } from "./lib/github.js";
 import { buildManifest, exchangeManifestCode, formPage, newState, registrationUrl, startCallbackServer } from "./lib/manifest.js";

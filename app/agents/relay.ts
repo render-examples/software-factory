@@ -1,7 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { errorMessage } from "../runner/core/emit.js";
-import { shq } from "../sandbox/shell.js";
-import type { ExecStreamOptions, Sandbox } from "../sandbox/types.js";
+import { type ExecStreamOptions, type Sandbox, shq } from "../sandbox/index.js";
+import { errorMessage } from "../util/index.js";
 
 const RETRY_MS = 5_000;
 /** The follow command's status while run-agent.sh has yet to write `<runDir>.pid` or create `<runDir>.jsonl`. */

@@ -5,8 +5,7 @@ import { AutopilotInput, type PrReviewInput, type SpecToPrInput, type TriageInpu
 import { defineGitHubTask, type GitHubTaskContext, type GitHubTaskDeps } from "../github-task.js";
 import { prReviewWorkflow } from "../pr-review/index.js";
 import { type SpecToPrHandoff, specToPrWorkflow } from "../spec-to-pr/index.js";
-import { triageWorkflow } from "../triage/index.js";
-import type { TriageHandoff } from "../triage/spec.js";
+import { type TriageHandoff, triageWorkflow } from "../triage/index.js";
 
 const TIMEOUT_SECONDS = 8 * 60 * 60;
 

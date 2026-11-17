@@ -1,7 +1,6 @@
 /** doctor: read-only checks of one or both services' environment, the database, the GitHub App, and Workflows tasks. */
 import { z } from "zod";
-import type { Agent } from "../../app/agents/define.js";
-import { AGENTS } from "../../app/agents/registry.js";
+import { type Agent, AGENTS } from "../../app/agents/index.js";
 import { TASKS } from "../../app/config/index.js";
 import { checkDatabase, type DatabaseDeps } from "./database.js";
 import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } from "./github.js";

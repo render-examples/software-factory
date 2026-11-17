@@ -92,6 +92,8 @@ export async function githubToken(opts: GitHubTokenOptions): Promise<string> {
 	const result = (await response.json()) as { token?: string; expires_at?: string };
 	const expiresAt = Date.parse(result.expires_at ?? "");
 	if (!result.token || Number.isNaN(expiresAt)) throw new Error("GitHub App token exchange returned no token or expiry");
+	const now = Date.now();
+	for (const [k, entry] of tokenCache) if (entry.expiresAt - REFRESH_MARGIN_MS <= now) tokenCache.delete(k);
 	tokenCache.set(key, { token: result.token, expiresAt });
 	return result.token;
 }

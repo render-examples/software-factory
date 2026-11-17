@@ -1,9 +1,10 @@
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { errorMessage } from "../../util/index.js";
 import { createFactoryTools, type FactoryTool } from "../tools/index.js";
 import type { DriverContext, DriverSession, SubmitTool } from "./driver.js";
 import { InvalidInput } from "./driver.js";
-import { errorMessage, previewText } from "./emit.js";
+import { previewText } from "./emit.js";
 import type { HarnessRun, HarnessRuntime } from "./harness.js";
 import { RUNNER_EXIT, type RunnerErrorCode } from "./protocol.js";
 import { SUBMIT_ACCEPTED, SUBMIT_DUPLICATE, SUBMIT_TOOL, Submission, submitDescription, submitParameters } from "./submit.js";

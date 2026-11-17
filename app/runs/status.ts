@@ -1,6 +1,7 @@
 import type { Db } from "../db/index.js";
 import { type GitHubClient, GitHubError, type RunState, renderMarker } from "../github/index.js";
 import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
+import { errorMessage } from "../util/index.js";
 
 export interface StatusLink {
 	label: string;
@@ -122,6 +123,5 @@ async function writeComment(gh: StatusGitHub, number: number, commentId: number 
 }
 
 export function warn(msg: string, error: unknown, fields: Record<string, unknown>): void {
-	const message = error instanceof Error ? error.message : String(error);
-	console.error(JSON.stringify({ level: "warn", msg, ...fields, error: message }));
+	console.error(JSON.stringify({ level: "warn", msg, ...fields, error: errorMessage(error) }));
 }

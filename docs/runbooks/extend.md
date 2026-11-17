@@ -358,8 +358,8 @@ Before handing off, confirm:
 - the new agent has the minimum tools it needs;
 - model output cannot select an external write target;
 - the gateway still imports no GitHub auth, Sandbox, agent, or workflow code;
-- the runner bundle (`app/runner/`, `app/harness/`, agent definitions, and
-  schemas) still imports no host-only code;
+- the runner bundle (`app/runner/`, `app/harness/`, agent definitions,
+  schemas, and `app/util/`) still imports no host-only code;
 - GitHub tasks record their Sandbox before running an agent;
 - tests cover the user-visible success and important failures; and
 - documentation and setup requirements changed when the App contract changed.

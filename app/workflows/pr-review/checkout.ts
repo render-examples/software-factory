@@ -2,6 +2,7 @@ import type { RepoContext } from "../../config/index.js";
 import type { PullRequest } from "../../github/index.js";
 import { ExpectedFailure } from "../../runs/index.js";
 import { type OpenedSandbox, type Sandbox, type SandboxRef, shq, withSandbox } from "../../sandbox/index.js";
+import { SHA } from "../../util/index.js";
 
 export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
 
@@ -28,7 +29,7 @@ export function headMoved(): ExpectedFailure {
 export async function mergeBase(sandbox: Sandbox, baseBranch: string): Promise<string> {
 	const res = await sandbox.exec(`git merge-base ${shq(`refs/remotes/origin/${baseBranch}`)} HEAD`, { asRunner: true });
 	const sha = res.stdout.trim();
-	if (res.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(sha)) {
+	if (res.exitCode !== 0 || !SHA.test(sha)) {
 		throw new ExpectedFailure(`couldn't find where this PR branched from \`${baseBranch}\`, so there's no diff to review.`, "no_merge_base");
 	}
 	return sha;

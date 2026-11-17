@@ -9,11 +9,12 @@ import { ClientError, SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxSnapshot } from "@renderinc/sdk/experimental";
 import { create as createTar } from "tar";
 import type { RepoContext } from "../config/index.js";
-import { githubToken } from "../github/auth.js";
-import { bundleRunner } from "../runner/bundle.js";
+import { githubToken } from "../github/index.js";
+import { bundleRunner } from "../runner/index.js";
+import { errorMessage, SHA } from "../util/index.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
 import { builderEgress, egressHint } from "./egress.js";
-import { errorMessage, log, SAFE_REF, shq } from "./shell.js";
+import { log, SAFE_REF, shq } from "./shell.js";
 import { APP_DIR, REPO_DIR, RUN_AS, SANDBOX_ROOT, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
 import { verifySandbox } from "./verify.js";
 
@@ -88,7 +89,7 @@ export function credentialFile(token: string): string {
 
 /** Builds the repository's named snapshot at `sha` and prunes older ones, keeping the newest two. */
 export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sha: string, deps: SnapshotDeps = {}): Promise<BuiltSnapshot> {
-	if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`refusing to build ${repo.fullName} at ${JSON.stringify(sha)}: not a commit SHA`);
+	if (!SHA.test(sha)) throw new Error(`refusing to build ${repo.fullName} at ${JSON.stringify(sha)}: not a commit SHA`);
 	const branch = repo.config.baseBranch;
 	if (!SAFE_REF.test(branch)) throw new Error(`${repo.fullName}: unsupported base branch ${JSON.stringify(branch)}`);
 	const name = snapshotName(repo);

@@ -3,9 +3,10 @@ import { SandboxSnapshotNotFoundError, SandboxSnapshotNotReadyError } from "@ren
 import type { SandboxNetworkPolicy } from "@renderinc/sdk/experimental";
 import { z } from "zod";
 import { config, type RepoContext } from "../config/index.js";
+import { errorMessage, SHA } from "../util/index.js";
 import { type SandboxClient, sandboxClient } from "./client.js";
 import { egressHint, taskEgress } from "./egress.js";
-import { errorMessage, log, SAFE_REF } from "./shell.js";
+import { log, SAFE_REF } from "./shell.js";
 import {
 	asRunner,
 	type BuiltSnapshot,
@@ -26,7 +27,7 @@ import { verifySandbox } from "./verify.js";
 const SnapshotManifestSchema = z.object({
 	repo: z.string(),
 	baseBranch: z.string(),
-	sha: z.string().regex(/^[0-9a-f]{40}$/),
+	sha: z.string().regex(SHA),
 	lockfileHash: z.string(),
 	install: z.string().nullable(),
 	createdAt: z.string(),
@@ -116,7 +117,7 @@ function checkRef(ref: SandboxRef): void {
 	if (ref.kind === "branch" && !SAFE_REF.test(ref.name)) throw new Error(`unsupported branch name ${JSON.stringify(ref.name)}`);
 	if (ref.kind === "pull") {
 		if (!Number.isInteger(ref.number) || ref.number <= 0) throw new Error(`invalid pull request number ${ref.number}`);
-		if (!/^[0-9a-f]{40}$/.test(ref.headSha)) throw new Error(`invalid head SHA ${JSON.stringify(ref.headSha)}`);
+		if (!SHA.test(ref.headSha)) throw new Error(`invalid head SHA ${JSON.stringify(ref.headSha)}`);
 		if (ref.baseBranch !== undefined && !SAFE_REF.test(ref.baseBranch)) {
 			throw new Error(`unsupported base branch name ${JSON.stringify(ref.baseBranch)}`);
 		}
@@ -185,7 +186,7 @@ async function fetchRef(client: SandboxClient, id: string, repo: RepoContext, re
 	if (fetchError) throw fetchError;
 
 	const fetched = (await client.check(id, asRunner("git", "rev-parse", "FETCH_HEAD^{commit}"), quick)).trim();
-	if (!/^[0-9a-f]{40}$/.test(fetched)) throw new Error(`fetching ${source} gave ${JSON.stringify(fetched.slice(0, 100))}`);
+	if (!SHA.test(fetched)) throw new Error(`fetching ${source} gave ${JSON.stringify(fetched.slice(0, 100))}`);
 	if (ref.kind === "pull" && fetched !== ref.headSha) {
 		throw new Error(`head moved: ${repo.fullName}#${ref.number} is at ${fetched}, expected ${ref.headSha}`);
 	}

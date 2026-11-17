@@ -1,9 +1,7 @@
 /** GitHub App access for the setup scripts and doctor, from injected env and fetch rather than process globals. */
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
-import { appJwt, githubApiUrl, normalizePrivateKey } from "../../app/github/auth.js";
-import { GitHubHttp } from "../../app/github/request.js";
-import { GitHubError } from "../../app/github/types.js";
+import { appJwt, GitHubError, GitHubHttp, githubApiUrl, normalizePrivateKey } from "../../app/github/index.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 

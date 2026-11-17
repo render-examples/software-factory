@@ -1,9 +1,8 @@
 import type { RepoContext } from "../config/index.js";
+import { SHA } from "../util/index.js";
 import { githubToken } from "./auth.js";
 import { encodePath, GitHubHttp } from "./request.js";
 import { GitHubError } from "./types.js";
-
-const SHA = /^[0-9a-f]{40}$/;
 
 export type FileMode = "100644" | "100755";
 

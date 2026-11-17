@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { config, type RepoContext } from "../config/index.js";
 import { type GitDataClient, GitHubError, type GitIdentity, gitData as gitDataClient, type TreeEntry } from "../github/index.js";
-import { SAFE_REF, shq } from "../sandbox/shell.js";
-import { APP_DIR, REPO_DIR, type Sandbox } from "../sandbox/types.js";
+import { APP_DIR, REPO_DIR, SAFE_REF, type Sandbox, shq } from "../sandbox/index.js";
+import { SHA } from "../util/index.js";
 import { type ChangedFile, checkChanges, type PublishLimits, parseChangesFile, type RefusalReason } from "./changes.js";
 
 export { blobSha, type ChangedFile, type RefusalReason } from "./changes.js";
@@ -15,7 +15,6 @@ const DEFAULT_IDENTITY = {
 	email: "software-factory[bot]@users.noreply.github.com",
 } as const;
 
-const SHA = /^[0-9a-f]{40}$/;
 const COLLECT_TIMEOUT_MS = 10 * 60 * 1000;
 /** Slack per changed file in the output file for its diff record, size line, and blob header (paths cap at 4096). */
 const PER_FILE_OVERHEAD = 4096 + 300;

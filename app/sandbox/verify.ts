@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { errorMessage } from "../util/index.js";
 import type { SandboxClient } from "./client.js";
-import { errorMessage } from "./shell.js";
 import { APP_DIR } from "./types.js";
 
 const SandboxInfo = z.object({

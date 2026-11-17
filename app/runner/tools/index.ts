@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
+import { errorMessage } from "../../util/index.js";
 import type { ToolName } from "../core/protocol.js";
 import { rejectReason } from "./shell-policy.js";
 
@@ -99,7 +100,7 @@ export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
 				const result = await tool.execute(`factory-${++nextCallId}`, args, signal);
 				return { text: contentText(result.content), isError: result.isError === true };
 			} catch (err) {
-				return { text: err instanceof Error ? err.message : String(err), isError: true };
+				return { text: errorMessage(err), isError: true };
 			}
 		},
 	}));
