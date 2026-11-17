@@ -1,4 +1,5 @@
 import pg from "pg";
+import { requireEnv } from "../config/index.js";
 
 /** A connection or an open transaction. */
 export interface Queryable {
@@ -40,4 +41,12 @@ export function createDb(connectionString: string, max: number): Db {
 		},
 		end: () => pool.end(),
 	};
+}
+
+let workflows: Db | undefined;
+
+/** The Workflows process's pool, configured from DATABASE_URL on first use. Tasks take it as an injectable default. */
+export function workflowsDb(): Db {
+	workflows ??= createDb(requireEnv("DATABASE_URL"), 3);
+	return workflows;
 }
