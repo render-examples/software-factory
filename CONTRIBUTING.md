@@ -116,8 +116,8 @@ and architectural reasons in [Architecture](docs/architecture.md).
 ## Add persistent state
 
 Persistent factory state goes in the event log in `app/db/`. GitHub owns
-collaboration artifacts, Render Workflows owns task execution, and telemetry
-goes to logs. To add state:
+collaboration artifacts, Render Workflows owns task execution, and warnings
+go to the service logs. To add state:
 
 1. Declare each event type with `defineEvent` in `app/events/catalog.ts`.
    Bound every string and array; bump the version when a payload changes.

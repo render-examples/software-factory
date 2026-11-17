@@ -28,7 +28,8 @@ connects the webhook, verifies both services, and runs one Triage smoke test.
 2. Running agents and repository tools inside short-lived, isolated Render Sandboxes.
 3. Handling overlapping runs, cancellation, cleanup, and idempotency.
 4. Validating typed agent output and safely publishing proposed code to GitHub.
-5. Providing deployment configuration, setup scripts, health checks, structured telemetry, and live agent event streams.
+5. Recording every delivery, claim, task run, and agent run in a Postgres event log, and streaming agent runs live.
+6. Providing deployment configuration, setup scripts, and health checks.
 
 **What software-factory leaves for you:**
 1. The agents, prompts, and workflow logic for your use case.
@@ -36,7 +37,7 @@ connects the webhook, verifies both services, and runs one Triage smoke test.
 3. The GitHub triggers, approval gates, and permissions your workflow needs.
 4. Model selection, budgets, and evaluation strategy.
 5. Channel integrations.
-6. Persistent data store.
+6. Data your workflows keep beyond the factory's event log.
 
 ## Included workflow
 
@@ -48,9 +49,10 @@ connects the webhook, verifies both services, and runs one Triage smoke test.
   performance, and tests. It posts a non-approving GitHub COMMENT review.
 
 GitHub holds the discussion, labels, specifications, pull requests, and
-reviews. Render Workflows runs the tasks. Sandboxes contain the checkout,
-agent loop, and model-directed tools. The included workflow never approves or
-merges code.
+reviews. Render Workflows runs the tasks. Postgres records every delivery,
+claim, task run, and agent run; the status comment on each issue or pull
+request is rendered from it. Sandboxes contain the checkout, agent loop, and
+model-directed tools. The included workflow never approves or merges code.
 
 The three labels above keep each transition human-gated. Apply
 `factory:autopilot` to an issue to grant upfront approval for the same stages:
@@ -109,6 +111,10 @@ tests, authority rules, deploys, and snapshot refreshes.
   it.
 - Sandboxes reach only an HTTPS allow-list: GitHub, the agents' model APIs,
   and the hosts each repository's install and verify commands need.
+- Nothing in a Sandbox holds a database credential. The Workflows host
+  records agent runs, and their outcomes and costs come from its own reading
+  of the result.
+- Agents load no instructions, skills, or extensions from the repository.
 
 Allowed hosts can still carry data out, and the model key exists in runner
 memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
@@ -129,10 +135,10 @@ code or untrusted pull requests.
 - [Quickstart](docs/quickstart.md) — what you need and how to start setup.
 - [Setup runbook](docs/runbooks/setup.md) — agent protocol for the first
   deployment.
-- [Configuration](docs/configuration.md) — settings, logs, run control,
-  deployment checks, and snapshots.
-- [Architecture](docs/architecture.md) — execution, state, coordination, and
-  trust boundaries.
+- [Configuration](docs/configuration.md) — settings, run control, event
+  streams, the database, deployment checks, and snapshots.
+- [Architecture](docs/architecture.md) — execution, state, the event log,
+  coordination, and trust boundaries.
 - [Extension runbook](docs/runbooks/extend.md) — add agents, Workflows tasks,
   and GitHub triggers.
 - [Contributing](CONTRIBUTING.md) — local development and verification.

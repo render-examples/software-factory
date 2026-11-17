@@ -2,19 +2,24 @@
 
 Agents inspect and modify repositories inside short-lived Render Sandboxes.
 Code in the Workflows service validates their results and performs every
-GitHub write.
+GitHub write. Postgres records every delivery, claim, task run, and agent run,
+and the gateway streams agent runs live to readers.
 
 ## System
 
 ```mermaid
 flowchart LR
   GitHub -->|signed webhook| Gateway
+  Gateway -->|record delivery| Postgres
   Gateway -->|start task| Workflows
+  Workflows -->|claims, runs, agent events| Postgres
   Workflows -->|restore| Sandbox
-  Sandbox -->|typed result or candidate tree| Workflows
+  Sandbox -->|live events, typed result, candidate tree| Workflows
   Workflows -->|validated write| GitHub
   Workflows -->|build| Snapshot
   Snapshot -.->|restore| Sandbox
+  Postgres -->|events and live text| Gateway
+  Gateway -->|server-sent events| Reader
 ```
 
 The Blueprint deploys two services and a database:
@@ -73,15 +78,15 @@ unrelated comments do not restart the workflow.
 
 ## State
 
-Each system owns the state it already manages:
+Each kind of state has one owner:
 
 | State | Owner |
 |---|---|
+| Deliveries, claims, task runs, their outcomes, and their Sandboxes | Postgres event log |
+| Agent runs: messages, tool calls, outcome, usage, and cost | Postgres event log |
 | Whether a task process is alive, and its input and result | Render Workflows |
 | Issues, labels, specifications, pull requests, and reviews | GitHub |
-| Deliveries, claims, task runs, their outcomes, and their Sandboxes | Postgres event log |
 | Prepared repository filesystem | Render Sandbox snapshot |
-| Agent runs: messages, tool calls, outcome, usage, and cost | Postgres event log |
 
 The status comment on an issue or pull request is a view of the claim and the
 current run, rendered from Postgres. Nothing reads it back, and nothing reads
@@ -140,13 +145,6 @@ The status comment and `factory:working` are synced from Postgres after each
 claim, progress update, and finish. A GitHub failure while syncing is logged
 and never fails the run; the final sync retries. Editing or deleting the
 comment can't change who owns the subject.
-
-### Upgrading from status-comment claims
-
-Before this release, the status comment was the claim. The upgrade does not
-read old comments: let running factory tasks finish, or cancel them, before
-deploying both services. The first run on each issue or pull request after the
-upgrade posts a new status comment.
 
 ## Sandboxes and snapshots
 
@@ -342,8 +340,7 @@ Tests pin these invariants and the tool authority of every built-in agent.
 - PR Reviewer runs repository-defined commands from the labeled pull request.
 - The Render API key may have workspace-wide authority.
 - The gateway's database credential can write factory state, so a compromised
-  gateway can forge events. Before the database, it held only the webhook
-  secret and the Render API key.
+  gateway can forge events.
 - Anyone with `EVENTS_READ_TOKEN` can read every agent run's messages and tool
   output, for every repository. Readers share the one token.
 - A process in a Sandbox that forges runner output can change what stream
@@ -351,8 +348,8 @@ Tests pin these invariants and the tool authority of every built-in agent.
 - Near-simultaneous triggers can both work until one fails its next ownership
   check.
 - Workflows inputs and results are visible to people with service access.
-- Telemetry can include repository names, issue subjects, and errors that
-  quote repository output.
+- Service logs and the event log can include repository names, issue
+  subjects, and errors that quote repository output.
 - The filesystem of each deployed Render service is ephemeral. Durable state
   belongs in GitHub, Workflows, Postgres, or Sandbox snapshots.
 - A cancelled snapshot build can leave its builder Sandbox running until the
