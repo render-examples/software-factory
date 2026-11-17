@@ -9,6 +9,8 @@ create table runs (
   summary     text,
   outcome     text,
   links       jsonb,
+  -- 'reply' when the run finished waiting for a reply on its thread.
+  waiting     text,
   sandbox_id  text,
   started_at  timestamptz not null,
   finished_at timestamptz,
@@ -26,4 +28,11 @@ create table threads (
   -- Operational: the comment the status view is synced to. db:rebuild keeps it.
   status_comment_id bigint,
   updated_seq       bigint not null
+);
+
+-- Threads whose work runs on another thread, such as a factory pull request's on its issue's, from thread.linked.
+create table thread_links (
+  thread      text primary key,
+  linked_to   text not null,
+  updated_seq bigint not null
 );

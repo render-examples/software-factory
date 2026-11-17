@@ -36,6 +36,11 @@ it, and both apply its migrations at startup. GitHub holds
 issues, specifications, pull requests, and reviews, and Render Workflows holds
 task execution. The status comment is a view and is never read back.
 
+Postgres, not GitHub labels, decides what a delivery means. Trigger labels are
+commands, removed when their run starts. A comment resumes an issue only while
+its latest root run finished waiting for a reply. A draft pull request the
+factory opens shares its issue's thread.
+
 Two dependency rules are mandatory:
 
 1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent

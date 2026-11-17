@@ -1,11 +1,15 @@
 import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { config, type TaskName } from "../app/config/index.js";
-import { type Db, readStream } from "../app/db/index.js";
-import { TriageInput } from "../app/schemas/tasks.js";
+import { append, type Db, readStream } from "../app/db/index.js";
+import { runFinished, threadLinked } from "../app/events/index.js";
 import { createGateway, EventHub, type GatewayDeps } from "../app/gateway/index.js";
+import { runEvent } from "../app/runs/index.js";
+import { TriageInput } from "../app/schemas/tasks.js";
+import { githubThread } from "../app/threads/index.js";
 import { REPO } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
+import { startRun } from "./helpers/runs.js";
 
 const SECRET = "webhook-secret";
 
@@ -17,6 +21,22 @@ const triagePayload = {
 	installation: { id: 7 },
 	sender: { login: "maintainer", type: "User" },
 };
+
+const ISSUE = { kind: "issue" as const, number: 12 };
+
+const commentPayload = (body: string, issue: Record<string, unknown> = {}) => ({
+	action: "created",
+	issue: { number: 12, ...issue },
+	comment: { id: 99, body },
+	repository: { full_name: REPO },
+	installation: { id: 7 },
+	sender: { login: "maintainer", type: "User" },
+});
+
+async function finishRun(runId: string, outcome: string, waiting?: "reply"): Promise<void> {
+	const finished = { state: "done" as const, outcome, summary: `${outcome}.`, links: [], duration_ms: 1, waiting };
+	await db.withTx((tx) => append(tx, runEvent(runFinished, runId, githubThread(REPO, ISSUE), finished)));
+}
 
 const sign = (body: string, secret = SECRET) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 
@@ -126,6 +146,60 @@ describe("gateway", () => {
 		expect(res.status).toBe(202);
 		expect(startTask.mock.calls.map(([, , key]) => key)).toEqual(["delivery-1", "delivery-1"]);
 		expect(await readStream(db, "delivery:github:delivery-1", 0)).toHaveLength(1);
+	});
+
+	it("resumes the task whose root run left the issue waiting for a reply, and nothing else", async () => {
+		await startRun(db, REPO, ISSUE, { traceId: "trn-autopilot", task: "autopilot", title: "Autopilot" });
+		await startRun(db, REPO, ISSUE, { traceId: "trn-autopilot", runId: "trn-triage" });
+		await finishRun("trn-triage", "asked", "reply");
+		await finishRun("trn-autopilot", "waiting_for_answers", "reply");
+
+		const res = await app.fetch(webhook(JSON.stringify(commentPayload("Here are the answers.")), { event: "issue_comment" }));
+
+		expect(res.status).toBe(202);
+		expect(startTask).toHaveBeenCalledWith(
+			"autopilot",
+			{ repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
+			"delivery-1",
+		);
+	});
+
+	it("ignores a comment while a trace runs, and after a root run that isn't waiting", async () => {
+		await startRun(db, REPO, ISSUE, { traceId: "trn-spec", task: "spec-to-pr", title: "Spec-to-PR" });
+		const comment = JSON.stringify(commentPayload("Thanks, looking forward to the PR!"));
+		expect(await (await app.fetch(webhook(comment, { event: "issue_comment" }))).json()).toEqual({ ignored: "thread is not waiting for a reply" });
+
+		await startRun(db, REPO, ISSUE, { traceId: "trn-triage" });
+		await finishRun("trn-triage", "declined");
+		await app.fetch(webhook(comment, { event: "issue_comment", delivery: "delivery-2" }));
+
+		expect(startTask).not.toHaveBeenCalled();
+		expect((await readStream(db, "delivery:github:delivery-2", 0))[0]?.payload).toEqual({
+			event: "issue_comment",
+			ignored: "thread is not waiting for a reply",
+		});
+	});
+
+	it("runs a factory pull request's cancel and review on its issue's thread", async () => {
+		const pr = githubThread(REPO, { kind: "pr", number: 34 });
+		await db.withTx((tx) =>
+			append(tx, { type: threadLinked, stream: `thread:${pr}`, thread: pr, source: "workflow:trn-spec", payload: { to: githubThread(REPO, ISSUE) } }),
+		);
+		const cancel = commentPayload(`${config.commandPrefix} cancel`, { number: 34, pull_request: {} });
+		const review = {
+			...triagePayload,
+			label: { name: config.labels.prReview },
+			pull_request: { number: 34, state: "open", head: { sha: "a".repeat(40) } },
+		};
+
+		await app.fetch(webhook(JSON.stringify(cancel), { event: "issue_comment" }));
+		await app.fetch(webhook(JSON.stringify(review), { event: "pull_request", delivery: "delivery-2" }));
+
+		expect(startTask.mock.calls.map(([task, input]) => [task, input])).toEqual([
+			["cancel", { repo: REPO, installationId: 7, number: 12, kind: "issue", actor: "maintainer" }],
+			["pr-review", { repo: REPO, installationId: 7, pr: 34, headSha: "a".repeat(40), actor: "maintainer", issue: 12 }],
+		]);
+		expect((await readStream(db, "delivery:github:delivery-2", 0))[0]?.thread).toBe(githubThread(REPO, ISSUE));
 	});
 
 	it("returns 502 without starting the task when the delivery can't be recorded", async () => {

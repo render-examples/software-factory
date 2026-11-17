@@ -1,4 +1,4 @@
-import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
+import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped, threadLinked } from "../events/index.js";
 import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
@@ -21,11 +21,11 @@ const runs: Projection = {
 	operational: [],
 	async apply(tx, event) {
 		const runId = event.stream.slice("run:".length);
-		const close = (state: string, outcome: string, summary: string, links: readonly unknown[] = []) =>
+		const close = (state: string, outcome: string, summary: string, links: readonly unknown[] = [], waiting: string | null = null) =>
 			tx.query(
-				`update runs set state = $2, outcome = $3, summary = $4, links = $5::jsonb, finished_at = $6, updated_seq = $7
+				`update runs set state = $2, outcome = $3, summary = $4, links = $5::jsonb, waiting = $6, finished_at = $7, updated_seq = $8
 				 where run_id = $1 and state = 'running'`,
-				[runId, state, outcome, summary, JSON.stringify(links), event.createdAt, event.seq],
+				[runId, state, outcome, summary, JSON.stringify(links), waiting, event.createdAt, event.seq],
 			);
 		switch (event.type) {
 			case runStarted.type: {
@@ -61,8 +61,8 @@ const runs: Projection = {
 				return;
 			}
 			case runFinished.type: {
-				const { state, outcome, summary, links } = runFinished.payload.parse(event.payload);
-				await close(state, outcome, summary, links);
+				const { state, outcome, summary, links, waiting } = runFinished.payload.parse(event.payload);
+				await close(state, outcome, summary, links, waiting);
 				return;
 			}
 		}
@@ -85,7 +85,22 @@ const threads: Projection = {
 	},
 };
 
-export const PROJECTIONS: readonly Projection[] = [runs, threads, agentRuns];
+/** Threads whose work runs on another thread. */
+const threadLinks: Projection = {
+	table: "thread_links",
+	key: ["thread"],
+	operational: [],
+	async apply(tx, event) {
+		if (event.type !== threadLinked.type) return;
+		await tx.query(
+			`insert into thread_links (thread, linked_to, updated_seq) values ($1, $2, $3)
+			 on conflict (thread) do update set linked_to = excluded.linked_to, updated_seq = excluded.updated_seq`,
+			[event.thread, threadLinked.payload.parse(event.payload).to, event.seq],
+		);
+	},
+};
+
+export const PROJECTIONS: readonly Projection[] = [runs, threads, threadLinks, agentRuns];
 
 /** Applies an event to every projection, in the transaction that appends it. */
 export async function project(tx: Tx, event: LogEvent): Promise<void> {

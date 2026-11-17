@@ -111,7 +111,7 @@ describe("autopilot", () => {
 						data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) },
 					});
 				}
-				expect(stageInput).toMatchObject({ pr: 34, workflowIssue: 12 });
+				expect(stageInput).toMatchObject({ pr: 34, issue: 12 });
 				return result("trn-review", "reviewed");
 			},
 		} as unknown as Pick<TaskContext, "metadata" | "run">;
@@ -142,7 +142,7 @@ describe("autopilot", () => {
 			},
 			prReview: async (stageInput) => {
 				order.push("pr-review");
-				expect(stageInput).toMatchObject({ pr: 34, headSha: "a".repeat(40), workflowIssue: 12 });
+				expect(stageInput).toMatchObject({ pr: 34, headSha: "a".repeat(40), issue: 12 });
 				return result("trn-review", "reviewed");
 			},
 		});
@@ -158,7 +158,7 @@ describe("autopilot", () => {
 		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "done", outcome: "completed" });
 	});
 
-	it("keeps the autopilot label while Triage waits for answers", async () => {
+	it.each(["asked", "skipped"])("waits for a reply when its resumed Triage %s", async (outcome) => {
 		const gh = new FakeGitHub();
 		const specToPr = vi.fn();
 		const output = await runAutopilot(
@@ -169,18 +169,19 @@ describe("autopilot", () => {
 				db,
 				triage: async (stageInput) => {
 					expect(stageInput.commentId).toBe(99);
-					return result("trn-triage", "asked", { summary: "asked one question." });
+					return result("trn-triage", outcome, { summary: `${outcome}.` });
 				},
 				specToPr,
 			},
 		);
 
-		expect(output).toMatchObject({ state: "done", outcome: "waiting_for_answers" });
+		expect(output).toMatchObject({ state: "done", outcome: "waiting_for_answers", summary: `${outcome}.` });
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ outcome: "waiting_for_answers", waiting: "reply" });
 		expect(gh.labels.get(12)).toContain(config.labels.autopilot);
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
-	it("does not put the autopilot label back after a newer run starts on the issue", async () => {
+	it("leaves the issue not waiting after a newer run starts on it", async () => {
 		const gh = new FakeGitHub();
 		const output = await runAutopilot(ctx, input, {
 			gh: asClient(gh),
@@ -192,7 +193,7 @@ describe("autopilot", () => {
 		});
 
 		expect(output).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "cancelled", waiting: null });
 	});
 
 	it("stops after a terminal stage result and removes the autopilot label", async () => {

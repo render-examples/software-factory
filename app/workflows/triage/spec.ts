@@ -1,4 +1,3 @@
-import { config } from "../../config/index.js";
 import { renderSpec, sanitizeInline, truncate } from "../../format/index.js";
 import { contentHash, type GitHubClient, type Issue, renderMarker } from "../../github/index.js";
 import { ExpectedFailure, type Outcome } from "../../runs/index.js";
@@ -42,7 +41,7 @@ async function trackedPaths(sandbox: Sandbox): Promise<Set<string>> {
  * didn't change leaves the comment untouched, so an approval of it stays valid.
  */
 export async function publishSpec(
-	gh: Pick<GitHubClient, "createComment" | "updateComment" | "removeLabel">,
+	gh: Pick<GitHubClient, "createComment" | "updateComment">,
 	issue: Issue,
 	current: CurrentSpec | null,
 	{ draft, warnings }: { draft: SpecDraft; warnings: string[] },
@@ -57,17 +56,13 @@ export async function publishSpec(
 		};
 	}
 	const version = (current?.version ?? 0) + 1;
-	const approvalRemoved = issue.labels.includes(config.labels.specApproved);
-	if (approvalRemoved) await gh.removeLabel(issue.number, config.labels.specApproved);
-
-	const visible = renderSpec(draft.spec, { version, warnings, changeSummary: current ? draft.changeSummary : undefined, approvalRemoved });
+	const visible = renderSpec(draft.spec, { version, warnings, changeSummary: current ? draft.changeSummary : undefined });
 	const body = `${visible}\n\n${renderMarker("spec", { spec: draft.spec, hash, version, notes: draft.notes })}`;
 	const comment = current ? await gh.updateComment(current.comment.id, body) : await gh.createComment(issue.number, body);
 
-	const note = approvalRemoved ? `; \`${config.labels.specApproved}\` was removed, so reapply it to approve this version` : "";
 	return {
 		outcome: current ? "revised" : "drafted",
-		summary: `${current ? "revised the spec to" : "drafted spec"} v${version}${note}.`,
+		summary: `${current ? "revised the spec to" : "drafted spec"} v${version}.`,
 		links: [specLink(version, comment.htmlUrl)],
 		data: { kind: "spec", commentId: comment.id, hash, version },
 	};

@@ -1,5 +1,5 @@
 import { prReviewer, runAgent } from "../../agents/index.js";
-import { TASKS } from "../../config/index.js";
+import { config, TASKS } from "../../config/index.js";
 import type { Outcome } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";
 import { PrReviewInput } from "../../schemas/index.js";
@@ -25,10 +25,8 @@ export const prReviewWorkflow = defineGitHubTask(
 		name: TASKS.prReview,
 		title: "PR Reviewer",
 		input: PrReviewInput,
-		thread: (input, ctx) => {
-			if (input.workflowIssue && !ctx.metadata.parentTaskRunId) throw new Error("workflowIssue is valid only in a parent workflow");
-			return input.workflowIssue ? { kind: "issue", number: input.workflowIssue } : { kind: "pr", number: input.pr };
-		},
+		thread: (input) => (input.issue ? { kind: "issue", number: input.issue } : { kind: "pr", number: input.pr }),
+		trigger: (input) => ({ label: config.labels.prReview, number: input.pr }),
 		timeoutSeconds: 2 * 60 * 60,
 	},
 	async (run, input, deps: PrReviewDeps): Promise<Outcome> => {

@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import type { TaskName } from "../config/index.js";
 import { append, type Db } from "../db/index.js";
 import { readBody } from "./body.js";
-import { deliveryEvent, route } from "./routes.js";
+import { type Decision, deliveryEvent, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
+import { threadState } from "./state.js";
 import { agentRunStream, githubThreadStream, requireReader, type StreamDeps, threadStream } from "./stream.js";
 
 export { EventHub, listen } from "./hub.js";
@@ -56,8 +57,10 @@ export function createGateway(deps: GatewayDeps): Hono {
 			return c.json({ error: "invalid json" }, 400);
 		}
 
-		const decision = route(event, payload, deliveryId);
+		const routed = route(event, payload, deliveryId);
+		let decision: Decision;
 		try {
+			decision = routed.kind === "lookup" ? routed.decide(await threadState(deps.db, routed.thread)) : routed;
 			// A redelivery is already recorded and appends nothing, but still starts its task: the first attempt may have failed.
 			await deps.db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
 		} catch (error) {

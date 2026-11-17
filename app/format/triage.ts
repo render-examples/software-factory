@@ -17,7 +17,7 @@ export function triageDeclineBody(rationale: string): string {
 	return fitAround(
 		"The factory declined this issue:\n\n",
 		sanitize(rationale),
-		`\n\nTo try again, remove and reapply the ${codeSpan(config.labels.triage)} label.`,
+		`\n\nTo try again, apply the ${codeSpan(config.labels.triage)} label.`,
 		BODY_MAX_CHARS,
 	);
 }

@@ -108,7 +108,7 @@ After adding a repository:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `labels.triage` | `factory:triage` | Starts or continues Triage |
+| `labels.triage` | `factory:triage` | Starts Triage |
 | `labels.specApproved` | `factory:spec-approved` | Starts Spec-to-PR |
 | `labels.prReview` | `factory:pr-review` | Starts PR Reviewer |
 | `labels.autopilot` | `factory:autopilot` | Runs all three stages through a reviewed draft PR |
@@ -122,6 +122,12 @@ After adding a repository:
 `minimumPermission` accepts `triage`, `write`, `maintain`, or `admin`. The
 factory checks the triggering actor's current permission at the start of
 every GitHub task.
+
+Trigger labels are commands: the factory removes a label as soon as its run
+starts, so applying it again starts another run. A rejected run leaves its
+label in place. A comment on an issue resumes Triage or Autopilot
+only while the issue waits for a reply, after Triage asked questions or posted
+a spec. Other comments start nothing, whatever labels the issue has.
 
 `setup:github` also creates `factory:working`. This label records an active
 run; it is not a trigger.
@@ -273,16 +279,18 @@ starting it takes over the issue or pull request, which stops the running
 workflow and its current child task and terminates their recorded Sandboxes.
 The status comment then shows what it cancelled, or that nothing was running.
 It also closes runs still recorded as `running` after their task stopped.
+A draft pull request the factory opened shares its issue's thread, so
+`/factory cancel` there stops the issue's work and reports on the issue.
 
-To restart work, remove the trigger label and apply it again.
+To restart work, apply the trigger label again.
 
 `factory:autopilot` grants upfront approval to draft a spec, implement it,
 open a draft pull request, and post a COMMENT review. It never approves or
 merges the pull request, and it does not apply the three manual transition
-labels. Triage may still clear a stale spec-approval label when it revises the
-spec. The trigger label is removed when a run starts. If Triage asks questions,
-the factory adds it back so a human reply can start the continuation. Use
-`/factory cancel` to stop an active root workflow.
+labels. If Triage asks questions, the issue waits for a reply, and a human
+reply starts the continuation. Applying `factory:pr-review` to its draft pull
+request takes over the issue's work with a new review. Use `/factory cancel`
+to stop an active root workflow.
 
 ## Event streams
 
@@ -305,6 +313,9 @@ curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
 curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
   https://<gateway-host>/threads/github%3Aacme%2Fweb%23issue-12/stream
 ```
+
+A draft pull request the factory opened shares its issue's thread, so its
+stream is the issue's.
 
 Each stream sends the stored events first, then the text so far of each
 message the model is still writing as `live.partial`, then new events as they

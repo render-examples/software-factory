@@ -36,7 +36,6 @@ export interface AutopilotDeps extends GitHubTaskDeps {
  * Child results, not GitHub labels, move the workflow to its next stage.
  */
 async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx: GitHubTaskContext): Promise<Outcome<AutopilotData>> {
-	const gh = run.gh;
 	const stages: AutopilotStage[] = [];
 	const record = <Data>(task: StageName, result: TaskResult<Data>): TaskResult<Data> => {
 		stages.push({ task, runId: result.runId, state: result.state, outcome: result.outcome, summary: result.summary });
@@ -66,15 +65,11 @@ async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx:
 	const runPrReview = child(deps.prReview, prReviewWorkflow);
 
 	const base = { repo: input.repo, installationId: input.installationId, actor: input.actor };
-	// Trigger labels are consumed when a run starts. Autopilot adds its label
-	// back only while it is waiting for a human answer.
-	await gh.removeLabel(input.issue, config.labels.autopilot);
 	await run.reportProgress("running Triage");
 	const triage = record("triage", await runTriage({ ...base, issue: input.issue, commentId: input.commentId }));
-	if (triage.state === "done" && triage.outcome === "asked") {
-		await run.assertCurrent();
-		await gh.addLabels(input.issue, [config.labels.autopilot]);
-		return finish("waiting_for_answers", triage.summary);
+	// A skipped reply, such as a deleted comment, leaves the questions unanswered.
+	if (triage.state === "done" && (triage.outcome === "asked" || triage.outcome === "skipped")) {
+		return { ...finish("waiting_for_answers", triage.summary), waiting: "reply" };
 	}
 	if (triage.state !== "done" || triage.data?.kind !== "spec") return stop("triage", triage);
 
@@ -95,10 +90,7 @@ async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx:
 	if (specToPr.state !== "done" || specToPr.data?.kind !== "pull_request") return stop("spec-to-pr", specToPr);
 
 	await run.reportProgress("reviewing the draft pull request");
-	const review = record(
-		"pr-review",
-		await runPrReview({ ...base, pr: specToPr.data.pr, headSha: specToPr.data.headSha, workflowIssue: input.issue }),
-	);
+	const review = record("pr-review", await runPrReview({ ...base, pr: specToPr.data.pr, headSha: specToPr.data.headSha, issue: input.issue }));
 	if (review.state !== "done" || !["reviewed", "already_reviewed"].includes(review.outcome)) return stop("pr-review", review);
 
 	return finish("completed", `opened and reviewed draft PR #${specToPr.data.pr}.`);
@@ -110,6 +102,7 @@ export const autopilotWorkflow = defineGitHubTask(
 		title: "Autopilot",
 		input: AutopilotInput,
 		thread: (input) => ({ kind: "issue", number: input.issue }),
+		trigger: (input) => (input.commentId === undefined ? { label: config.labels.autopilot, number: input.issue } : undefined),
 		timeoutSeconds: TIMEOUT_SECONDS,
 	},
 	autopilot,

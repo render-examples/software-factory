@@ -13,6 +13,7 @@ export {
 	runSandboxAttached,
 	runStarted,
 	runStopped,
+	threadLinked,
 	toolCall,
 	toolResult,
 	usage,

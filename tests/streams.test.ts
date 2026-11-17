@@ -2,7 +2,7 @@ import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { append, type Db } from "../app/db/index.js";
-import { AgentRunRecorder, type AgentRunSummary, defineEvent } from "../app/events/index.js";
+import { AgentRunRecorder, type AgentRunSummary, defineEvent, threadLinked } from "../app/events/index.js";
 import { createGateway, EventHub } from "../app/gateway/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
 import type { ThreadKey } from "../app/threads/index.js";
@@ -167,5 +167,18 @@ describe("GET /threads/:thread/stream", () => {
 		}
 		expect(frames[0]).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread }) })]);
 		expect(frames[1]).toEqual(frames[0]);
+	});
+
+	it("streams a factory pull request's issue thread, which its work runs on", async () => {
+		const issue = "github:acme/web#issue-55";
+		const pr = "github:acme/web#pr-56";
+		await db.withTx((tx) => append(tx, { type: threadLinked, stream: `thread:${pr}`, thread: pr, source: "workflow:trn-4", payload: { to: issue } }));
+		await db.withTx((tx) =>
+			append(tx, { type: opened, stream: `thread:${issue}`, thread: issue, source: "workflow:trn-4", payload: { run_id: "trn-4" } }),
+		);
+
+		const stream = readSse(await get("/threads/github/acme/web/pr/56/stream"));
+		expect(await stream.take(1)).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread: issue }) })]);
+		await stream.close();
 	});
 });

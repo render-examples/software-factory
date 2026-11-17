@@ -202,6 +202,7 @@ export const exampleWorkflow = defineGitHubTask(
     title: "Example",
     input: ExampleInput,
     thread: (input) => ({ kind: "issue", number: input.issue }),
+    trigger: (input) => ({ label: config.labels.example, number: input.issue }),
     timeoutSeconds: 3600,
   },
   async (run, input, deps): Promise<Outcome> => {
@@ -220,6 +221,11 @@ export const runExample = exampleWorkflow.run;
 - `exampleWorkflow.run` calls the same body in-process with injectable
   dependencies for tests.
 
+`trigger` names the label that started a root run, if one did, and the issue
+or pull request it's on. Labels are commands: `defineGitHubTask()` removes it
+once the run has started on its thread. Omit `trigger` for tasks that only
+comments or parent workflows start.
+
 GitHub tasks do not retry automatically. A retry can repeat model spend or
 durable writes; a person starts a fresh run instead.
 
@@ -236,6 +242,11 @@ durable writes; a person starts a fresh run instead.
   GitHub.
 - Return a short snake_case `outcome`, user-facing `summary`, and relevant
   links.
+- Return `waiting: "reply"` when the thread waits for a person's reply. A
+  comment resumes only a thread whose latest root run finished waiting; route
+  the reply to the task in `route()`.
+- Call `run.linkThread()` when the task opens a pull request that belongs to
+  its issue, so work on that pull request runs on the issue's thread.
 
 Only code in the Workflows service may call GitHub write methods. Format model
 text through `app/format/` before publishing it.
@@ -305,12 +316,17 @@ ownership for issue or pull request work.
 ## Add a GitHub trigger
 
 The gateway route is a pure mapping from an authenticated delivery to a
-validated task input.
+validated task input. Labels and other GitHub state never decide what a
+delivery means beyond the event itself: when its meaning depends on the
+thread, `route()` returns a `lookup` whose `decide` receives the thread's
+state from Postgres, which is the thread a factory pull request links to and
+the task waiting for a reply.
 
 1. Add the task name and input schema first.
 2. Update `route()` in `app/gateway/routes.ts`.
 3. Derive repository, installation, actor, issue or pull request, and commit
-   from the authenticated payload.
+   from the authenticated payload. Resolve pull request deliveries through
+   `onPull`, so a factory pull request's work runs on its issue's thread.
 4. Use the GitHub delivery ID as the task idempotency key. For content-addressed
    maintenance work, use a deterministic key such as `repo@sha`.
 5. Update `REQUIRED_EVENTS`, `REQUIRED_PERMISSIONS`, or `LABELS` in

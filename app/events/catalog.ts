@@ -47,6 +47,9 @@ export const runStarted = defineEvent(
 	z.strictObject({ run_id: id, trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
 );
 
+/** Stream `thread:<thread>`: work on the thread runs on thread `to`, as a factory pull request's runs on its issue's. */
+export const threadLinked = defineEvent("thread.linked", 1, z.strictObject({ to: ThreadKey }));
+
 /** Stream `run:<task_run_id>` for the rest of this block. The actor lacked the permission, so the run never started. */
 export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ trace_id: id, task: name, title: name, actor: name, reason: summary }));
 
@@ -66,6 +69,8 @@ export const runFinished = defineEvent(
 		summary,
 		links: z.array(z.strictObject({ label: z.string().max(200), url: z.string().max(2000) })).max(20),
 		duration_ms: z.number().int().nonnegative(),
+		/** The run's thread waits for a reply; for a trace's root, a comment there resumes its task. */
+		waiting: z.literal("reply").optional(),
 	}),
 );
 // Live agent events (plan 05)

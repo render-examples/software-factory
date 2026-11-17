@@ -320,18 +320,22 @@ describe("the status comment", () => {
 });
 
 describe("db:rebuild", () => {
-	it("recreates runs and threads from the log and keeps the status comment's ID", async () => {
+	it("recreates runs, threads, and links from the log and keeps the status comment's ID", async () => {
 		const gh = new FakeGitHub();
 		gh.permissions.reader = "read";
 		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", sandboxId: "sbx-old" });
 		await withRun(root("trn-new"), options(gh, { runs: new FakeRuns({ "trn-old": "running" }) }), async (run) => {
 			await run.reportProgress("working");
-			return { outcome: "done", summary: "done.", links: [{ label: "Spec v1", url: "https://github.test/s" }] };
+			await run.linkThread({ kind: "pr", number: 34 });
+			return { outcome: "done", summary: "done.", links: [{ label: "Spec v1", url: "https://github.test/s" }], waiting: "reply" };
 		});
 		await withRun(root("trn-denied"), options(gh, { actor: "reader" }), done);
-		const snapshot = async () => [(await db.query("select * from runs order by run_id")).rows, (await db.query("select * from threads")).rows];
+		const tables = ["runs", "threads", "thread_links"];
+		const snapshot = () => Promise.all(tables.map(async (table) => (await db.query(`select * from ${table} order by 1`)).rows));
 		const before = await snapshot();
+		expect(before[0]).toContainEqual(expect.objectContaining({ run_id: "trn-new", waiting: "reply" }));
 		expect(before[1]).toMatchObject([{ status_comment_id: expect.anything() }]);
+		expect(before[2]).toMatchObject([{ linked_to: githubThread(REPO.fullName, thread) }]);
 
 		await rebuild(db);
 		expect(await snapshot()).toEqual(before);

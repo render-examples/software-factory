@@ -11,14 +11,14 @@ const ActorLogin = z.string().min(1);
 export const TriageInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
-	/** Set when a human reply started this round. */
+	/** Set when a reply on a thread waiting for one started this round. */
 	commentId: z.number().int().positive().optional(),
 });
 
 export const AutopilotInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
-	/** Set when a human reply restarted an autopilot run that had asked questions. */
+	/** Set when a reply resumed an autopilot run that was waiting for answers. */
 	commentId: z.number().int().positive().optional(),
 });
 
@@ -47,8 +47,8 @@ export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
 	headSha: z.string().regex(/^[0-9a-f]{40}$/),
 	actor: ActorLogin,
-	/** Starts an autopilot review on the workflow's issue, continuing its root run. */
-	workflowIssue: z.number().int().positive().optional(),
+	/** The issue whose thread a factory pull request shares; the run starts there instead of on the pull request. */
+	issue: z.number().int().positive().optional(),
 });
 
 export const CancelInput = RepoInput.extend({

@@ -33,7 +33,8 @@ export interface SpecToPrDeps extends GitHubTaskDeps {
 
 /**
  * Approved spec to draft PR: implement in one sandbox, verify with up to `limits.repairRounds` repair runs, then
- * publish through the Git Data API and open a draft PR. A rerun (a relabel) replaces the earlier attempt's branch.
+ * publish through the Git Data API and open a draft PR, which shares the issue's thread. A rerun (a relabel)
+ * replaces the earlier attempt's branch.
  */
 export const specToPrWorkflow = defineGitHubTask(
 	{
@@ -41,6 +42,7 @@ export const specToPrWorkflow = defineGitHubTask(
 		title: "Spec-to-PR",
 		input: SpecToPrInput,
 		thread: (input) => ({ kind: "issue", number: input.issue }),
+		trigger: (input) => ({ label: config.labels.specApproved, number: input.issue }),
 		timeoutSeconds: 4 * 60 * 60,
 	},
 	async (run, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {
@@ -107,6 +109,7 @@ export const specToPrWorkflow = defineGitHubTask(
 				body: pullRequestBody({ issue: input.issue, spec, implementation, verification, specUrl: comment.htmlUrl }),
 				draft: true,
 			});
+			await run.linkThread({ kind: "pr", number: pull.number });
 			return {
 				outcome: "pr_opened",
 				summary: `opened draft PR #${pull.number}. Review it before marking it ready.`,

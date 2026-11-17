@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { config } from "../app/config/index.js";
 import { AutopilotInput, PrReviewInput, SpecToPrInput, TriageInput } from "../app/schemas/tasks.js";
-import { route } from "../app/gateway/routes.js";
+import { type Decision, type Route, route, type ThreadState } from "../app/gateway/routes.js";
 import { REPO, REPOSITORY_CASES } from "./fixtures/config.js";
 
 const BASE = config.repos[REPO]?.baseBranch as string;
@@ -28,11 +28,18 @@ const prLabeled = (label: string, state = "open") =>
 const comment = (body: string, issue: Record<string, unknown> = {}) =>
 	envelope({
 		action: "created",
-		issue: { number: 12, labels: [{ name: config.labels.triage }], ...issue },
+		issue: { number: 12, ...issue },
 		comment: { id: 99, body },
 	});
 
 const push = (overrides: Record<string, unknown> = {}) => envelope({ ref: `refs/heads/${BASE}`, after: SHA, deleted: false, ...overrides });
+
+const ISSUE = `github:${REPO}#issue-12`;
+const PR = `github:${REPO}#pr-34`;
+
+/** Decides a route as the gateway would, given its thread's state. */
+const decide = (r: Route, state: Partial<ThreadState> = {}): Decision =>
+	r.kind === "lookup" ? r.decide({ linked: null, waiting: null, ...state }) : r;
 
 describe("route: starts", () => {
 	it("triage label on an issue starts triage", () => {
@@ -76,31 +83,54 @@ describe("route: starts", () => {
 		if (r.kind === "start") expect(AutopilotInput.safeParse(r.input).success).toBe(true);
 	});
 
-	it("a human reply continues autopilot while its label remains", () => {
-		const r = route("issue_comment", comment("Here are the details.", { labels: [{ name: config.labels.autopilot }] }), DELIVERY);
-		expect(r).toMatchObject({
+	it.each([
+		["triage", TriageInput],
+		["autopilot", AutopilotInput],
+	] as const)("a comment on an issue waiting for a reply resumes %s", (task, schema) => {
+		const r = decide(route("issue_comment", comment("Here are the details."), DELIVERY), { waiting: task });
+		expect(r).toEqual({
 			kind: "start",
-			task: "autopilot",
+			task,
 			input: { repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
-			thread: `github:${REPO}#issue-12`,
+			idempotencyKey: DELIVERY,
+			thread: ISSUE,
 		});
+		if (r.kind === "start") expect(schema.safeParse(r.input).success).toBe(true);
 	});
 
-	it("does not restart autopilot for comments after its trigger label was consumed", () => {
-		const r = route("issue_comment", comment("Unrelated note.", { labels: [] }), DELIVERY);
-		expect(r).toEqual({ kind: "ignore", reason: "issue not in triage" });
+	it("a comment resumes nothing on a thread that isn't waiting, whatever its labels", () => {
+		const labeled = comment("Thanks, looking forward to the PR!", { labels: [{ name: config.labels.triage }, { name: config.labels.autopilot }] });
+		for (const waiting of [null, "spec-to-pr"]) {
+			expect(decide(route("issue_comment", labeled, DELIVERY), { waiting })).toEqual({ kind: "ignore", reason: "thread is not waiting for a reply" });
+		}
 	});
 
 	it("pr-review label on an open PR starts pr-review", () => {
-		const r = route("pull_request", prLabeled(config.labels.prReview), DELIVERY);
+		const r = decide(route("pull_request", prLabeled(config.labels.prReview), DELIVERY));
 		expect(r).toEqual({
 			kind: "start",
 			task: "pr-review",
 			input: { repo: REPO, installationId: 7, pr: 34, headSha: SHA, actor: "maintainer" },
 			idempotencyKey: DELIVERY,
-			thread: `github:${REPO}#pr-34`,
+			thread: PR,
 		});
 		if (r.kind === "start") expect(PrReviewInput.safeParse(r.input).success).toBe(true);
+	});
+
+	it("pr-review label on a factory PR runs on its issue's thread", () => {
+		const r = decide(route("pull_request", prLabeled(config.labels.prReview), DELIVERY), { linked: ISSUE });
+		expect(r).toMatchObject({ kind: "start", task: "pr-review", input: { pr: 34, headSha: SHA, issue: 12 }, thread: ISSUE });
+		if (r.kind === "start") expect(PrReviewInput.safeParse(r.input).success).toBe(true);
+	});
+
+	it("cancel command on a factory PR cancels its issue's thread", () => {
+		const onPr = comment(`${config.commandPrefix} cancel`, { number: 34, pull_request: {} });
+		expect(decide(route("issue_comment", onPr, DELIVERY))).toMatchObject({ task: "cancel", input: { number: 34, kind: "pr" }, thread: PR });
+		expect(decide(route("issue_comment", onPr, DELIVERY), { linked: ISSUE })).toMatchObject({
+			task: "cancel",
+			input: { number: 12, kind: "issue" },
+			thread: ISSUE,
+		});
 	});
 
 	it("cancel command on an issue starts cancel", () => {
@@ -143,6 +173,6 @@ describe("route: ignores untrusted or irrelevant deliveries", () => {
 			["pull_request", prLabeled(config.labels.prReview, "closed")],
 			["push", push({ ref: "refs/heads/feature" })],
 		];
-		for (const [event, payload] of deliveries) expect(route(event, payload, DELIVERY).kind).toBe("ignore");
+		for (const [event, payload] of deliveries) expect(decide(route(event, payload, DELIVERY)).kind).toBe("ignore");
 	});
 });

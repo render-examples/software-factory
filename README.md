@@ -55,7 +55,9 @@ task run, and agent run; the status comment on each issue or pull request is
 rendered from it. Sandboxes contain the checkout, agent loop, and
 model-directed tools. The included workflow never approves or merges code.
 
-The three labels above keep each transition human-gated. Apply
+The three labels above keep each transition human-gated. Each label is a
+command, removed when its run starts, and the draft pull request shares its
+issue's status and run history. Apply
 `factory:autopilot` to an issue to grant upfront approval for the same stages:
 Triage drafts the spec, Spec-to-PR opens a draft pull request, and PR Reviewer
 posts its review as child tasks in one Render Workflow. If Triage asks

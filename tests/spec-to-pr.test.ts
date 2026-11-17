@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Db } from "../app/db/index.js";
+import { type Db, readStream } from "../app/db/index.js";
+import { githubThread } from "../app/threads/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 import { runRow, startRun } from "./helpers/runs.js";
@@ -90,7 +91,7 @@ function fakeGitHub(opts: { spec?: unknown; specUpdatedAt?: string; labelEvents?
 		},
 		ensureLabel: async () => {},
 		addLabels: async () => {},
-		removeLabel: async () => {},
+		removeLabel: vi.fn(async (_n: number, _label: string) => {}),
 		getPermission: async () => "write" as const,
 		getIssue: async (number: number) => ({
 			number,
@@ -290,6 +291,17 @@ describe("implement, verify, and publish", () => {
 		expect(t.status().data?.state).toBe("done");
 		expect(t.status().body).toContain(`[Draft PR #34](https://github.com/${REPO}/pull/34)`);
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
+		expect(t.gh.removeLabel).toHaveBeenCalledWith(ISSUE, config.labels.specApproved);
+	});
+
+	it("links the draft PR's thread to the issue's, so work on the PR runs on the issue", async () => {
+		const t = setup();
+		await t.run();
+
+		const pr = githubThread(REPO, { kind: "pr", number: 34 });
+		expect(await readStream(db, `thread:${pr}`, 0)).toMatchObject([
+			{ type: "thread.linked", thread: pr, payload: { to: githubThread(REPO, { kind: "issue", number: ISSUE }) } },
+		]);
 	});
 
 	it.each(REPOSITORY_CASES)("publishes $repo against $baseBranch with its own verification commands", async ({ repo, baseBranch, verify }) => {

@@ -21,7 +21,9 @@ export interface GitHubTaskSpec<Input> {
 	/** Validates input before any work starts. */
 	input: z.ZodType<Input>;
 	/** Selects the issue or pull request this run starts on. */
-	thread(input: Input, ctx: GitHubTaskContext): GitHubThread;
+	thread(input: Input): GitHubThread;
+	/** The label that started a root run, if one did, and the issue or pull request it's on. */
+	trigger?(input: Input): { label: string; number: number } | undefined;
 	timeoutSeconds: number;
 }
 
@@ -44,6 +46,7 @@ export interface GitHubTask<Deps, Data = undefined> {
  * Defines work attached to one GitHub issue or pull request. Every run validates
  * input, resolves the configured repository, checks the actor's permission, and
  * starts on its thread: a root run takes it over, and a subtask continues its root.
+ * A trigger label is a command, so a root run removes it once it has started.
  */
 export function defineGitHubTask<Input extends { repo: string; installationId: number; actor: string }, Data, Deps extends GitHubTaskDeps>(
 	spec: GitHubTaskSpec<Input>,
@@ -52,20 +55,30 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 	const run: GitHubTaskRunner<Deps, Data> = (ctx, raw, deps = {} as Deps) => {
 		const input = spec.input.parse(raw);
 		const repo = requireRepo(input.repo, input.installationId);
+		const root = !ctx.metadata.parentTaskRunId;
+		const trigger = root ? spec.trigger?.(input) : undefined;
 		return withRun(
 			ctx,
 			{
 				repo,
-				thread: spec.thread(input, ctx),
+				thread: spec.thread(input),
 				task: spec.name,
 				title: spec.title,
 				actor: input.actor,
-				mode: ctx.metadata.parentTaskRunId ? "continue" : "replace",
+				mode: root ? "replace" : "continue",
 				gh: deps.gh,
 				runs: deps.runs,
 				db: deps.db,
 			},
-			(threadRun) => work(threadRun, input, deps, ctx),
+			async (threadRun) => {
+				// Best effort: a label left behind only means a person removes it before applying it again.
+				if (trigger) {
+					await threadRun.gh.removeLabel(trigger.number, trigger.label).catch((error) => {
+						console.error(JSON.stringify({ level: "warn", msg: "could not remove the trigger label", ...trigger, error: String(error) }));
+					});
+				}
+				return work(threadRun, input, deps, ctx);
+			},
 		);
 	};
 	// Replaying a run can repeat model spend and durable writes. A new GitHub

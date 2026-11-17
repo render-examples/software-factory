@@ -1,5 +1,5 @@
 import { runAgent } from "../../agents/index.js";
-import { type RepoContext, TASKS } from "../../config/index.js";
+import { config, type RepoContext, TASKS } from "../../config/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { renderMarker } from "../../github/index.js";
 import type { Outcome } from "../../runs/index.js";
@@ -19,16 +19,24 @@ export interface TriageDeps extends GitHubTaskDeps {
 /**
  * Triage one issue: the triage agent reads the issue and the repository and decides to ask questions, draft
  * (or revise) the spec, or decline. Every GitHub write goes through the format helpers and carries a marker.
+ * Every outcome but a decline waits for a reply, which resumes Triage.
  */
 export const triageWorkflow = defineGitHubTask(
-	{ name: TASKS.triage, title: "Triage", input: TriageInput, thread: (input) => ({ kind: "issue", number: input.issue }), timeoutSeconds: 3600 },
+	{
+		name: TASKS.triage,
+		title: "Triage",
+		input: TriageInput,
+		thread: (input) => ({ kind: "issue", number: input.issue }),
+		trigger: (input) => (input.commentId === undefined ? { label: config.labels.triage, number: input.issue } : undefined),
+		timeoutSeconds: 3600,
+	},
 	async (run, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
 		const { gh, repo } = run;
 		const [issue, comments, bot] = await Promise.all([gh.getIssue(input.issue), gh.listIssueComments(input.issue), gh.botLogin()]);
 		if (input.commentId !== undefined) {
 			const trigger = comments.find((c) => c.id === input.commentId);
 			if (!trigger || trigger.author.login.toLowerCase() === bot.toLowerCase()) {
-				return { outcome: "skipped", summary: "the comment that started this run is the factory's own or no longer exists." };
+				return { outcome: "skipped", summary: "the comment that started this run is the factory's own or no longer exists.", waiting: "reply" };
 			}
 		}
 		const thread = readThread(issue, comments, bot);
@@ -47,7 +55,8 @@ export const triageWorkflow = defineGitHubTask(
 				const body = `${triageQuestionsBody(decision.questions)}\n\n${renderMarker("questions", { round, questions: decision.questions })}`;
 				const comment = thread.questions ? await gh.updateComment(thread.questions.comment.id, body) : await gh.createComment(issue.number, body);
 				const n = decision.questions.length;
-				return { outcome: "asked", summary: `asked ${n} question${n === 1 ? "" : "s"}.`, links: [{ label: "Questions", url: comment.htmlUrl }] };
+				const summary = `asked ${n} question${n === 1 ? "" : "s"}.`;
+				return { outcome: "asked", summary, links: [{ label: "Questions", url: comment.htmlUrl }], waiting: "reply" };
 			}
 
 			if (decision.decision === "decline") {
@@ -59,7 +68,7 @@ export const triageWorkflow = defineGitHubTask(
 			await run.reportProgress(thread.spec ? "revising the spec" : "drafting the spec");
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
 			await run.reportProgress("posting the spec");
-			return await publishSpec(gh, issue, thread.spec, drafted);
+			return { ...(await publishSpec(gh, issue, thread.spec, drafted)), waiting: "reply" };
 		});
 	},
 );

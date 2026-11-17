@@ -448,7 +448,8 @@ Offer two paths.
    opens a draft pull request. If the spec comment changes after the label is
    applied, Spec-to-PR stops; review the spec and reapply the label.
 3. Apply `factory:pr-review` to the draft pull request. PR Reviewer runs the
-   `verify` commands and posts a COMMENT review.
+   `verify` commands and posts a COMMENT review. Its status comment is on the
+   issue, which shares the draft pull request's thread.
 
 **Autopilot.** Apply `factory:autopilot` to a new issue instead. It grants
 upfront approval for the same three stages and runs them as child tasks of one
@@ -504,8 +505,9 @@ Open the App's **Advanced** settings and inspect **Recent Deliveries**.
 - `502` with `could not start task`: check `RENDER_API_KEY`,
   `RENDER_WORKFLOW_SLUG`, and the Workflows deployment.
 - `200` with `{"ignored":"<reason>"}`: the event did not start a task. Common
-  reasons are `unconfigured repo`, `unhandled label`, `issue not in triage`,
-  `bot sender`, `pull request not open`, and `not base branch`.
+  reasons are `unconfigured repo`, `unhandled label`,
+  `thread is not waiting for a reply`, `bot sender`, `pull request not open`,
+  and `not base branch`.
 - `202`: the task started; inspect it under `factory-workflows`.
 
 If a task starts but the comment says it did not run, the triggering actor

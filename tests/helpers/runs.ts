@@ -22,15 +22,17 @@ export async function startRun(
 	});
 }
 
+interface RunRow {
+	state: string;
+	outcome: string | null;
+	summary: string | null;
+	sandbox_id: string | null;
+	waiting: string | null;
+}
+
 /** The runs projection's row for a task run. */
-export async function runRow(
-	db: Db,
-	runId: string,
-): Promise<{ state: string; outcome: string | null; summary: string | null; sandbox_id: string | null }> {
-	const { rows } = await db.query<{ state: string; outcome: string | null; summary: string | null; sandbox_id: string | null }>(
-		"select state, outcome, summary, sandbox_id from runs where run_id = $1",
-		[runId],
-	);
+export async function runRow(db: Db, runId: string): Promise<RunRow> {
+	const { rows } = await db.query<RunRow>("select state, outcome, summary, sandbox_id, waiting from runs where run_id = $1", [runId]);
 	if (!rows[0]) throw new Error(`no run ${runId}`);
 	return rows[0];
 }

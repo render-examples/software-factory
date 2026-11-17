@@ -2,9 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
-import { runRow, startRun } from "./helpers/runs.js";
+import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
 const { AgentError } = await import("../app/agents/index.js");
+const { config } = await import("../app/config/index.js");
 const { GitHubError, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { runPrReview } = await import("../app/workflows/pr-review/index.js");
 type GitHubClient = import("../app/github/index.js").GitHubClient;
@@ -95,7 +96,7 @@ class FakeGitHub {
 	};
 	ensureLabel = async () => {};
 	addLabels = async () => {};
-	removeLabel = async () => {};
+	removeLabel = vi.fn(async (_number: number, _label: string) => {});
 	getPull = vi.fn(async () => ({ ...this.pull }));
 	getPullDiff = vi.fn(async () => this.diff);
 	listPullFiles = async () => [
@@ -403,10 +404,31 @@ describe("runPrReview", () => {
 
 	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {
 		await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
-		const result = await runPrReview(childCtx, { ...input, workflowIssue: 12 }, deps());
+		const result = await runPrReview(childCtx, { ...input, issue: 12 }, deps());
 		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
 		expect(gh.statusNumbers).toEqual([12]);
 		expect(await runRow(db, "trn-run")).toMatchObject({ sandbox_id: "sbx-pr" });
+		expect(gh.removeLabel).not.toHaveBeenCalledWith(34, config.labels.prReview);
+	});
+
+	it("takes over the issue's thread for a labeled review of its factory PR, and removes the label from the PR", async () => {
+		await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-autopilot", task: "autopilot", title: "Autopilot" });
+		await startRun(
+			db,
+			REPO,
+			{ kind: "issue", number: 12 },
+			{ traceId: "trn-autopilot", runId: "trn-child", task: "pr-review", sandboxId: "sbx-child" },
+		);
+		const runs = new FakeRuns({ "trn-autopilot": "running" });
+
+		const result = await runPrReview(ctx, { ...input, issue: 12 }, deps({ runs }));
+
+		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
+		expect(runs.cancelled).toEqual(["trn-autopilot"]);
+		expect(runs.terminated).toEqual(["sbx-child"]);
+		expect(await runRow(db, "trn-child")).toMatchObject({ state: "cancelled" });
+		expect(gh.statusNumbers).toEqual([12]);
+		expect(gh.removeLabel).toHaveBeenCalledWith(34, config.labels.prReview);
 	});
 
 	it("posts no review once a newer run starts on the pull request", async () => {
@@ -425,12 +447,6 @@ describe("runPrReview", () => {
 		expect(result).toMatchObject({ state: "cancelled", outcome: "superseded" });
 		expect(gh.createReview).not.toHaveBeenCalled();
 		expect(sandbox.closed).toBe(1);
-	});
-
-	it("rejects workflowIssue on a directly started PR Reviewer task", async () => {
-		expect(() => runPrReview(ctx, { ...input, workflowIssue: 12 }, deps())).toThrow("valid only in a parent workflow");
-		expect(gh.comments).toEqual([]);
-		expect(opened).toEqual([]);
 	});
 
 	it("fails cleanly when the reviewer stops", async () => {

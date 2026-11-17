@@ -3,8 +3,8 @@ import type { TaskContext } from "@renderinc/sdk/workflows";
 import type { z } from "zod";
 import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agents/index.js";
 import { config, type RepoContext } from "../config/index.js";
-import { append, type Db, workflowsDb } from "../db/index.js";
-import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached } from "../events/index.js";
+import { append, type Db, VersionConflict, workflowsDb } from "../db/index.js";
+import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached, threadLinked } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
 import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 import { checkPermission } from "./permission.js";
@@ -29,6 +29,8 @@ export interface Run {
 	trackSandbox(sandbox: { id: string }): Promise<void>;
 	/** runAgent options for `sandbox`, so the agent's events carry this run's trace. */
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions;
+	/** Records that work on `thread` runs on this run's thread, so deliveries there are resolved here. */
+	linkThread(thread: GitHubThread): Promise<void>;
 }
 
 /** How the work ended. `summary` is shown on GitHub, so it must be safe to publish. */
@@ -37,6 +39,8 @@ export interface Outcome<Data = undefined> {
 	summary: string;
 	state?: "done" | "failed";
 	links?: StatusLink[];
+	/** Set when the thread waits for a reply. A comment on it then resumes the trace's root task. */
+	waiting?: "reply";
 	/** Typed data for a parent task. It is returned to Workflows, never rendered on GitHub. */
 	data?: Data;
 }
@@ -113,6 +117,7 @@ const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
 };
 
 const FINAL_SYNC_ATTEMPTS = 3;
+const LINK_ATTEMPTS = 3;
 
 /** The lifecycle behind a Run. Only withRun calls the methods beyond the Run interface. */
 class ThreadRun implements Run {
@@ -159,6 +164,22 @@ class ThreadRun implements Run {
 
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions {
 		return { sandbox, traceId: this.traceId, runId: this.runId, thread: this.#key };
+	}
+
+	async linkThread(thread: GitHubThread): Promise<void> {
+		const key = githubThread(this.repo.fullName, thread);
+		const stream = `thread:${key}`;
+		const event = { type: threadLinked, stream, thread: key, source: `workflow:${this.runId}`, payload: { to: this.#key } };
+		// Recorded once: a rerun that finds the same pull request links it to the same issue. A run starting on the
+		// pull request's thread at the same moment conflicts on its stream version, so the link is retried.
+		for (let attempt = 1; ; attempt++) {
+			try {
+				await this.#db.withTx((tx) => append(tx, { ...event, idempotencyKey: `${stream} linked` }));
+				return;
+			} catch (error) {
+				if (!(error instanceof VersionConflict) || attempt >= LINK_ATTEMPTS) throw error;
+			}
+		}
 	}
 
 	authorized(): Promise<boolean> {
@@ -237,8 +258,11 @@ class ThreadRun implements Run {
 	}
 
 	/** Appends `run.finished`. It changes nothing for a run already recorded as stopped. */
-	async #record<Data>(state: "done" | "failed" | "cancelled", { outcome, summary, links = [], data }: Outcome<Data>): Promise<TaskResult<Data>> {
-		await this.#append(runFinished, { state, outcome, summary, links, duration_ms: Date.now() - this.#startedAt });
+	async #record<Data>(
+		state: "done" | "failed" | "cancelled",
+		{ outcome, summary, links = [], data, waiting }: Outcome<Data>,
+	): Promise<TaskResult<Data>> {
+		await this.#append(runFinished, { state, outcome, summary, links, duration_ms: Date.now() - this.#startedAt, waiting });
 		return this.result(state, { outcome, summary, data });
 	}
 

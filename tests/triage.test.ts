@@ -20,7 +20,6 @@ type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 
 const BOT = "software-factory[bot]";
-const APPROVED = config.labels.specApproved;
 const ctx = { metadata: { taskRunId: "trn-triage", rootTaskRunId: "trn-triage" } };
 const input = { repo: REPO, installationId: 5, issue: 12, actor: "maintainer" };
 
@@ -233,7 +232,7 @@ describe("triage task", () => {
 		expect(gh.status()).toContain(`(${questions?.htmlUrl})`);
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
 		expect(sandbox.closed).toBe(1);
-		expect(await runRow(db, "trn-triage")).toMatchObject({ state: "done", outcome: "asked" });
+		expect(await runRow(db, "trn-triage")).toMatchObject({ state: "done", outcome: "asked", waiting: "reply" });
 	});
 
 	it("updates the same questions comment on the next round and shows the earlier questions as the factory's", async () => {
@@ -264,6 +263,8 @@ describe("triage task", () => {
 		expect(declined?.body).toContain("The factory declined this issue");
 		expect(declined?.body).not.toContain("@everyone");
 		expect(declined?.body).not.toContain("<!--");
+		expect(declined?.body).toContain(`To try again, apply the \`${config.labels.triage}\` label.`);
+		expect(await runRow(db, "trn-triage")).toMatchObject({ outcome: "declined", waiting: null });
 	});
 
 	it("drafts a spec comment whose marker carries the spec, its hash, and version 1", async () => {
@@ -297,9 +298,10 @@ describe("triage task", () => {
 		expect(marker?.notes).toEqual(draft(spec()).notes);
 		expect(gh.status()).toContain(`- [Spec v1](${comment?.htmlUrl})`);
 		expect(sandbox.closed).toBe(1);
+		expect(await runRow(db, "trn-triage")).toMatchObject({ outcome: "drafted", waiting: "reply" });
 	});
 
-	it("revises the same spec comment, bumps the version, and removes the approval label", async () => {
+	it("revises the same spec comment and bumps the version", async () => {
 		const revised = spec({ goals: ["Users can switch to dark mode", "The choice persists"] });
 		const revisedDraft: SpecDraft = {
 			...draft(revised, "Added persistence."),
@@ -311,15 +313,12 @@ describe("triage task", () => {
 		});
 		const saved: SpecNotes = { findings: "The palette is defined in src/theme.ts.", relevantPaths: ["src/theme.ts", "src/app.css"] };
 		const original = specComment(gh, spec(), 1, BOT, saved);
-		gh.labels.add(APPROVED);
 		gh.add("maintainer", "It should remember the choice.");
 
 		const outcome = await runTriage(ctx, { ...input, commentId: gh.comments.at(-1)?.id }, deps);
 
 		expect(outcome).toMatchObject({ outcome: "revised" });
-		expect(outcome.summary).toContain("revised the spec to v2");
-		expect(gh.removeLabel).toHaveBeenCalledWith(12, APPROVED);
-		expect(gh.labels.has(APPROVED)).toBe(false);
+		expect(outcome.summary).toBe("revised the spec to v2.");
 		expect(calls[0]?.message).toContain('<factory-spec version="1">');
 		expect(calls[0]?.message).toContain("## Current spec (v1)");
 		expect(calls[1]?.message).toContain("This is a revision");
@@ -334,7 +333,6 @@ describe("triage task", () => {
 		expect(specs[0]?.id).toBe(original.id);
 		expect(specs[0]?.body).toMatch(/^## Specification v2\n/);
 		expect(specs[0]?.body).toContain("Added persistence.");
-		expect(specs[0]?.body).toContain("label was removed because the spec changed");
 		expect(parseMarker(specs[0]?.body ?? "", "spec")).toMatchObject({
 			version: 2,
 			hash: contentHash(revised),
@@ -382,14 +380,36 @@ describe("triage task", () => {
 		expect(gh.written()).toEqual([]);
 	});
 
-	it("neither revises the spec nor removes its approval once a newer run starts on the issue", async () => {
+	it("does not revise the spec once a newer run starts on the issue", async () => {
 		const { gh, deps } = setup({ triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] });
 		const original = specComment(gh, spec(), 1);
-		gh.labels.add(APPROVED);
 		loseThreadAfter(deps, "spec-writer");
 
 		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
 		expect(gh.written().map((c) => c.body)).toEqual([original.body]);
-		expect(gh.labels.has(APPROVED)).toBe(true);
+	});
+
+	it("keeps the issue waiting when the reply that started it no longer exists", async () => {
+		const { calls, deps } = setup({});
+
+		expect(await runTriage(ctx, { ...input, commentId: 555 }, deps)).toMatchObject({ state: "done", outcome: "skipped" });
+		expect(calls).toEqual([]);
+		expect(await runRow(db, "trn-triage")).toMatchObject({ outcome: "skipped", waiting: "reply" });
+	});
+
+	it("removes the triage label once a labeled run starts, but not for a reply or a rejected actor", async () => {
+		const ask = () => ({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
+		const labeled = setup(ask());
+		await runTriage(ctx, input, labeled.deps);
+		expect(labeled.gh.labels.has(config.labels.triage)).toBe(false);
+
+		const reply = setup(ask());
+		reply.gh.add("maintainer", "All of them.");
+		await runTriage({ metadata: { taskRunId: "trn-reply" } }, { ...input, commentId: reply.gh.comments.at(-1)?.id }, reply.deps);
+		expect(reply.gh.removeLabel).not.toHaveBeenCalledWith(12, config.labels.triage);
+
+		const rejected = setup({});
+		await runTriage({ metadata: { taskRunId: "trn-bob" } }, { ...input, actor: "bob" }, rejected.deps);
+		expect(rejected.gh.labels.has(config.labels.triage)).toBe(true);
 	});
 });

@@ -36,8 +36,6 @@ export interface RenderSpecOptions {
 	warnings?: readonly string[];
 	/** The spec writer's `changeSummary`, shown for a revision. */
 	changeSummary?: string;
-	/** Set when a revision removed the approval label, so the maintainer knows to reapply it. */
-	approvalRemoved?: boolean;
 }
 
 /** The spec comment's visible body. The caller appends the hidden marker that carries the spec as JSON. */
@@ -49,7 +47,6 @@ export function renderSpec(spec: Spec, opts: RenderSpecOptions = {}): string {
 	if (opts.warnings && opts.warnings.length > 0) extras.push(`### Warnings\n\n${truncate(bullets(opts.warnings), 4000)}`);
 	if (opts.changeSummary?.trim())
 		extras.push(`### Changes${opts.version ? ` in v${opts.version}` : ""}\n\n${truncate(sanitize(opts.changeSummary), 4000)}`);
-	if (opts.approvalRemoved) extras.push(`> **Note:** the ${approve} label was removed because the spec changed. Reapply it to approve this version.`);
 	const tail = [
 		"",
 		...extras,
