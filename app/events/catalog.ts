@@ -10,6 +10,11 @@ export interface EventSpec<S extends z.ZodType = z.ZodType> {
 	readonly payload: S;
 }
 
+/** The `subject` of every event about an issue or pull request: "owner/name#issue-12" or "owner/name#pr-34". */
+export function subjectKey(repo: string, subject: { kind: "issue" | "pr"; number: number }): string {
+	return `${repo}#${subject.kind}-${subject.number}`;
+}
+
 /** Every event type the factory writes is declared in this file with `defineEvent`. */
 export function defineEvent<S extends z.ZodType>(type: string, version: number, payload: S): EventSpec<S> {
 	return { type, version, payload };
