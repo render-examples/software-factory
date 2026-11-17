@@ -81,9 +81,12 @@ export const claimReleased = defineEvent("claim.released", 1, z.strictObject({ t
 
 // Live agent events (plan 05)
 
-/** Model text in one event, in characters. */
+/**
+ * Model text in one event. The recorder clips to this many bytes of JSON-encoded UTF-8, so the schema's character
+ * limit, which every byte budget implies, can never be exceeded.
+ */
 export const MESSAGE_MAX = 64 * 1024;
-/** Tool arguments (as JSON) and output previews, in characters. */
+/** Tool arguments (as JSON) and output previews, clipped the same way as MESSAGE_MAX. */
 export const TOOL_TEXT_MAX = 32 * 1024;
 
 const count = z.number().int().nonnegative();

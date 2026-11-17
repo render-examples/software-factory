@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { appendMany, type Db, type NewEvent, type Tx } from "../db/index.js";
+import { appendMany, type Db, MAX_PAYLOAD_BYTES, type NewEvent, type Tx } from "../db/index.js";
 import { errorMessage } from "../runner/core/emit.js";
 import type { RunnerEvent, Usage } from "../runner/core/protocol.js";
-import type { ThreadKey } from "../threads/index.js";
+import { ThreadKey } from "../threads/index.js";
 import {
 	agentRunFinished,
 	agentRunStarted,
@@ -70,8 +70,10 @@ export class AgentRunRecorder {
 	constructor(opts: RecorderOptions) {
 		this.#db = opts.db;
 		this.#runId = opts.runId;
-		this.#thread = opts.thread;
 		this.#source = `workflow:${opts.runId}`;
+		// append() rejects a malformed thread key, which would fail every write for the rest of the run.
+		if (opts.thread === undefined || ThreadKey.safeParse(opts.thread).success) this.#thread = opts.thread;
+		else warn("agent run recorded without its thread: invalid thread key", { agentRunId: this.id });
 	}
 
 	start(agent: { agentId: string; harness: string; model: string }): void {
@@ -134,10 +136,18 @@ export class AgentRunRecorder {
 		await this.#flush();
 	}
 
+	/**
+	 * Queues an event only if append() will accept it: a rejected event in a batch would fail every later write, so
+	 * the database errors that #write retries must be the only failures left.
+	 */
 	#push(type: Pending["type"], payload: unknown): void {
 		const parsed = type.payload.safeParse(payload);
 		if (!parsed.success) {
 			warn("agent run event dropped: invalid payload", { agentRunId: this.id, type: type.type });
+			return;
+		}
+		if (Buffer.byteLength(JSON.stringify(parsed.data)) > MAX_PAYLOAD_BYTES) {
+			warn("agent run event dropped: payload too large", { agentRunId: this.id, type: type.type });
 			return;
 		}
 		const event = { type, thread: this.#thread, source: this.#source, payload: parsed.data };
@@ -221,7 +231,7 @@ function chunks(text: string): string[] {
 	let current = "";
 	let bytes = 0;
 	for (const char of text) {
-		const size = Buffer.byteLength(JSON.stringify(char)) - 2;
+		const size = jsonBytes(char);
 		if (bytes + size > MAX_PART_BYTES) {
 			parts.push(current);
 			current = "";
@@ -240,13 +250,26 @@ function clean(text: string): string {
 }
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
-function clip(text: string, max: number): string {
+/**
+ * Cuts text to whole characters whose JSON encoding fits `maxBytes` of UTF-8, marked TRUNCATED when cut. A control
+ * character such as ESC takes 6 bytes in JSON, so a character count alone can't bound an event's size.
+ */
+function clip(text: string, maxBytes: number): string {
 	const safe = clean(text);
-	if (safe.length <= max) return safe;
-	let end = max - TRUNCATED.length;
-	if (/[\ud800-\udbff]/.test(safe.charAt(end - 1))) end--;
+	if (jsonBytes(safe) <= maxBytes) return safe;
+	const budget = maxBytes - jsonBytes(TRUNCATED);
+	let end = 0;
+	let bytes = 0;
+	for (const char of safe) {
+		bytes += jsonBytes(char);
+		if (bytes > budget) break;
+		end += char.length;
+	}
 	return safe.slice(0, end) + TRUNCATED;
 }
+
+/** Text's size once JSON-encoded, in UTF-8 bytes, without the quotes. */
+const jsonBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
 
 function warn(msg: string, fields: Record<string, unknown>): void {
 	console.error(JSON.stringify({ level: "warn", msg, ...fields }));

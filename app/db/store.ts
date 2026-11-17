@@ -5,7 +5,8 @@ import type { Tx } from "./pool.js";
 import { project } from "./projections.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
 
-const MAX_PAYLOAD_BYTES = 256 * 1024;
+/** An event payload's largest JSON encoding, in UTF-8 bytes. */
+export const MAX_PAYLOAD_BYTES = 256 * 1024;
 
 export interface NewEvent<S extends z.ZodType = z.ZodType> {
 	type: EventSpec<S>;

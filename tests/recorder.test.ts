@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { type Db, readStream } from "../app/db/index.js";
 import { type AgentRunSummary, AgentRunRecorder, LiveNotice } from "../app/events/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
+import type { ThreadKey } from "../app/threads/index.js";
 import { pgliteDb } from "./helpers/db.js";
 
 let db: Db;
@@ -37,6 +38,7 @@ const feed = (r: AgentRunRecorder, ...events: RunnerEvent[]) => {
 };
 const delta = (text: string, message_id = "m1"): RunnerEvent => ({ type: "assistant_delta", at, message_id, text });
 const logged = (r: AgentRunRecorder) => readStream(db, r.stream, 0);
+const jsonBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
 
 /** A database whose first `failures` transactions fail. */
 function flaky(failures: number): Db & { attempts: number } {
@@ -120,10 +122,58 @@ describe("AgentRunRecorder", () => {
 		const [, message, result] = await logged(r);
 		expect(message?.payload).toEqual({ message_id: "m1", text: "ab \ufffd" });
 		const preview = (result?.payload as { output_preview?: string } | undefined)?.output_preview ?? "";
-		expect(preview).toHaveLength(32 * 1024);
+		expect(jsonBytes(preview)).toBeLessThanOrEqual(32 * 1024);
+		expect(jsonBytes(preview)).toBeGreaterThan(32 * 1024 - 8);
 		expect(preview.startsWith("xxx")).toBe(true);
 		expect(preview.endsWith("…[truncated]")).toBe(true);
 		expect(notices[0]).toMatchObject({ type: "delta", text: "ab" });
+	});
+
+	it("clips by JSON-encoded bytes, so escape-heavy text can't block the events after it", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const r = recorder();
+		// ESC is one character but six bytes in JSON: 60,000 of them are about 360 KB, over the 256 KB payload cap.
+		feed(
+			r,
+			{ type: "assistant_text", at, message_id: "m1", text: "\u001b".repeat(60_000) },
+			{ type: "tool_call", at, tool_call_id: "c1", tool: "bash", args: { command: "\u001b".repeat(40_000) } },
+			{ type: "tool_result", at, tool_call_id: "c1", tool: "bash", is_error: false, output_preview: "ok" },
+		);
+		await r.finish(SUMMARY);
+		const events = await logged(r);
+		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "assistant.message", "tool.call", "tool.result", "agent_run.finished"]);
+		const text = (events[1]?.payload as { text: string }).text;
+		const args = (events[2]?.payload as { args: string }).args;
+		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
+		expect(text.endsWith("…[truncated]")).toBe(true);
+		expect(jsonBytes(args)).toBeLessThanOrEqual(32 * 1024);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it("cuts multi-byte text at a character boundary within the budget", async () => {
+		const r = recorder();
+		feed(r, { type: "assistant_text", at, message_id: "m1", text: `${"字".repeat(20_000)}${"🙂".repeat(20_000)}` });
+		await r.finish(SUMMARY);
+		const text = ((await logged(r))[1]?.payload as { text: string }).text;
+		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
+		const kept = text.slice(0, -"…[truncated]".length);
+		expect(kept).toMatch(/^字+🙂*$/u);
+		expect(kept.at(-1)).not.toMatch(/[\ud800-\udbff]/);
+	});
+
+	it("records a run whose thread key is malformed, without the thread", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const r = new AgentRunRecorder({ db, runId: "trn-1", thread: "not a key" as ThreadKey });
+		r.start({ agentId: "triage", harness: "pi", model: "anthropic/claude-opus-5" });
+		feed(r, { type: "assistant_text", at, message_id: "m1", text: "Done." });
+		await r.finish(SUMMARY);
+		const events = await logged(r);
+		expect(events.map((e) => [e.type, e.thread])).toEqual([
+			["agent_run.started", null],
+			["assistant.message", null],
+			["agent_run.finished", null],
+		]);
+		expect(warn).toHaveBeenCalledTimes(1);
 	});
 
 	it("takes agent_run.finished from the host's summary, not from streamed usage", async () => {
