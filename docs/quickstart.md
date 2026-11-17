@@ -38,15 +38,17 @@ Stop at every human checkpoint. Do not print or expose secrets.
 ```
 
 The agent will configure the fork, create a GitHub App, create the Render
-environment groups, deploy the Blueprint, connect the webhook, verify the
-deployment, and guide one Triage smoke test.
+environment groups, deploy the Blueprint, link its database to the Workflows
+service, connect the webhook, verify the deployment, and guide one Triage
+smoke test.
 
 You must take over for:
 
 - approval to commit or push;
 - GitHub App creation and installation;
 - secret entry;
-- paid Render resource creation;
+- paid Render resource creation, and redeploying `factory-workflows` once its
+  database is linked;
 - webhook activation; and
 - creation or labeling of the smoke-test issue.
 

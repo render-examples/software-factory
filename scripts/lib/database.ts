@@ -20,7 +20,7 @@ export async function checkDatabase(url: string, deps: DatabaseDeps, out: Report
 	} catch (error) {
 		out.fail(
 			`database check failed: ${errorMessage(error)}`,
-			"On Render the Blueprint links factory-db's internal URL; locally, use its external URL with ?sslmode=require",
+			"On Render, services use factory-db's internal URL; locally, use its external URL with ?sslmode=verify-full",
 		);
 	} finally {
 		await db.end().catch(() => {});

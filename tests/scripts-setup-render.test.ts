@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
-import { ENV_GROUPS, SERVICE_ENV } from "../scripts/lib/requirements.js";
-import { newEventsReadToken, setupRender } from "../scripts/lib/setup-render.js";
+import { ENV_GROUPS, SERVICE_ENV, WORKFLOWS_DATABASE_GROUP } from "../scripts/lib/requirements.js";
+import { linkDatabase, newEventsReadToken, setupRender } from "../scripts/lib/setup-render.js";
 
 const WORKSPACE = "tea-abc123";
 const SECRETS = {
@@ -21,6 +21,12 @@ interface StoredGroup {
 	envVars: { key: string; value: string }[];
 }
 
+interface StoredService {
+	id: string;
+	name: string;
+	envVars: { key: string; value: string }[];
+}
+
 interface Call {
 	method: string;
 	path: string;
@@ -28,9 +34,10 @@ interface Call {
 	body: unknown;
 }
 
-/** A Render API with an in-memory set of env groups. */
-function renderWorld(opts: { groups?: StoredGroup[]; ownerStatus?: number } = {}) {
+/** A Render API with an in-memory set of env groups and web services. */
+function renderWorld(opts: { groups?: StoredGroup[]; services?: StoredService[]; ownerStatus?: number } = {}) {
 	const groups = opts.groups ?? [];
+	const services = opts.services ?? [];
 	const calls: Call[] = [];
 	const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = new URL(String(input));
@@ -57,6 +64,16 @@ function renderWorld(opts: { groups?: StoredGroup[]; ownerStatus?: number } = {}
 			groups.push(group);
 			return json(group, 201);
 		}
+		if (call.method === "GET" && url.pathname === "/v1/services" && url.searchParams.get("ownerId") === WORKSPACE) {
+			const limit = Number(url.searchParams.get("limit"));
+			const start = services.findIndex((s) => s.id === url.searchParams.get("cursor")) + 1;
+			return json(
+				services.slice(start, start + limit).map(({ id, name }) => ({ cursor: id, service: { id, name, type: "web_service", ownerId: WORKSPACE } })),
+			);
+		}
+		const envVarPath = /^\/v1\/services\/([^/]+)\/env-vars\/([^/]+)$/.exec(url.pathname);
+		const envVar = envVarPath && services.find((s) => s.id === envVarPath[1])?.envVars.find((v) => v.key === envVarPath[2]);
+		if (call.method === "GET" && envVar) return json(envVar);
 		const group = groupPath && groups.find((g) => g.id === groupPath[1]);
 		if (group && call.method === "GET" && !groupPath[2]) return json(group);
 		if (group && call.method === "PUT" && groupPath[2]) {
@@ -67,7 +84,7 @@ function renderWorld(opts: { groups?: StoredGroup[]; ownerStatus?: number } = {}
 		}
 		return json({ message: "Not Found" }, 404);
 	}) as typeof globalThis.fetch;
-	return { fetch, calls, groups };
+	return { fetch, calls, groups, services };
 }
 
 async function run(world: ReturnType<typeof renderWorld>, env: Record<string, string | undefined> = ENV) {
@@ -170,6 +187,82 @@ describe("setup:render", () => {
 	});
 });
 
+describe("setup:render --link-database", () => {
+	const DATABASE_URL = "postgresql://factory:db-SECRET-password@dpg-abc123-a/factory_db_ygz3";
+	const LINK_ENV = { RENDER_API_KEY: SECRETS.RENDER_API_KEY, RENDER_WORKSPACE_ID: WORKSPACE };
+	const workflowsGroup = (): StoredGroup => ({
+		id: "evg-w",
+		name: "software-factory-workflows",
+		ownerId: WORKSPACE,
+		envVars: [{ key: "GITHUB_APP_ID", value: "1" }],
+	});
+	/** More than one page of other web services, then the Blueprint's gateway under a suffixed name. */
+	const servicesWithGateway = (envVars: StoredService["envVars"]): StoredService[] => [
+		...Array.from({ length: 100 }, (_, i) => ({ id: `srv-${i}`, name: `app-${i}`, envVars: [] })),
+		{ id: "srv-gw", name: "factory-gateway-ygz3", envVars },
+	];
+
+	async function link(world: ReturnType<typeof renderWorld>) {
+		const lines: string[] = [];
+		const code = await linkDatabase({ env: LINK_ENV, fetch: world.fetch }, new Reporter((line) => lines.push(line)));
+		return { code, output: lines.join("\n") };
+	}
+
+	it("copies the gateway's DATABASE_URL into the workflows group without printing it, and is idempotent", async () => {
+		const world = renderWorld({ groups: [workflowsGroup()], services: servicesWithGateway([{ key: "DATABASE_URL", value: DATABASE_URL }]) });
+		const { code, output } = await link(world);
+		expect(code).toBe(0);
+		expect(world.groups[0]?.envVars).toEqual([
+			{ key: "GITHUB_APP_ID", value: "1" },
+			{ key: "DATABASE_URL", value: DATABASE_URL },
+		]);
+		expect(writes(world.calls).map((c) => `${c.method} ${c.path}`)).toEqual(["PUT /v1/env-groups/evg-w/env-vars/DATABASE_URL"]);
+		expect(output).toContain("DATABASE_URL added");
+		expect(output).toContain("factory-workflows picks up DATABASE_URL on its next deploy");
+		expect(output).not.toContain(DATABASE_URL);
+		expect(output).not.toContain("db-SECRET-password");
+
+		const again = renderWorld({ groups: world.groups, services: world.services });
+		const rerun = await link(again);
+		expect(rerun.code).toBe(0);
+		expect(rerun.output).toContain("DATABASE_URL unchanged");
+		expect(writes(again.calls)).toEqual([]);
+	});
+
+	it("fails without writing when the gateway doesn't exist yet", async () => {
+		const world = renderWorld({ groups: [workflowsGroup()], services: [{ id: "srv-1", name: "other-app", envVars: [] }] });
+		const { code, output } = await link(world);
+		expect(code).toBe(1);
+		expect(output).toContain(`no factory-gateway service in workspace ${WORKSPACE}`);
+		expect(output).toContain("Apply the Blueprint first");
+		expect(writes(world.calls)).toEqual([]);
+	});
+
+	it("fails without writing when the gateway has no DATABASE_URL", async () => {
+		const world = renderWorld({ groups: [workflowsGroup()], services: servicesWithGateway([]) });
+		const { code, output } = await link(world);
+		expect(code).toBe(1);
+		expect(output).toContain("factory-gateway-ygz3 has no DATABASE_URL");
+		expect(output).toContain("Apply the Blueprint first");
+		expect(writes(world.calls)).toEqual([]);
+	});
+
+	it("refuses to pick between two services that could be the gateway", async () => {
+		const envVars = [{ key: "DATABASE_URL", value: DATABASE_URL }];
+		const world = renderWorld({
+			groups: [workflowsGroup()],
+			services: [
+				{ id: "srv-1", name: "factory-gateway", envVars },
+				{ id: "srv-2", name: "factory-gateway-ygz3", envVars },
+			],
+		});
+		const { code, output } = await link(world);
+		expect(code).toBe(1);
+		expect(output).toContain("2 web services could be the gateway: factory-gateway, factory-gateway-ygz3");
+		expect(writes(world.calls)).toEqual([]);
+	});
+});
+
 describe("render.yaml env groups", () => {
 	const blueprint = readFileSync(new URL("../render.yaml", import.meta.url), "utf8");
 
@@ -180,14 +273,21 @@ describe("render.yaml env groups", () => {
 		return blueprint.slice(start, next < 0 ? undefined : start + 1 + next);
 	}
 
-	it("links each service to the groups setup:render creates for it and to factory-db, covering SERVICE_ENV", () => {
+	it("links each service to the groups setup:render creates for it, covering SERVICE_ENV", () => {
 		for (const service of ["gateway", "workflows"] as const) {
 			const block = serviceBlock(`factory-${service}`);
 			const expected = ENV_GROUPS.filter((g) => g.services.includes(service));
 			expect([...block.matchAll(/fromGroup:\s*(\S+)/g)].map((m) => m[1]).sort()).toEqual(expected.map((g) => g.name).sort());
-			expect(block).toMatch(/key: DATABASE_URL\n\s+fromDatabase:\n\s+name: factory-db\n/);
 			const keys = [...expected.flatMap((g) => g.keys), "RENDER_WORKFLOW_SLUG", "DATABASE_URL"];
 			expect(keys.filter((k) => SERVICE_ENV[service].includes(k)).sort()).toEqual([...SERVICE_ENV[service]].sort());
 		}
+	});
+
+	it("links factory-db to the gateway, and Workflows gets DATABASE_URL from a group it links", () => {
+		expect(serviceBlock("factory-gateway")).toMatch(/key: DATABASE_URL\n\s+fromDatabase:\n\s+name: factory-db\n/);
+		const workflows = serviceBlock("factory-workflows");
+		expect(workflows).not.toMatch(/key: DATABASE_URL/);
+		expect(WORKFLOWS_DATABASE_GROUP.services).toEqual(["workflows"]);
+		expect(workflows).toContain(`fromGroup: ${WORKFLOWS_DATABASE_GROUP.name}\n`);
 	});
 });

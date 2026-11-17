@@ -358,8 +358,18 @@ values and common failures.
 ## Database
 
 The Blueprint creates `factory-db`, a Render Postgres 17 database on the paid
-`basic-256mb` plan, because free databases expire after 30 days. It links the
-database's internal URL to both services as `DATABASE_URL`.
+`basic-256mb` plan, because free databases expire after 30 days. Both services
+read its internal URL as `DATABASE_URL`. The Blueprint links it to the
+gateway. A Blueprint can't reference a database from a Workflows service, so
+after the Blueprint is applied, this command copies the gateway's value into
+the `software-factory-workflows` env group:
+
+```bash
+npm run setup:render -- --link-database
+```
+
+It never prints the value and is safe to rerun. `factory-workflows` reads the
+value on its next deploy.
 
 Each service applies pending migrations from `app/db/migrations/` when it
 starts. An advisory lock lets only one apply them; the other waits and finds
@@ -368,7 +378,7 @@ because the other service may still be running the previous code.
 
 To run the services locally, set `DATABASE_URL` in `.env` to a local Postgres
 or to `factory-db`'s external URL from its **Connect** tab with
-`?sslmode=require` appended. The local services migrate that database when
+`?sslmode=verify-full` appended. The local services migrate that database when
 they start. `npm run setup:preflight -- --local` and `doctor` check that
 `DATABASE_URL` connects and warn about migrations it hasn't applied yet.
 
@@ -386,9 +396,10 @@ external URL.
 ## Environment variables
 
 Local variables are listed in [`.env.example`](../.env.example). The
-Blueprint supplies `RENDER_WORKFLOW_SLUG` to the gateway from the Workflows
-service and `DATABASE_URL` to both services from `factory-db`. Every other
-deployed value comes from an [environment group](#environment-groups).
+Blueprint supplies `RENDER_WORKFLOW_SLUG` and `DATABASE_URL` to the gateway,
+from the Workflows service and `factory-db`. Every other deployed value,
+including Workflows' `DATABASE_URL`, comes from an
+[environment group](#environment-groups).
 
 ### Gateway
 
@@ -398,7 +409,7 @@ deployed value comes from an [environment group](#environment-groups).
 | `EVENTS_READ_TOKEN` | Authenticate readers of the [event streams](#event-streams); `npm run setup:render` generates it |
 | `RENDER_API_KEY` | Start Workflows tasks |
 | `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
-| `DATABASE_URL` | Connect to the [database](#database) |
+| `DATABASE_URL` | Connect to the [database](#database); the Blueprint links it |
 | `PORT` | HTTP port; defaults to `3000` |
 
 ### Workflows
@@ -409,7 +420,7 @@ deployed value comes from an [environment group](#environment-groups).
 | `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
 | `GITHUB_APP_ID` | Authenticate the GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
-| `DATABASE_URL` | Connect to the [database](#database) |
+| `DATABASE_URL` | Connect to the [database](#database); `npm run setup:render -- --link-database` sets it after the Blueprint is applied |
 | `ANTHROPIC_API_KEY` | Call the default models; each agent's harness declares the key it needs |
 | `GITHUB_API_URL` | Optional GitHub API base URL |
 
@@ -430,9 +441,12 @@ instead:
 |---|---|---|
 | `software-factory-shared` | both services | `RENDER_API_KEY` |
 | `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET`, `EVENTS_READ_TOKEN` |
-| `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY` |
+| `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL` |
 
 The gateway links no group that holds GitHub App credentials or a model key.
+`DATABASE_URL` is the only value that doesn't come from `.env`:
+`npm run setup:render -- --link-database` copies it from the gateway after
+the Blueprint is applied (see [Database](#database)).
 `ENV_GROUPS` in
 [`scripts/lib/requirements.ts`](../scripts/lib/requirements.ts) defines this
 layout for setup and `doctor`.
@@ -464,7 +478,9 @@ redeploy the services that link the group.
 
 To keep the Render API key out of local `.env`, create the groups by hand
 before applying the Blueprint. In the workspace, open **Environment Groups**
-and create each group in the table with the exact name and variables shown.
+and create each group in the table with the exact name and variables shown,
+except `DATABASE_URL`: after the Blueprint is applied, copy the gateway's
+`DATABASE_URL` into `software-factory-workflows`.
 Paste values from `.env` or from their source without showing them in chat.
 Workflows `doctor` still reads these values locally, so export them in the
 shell where it runs.

@@ -79,8 +79,8 @@ export interface EnvGroupSpec {
 
 /**
  * The environment groups setup:render creates from .env and render.yaml links. Each service gets every key in
- * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG and DATABASE_URL, which the Blueprint wires from the Workflows
- * service and the factory-db database.
+ * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG and DATABASE_URL. The Blueprint wires the gateway's from the
+ * Workflows service and the factory-db database; Workflows gets DATABASE_URL from WORKFLOWS_DATABASE_GROUP.
  * The gateway links no group that holds GitHub App credentials or a model key.
  */
 export const ENV_GROUPS: readonly EnvGroupSpec[] = [
@@ -92,6 +92,12 @@ export const ENV_GROUPS: readonly EnvGroupSpec[] = [
 		keys: ["RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", ...HARNESS_KEY_ENV],
 	},
 ];
+
+/**
+ * Where Workflows gets DATABASE_URL. A Blueprint can't link a database to a workflow service, so after the Blueprint
+ * is applied, `setup:render -- --link-database` copies the gateway's DATABASE_URL into this group.
+ */
+export const WORKFLOWS_DATABASE_GROUP: EnvGroupSpec = { name: "software-factory-workflows", services: ["workflows"], keys: ["DATABASE_URL"] };
 
 /** The group a service reads `key` from, if any. */
 export function envGroupFor(service: Service, key: string): EnvGroupSpec | undefined {

@@ -42,13 +42,12 @@ projects:
             runtime: node
             buildCommand: npm ci
             startCommand: npm run start:workflows
+            # DATABASE_URL comes from the software-factory-workflows group: a Blueprint can't reference a
+            # database from a workflow service, so `npm run setup:render -- --link-database` sets it after
+            # this Blueprint creates factory-db.
             envVars:
               - fromGroup: software-factory-shared
               - fromGroup: software-factory-workflows
-              - key: DATABASE_URL
-                fromDatabase:
-                  name: factory-db
-                  property: connectionString
 
         databases:
           - name: factory-db

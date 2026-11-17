@@ -236,7 +236,8 @@ After preflight passes, the command creates or updates:
   `EVENTS_READ_TOKEN`, which the command generates and saves to `.env` when
   it's missing; and
 - `software-factory-workflows`, for Workflows: `RENDER_WORKSPACE_ID`,
-  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`.
+  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`. Phase 7
+  adds `DATABASE_URL` once the Blueprint has created the database.
 
 It saves the workspace ID to `.env`, never prints a secret, and is safe to
 rerun. Continue only when it reports no failed check.
@@ -270,10 +271,32 @@ Explain the resources and expected charges. Ask the user to create the
 Blueprint from the configured fork and branch, in the workspace from Phase 6,
 and apply it. The form asks for no values.
 
-Continue when both services have deployed and the gateway is live.
+Continue when the gateway is live. `factory-workflows` can't start until it
+has `DATABASE_URL`, which the next step provides, so expect its first deploy
+to fail with `DATABASE_URL is not set`.
 
 The gateway has no web UI. Opening its URL in a browser shows a short
 message that it is running; that is expected, not a failed deploy.
+
+### Link the database to Workflows
+
+A Blueprint can't reference a database from a Workflows service, so
+`render.yaml` links `factory-db` only to the gateway. Copy the gateway's
+`DATABASE_URL` into the `software-factory-workflows` env group:
+
+```bash
+npm run setup:render -- --link-database
+```
+
+The command finds `factory-gateway` in the workspace from Phase 6, reads the
+internal database URL the Blueprint gave it, and writes that value to the
+group without printing it. It is safe to rerun. If it reports that the
+gateway or its `DATABASE_URL` doesn't exist, the Blueprint hasn't finished
+creating them: wait for it, then rerun the command.
+
+`factory-workflows` reads the value on its next deploy. Ask the user to
+redeploy `factory-workflows` from the Render Dashboard, and continue when that
+deploy succeeds.
 
 ## Phase 8: Configure GitHub
 
@@ -330,8 +353,8 @@ needs `RENDER_WORKFLOW_SLUG`, which is not a secret. Use the deployed workflow
 slug, including any suffix Render added: copy the exact value from
 `factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`. It
 also needs `DATABASE_URL`: ask the user to paste `factory-db`'s external URL
-from its **Connect** tab into `.env` with `?sslmode=require` appended. It holds
-the database password; do not ask for it in chat.
+from its **Connect** tab into `.env` with `?sslmode=verify-full` appended. It
+holds the database password; do not ask for it in chat.
 
 Run:
 
@@ -442,6 +465,8 @@ they can delete.
 
 - For `depends on non-existent group`, run `npm run setup:render` in the
   workspace that holds the Blueprint, then retry the Blueprint sync.
+- For `DATABASE_URL is not set` on `factory-workflows`, run
+  `npm run setup:render -- --link-database`, then redeploy `factory-workflows`.
 - For a missing or wrong value, fix it in `.env`, rerun
   `npm run setup:render`, and redeploy the affected service.
 - For a build failure, inspect the failing service's build log before changing
@@ -452,14 +477,18 @@ they can delete.
 ### `doctor` fails
 
 - Gateway: check the webhook secret, Render API key, and workflow slug.
-- Database: on Render, both services get `DATABASE_URL` from the Blueprint;
-  rerun the Blueprint sync if it is missing. Locally, use the external URL
-  with `?sslmode=require`. Migrations not yet applied mean neither service
-  has started on the current code.
+- Database: on Render, the gateway gets `DATABASE_URL` from the Blueprint;
+  rerun the Blueprint sync if it is missing. Workflows gets it from the
+  `software-factory-workflows` env group; run
+  `npm run setup:render -- --link-database` and redeploy `factory-workflows`
+  if it is missing. Locally, use the external URL with `?sslmode=verify-full`.
+  Migrations not yet applied mean neither service has started on the current
+  code.
 - Workflows: check the workspace ID, Render API key, App credentials,
   provider key, and registered tasks.
 - `No tasks found`: use the deployed workflow slug, not an assumed service
-  name.
+  name. If `factory-workflows` never deployed successfully, check its deploy
+  log for `DATABASE_URL is not set`.
 - App or label failure: fix App access and rerun `npm run setup:github`.
 
 ### No status comment appears

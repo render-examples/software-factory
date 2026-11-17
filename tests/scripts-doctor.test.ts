@@ -240,6 +240,12 @@ describe("doctor", () => {
 		expect(find("fail", "DATABASE_URL is not set")).toBeDefined();
 	});
 
+	it("points Workflows' missing DATABASE_URL at setup:render --link-database", async () => {
+		const { DATABASE_URL: _, ...env } = FULL_ENV;
+		const { find } = await doctor({ env, services: ["workflows"] });
+		expect(find("fail", "DATABASE_URL is not set")?.fix).toContain("npm run setup:render -- --link-database");
+	});
+
 	it.each([
 		["null", { tasksBody: null }],
 		["object", { tasksBody: {} }],

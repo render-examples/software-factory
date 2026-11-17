@@ -32,7 +32,7 @@ export async function runPreflight(opts: PreflightOptions, out: Reporter): Promi
 		out.fail(`Node ${opts.requiredNodeMajor} is required by .node-version`, `Activate the pinned Node version; currently ${opts.nodeVersion}`);
 	} else out.pass(`Node ${opts.requiredNodeMajor} matches .node-version`);
 	if (opts.local) {
-		// Before deployment there is no factory-db yet: the Blueprint creates it and links it to both services.
+		// Before deployment there is no factory-db yet: the Blueprint creates it.
 		const databaseUrl = opts.env.DATABASE_URL?.trim();
 		if (databaseUrl) await checkDatabase(databaseUrl, opts, out);
 		else out.skip("Database: no DATABASE_URL here", "Set it to run the services locally; see docs/configuration.md#database");

@@ -8,7 +8,17 @@ import { appCredentialsFrom, type Env, GitHubApp, type ScriptDeps, splitRepo } f
 import { PLACEHOLDER_WEBHOOK_URL } from "./manifest.js";
 import { errorMessage, type Reporter } from "./output.js";
 import { checkRepositoryPrerequisites } from "./repo-prerequisites.js";
-import { envGroupFor, LABELS, missingEvents, missingPermissions, SECRET_ENV, SERVICE_ENV, type Service, WEBHOOK_PATH } from "./requirements.js";
+import {
+	envGroupFor,
+	LABELS,
+	missingEvents,
+	missingPermissions,
+	SECRET_ENV,
+	SERVICE_ENV,
+	type Service,
+	WEBHOOK_PATH,
+	WORKFLOWS_DATABASE_GROUP,
+} from "./requirements.js";
 import { appSettingsUrl } from "./setup-github.js";
 
 export interface DoctorOptions extends ScriptDeps, DatabaseDeps {
@@ -53,6 +63,12 @@ function checkEnv({ env, services }: DoctorOptions, out: Reporter): void {
 }
 
 function setFix(service: Service, name: string): string {
+	if (service === "workflows" && name === "DATABASE_URL") {
+		return (
+			`On Render it's in the ${WORKFLOWS_DATABASE_GROUP.name} env group: run \`npm run setup:render -- --link-database\` and redeploy factory-workflows. ` +
+			"Locally, use factory-db's external URL with ?sslmode=verify-full"
+		);
+	}
 	const group = envGroupFor(service, name);
 	if (!group) return `Set it on factory-${service} (render.yaml declares it)`;
 	return `Set it in the ${group.name} env group: add it to .env and run \`npm run setup:render\``;
