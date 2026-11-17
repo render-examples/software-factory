@@ -95,6 +95,9 @@ class FakeSandbox {
 		this.execs.push({ command, opts });
 		return { exitCode: 0, stdout: this.files.map((f) => `${f}\0`).join(""), stderr: "" };
 	};
+	execStream = async (): Promise<number> => {
+		throw new Error("not used");
+	};
 	upload = async () => {};
 	download = async () => Buffer.from("");
 	close = async () => {

@@ -131,6 +131,9 @@ function fakeSandbox(opts: { changed?: boolean; verify?: Record<string, ExecResu
 			const next = queue && queue.length > 1 ? queue.shift() : queue?.[0];
 			return next ?? { exitCode: 0, stdout: "ok", stderr: "" };
 		}),
+		execStream: async (): Promise<number> => {
+			throw new Error("not used");
+		},
 		upload: async () => {},
 		download: async () => Buffer.alloc(0),
 		close: vi.fn(async () => {}),

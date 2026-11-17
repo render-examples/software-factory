@@ -38,7 +38,33 @@ const report = { input, key, keyFileExists, args, cwd: process.cwd(), envKeys: O
 console.log(JSON.stringify({ type: "started" }));
 console.log(JSON.stringify({ type: "report", report }));
 process.stderr.write("fake runner diagnostics\\n");
-process.exit(input.mode === "fail" ? 3 : 0);
+if (input.mode === "hang") setInterval(() => {}, 1000);
+else process.exit(input.mode === "fail" ? 3 : 0);
+`;
+
+/**
+ * coreutils timeout is missing on macOS. This one ignores options, runs the command with the caller's stdin, and
+ * exits 124 if it had to stop it at the duration.
+ */
+const TIMEOUT_SHIM = `#!/usr/bin/env bash
+while [ "\${1#-}" != "$1" ]; do shift; done
+seconds=$1
+shift
+exec 3<&0
+"$@" <&3 3<&- &
+pid=$!
+(sleep "$seconds" && kill "$pid") >/dev/null 2>&1 &
+watcher=$!
+wait "$pid"
+status=$?
+kill "$watcher" 2>/dev/null || exit 124
+exit "$status"
+`;
+
+/** BSD tee on macOS has no -p. */
+const TEE_SHIM = `#!/bin/sh
+[ "$1" = -p ] && shift
+exec /usr/bin/tee "$@"
 `;
 
 let tmp: string;
@@ -77,9 +103,8 @@ beforeAll(async () => {
 	const shim = join(tmp, "shim");
 	await mkdir(join(tmp, "home"), { recursive: true });
 	await mkdir(shim);
-	// coreutils timeout is missing on macOS: drop its options and duration, run the command.
-	const timeoutShim = ["#!/bin/sh", 'while [ "$' + '{1#-}" != "$1" ]; do shift; done', "shift", 'exec "$@"', ""].join("\n");
-	await writeFile(join(shim, "timeout"), timeoutShim, { mode: 0o755 });
+	await writeFile(join(shim, "timeout"), TIMEOUT_SHIM, { mode: 0o755 });
+	await writeFile(join(shim, "tee"), TEE_SHIM, { mode: 0o755 });
 	await writeFile(join(shim, "rg"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 	env = {
 		PATH: `${shim}:${dirname(process.execPath)}:${process.env.PATH}`,
@@ -197,10 +222,12 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 		const dir = await runDir("run-ok", { mode: "ok", task: "hello" }, `${key}\n`);
 		const res = await bash(join(app, "run-agent.sh"), [dir, "30"]);
 		expect(res.code).toBe(0);
-		expect(res.stdout).toBe("");
 		expect(res.stderr).toContain("fake runner diagnostics");
 		expect(await readFile(`${dir}.exit`, "utf8")).toBe("0\n");
-		const report = reportOf(await readFile(`${dir}.jsonl`, "utf8"));
+		expect(await readFile(`${dir}.pid`, "utf8")).toMatch(/^[1-9]\d*\n$/);
+		const jsonl = await readFile(`${dir}.jsonl`, "utf8");
+		expect(res.stdout).toBe(jsonl);
+		const report = reportOf(jsonl);
 		expect(report).toMatchObject({ input: { task: "hello" }, key, keyFileExists: false, args: ["--key-stdin"], cwd: repo });
 		expect(report.envKeys).not.toContain("DATABASE_URL");
 		expect(report.envKeys).toEqual(expect.arrayContaining(["HOME", "PATH", "TMPDIR", "GIT_CONFIG_GLOBAL"]));
@@ -209,6 +236,19 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 		expect(probe).not.toContain("--key-file");
 		expect(probe).not.toContain(key);
 		expect(existsSync(join(dir, "key"))).toBe(false);
+	});
+
+	it.each([
+		["fails", "fail", "30", 3],
+		["times out", "hang", "1", 124],
+	])("writes the same output to stdout and the file and keeps the runner's status when the runner %s", async (_, mode, seconds, status) => {
+		const dir = await runDir(`run-${mode}`, { mode }, "sk-ant-script-key\n");
+		const res = await bash(join(app, "run-agent.sh"), [dir, seconds]);
+		expect(res.code).toBe(status);
+		expect(await readFile(`${dir}.exit`, "utf8")).toBe(`${status}\n`);
+		const jsonl = await readFile(`${dir}.jsonl`, "utf8");
+		expect(jsonl).toContain('"type":"report"');
+		expect(res.stdout).toBe(jsonl);
 	});
 });
 

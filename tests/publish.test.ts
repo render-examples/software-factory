@@ -302,6 +302,9 @@ class LocalSandbox implements Sandbox {
 			});
 		});
 	}
+	async execStream(): Promise<number> {
+		throw new Error("not used");
+	}
 	async upload(): Promise<void> {}
 	async download(path: string): Promise<Buffer> {
 		this.downloads.push(path);

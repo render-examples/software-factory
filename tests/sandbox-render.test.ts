@@ -413,3 +413,31 @@ describe("openSandbox", () => {
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
 	});
 });
+
+describe("SandboxClient.execStream", () => {
+	it("passes on every chunk in order and resolves with the exit code", async () => {
+		fake.overrides = () => [out('{"a":1}\n{"b"'), out("diagnostics\n", "stderr"), out(":2}\n"), exit(3)];
+		const chunks: string[] = [];
+		const exitCode = await client().execStream("sbx-1", "run", { timeoutMs: 1_000, onData: (stream, data) => chunks.push(`${stream}:${data}`) });
+		expect(exitCode).toBe(3);
+		expect(chunks).toEqual(['stdout:{"a":1}\n{"b"', "stderr:diagnostics\n", "stdout::2}\n"]);
+	});
+
+	it("stops a command that outlives its timeout, keeping what it already passed on", async () => {
+		const api = {
+			async exec(_id: string, _command: string, _ownerId: undefined, signal: AbortSignal) {
+				return (async function* () {
+					yield out("started\n");
+					await new Promise((_, reject) => signal.addEventListener("abort", reject));
+				})();
+			},
+		} as unknown as SandboxApi;
+		const chunks: string[] = [];
+		const run = new SandboxClient(api, { minRequestIntervalMs: 0 }).execStream("sbx-1", "sleep 600", {
+			timeoutMs: 50,
+			onData: (_, data) => chunks.push(data),
+		});
+		await expect(run).rejects.toThrow("timed out after 50ms");
+		expect(chunks).toEqual(["started\n"]);
+	});
+});

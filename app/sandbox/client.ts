@@ -3,7 +3,7 @@ import { ClientError, Render, ServerError } from "@renderinc/sdk";
 import type { SandboxesClient, SandboxUploadContentType } from "@renderinc/sdk/experimental";
 import { requireEnv } from "../config/index.js";
 import { errorMessage, log } from "./shell.js";
-import type { ExecResult } from "./types.js";
+import type { ExecResult, ExecStreamOptions } from "./types.js";
 
 /** The subset of the SDK's SandboxesClient used here; tests substitute a fake. */
 export type SandboxApi = Pick<SandboxesClient, "create" | "get" | "exec" | "upload" | "download" | "terminate"> & {
@@ -53,7 +53,8 @@ export interface ClientExecOptions {
  * - pacing: the Sandbox API allows 100 requests/min per workspace and the SDK neither paces nor retries 429s;
  * - retries on 429/503, which the SDK surfaces as errors;
  * - `waitRunning`: `create` returns while the sandbox is still `creating`, and there is no wait helper;
- * - `exec` collection: the SDK returns the raw event stream; `exec` here gathers output and the exit code.
+ * - `exec` collection: the SDK returns the raw event stream; `exec` here gathers output and the exit code, and
+ *   `execStream` passes it on as it arrives.
  */
 export class SandboxClient {
 	readonly t: SandboxTimings;
@@ -85,20 +86,32 @@ export class SandboxClient {
 		}
 	}
 
+	/** Keeps the last 256 KB of each output stream. */
 	async exec(id: string, command: string, opts: ClientExecOptions): Promise<ExecResult> {
+		let stdout = "";
+		let stderr = "";
+		const exitCode = await this.execStream(id, command, {
+			...opts,
+			onData: (stream, data) => {
+				if (stream === "stdout") stdout = (stdout + data).slice(-OUTPUT_TAIL);
+				else stderr = (stderr + data).slice(-OUTPUT_TAIL);
+			},
+		});
+		return { exitCode, stdout, stderr };
+	}
+
+	/** Passes on every chunk of output as it arrives and resolves with the exit code. */
+	async execStream(id: string, command: string, opts: ClientExecOptions & Pick<ExecStreamOptions, "onData">): Promise<number> {
 		const timeout = AbortSignal.timeout(opts.timeoutMs);
 		const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
 		const retry = opts.waitReady
 			? { retryOn: READY_RETRY, attempts: Math.ceil(this.t.bootTimeoutMs / Math.max(this.t.pollMs, 1)) }
 			: { retryOn: TRANSIENT };
-		let stdout = "";
-		let stderr = "";
 		try {
 			const stream = await this.call(() => this.api.exec(id, command, undefined, signal), { ...retry, signal });
 			for await (const ev of stream) {
-				if (ev.type === "exit") return { exitCode: ev.exit_code, stdout, stderr };
-				if (ev.stream === "stdout") stdout = (stdout + ev.data).slice(-OUTPUT_TAIL);
-				else stderr = (stderr + ev.data).slice(-OUTPUT_TAIL);
+				if (ev.type === "exit") return ev.exit_code;
+				opts.onData(ev.stream, ev.data);
 			}
 		} catch (err) {
 			if (timeout.aborted) throw new Error(`exec in ${id} timed out after ${opts.timeoutMs}ms: ${command}`);

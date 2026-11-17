@@ -4,12 +4,15 @@ import { type Db, workflowsDb } from "../db/index.js";
 import { AgentRunRecorder } from "../events/index.js";
 import { errorMessage } from "../runner/core/emit.js";
 import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/core/protocol.js";
-import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
+import { APP_DIR, type ExecStreamOptions, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
 import type { Agent, OutputSchema } from "./define.js";
+import { followRun, LineRelay } from "./relay.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Extra time the host gives run-agent.sh beyond the runner's own timeout, to flush events and exit. */
 const EXEC_GRACE_MS = 60_000;
+/** run-agent.sh's stderr kept for a runner_lost message. */
+const STDERR_KEPT = 2000;
 
 export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
 
@@ -95,9 +98,12 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 		const apiKey = process.env[harness.credential]?.trim();
 		if (!apiKey) throw failure("agent_error", `${harness.credential} is not set: the ${harness.name} harness needs it`);
 
-		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
+		const relay = new LineRelay((line) => {
+			const event = parseLine(line);
+			if (event) recorder.onRunnerEvent(event);
+		});
+		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, relay, base.signal);
 		const { events, invalidLines } = parseEvents(stdout.text);
-		for (const event of events) recorder.onRunnerEvent(event);
 		summary = summarize(events, invalidLines);
 		const end = summary.terminal;
 		if (!end) {
@@ -126,13 +132,23 @@ interface RunnerOutput {
 }
 
 /**
- * Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it reads and deletes
- * `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that user from
- * REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by `<runDir>/input.json`. It
- * writes stdout to `<runDir>.jsonl` and the exit status to `<runDir>.exit`. `<runDir>` must be root-only (mode
- * 700) when the key is uploaded, so the runner user can't reach the key file before it's deleted.
+ * Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it writes its PID to `<runDir>.pid`,
+ * reads and deletes `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that
+ * user from REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by
+ * `<runDir>/input.json`. It writes the runner's stdout both to its own stdout and to `<runDir>.jsonl`, and the exit
+ * status to `<runDir>.exit`. `<runDir>` must be root-only (mode 700) when the key is uploaded, so the runner user
+ * can't reach the key file before it's deleted.
+ *
+ * The live copy reaches `relay` as the runner writes it; the downloaded `<runDir>.jsonl` is the result.
  */
-async function runInSandbox(sandbox: Sandbox, input: RunnerInput, apiKey: string, timeoutMs: number, signal?: AbortSignal): Promise<RunnerOutput> {
+async function runInSandbox(
+	sandbox: Sandbox,
+	input: RunnerInput,
+	apiKey: string,
+	timeoutMs: number,
+	relay: LineRelay,
+	signal?: AbortSignal,
+): Promise<RunnerOutput> {
 	const runDir = `/tmp/agent-${randomUUID()}`;
 	const mkdir = await sandbox.exec(`mkdir -m 700 ${runDir}`, { signal });
 	if (mkdir.exitCode !== 0) return { text: "", detail: `mkdir ${runDir} exited ${mkdir.exitCode}: ${tail(mkdir.stderr)}` };
@@ -140,26 +156,37 @@ async function runInSandbox(sandbox: Sandbox, input: RunnerInput, apiKey: string
 		await sandbox.upload(`${runDir}/input.json`, JSON.stringify(input));
 		await sandbox.upload(`${runDir}/key`, apiKey);
 		const details: string[] = [];
+		const deadline = Date.now() + timeoutMs + EXEC_GRACE_MS;
+		let stderr = "";
+		const onData: ExecStreamOptions["onData"] = (stream, data) => {
+			if (stream === "stdout") relay.push(data);
+			else stderr = (stderr + data).slice(-STDERR_KEPT);
+		};
 		try {
-			const res = await sandbox.exec(`bash ${APP_DIR}/run-agent.sh ${runDir} ${Math.ceil(timeoutMs / 1000)}`, {
-				timeoutMs: timeoutMs + EXEC_GRACE_MS,
+			const exitCode = await sandbox.execStream(`bash ${APP_DIR}/run-agent.sh ${runDir} ${Math.ceil(timeoutMs / 1000)}`, {
+				onData,
+				timeoutMs: deadline - Date.now(),
 				signal,
 			});
-			if (res.exitCode !== 0) details.push(`run-agent.sh exited ${res.exitCode}: ${tail(res.stderr)}`);
+			if (exitCode !== 0) details.push(`run-agent.sh exited ${exitCode}: ${tail(stderr)}`);
 		} catch (err) {
 			if (signal?.aborted) throw err;
 			details.push(`run-agent.sh failed: ${errorMessage(err)}`);
+			const stopped = await followRun(sandbox, runDir, relay, deadline, signal);
+			if (stopped) details.push(stopped);
 		}
 		let text = "";
 		try {
-			text = (await sandbox.download(`${runDir}.jsonl`, signal)).toString("utf8");
+			const file = await sandbox.download(`${runDir}.jsonl`, signal);
+			relay.finish(file);
+			text = file.toString("utf8");
 		} catch (err) {
 			if (signal?.aborted) throw err;
 			details.push(`cannot download ${runDir}.jsonl: ${errorMessage(err)}`);
 		}
 		return { text, detail: details.join("; ") || undefined };
 	} finally {
-		await sandbox.exec(`rm -rf ${runDir} ${runDir}.jsonl ${runDir}.exit`).catch(() => {});
+		await sandbox.exec(`rm -rf ${runDir} ${runDir}.jsonl ${runDir}.exit ${runDir}.pid`).catch(() => {});
 	}
 }
 
@@ -190,13 +217,19 @@ function parseEvents(jsonl: string): { events: RunnerEvent[]; invalidLines: numb
 	let invalidLines = 0;
 	for (const line of jsonl.split("\n")) {
 		if (!line.trim()) continue;
-		try {
-			events.push(RunnerEvent.parse(JSON.parse(line)));
-		} catch {
-			invalidLines++;
-		}
+		const event = parseLine(line);
+		if (event) events.push(event);
+		else invalidLines++;
 	}
 	return { events, invalidLines };
+}
+
+function parseLine(line: string): RunnerEvent | undefined {
+	try {
+		return RunnerEvent.parse(JSON.parse(line));
+	} catch {
+		return undefined;
+	}
 }
 
 /** Sums usage up to the terminal event. Turns come from `result`, else count model calls. */

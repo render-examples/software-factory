@@ -164,6 +164,9 @@ class FakeSandbox implements OpenedSandbox {
 		if (command.startsWith("git merge-base")) return { exitCode: 0, stdout: `${MERGE_BASE}\n`, stderr: "" };
 		return { exitCode: 0, stdout: "ok\n", stderr: "" };
 	}
+	async execStream(): Promise<number> {
+		throw new Error("not used");
+	}
 	async upload(): Promise<void> {}
 	async download(): Promise<Buffer> {
 		throw new Error("not used");

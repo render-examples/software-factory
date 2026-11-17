@@ -42,6 +42,10 @@ function connectSandbox(id: string, client?: SandboxClient): Sandbox {
 			const wrapped = opts.asRunner ? asRunner("bash", "-c", command) : command;
 			return c.exec(id, wrapped, { timeoutMs: opts.timeoutMs ?? c.t.execTimeoutMs, signal: opts.signal });
 		},
+		async execStream(command, opts) {
+			const c = get();
+			return c.execStream(id, command, { ...opts, timeoutMs: opts.timeoutMs ?? c.t.execTimeoutMs });
+		},
 		async upload(path, data) {
 			await get().upload(id, path, data);
 		},

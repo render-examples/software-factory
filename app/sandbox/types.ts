@@ -22,10 +22,19 @@ export interface ExecOptions {
 	signal?: AbortSignal;
 }
 
+export interface ExecStreamOptions {
+	/** Receives every chunk of output as it arrives. */
+	onData: (stream: "stdout" | "stderr", data: string) => void;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+}
+
 /** A running sandbox. */
 export interface Sandbox {
 	readonly id: string;
 	exec(command: string, opts?: ExecOptions): Promise<ExecResult>;
+	/** Runs `command` as root, passing on its output as it arrives. Resolves with the exit code. */
+	execStream(command: string, opts: ExecStreamOptions): Promise<number>;
 	upload(path: string, data: string | Buffer): Promise<void>;
 	download(path: string, signal?: AbortSignal): Promise<Buffer>;
 	/** Idempotent: a sandbox that no longer exists counts as closed. */

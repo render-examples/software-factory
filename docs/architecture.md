@@ -209,12 +209,21 @@ stream, whose subject is the task's issue or pull request. A recorder on the
 Workflows host (`app/events/recorder.ts`) is the stream's only writer. It
 translates the runner's events into `assistant.message`, `tool.call`,
 `tool.result`, and `usage` events and writes them every 250 ms in one
-transaction. Until the runner reports live, the host feeds it the downloaded
-output after the run. Runner output is untrusted: it becomes display events on
-the run's own stream and nothing else. `agent_run.finished`, with the outcome,
+transaction. Runner output is untrusted: it becomes display events on the
+run's own stream and nothing else. `agent_run.finished`, with the outcome,
 turns, usage, and cost, comes from the host's own summary of the run, and the
 `agent_runs` table projects it. A database error never fails the agent run;
 the recorder keeps a bounded queue and logs what it couldn't write.
+
+The runner reports live through the host. `run-agent.sh` writes the runner's
+output both to the root-owned `<runDir>.jsonl` beside the run directory and to
+the command's stdout, which the host reads as it arrives and feeds to the
+recorder line by line. Nothing in the Sandbox holds an endpoint or credential
+for the log. If the command stream drops, the command keeps running, and the
+host follows the file from the last complete line it relayed until
+`run-agent.sh` exits, so no event is lost or repeated. When the command ends,
+the host downloads the file, relays any lines the live copy missed, and takes
+the result, outcome, and cost from the file alone.
 
 The model's text as it streams travels as `NOTIFY` messages on the `live`
 channel, sent in the recorder's transactions and never stored. Each gateway
