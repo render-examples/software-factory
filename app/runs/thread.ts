@@ -89,10 +89,12 @@ export async function stopTrace(db: Db, runs: RunControl, traceId: string, stop:
 	return rows.map((row) => row.runId);
 }
 
+const ACTIVE_TASK_RUN = new Set(["pending", "running", "paused"]);
+
 async function cancelIfActive(runs: RunControl, taskRunId: string): Promise<boolean> {
 	try {
 		const { status } = await runs.getTaskRun(taskRunId);
-		if (status !== "pending" && status !== "running") return false;
+		if (!ACTIVE_TASK_RUN.has(status)) return false;
 	} catch (error) {
 		if (error instanceof ClientError && error.statusCode === 404) return false;
 		warn("could not read the task run; cancelling it anyway", error, { taskRunId });

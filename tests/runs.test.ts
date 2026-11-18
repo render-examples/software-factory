@@ -103,7 +103,7 @@ describe("withRun", () => {
 		const gh = new FakeGitHub();
 		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", task: "autopilot", title: "Autopilot" });
 		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", runId: "trn-child-old", sandboxId: "sbx-child" });
-		const runs = new FakeRuns({ "trn-old": "running" });
+		const runs = new FakeRuns({ "trn-old": "paused" });
 		await withRun(root("trn-new"), options(gh, { runs }), done);
 
 		expect(runs.cancelled).toEqual(["trn-old"]);
