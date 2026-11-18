@@ -17,7 +17,7 @@ export function piTool(tool: FactoryTool, endsBatch: () => boolean): ToolDefinit
 }
 
 export function piSubmitTool(submit: SubmitTool): ToolDefinition {
-	let text = "";
+	let accepted: string | undefined;
 	return {
 		name: submit.name,
 		label: "Submit",
@@ -25,13 +25,18 @@ export function piSubmitTool(submit: SubmitTool): ToolDefinition {
 		parameters: submit.parameters as TSchema,
 		executionMode: "sequential",
 		prepareArguments(args) {
+			accepted = undefined;
+			if (isEmptyObject(args)) return args as never;
 			const out = submit.call(args);
 			if (out.isError) throw new Error(out.text);
-			text = out.text;
+			accepted = out.text;
 			return args as never;
 		},
-		async execute() {
-			return { content: [{ type: "text", text }], details: undefined, terminate: true };
+		async execute(_toolCallId, params) {
+			const out = accepted === undefined ? submit.call(params) : { text: accepted, isError: false };
+			return { content: [{ type: "text", text: out.text }], details: undefined, isError: out.isError, terminate: !out.isError };
 		},
 	};
 }
+
+const isEmptyObject = (args: unknown) => typeof args === "object" && args !== null && Object.keys(args).length === 0;

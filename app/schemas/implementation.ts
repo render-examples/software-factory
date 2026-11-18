@@ -7,10 +7,10 @@ export const VerificationRun = z.strictObject({
 });
 
 export const Implementation = z.strictObject({
-	summary: z.string().min(1).max(4000).describe("What you changed and why, for the pull request description."),
 	filesChanged: z.array(z.string().min(1)).max(500).describe("Repository-relative paths you created, modified, or deleted."),
 	verification: z.array(VerificationRun).describe("Every verify command, in order, with its last result."),
 	followUps: z.array(z.string().min(1).max(1000)).max(20).describe("Work the spec implies but you left out, for the maintainer."),
+	summary: z.string().min(1).max(4000).describe("What you changed and why, for the pull request description."),
 });
 
 export type VerificationRun = z.infer<typeof VerificationRun>;

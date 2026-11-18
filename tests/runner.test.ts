@@ -84,6 +84,23 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 		expect(code).toBe(0);
 	});
 
+	it("drops tool-call markup a model leaks into a field, and shows it the arguments it couldn't parse", async () => {
+		const ws = makeWorkspace();
+		const leaked = { summary: 'All good.\n<parameter name="files">["README.md"]</parameter>' };
+		const raw = '<parameter name="summary">All good.</parameter>';
+		const unparsed = { calls: [{ name: SUBMIT, args: {}, argumentsError: `Unexpected token '<'\n\nReceived arguments:\n${raw}` }] };
+		const trailing = { ...GOOD, summary: "All good.</summary>\n</invoke>" };
+		const { code, events } = await runContract(make([call(SUBMIT, leaked), unparsed, call(SUBMIT, trailing)]), makeInput(ws));
+		const [markup, malformed, accepted] = toolResults(events);
+		expect(markup?.output_preview).toContain('/summary: contains tool-call markup (<parameter name="files">)');
+		expect(markup?.output_preview).toContain("must have required properties files");
+		expect(malformed).toMatchObject({ tool: SUBMIT, is_error: true });
+		expect(malformed?.output_preview).toContain(raw);
+		expect(accepted).toMatchObject({ tool: SUBMIT, is_error: false });
+		expect(terminal(events)).toMatchObject({ type: "result", output: GOOD });
+		expect(code).toBe(0);
+	});
+
 	it("stops after the last rejected submission and says what was wrong with it", async () => {
 		const ws = makeWorkspace();
 		const bad = call(SUBMIT, { summary: "ok summary", files: "README.md" });

@@ -35,9 +35,9 @@ export const SpecNotes = z.strictObject({
 });
 
 export const SpecDraft = z.strictObject({
-	spec: Spec,
 	notes: SpecNotes,
 	changeSummary: z.string().max(2000).optional().describe("Only when revising a previous version: what changed and why."),
+	spec: Spec,
 });
 
 export type AcceptanceCriterion = z.infer<typeof AcceptanceCriterion>;

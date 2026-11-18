@@ -12,13 +12,17 @@ import { pi } from "../../app/harness/index.js";
 
 export interface TestTurn {
 	text?: string;
-	calls: { name: string; args: Record<string, unknown> }[];
+	calls: { name: string; args: Record<string, unknown>; argumentsError?: string }[];
 }
 
 export function scriptedPi(turns: readonly TestTurn[]): Harness {
+	const toolCall = (c: TestTurn["calls"][number]) => ({
+		...fauxToolCall(c.name, c.args as JsonObject),
+		...(c.argumentsError && { argumentsError: c.argumentsError }),
+	});
 	return fauxPi(
 		turns.map((turn) =>
-			fauxAssistantMessage([...(turn.text ? [fauxText(turn.text)] : []), ...turn.calls.map((c) => fauxToolCall(c.name, c.args as JsonObject))], {
+			fauxAssistantMessage([...(turn.text ? [fauxText(turn.text)] : []), ...turn.calls.map(toolCall)], {
 				stopReason: turn.calls.length > 0 ? "toolUse" : "stop",
 			}),
 		),

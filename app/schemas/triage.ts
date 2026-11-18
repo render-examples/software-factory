@@ -6,9 +6,9 @@ export const TriageDecision = z
 			.enum(["ask", "draft", "decline"])
 			.describe('"draft" by default; "ask" only when the intent is unclear; "decline" for spam, duplicates, or out of scope.'),
 		questions: z.array(z.string().min(1).max(1000)).max(5).describe('Questions for the maintainer. Non-empty exactly when decision is "ask".'),
+		relevantPaths: z.array(z.string().min(1)).max(50).default([]).describe("Repository-relative paths that matter for the change, when any."),
 		rationale: z.string().min(1).max(4000).describe("Why you decided this. Shown to the maintainer when you decline."),
 		findings: z.string().max(8000).describe("What you learned from the repository, kept for the spec writer and later rounds."),
-		relevantPaths: z.array(z.string().min(1)).max(50).default([]).describe("Repository-relative paths that matter for the change, when any."),
 	})
 	.superRefine((value, ctx) => {
 		if (value.decision === "ask" && value.questions.length === 0) {

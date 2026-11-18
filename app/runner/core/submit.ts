@@ -44,16 +44,22 @@ export class Submission {
 	#accepted: { output: unknown } | undefined;
 	#rejected = 0;
 
-	constructor(private readonly schema: JsonOutputSchema) {}
+	readonly #markup: RegExp;
+
+	constructor(private readonly schema: JsonOutputSchema) {
+		const fields = Object.keys((schema.properties as Record<string, unknown>) ?? {}).map(escapeRegExp);
+		this.#markup = new RegExp(`<\\/?(?:parameter|invoke)\\b[^>]*>|<\\/(?:${[SUBMIT_TOOL, ...fields].join("|")})\\b[^>]*>`);
+	}
 
 	get accepted(): { output: unknown } | undefined {
 		return this.#accepted;
 	}
 
 	check(args: unknown): SubmitCheck {
-		if (Value.Check(this.schema as TSchema, args)) return { ok: true, checked: structuredClone(args) };
-		const found = [...Value.Errors(this.schema as TSchema, args)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
-		const problems = found.length > 0 ? [...new Set(found)] : ["(root): does not match the output schema"];
+		const cleaned = cutAtMarkup(this.#markup, args);
+		const invalid = schemaProblems(this.schema, cleaned);
+		if (invalid.length === 0) return { ok: true, checked: cleaned };
+		const problems = [...markupProblems(this.#markup, args), ...invalid];
 		this.#rejected++;
 		const remaining = MAX_SUBMIT_ATTEMPTS - this.#rejected;
 		const message =
@@ -77,3 +83,34 @@ export class Submission {
 		return true;
 	}
 }
+
+function schemaProblems(schema: JsonOutputSchema, args: unknown): string[] {
+	if (Value.Check(schema as TSchema, args)) return [];
+	const found = [...Value.Errors(schema as TSchema, args)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
+	return found.length > 0 ? [...new Set(found)] : ["(root): does not match the output schema"];
+}
+
+function cutAtMarkup(pattern: RegExp, value: unknown): unknown {
+	if (typeof value === "string") {
+		const at = value.search(pattern);
+		return at === -1 ? value : value.slice(0, at).trimEnd();
+	}
+	if (Array.isArray(value)) return value.map((item) => cutAtMarkup(pattern, item));
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cutAtMarkup(pattern, item)]));
+	return value;
+}
+
+function markupProblems(pattern: RegExp, value: unknown, path = ""): string[] {
+	if (typeof value === "string") {
+		const markup = pattern.exec(value)?.[0];
+		if (!markup) return [];
+		return [
+			`${path || "(root)"}: contains tool-call markup (${markup.slice(0, 60)}); send every field as its own JSON property, not as markup inside a string`,
+		];
+	}
+	if (Array.isArray(value)) return value.flatMap((item, i) => markupProblems(pattern, item, `${path}/${i}`));
+	if (value && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => markupProblems(pattern, item, `${path}/${key}`));
+	return [];
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
