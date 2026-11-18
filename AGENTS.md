@@ -77,8 +77,9 @@ writes.
 - Pass model text through `app/format/` before writing it to GitHub.
 - Inject GitHub, Sandbox, agent, and run-control dependencies into task
   implementations. Tests use fakes, never live services.
-- Comment security reasons, platform constraints, and required ordering. Do
-  not narrate obvious code.
+- Don't write code comments. Name things so the code explains itself, and
+  put constraints in docs or tests. Tool directives (`biome-ignore`,
+  `shellcheck`, shebangs) are the only exception.
 
 ## Tests
 
