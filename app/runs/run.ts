@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { TaskContext } from "@renderinc/sdk/workflows";
 import type { z } from "zod";
-import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agents/index.js";
+import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agent-runs/index.js";
 import { config, type RepoContext } from "../config/index.js";
 import { append, type Db, VersionConflict, workflowsDb } from "../db/index.js";
 import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached, threadLinked } from "../events/index.js";

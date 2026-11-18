@@ -1,5 +1,5 @@
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai";
-import { piDriver, type ThinkingLevel } from "../runner/pi/driver.js";
+import { piDriver, type ThinkingLevel } from "../runner/index.js";
 import type { Harness } from "./types.js";
 
 export type { ThinkingLevel };

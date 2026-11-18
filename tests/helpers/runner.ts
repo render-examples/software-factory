@@ -8,8 +8,8 @@ import { z } from "zod";
 import { type Agent, defineAgent } from "../../app/agents/define.js";
 import type { Harness } from "../../app/harness/types.js";
 import { PROTOCOL_VERSION, RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/core/protocol.js";
-import { bundleRunner } from "../../app/runner/bundle.js";
 import { main } from "../../app/runner/main.js";
+import { bundleRunner } from "../../app/runner-bundle/index.js";
 import { scriptedPi } from "./pi-scripted.js";
 import { scripted, type TestTurn } from "./scripted-harness.js";
 

@@ -2,7 +2,7 @@ import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-const RUNNER_DIR = fileURLToPath(new URL(".", import.meta.url));
+const RUNNER_DIR = fileURLToPath(new URL("../runner/", import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 async function buildBundle(): Promise<{ text: string; inputs: string[] }> {

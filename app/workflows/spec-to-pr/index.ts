@@ -1,4 +1,5 @@
-import { implementer, runAgent } from "../../agents/index.js";
+import { runAgent } from "../../agent-runs/index.js";
+import { implementer } from "../../agents/index.js";
 import { publish } from "../../changeset/index.js";
 import { config, type RepoContext, TASKS } from "../../config/index.js";
 import { pullRequestBody, pullRequestTitle } from "../../format/index.js";

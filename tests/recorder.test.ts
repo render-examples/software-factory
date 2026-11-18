@@ -1,7 +1,8 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AgentRunRecorder, type AgentRunSummary } from "../app/agent-runs/index.js";
 import { type Db, readStream } from "../app/db/index.js";
-import { type AgentRunSummary, AgentRunRecorder, LiveNotice } from "../app/events/index.js";
+import { LiveNotice } from "../app/events/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
 import type { ThreadKey } from "../app/threads/index.js";
 import { pgliteDb } from "./helpers/db.js";

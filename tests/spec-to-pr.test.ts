@@ -5,7 +5,7 @@ import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/
 import { pgliteDb, resetDb } from "./helpers/db.js";
 import { runRow, startRun } from "./helpers/runs.js";
 
-const { AgentError } = await import("../app/agents/index.js");
+const { AgentError } = await import("../app/agent-runs/index.js");
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { runSpecToPr } = await import("../app/workflows/spec-to-pr/index.js");

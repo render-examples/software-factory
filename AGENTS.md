@@ -44,11 +44,11 @@ factory opens shares its issue's thread.
 Two dependency rules are mandatory:
 
 1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent
-   definitions in `app/agents/registry.ts`, `app/schemas/`, and `app/util/`)
+   definitions in `app/agents/`, `app/schemas/`, and `app/util/`)
    imports no host-only code: GitHub, Sandboxes, Workflows, runs, events, the
-   database, or config. Host code imports the runner through
-   `app/runner/index.ts`, which bundled code must not import.
-   `tests/agents-catalog.test.ts` enforces it.
+   database, config, `app/agent-runs/` (running an agent from the host), or
+   `app/runner-bundle/` (building the bundle). `tests/agents-catalog.test.ts`
+   enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
    workflows. The gateway holds no GitHub credential and runs no model. It
    builds thread keys with the dependency-free `app/threads/`.

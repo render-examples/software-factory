@@ -10,7 +10,7 @@ import type { SandboxSnapshot } from "@renderinc/sdk/experimental";
 import { create as createTar } from "tar";
 import type { RepoContext } from "../config/index.js";
 import { githubToken } from "../github/index.js";
-import { bundleRunner } from "../runner/index.js";
+import { bundleRunner } from "../runner-bundle/index.js";
 import { errorMessage, SHA } from "../util/index.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
 import { builderEgress, egressHint } from "./egress.js";

@@ -1,4 +1,5 @@
-import { prReviewer, runAgent } from "../../agents/index.js";
+import { runAgent } from "../../agent-runs/index.js";
+import { prReviewer } from "../../agents/index.js";
 import { config, TASKS } from "../../config/index.js";
 import type { Outcome } from "../../runs/index.js";
 import { openSandbox } from "../../sandbox/index.js";

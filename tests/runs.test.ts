@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentError } from "../app/agents/index.js";
+import { AgentError } from "../app/agent-runs/index.js";
 import { requireRepo } from "../app/config/index.js";
 import { append, type Db, readStream, rebuild } from "../app/db/index.js";
 import { runFinished, runProgress } from "../app/events/index.js";

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineAgent, piOpus, runAgent } from "../app/agents/index.js";
+import { runAgent } from "../app/agent-runs/index.js";
+import { defineAgent, piOpus } from "../app/agents/index.js";
 import { type Db, readStream } from "../app/db/index.js";
 import { PROTOCOL_VERSION, RunnerInput } from "../app/runner/core/protocol.js";
 import { REPO_DIR } from "../app/sandbox/types.js";

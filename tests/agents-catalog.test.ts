@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AGENTS, implementer, prReviewer, specWriter, triage } from "../app/agents/index.js";
-import { bundleInputs } from "../app/runner/bundle.js";
+import { bundleInputs } from "../app/runner-bundle/index.js";
 
 const agents = [triage, specWriter, implementer, prReviewer];
 
@@ -12,10 +12,8 @@ describe("agent registry", () => {
 
 	it("keeps host-only code out of the sandbox runner bundle", { timeout: 60_000 }, async () => {
 		const app = (await bundleInputs()).filter((path) => !path.includes("node_modules/"));
-		const hostOnly = app.filter(
-			(path) =>
-				/^app\/(github|sandbox|workflows|runs|gateway|events|db|config|entrypoints)\//.test(path) ||
-				["app/agents/run.ts", "app/runner/index.ts", "app/runner/bundle.ts"].includes(path),
+		const hostOnly = app.filter((path) =>
+			/^app\/(agent-runs|runner-bundle|github|sandbox|workflows|runs|gateway|events|db|config|entrypoints)\//.test(path),
 		);
 		expect(hostOnly).toEqual([]);
 		expect(app).toContain("app/agents/registry.ts");

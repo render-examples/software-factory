@@ -1,4 +1,4 @@
-import type { HarnessRuntime } from "../runner/core/harness.js";
+import type { HarnessRuntime } from "../runner/index.js";
 
 /**
  * What an adapter returns: the runtime the runner calls in the sandbox, plus what the host needs to know before a

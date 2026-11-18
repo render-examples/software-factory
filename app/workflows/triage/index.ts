@@ -1,4 +1,4 @@
-import { runAgent } from "../../agents/index.js";
+import { runAgent } from "../../agent-runs/index.js";
 import { config, type RepoContext, TASKS } from "../../config/index.js";
 import { triageDeclineBody, triageQuestionsBody } from "../../format/index.js";
 import { renderMarker } from "../../github/index.js";

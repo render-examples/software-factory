@@ -4,7 +4,7 @@ import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/
 import { pgliteDb, resetDb } from "./helpers/db.js";
 import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
-const { AgentError } = await import("../app/agents/index.js");
+const { AgentError } = await import("../app/agent-runs/index.js");
 const { config } = await import("../app/config/index.js");
 const { GitHubError, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { runPrReview } = await import("../app/workflows/pr-review/index.js");
@@ -18,7 +18,7 @@ type ExecResult = import("../app/sandbox/index.js").ExecResult;
 type OpenedSandbox = import("../app/sandbox/index.js").OpenedSandbox;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 type Review = import("../app/schemas/index.js").Review;
-type RunAgent = typeof import("../app/agents/index.js").runAgent;
+type RunAgent = typeof import("../app/agent-runs/index.js").runAgent;
 type PrReviewDeps = import("../app/workflows/pr-review/index.js").PrReviewDeps;
 
 const BOT = "software-factory[bot]";

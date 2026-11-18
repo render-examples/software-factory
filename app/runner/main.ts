@@ -1,13 +1,12 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import type { Agent } from "../agents/define.js";
-import { AGENTS } from "../agents/registry.js";
+import { AGENTS, type Agent } from "../agents/index.js";
 import { errorMessage } from "../util/index.js";
 import { createEmitter } from "./core/emit.js";
 import { parseInput } from "./core/input.js";
-import { scrubKeys } from "./core/keys.js";
 import { executeHarness } from "./core/kernel.js";
+import { scrubKeys } from "./core/keys.js";
 import { PROTOCOL_VERSION, RUNNER_EXIT } from "./core/protocol.js";
 
 interface MainIO {

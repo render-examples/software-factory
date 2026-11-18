@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { followRun, LineRelay } from "../app/agents/relay.js";
+import { followRun, LineRelay } from "../app/agent-runs/relay.js";
 import { asciiJson, createEmitter } from "../app/runner/core/emit.js";
 import type { ExecStreamOptions, Sandbox } from "../app/sandbox/types.js";
 

@@ -1,8 +1,9 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { AgentRunRecorder, type AgentRunSummary } from "../app/agent-runs/index.js";
 import { append, type Db } from "../app/db/index.js";
-import { AgentRunRecorder, type AgentRunSummary, defineEvent, threadLinked } from "../app/events/index.js";
+import { defineEvent, threadLinked } from "../app/events/index.js";
 import { createGateway, EventHub } from "../app/gateway/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
 import type { ThreadKey } from "../app/threads/index.js";

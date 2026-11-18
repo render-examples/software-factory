@@ -26,7 +26,7 @@ async function untar(data: Buffer): Promise<Map<string, string>> {
 }
 
 const FAKE_BUNDLE = "// fake runner bundle\n";
-vi.mock("../app/runner/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
+vi.mock("../app/runner-bundle/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const TOKEN = "ghs_factoryReadToken0000000000000000000";

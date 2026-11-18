@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { appendMany, type Db, MAX_PAYLOAD_BYTES, type NewEvent, type Tx } from "../db/index.js";
-import type { RunnerEvent, Usage } from "../runner/index.js";
-import { ThreadKey } from "../threads/index.js";
-import { errorMessage } from "../util/index.js";
 import {
 	agentRunFinished,
 	agentRunStarted,
@@ -15,7 +12,10 @@ import {
 	toolCall,
 	toolResult,
 	usage,
-} from "./catalog.js";
+} from "../events/index.js";
+import type { RunnerEvent, Usage } from "../runner/index.js";
+import { ThreadKey } from "../threads/index.js";
+import { errorMessage } from "../util/index.js";
 
 const FLUSH_MS = 250;
 /** Log events kept while the database is unreachable; later ones are dropped. */

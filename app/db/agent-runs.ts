@@ -1,5 +1,4 @@
-// The catalog, not the events barrel: the barrel's recorder imports app/db, which would make a cycle.
-import { agentRunFinished, agentRunStarted, toolCall } from "../events/catalog.js";
+import { agentRunFinished, agentRunStarted, toolCall } from "../events/index.js";
 import type { Projection } from "./projections.js";
 
 const STREAM_PREFIX = "agent_run:";

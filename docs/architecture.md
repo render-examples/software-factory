@@ -272,7 +272,7 @@ write targets come from authenticated task input, never model output.
 
 `runAgent` records every agent run in the event log as an `agent_run:<id>`
 stream, whose thread is the task's issue or pull request. A recorder on the
-Workflows host (`app/events/recorder.ts`) is the stream's only writer. It
+Workflows host (`app/agent-runs/recorder.ts`) is the stream's only writer. It
 translates the runner's events into `assistant.message`, `tool.call`,
 `tool.result`, and `usage` events and writes them every 250 ms in one
 transaction. Runner output is untrusted: it becomes display events on the
@@ -441,7 +441,7 @@ Start with:
    complete GitHub task.
 5. [`app/workflows/autopilot/index.ts`](../app/workflows/autopilot/index.ts) —
    parent/subtask orchestration.
-6. [`app/agents/run.ts`](../app/agents/run.ts) — host-side agent execution.
+6. [`app/agent-runs/run.ts`](../app/agent-runs/run.ts) — host-side agent execution.
 7. [`app/runner/main.ts`](../app/runner/main.ts) — Sandbox runner entry point;
    [`app/harness/`](../app/harness/) — agent library adapters.
 8. [`app/sandbox/sandbox.ts`](../app/sandbox/sandbox.ts) — Sandbox lifecycle.
@@ -449,7 +449,7 @@ Start with:
    publishing.
 10. [`app/db/store.ts`](../app/db/store.ts) — appending to the event log;
     [`app/db/read.ts`](../app/db/read.ts) — reading it in order.
-11. [`app/events/recorder.ts`](../app/events/recorder.ts) — recording an agent
+11. [`app/agent-runs/recorder.ts`](../app/agent-runs/recorder.ts) — recording an agent
     run; [`app/gateway/stream.ts`](../app/gateway/stream.ts) — streaming it.
 
 Use the [extension runbook](runbooks/extend.md) to add agents, tasks, or

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
+import type { Agent, OutputSchema } from "../agents/index.js";
 import { type Db, workflowsDb } from "../db/index.js";
-import { AgentRunRecorder } from "../events/index.js";
 import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/index.js";
-import { APP_DIR, type ExecStreamOptions, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/index.js";
+import { APP_DIR, type ExecStreamOptions, REPO_DIR, type Sandbox, SCRATCH_DIR } from "../sandbox/index.js";
 import type { ThreadKey } from "../threads/index.js";
 import { errorMessage } from "../util/index.js";
-import type { Agent, OutputSchema } from "./define.js";
+import { AgentRunRecorder } from "./recorder.js";
 import { followRun, LineRelay } from "./relay.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AgentRunRecorder } from "../app/agent-runs/index.js";
 import { createDb, type Db, migrate } from "../app/db/index.js";
-import { AgentRunRecorder } from "../app/events/index.js";
 import { createGateway, EventHub, listen } from "../app/gateway/index.js";
 import { postgresDatabase, TEST_DATABASE_URL } from "./helpers/db.js";
 import { readSse } from "./helpers/sse.js";
