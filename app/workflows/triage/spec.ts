@@ -6,7 +6,6 @@ import { type SpecDraft, validateSpec } from "../../schemas/index.js";
 import type { TriageAgents } from "./agents.js";
 import { type CurrentSpec, retryMessage } from "./thread.js";
 
-/** The spec a parent task may pass to its next stage. */
 export interface TriageHandoff {
 	kind: "spec";
 	commentId: number;
@@ -14,7 +13,6 @@ export interface TriageHandoff {
 	version: number;
 }
 
-/** Drafts the spec, and redrafts once if validation rejects it. */
 export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message: string): Promise<{ draft: SpecDraft; warnings: string[] }> {
 	const existing = await trackedPaths(sandbox);
 	let draft = await agents.specWriter(message);
@@ -29,17 +27,12 @@ export async function draftSpec(agents: TriageAgents, sandbox: Sandbox, message:
 	return { draft, warnings };
 }
 
-/** Repository-relative paths of every tracked file at the sandbox's checkout. */
 async function trackedPaths(sandbox: Sandbox): Promise<Set<string>> {
 	const res = await sandbox.exec("git ls-files -z", { asRunner: true });
 	if (res.exitCode !== 0) throw new Error(`git ls-files exited ${res.exitCode}: ${res.stderr.trim().slice(-500)}`);
 	return new Set(res.stdout.split("\0").filter(Boolean));
 }
 
-/**
- * Posts the spec comment, or revises the current one in place with the next version. A spec whose content
- * didn't change leaves the comment untouched, so an approval of it stays valid.
- */
 export async function publishSpec(
 	gh: Pick<GitHubClient, "createComment" | "updateComment">,
 	issue: Issue,

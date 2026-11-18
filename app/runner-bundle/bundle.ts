@@ -16,7 +16,6 @@ async function buildBundle(): Promise<{ text: string; inputs: string[] }> {
 		platform: "node",
 		format: "esm",
 		target: "node22",
-		// Bundled CommonJS dependencies call require() for Node built-ins, which ESM doesn't define.
 		banner: { js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);' },
 		logLevel: "warning",
 	});
@@ -25,15 +24,10 @@ async function buildBundle(): Promise<{ text: string; inputs: string[] }> {
 	return { text: file.text, inputs: Object.keys(result.metafile.inputs) };
 }
 
-/**
- * Bundles app/runner/main.ts, the agent registry with every harness it uses, and every package they need into one
- * self-contained ESM file, so the sandbox needs only Node to run it: no npm, no node_modules.
- */
 export async function bundleRunner(): Promise<string> {
 	return (await buildBundle()).text;
 }
 
-/** The source files in the bundle, relative to the repository root (tests check the sandbox's import boundary). */
 export async function bundleInputs(): Promise<string[]> {
 	return (await buildBundle()).inputs.map((input) => relative(REPO_ROOT, resolve(RUNNER_DIR, input)));
 }

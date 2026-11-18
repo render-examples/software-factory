@@ -17,13 +17,11 @@ export interface PreflightOptions extends ScriptDeps, DatabaseDeps {
 
 const ownerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) });
 
-/** Check every target before provisioning any environment group. */
 export async function setupRenderWithPreflight(opts: PreflightOptions, out: Reporter): Promise<number> {
 	const code = await runPreflight({ ...opts, local: false }, out);
 	return code === 0 ? setupRender(opts, out) : code;
 }
 
-/** No configuration writes, model calls, or Sandbox creation; installation tokens are read-only and repository-scoped. */
 export async function runPreflight(opts: PreflightOptions, out: Reporter): Promise<number> {
 	out.addSecrets(...[...SECRET_ENV, ...HARNESS_KEY_ENV].map((name) => opts.env[name]));
 	out.heading("Setup prerequisites");
@@ -32,7 +30,6 @@ export async function runPreflight(opts: PreflightOptions, out: Reporter): Promi
 		out.fail(`Node ${opts.requiredNodeMajor} is required by .node-version`, `Activate the pinned Node version; currently ${opts.nodeVersion}`);
 	} else out.pass(`Node ${opts.requiredNodeMajor} matches .node-version`);
 	if (opts.local) {
-		// Before deployment there is no factory-db yet: the Blueprint creates it.
 		const databaseUrl = opts.env.DATABASE_URL?.trim();
 		if (databaseUrl) await checkDatabase(databaseUrl, opts, out);
 		else out.skip("Database: no DATABASE_URL here", "Set it to run the services locally; see docs/configuration.md#database");

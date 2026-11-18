@@ -5,17 +5,14 @@ export interface FakeRequest {
 	body: unknown;
 }
 
-/** A JSON body, a Response, an Error to throw, or a handler producing one. */
 export type Reply = object | string | number | boolean | null | undefined;
 export type Handler = (request: FakeRequest, params: Record<string, string>) => Reply | Promise<Reply>;
-/** Keyed `METHOD /path`, where `:name` matches one path segment. */
 export type Routes = Record<string, Reply | Handler>;
 
 export function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** Routes requests by method and pathname and records them. A handler returning undefined falls through; unmatched requests get a 404. */
 export function fakeFetch(routes: Routes) {
 	const requests: FakeRequest[] = [];
 	const table = Object.entries(routes).map(([key, reply]) => {

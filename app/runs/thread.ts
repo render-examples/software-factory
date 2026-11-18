@@ -6,17 +6,14 @@ import { sandboxClient } from "../sandbox/index.js";
 import type { ThreadKey } from "../threads/index.js";
 import { warn } from "./status.js";
 
-/** The Render calls that stop a displaced run, injectable for tests. */
 export interface RunControl {
 	getTaskRun(taskRunId: string): Promise<{ status: string }>;
 	cancelTaskRun(taskRunId: string): Promise<void>;
-	/** Idempotent: a sandbox that no longer exists counts as terminated. */
 	terminateSandbox(sandboxId: string): Promise<void>;
 }
 
 let defaultRuns: RunControl | undefined;
 
-/** The Workflows and Sandbox APIs via the SDK. Reads RENDER_API_KEY and RENDER_WORKSPACE_ID. */
 export function workflowRuns(): RunControl {
 	if (!defaultRuns) {
 		const workflows = new Render().workflows;
@@ -29,7 +26,6 @@ export function workflowRuns(): RunControl {
 	return defaultRuns;
 }
 
-/** An event on task run `runId`'s stream about `thread`, written by task run `by`. */
 export function runEvent<S extends z.ZodType>(type: EventSpec<S>, runId: string, thread: ThreadKey, payload: z.input<S>, by = runId): NewEvent<S> {
 	return { type, stream: `run:${runId}`, thread, source: `workflow:${by}`, payload };
 }
@@ -38,11 +34,6 @@ export type StartingRun = Omit<z.input<typeof runStarted.payload>, "run_id" | "t
 
 const START_ATTEMPTS = 4;
 
-/**
- * Appends the run's `run.started` to the thread's stream at the version it read, so of two runs that read the same
- * latest trace only one appends; the other rereads and tries again. A child run (`continue`) starts only while its
- * own trace is the thread's latest. Returns the trace the run displaced, or null when it may not start.
- */
 export async function startOnThread(db: Db, run: StartingRun): Promise<{ displaced: string | null } | null> {
 	const { thread, runId, traceId, ...started } = run;
 	for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
@@ -69,11 +60,9 @@ export async function startOnThread(db: Db, run: StartingRun): Promise<{ displac
 			if (!(error instanceof VersionConflict)) throw error;
 		}
 	}
-	// Newer runs started on every attempt.
 	return null;
 }
 
-/** Whether the run is still running and its trace is the thread's latest. */
 export async function isCurrent(db: Queryable, thread: ThreadKey, run: { traceId: string; runId: string }): Promise<boolean> {
 	const { rows } = await db.query(
 		"select 1 from threads t join runs r on r.run_id = $3 where t.thread = $1 and t.trace_id = $2 and r.state = 'running'",
@@ -82,12 +71,6 @@ export async function isCurrent(db: Queryable, thread: ThreadKey, run: { traceId
 	return rows.length > 0;
 }
 
-/**
- * Stops a displaced trace: cancels its root run if Render still has it active, terminates the Sandboxes its running
- * task runs recorded, and records those runs stopped. Render kills a cancelled task without running its `finally`,
- * so its Sandbox would otherwise live until its timeout and its runs would stay `running`. Returns the task runs
- * that were still running.
- */
 export async function stopTrace(db: Db, runs: RunControl, traceId: string, stop: { by: string; summary: string }): Promise<string[]> {
 	const { rows } = await db.query<{ runId: string; thread: ThreadKey; sandboxId: string | null }>(
 		`select run_id as "runId", thread, sandbox_id as "sandboxId" from runs where trace_id = $1 and state = 'running'`,
@@ -106,10 +89,6 @@ export async function stopTrace(db: Db, runs: RunControl, traceId: string, stop:
 	return rows.map((row) => row.runId);
 }
 
-/**
- * Cancels a task run that Render has pending or running, and returns whether it did. An unknown state counts as
- * active. A failed cancel is logged: the run is already fenced and stops at its next ownership check.
- */
 async function cancelIfActive(runs: RunControl, taskRunId: string): Promise<boolean> {
 	try {
 		const { status } = await runs.getTaskRun(taskRunId);

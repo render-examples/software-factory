@@ -10,10 +10,6 @@ interface ApprovedSpec {
 	comment: IssueComment;
 }
 
-/**
- * Loads the exact approved spec. Manual runs use the approval label's timestamp;
- * autopilot names the App-authored spec comment and marker it received from Triage.
- */
 export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, approval: SpecApproval): Promise<ApprovedSpec> {
 	const label = config.labels.specApproved;
 	const found = findMarkedComment(await gh.listIssueComments(issue), "spec", await gh.botLogin());

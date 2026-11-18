@@ -4,7 +4,6 @@ import { runSandboxAttached, runStarted } from "../../app/events/index.js";
 import { type RunControl, runEvent } from "../../app/runs/index.js";
 import { type GitHubThread, githubThread } from "../../app/threads/index.js";
 
-/** Records a running task run started on the thread, as withRun would, without stopping anything. `runId` defaults to the trace's root. */
 export async function startRun(
 	db: Db,
 	repo: string,
@@ -29,14 +28,12 @@ interface RunRow {
 	waiting: string | null;
 }
 
-/** The runs projection's row for a task run. */
 export async function runRow(db: Db, runId: string): Promise<RunRow> {
 	const { rows } = await db.query<RunRow>("select state, outcome, summary, sandbox_id, waiting from runs where run_id = $1", [runId]);
 	if (!rows[0]) throw new Error(`no run ${runId}`);
 	return rows[0];
 }
 
-/** Render's view of task runs: `statuses` by task run ID, "succeeded" when absent. */
 export class FakeRuns implements RunControl {
 	readonly cancelled: string[] = [];
 	readonly terminated: string[] = [];

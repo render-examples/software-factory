@@ -16,14 +16,12 @@ import { allPassed, failureSummary, hasChanges } from "./verify.js";
 
 const IMPLEMENT_TIMEOUT_MS = 60 * 60 * 1000;
 
-/** The draft pull request a parent task may pass to its next stage. */
 export interface SpecToPrHandoff {
 	kind: "pull_request";
 	pr: number;
 	headSha: string;
 }
 
-/** Test seams; each defaults to the real thing. */
 export interface SpecToPrDeps extends GitHubTaskDeps {
 	gitData?: GitDataClient;
 	openSandbox?: (repo: RepoContext, ref: SandboxRef) => Promise<OpenedSandbox>;
@@ -32,11 +30,6 @@ export interface SpecToPrDeps extends GitHubTaskDeps {
 	now?: () => Date;
 }
 
-/**
- * Approved spec to draft PR: implement in one sandbox, verify with up to `limits.repairRounds` repair runs, then
- * publish through the Git Data API and open a draft PR, which shares the issue's thread. A rerun (a relabel)
- * replaces the earlier attempt's branch.
- */
 export const specToPrWorkflow = defineGitHubTask(
 	{
 		name: TASKS.specToPr,
@@ -48,7 +41,6 @@ export const specToPrWorkflow = defineGitHubTask(
 	},
 	async (run, input, deps: SpecToPrDeps): Promise<Outcome<SpecToPrHandoff>> => {
 		const { gh, repo } = run;
-		// Fixed for the whole run, so publishing the same tree twice produces the same commit.
 		const date = commitDate((deps.now ?? (() => new Date()))());
 		const { spec, comment } = await loadApprovedSpec(gh, input.issue, input.approval);
 		const issue = await gh.getIssue(input.issue);

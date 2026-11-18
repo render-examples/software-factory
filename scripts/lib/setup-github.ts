@@ -1,9 +1,7 @@
-/** setup:github: point the App's webhook at the gateway and create the factory's labels. Idempotent. */
 import { type AppInfo, type GitHubApp, githubWebUrl, splitRepo } from "./github.js";
 import { errorMessage, type Reporter } from "./output.js";
 import { LABELS, WEBHOOK_PATH } from "./requirements.js";
 
-/** `<gateway>/webhooks/github` from the gateway's base URL (a pasted full webhook URL is accepted too). */
 function webhookUrl(gatewayUrl: string): string {
 	let url: URL;
 	try {
@@ -18,7 +16,6 @@ function webhookUrl(gatewayUrl: string): string {
 	return `${url.origin}${path}${WEBHOOK_PATH}`;
 }
 
-/** The App's settings page, where the webhook's Active box lives. */
 export function appSettingsUrl(app: AppInfo, apiUrl: string): string {
 	const web = githubWebUrl(apiUrl);
 	const slug = encodeURIComponent(app.slug);
@@ -49,7 +46,6 @@ export async function setupGithub(app: GitHubApp, opts: SetupGithubOptions, out:
 
 async function configureWebhook(app: GitHubApp, info: AppInfo, url: string, secret: string, out: Reporter): Promise<void> {
 	const current = await app.getHookConfig();
-	// GitHub masks the stored secret, so it can't be compared: it's always sent.
 	await app.updateHookConfig({ url, content_type: "json", insecure_ssl: "0", secret });
 	if (current.url === url) out.pass(`webhook URL already ${url}`);
 	else out.pass(`webhook URL set to ${url}${current.url ? ` (was ${current.url})` : ""}`);
@@ -57,7 +53,6 @@ async function configureWebhook(app: GitHubApp, info: AppInfo, url: string, secr
 	else out.pass(`webhook content type set to json${current.content_type ? ` (was ${current.content_type})` : ""}`);
 	out.pass("webhook secret set (the gateway's GITHUB_WEBHOOK_SECRET must be the same value)");
 
-	// The API cannot read or set Active. Past attempts cannot verify the URL and secret just written.
 	out.warn(
 		"webhook configured; activation and delivery are unverified",
 		`Open ${appSettingsUrl(info, app.apiUrl)}, check Webhook > Active and save. Redeliver a ping in Advanced, then run doctor. Leave the URL and secret as they are.`,

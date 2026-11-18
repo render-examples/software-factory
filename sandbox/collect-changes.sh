@@ -1,22 +1,4 @@
 #!/usr/bin/env bash
-# Collects the changes in <repo_dir>'s working tree against <base_sha> into one file the host downloads.
-# Usage: collect-changes.sh <repo_dir> <base_sha> <out_file> <max_changed_files> <max_file_bytes>
-#
-# Git runs against a throwaway git dir that borrows <repo_dir>/.git/objects as an alternate, so nothing the
-# agent wrote into .git (config, filter drivers, hooks, replace refs, grafts, the index) takes effect, and the
-# repository itself is never modified. The index starts from <base_sha>'s tree and `git add -A` brings it to
-# the working tree, so .gitignore applies to untracked files.
-#
-# <out_file> must not exist. It holds, in order:
-#   software-factory-changes 1\n
-#   tree <sha of the staged tree, from git write-tree>\n
-#   count <number of changed paths>\n
-#   diff <n>\n <n bytes: git diff-tree -r -z --no-renames --no-abbrev <base tree> <tree>> \n
-#   sizes <n>\n <n bytes: "<blob sha> <size>\n" per distinct blob of an added or modified regular file> \n
-#   blobs <n>\n <n bytes: git cat-file --batch output for those blobs> \n
-# diff is empty when count exceeds <max_changed_files>. sizes and blobs are empty when diff is, and blobs is
-# empty when any blob exceeds <max_file_bytes> or any path becomes a symlink or gitlink: content that would
-# be refused is never written. Prints the size of <out_file> in bytes.
 set -euo pipefail
 export LC_ALL=C
 

@@ -14,7 +14,6 @@ describe.skipIf(!TEST_DATABASE_URL)("streams on Postgres", { timeout: 20_000 }, 
 	const pools: Db[] = [];
 	const listeners: { stop(): Promise<void> }[] = [];
 
-	/** A gateway instance with its own pool and, unless `deaf`, its own LISTEN connection. */
 	function gateway({ deaf = false } = {}) {
 		const hub = new EventHub();
 		const pool = createDb(database.url, 2);

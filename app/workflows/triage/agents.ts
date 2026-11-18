@@ -4,7 +4,6 @@ import type { SpecDraft, TriageDecision } from "../../schemas/index.js";
 
 export type AgentRunner = typeof runAgent;
 
-/** Triage's two agents, bound to one sandbox. */
 export function triageAgents(run: AgentRunner, opts: RunAgentOptions) {
 	return {
 		async triage(message: string): Promise<TriageDecision> {

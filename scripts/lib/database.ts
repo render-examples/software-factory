@@ -2,11 +2,9 @@ import { createDb, type Db, pendingMigrations } from "../../app/db/index.js";
 import { errorMessage, type Reporter } from "./output.js";
 
 export interface DatabaseDeps {
-	/** Test seam: opens DATABASE_URL. */
 	openDb?: (url: string) => Db;
 }
 
-/** Read-only: DATABASE_URL connects, and the database has applied every migration in this checkout. */
 export async function checkDatabase(url: string, deps: DatabaseDeps, out: Reporter): Promise<void> {
 	out.addSecrets(url, passwordOf(url));
 	const db = (deps.openDb ?? ((value) => createDb(value, 1)))(url);

@@ -9,28 +9,19 @@ import type { HarnessRun, HarnessRuntime } from "./harness.js";
 import { RUNNER_EXIT, type RunnerErrorCode } from "./protocol.js";
 import { SUBMIT_ACCEPTED, SUBMIT_DUPLICATE, SUBMIT_TOOL, Submission, submitDescription, submitParameters } from "./submit.js";
 
-/** Time kept back from `timeout_ms` so the runner reports its own timeout before the host kills it. */
 const SAFETY_MARGIN_MS = 10_000;
-/** How long a driver may take to stop after the run ends before the outcome is reported anyway. */
 const STOP_GRACE_MS = 5_000;
 const RUN_OVER = "The run is over.";
 
 type Outcome = { type: "result"; output: unknown } | { type: "error"; code: RunnerErrorCode; message: string };
 
-/**
- * Runs one agent on `harness.driver` and returns the exit code. The kernel emits `started`, then exactly one
- * `result` or `error`: the first outcome reached (an accepted submission, a rejected last submission, the turn
- * limit, the timeout, or cancellation) is final, and the driver is stopped once it is.
- */
 export async function executeHarness(run: HarnessRun, harness: HarnessRuntime): Promise<number> {
 	const { input, emit } = run;
 	const stop = new AbortController();
 	let outcome: Outcome | undefined;
-	/** Records the outcome if it's the first; the driver may finish its current step (e.g. the submit result). */
 	const end = (next: Outcome) => {
 		outcome ??= next;
 	};
-	/** Records the outcome if it's the first, and stops the driver either way. */
 	const halt = (next: Outcome) => {
 		end(next);
 		stop.abort();
@@ -121,7 +112,6 @@ export async function executeHarness(run: HarnessRun, harness: HarnessRuntime): 
 	);
 
 	let failure: { error: unknown } | undefined;
-	/** Runs a driver step until it settles, or until the run has ended and the driver had its grace to stop. */
 	const step = async <T>(work: () => T | Promise<T>): Promise<T | undefined> => {
 		const settled = Promise.resolve()
 			.then(work)

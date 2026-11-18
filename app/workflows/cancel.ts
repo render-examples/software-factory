@@ -2,10 +2,6 @@ import { TASKS } from "../config/index.js";
 import { CancelInput } from "../schemas/index.js";
 import { defineGitHubTask } from "./github-task.js";
 
-/**
- * `/factory cancel`: a run like any other. Starting it takes over the issue or PR and stops whatever was running
- * there, so its work only reports what that was.
- */
 export const cancelWorkflow = defineGitHubTask(
 	{ name: TASKS.cancel, title: "Cancel", input: CancelInput, thread: (input) => ({ kind: input.kind, number: input.number }), timeoutSeconds: 120 },
 	async (run) => {

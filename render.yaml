@@ -1,15 +1,3 @@
-# software-factory: two services and a database in a software-factory project.
-# - factory-gateway: verifies GitHub webhooks and starts the matching Workflows task.
-# - factory-workflows: runs every task (agents, snapshot refresh, cancel). It has no `repo` field, so it
-#   deploys from the same repository as this Blueprint, including forks.
-# - factory-db: the event log. Both services apply its migrations at startup. It is a paid instance because
-#   free databases expire after 30 days.
-# Deliveries, task runs, and agent runs are recorded in factory-db; the gateway streams agent runs live.
-#
-# Secrets live in three environment groups that `npm run setup:render` creates from .env before this
-# Blueprint is applied. Blueprint groups can't hold `sync: false` values, so the groups are not defined here.
-# The gateway links no group that holds GitHub App credentials or a model key.
-
 projects:
   - name: software-factory
     environments:
@@ -42,9 +30,6 @@ projects:
             runtime: node
             buildCommand: npm ci
             startCommand: npm run start:workflows
-            # DATABASE_URL comes from the software-factory-workflows group: a Blueprint can't reference a
-            # database from a workflow service, so `npm run setup:render -- --link-database` sets it after
-            # this Blueprint creates factory-db.
             envVars:
               - fromGroup: software-factory-shared
               - fromGroup: software-factory-workflows

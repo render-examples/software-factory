@@ -35,7 +35,6 @@ afterEach(() => {
 	for (const name of ENV_KEYS) delete process.env[name];
 });
 
-// The bundled runner runs only the agents bundled into it; triage is one, on Pi.
 describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 	it("--self-test loads the bundle and every agent definition, and reports each agent's harness", () => {
 		const { code, stdout } = runCli(["--self-test"], "");
@@ -70,7 +69,6 @@ describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 	});
 });
 
-// The runner contract every harness must honor. A new harness joins HARNESSES in tests/helpers/runner.ts.
 describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ make }) => {
 	it("returns every submit problem to the model, and accepts the corrected submission", async () => {
 		const ws = makeWorkspace();
@@ -110,8 +108,6 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 		expect(code).toBe(1);
 	});
 
-	// Tests that inspect a command's environment have it write to a file: Pi stops reading a command's stdout
-	// 100 ms after the process exits, so under load the tool result can come back empty.
 	it("takes the key from stdin and keeps every secret out of the tool env and the output", async () => {
 		const ws = makeWorkspace();
 		const stdinKey = "sk-ant-test-STDINKEY-0123456789";

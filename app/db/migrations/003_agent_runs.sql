@@ -1,4 +1,3 @@
--- One row per agent run, derived from its agent_run:<id> stream. No operational columns.
 create table agent_runs (
   id          text primary key,
   run_id      text not null,        -- the Workflows task run

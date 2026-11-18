@@ -1,4 +1,3 @@
-// Importing a task module registers its tasks with the Render Workflows SDK.
 import "./autopilot/index.js";
 import "./cancel.js";
 import "./pr-review/index.js";

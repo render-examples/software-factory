@@ -4,7 +4,6 @@ import type { Harness } from "./types.js";
 
 export type { ThinkingLevel };
 
-/** Each provider's key env var, for the providers the factory supports through Pi. */
 export const PI_PROVIDER_KEY_ENV: Readonly<Record<string, string>> = {
 	anthropic: "ANTHROPIC_API_KEY",
 	google: "GEMINI_API_KEY",
@@ -12,25 +11,13 @@ export const PI_PROVIDER_KEY_ENV: Readonly<Record<string, string>> = {
 };
 
 export interface PiOptions {
-	/** A model from Pi's catalog, e.g. `getBuiltinModel("anthropic", "claude-opus-5")`. */
 	model: Model<Api>;
-	/** Default "medium". */
 	thinkingLevel?: ThinkingLevel;
-	/**
-	 * Providers the model can be resolved and streamed through, such as a custom or self-hosted one. They're added to
-	 * Pi's built-in catalog, each replacing a built-in provider with the same ID.
-	 */
 	models?: () => MutableModels;
-	/** The env var holding the key. Default: the provider's, from PI_PROVIDER_KEY_ENV; required for other providers. */
 	credential?: string;
-	/**
-	 * The hosts model requests go to. Default: the host of `model.baseUrl`. Set it when `models` resolves the model
-	 * to a different base URL, such as a proxy.
-	 */
 	egress?: string[];
 }
 
-/** Runs an agent on Pi (`@earendil-works/pi-coding-agent`) with the factory's tools. */
 export function pi(opts: PiOptions): Harness {
 	const { provider, id } = opts.model;
 	const credential = opts.credential ?? PI_PROVIDER_KEY_ENV[provider];

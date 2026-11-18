@@ -6,16 +6,13 @@ const DESCRIPTION_MAX_CHARS = 20_000;
 const MAX_LISTED_FILES = 300;
 
 interface ReviewerMessageInput {
-	/** "owner/name" */
 	repo: string;
 	pull: PullRequest;
-	/** The PR's merge base, a commit SHA. */
 	baseRef: string;
 	files: readonly PullFile[];
 	verify: readonly VerifyRun[];
 }
 
-/** The reviewer's task message: where to diff, the PR's text as untrusted data, the changed files, and the verify results. */
 export function reviewerMessage({ repo, pull, baseRef, files, verify }: ReviewerMessageInput): string {
 	const listed = files.slice(0, MAX_LISTED_FILES).map((f) => {
 		const renamed = f.previousFilename ? `, renamed from ${f.previousFilename}` : "";

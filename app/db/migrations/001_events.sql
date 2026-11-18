@@ -1,4 +1,3 @@
--- Append-only log; the source of truth for factory state. Projections are derived from it.
 create table events (
   seq             bigserial primary key,
   tx              xid8 not null default pg_current_xact_id(),

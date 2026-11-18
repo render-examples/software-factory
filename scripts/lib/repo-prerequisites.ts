@@ -5,7 +5,6 @@ import type { Reporter } from "./output.js";
 const metadataSchema = z.object({ full_name: z.string().min(1), has_issues: z.boolean(), archived: z.boolean() });
 const branchSchema = z.object({ name: z.string().min(1), commit: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/i) }) });
 
-/** Read-only repository capabilities, shared by preflight and the deployed-value doctor. */
 export async function checkRepositoryPrerequisites(
 	repo: ReturnType<GitHubApp["repo"]>,
 	fullName: string,

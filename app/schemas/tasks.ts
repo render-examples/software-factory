@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { SHA } from "../util/index.js";
 
-/** Every task input names its repository and the App installation to act through. */
 const RepoInput = z.object({
 	repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
 	installationId: z.number().int().positive(),
@@ -12,26 +11,22 @@ const ActorLogin = z.string().min(1);
 export const TriageInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
-	/** Set when a reply on a thread waiting for one started this round. */
 	commentId: z.number().int().positive().optional(),
 });
 
 export const AutopilotInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
-	/** Set when a reply resumed an autopilot run that was waiting for answers. */
 	commentId: z.number().int().positive().optional(),
 });
 
 export const SpecApproval = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("label"),
-		/** When the approval label was applied; the spec must not have changed after it. */
 		labeledAt: z.iso.datetime({ offset: true }),
 	}),
 	z.object({
 		kind: z.literal("autopilot"),
-		/** The exact App-authored spec returned by the Triage child task. */
 		commentId: z.number().int().positive(),
 		hash: z.string().regex(/^[0-9a-f]{64}$/),
 		version: z.number().int().positive(),
@@ -48,12 +43,10 @@ export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
 	headSha: z.string().regex(SHA),
 	actor: ActorLogin,
-	/** The issue whose thread a factory pull request shares; the run starts there instead of on the pull request. */
 	issue: z.number().int().positive().optional(),
 });
 
 export const CancelInput = RepoInput.extend({
-	/** Issue or PR number. */
 	number: z.number().int().positive(),
 	kind: z.enum(["issue", "pr"]),
 	actor: ActorLogin,

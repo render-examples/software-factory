@@ -1,11 +1,3 @@
-/**
- * Step 1 of setup: create the factory's GitHub App with GitHub's manifest flow, before anything is deployed.
- *
- *   npm run setup:app [-- --org <org>] [--name <name>] [--write-env]
- *
- * The App's webhook starts inactive at a placeholder URL; `npm run setup:github` points it at the gateway once the
- * Blueprint is deployed. `npm run setup:render` copies the App's values into Render env groups before that.
- */
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";
@@ -20,7 +12,6 @@ const { values } = parseArgs({
 		org: { type: "string" },
 		name: { type: "string" },
 		port: { type: "string" },
-		// Accepted for compatibility; credentials are always saved instead of printed.
 		"write-env": { type: "boolean", default: true },
 	},
 });

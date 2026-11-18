@@ -1,11 +1,5 @@
 import { basename } from "node:path";
 
-/*
- * Read-only shell policy, applied when an agent has neither `edit` nor `write`. A usability guard, not a security
- * boundary: it rejects obviously mutating or networked commands so the model gets a clear message and adapts
- * instead of burning turns. Its parsing is approximate and easy to bypass; the sandbox is the boundary.
- */
-
 const READ_ONLY_GIT = new Set([
 	"blame",
 	"cat-file",
@@ -47,11 +41,8 @@ const INSTALL_VERBS = new Map(
 		brew: ["install"],
 	}),
 );
-/** Commands that create, change, or delete files: allowed only when every path they write is in scratch. */
 const FILE_WRITERS = new Set(["rm", "rmdir", "mv", "cp", "mkdir", "touch", "ln", "truncate", "tee", "patch", "chmod", "chown"]);
-/** Prefixes whose arguments are another command. Their own flags are skipped. */
 const WRAPPERS = new Set(["env", "timeout", "nice", "xargs", "command", "exec", "time", "nohup"]);
-/** Wrapper flags whose value is the next word. */
 const WRAPPER_VALUE_FLAGS = new Map(
 	Object.entries({
 		env: ["-u", "--unset", "-C", "--chdir"],
@@ -63,7 +54,6 @@ const WRAPPER_VALUE_FLAGS = new Map(
 const SHELLS = new Set(["sh", "bash", "zsh", "dash"]);
 const REDIRECT = /^(\d*|&)>>?(.*)$/;
 
-/** Returns why `command` is rejected, or undefined if it may run. */
 export function rejectReason(command: string, scratchDir: string): string | undefined {
 	for (const words of splitCommands(command)) {
 		const reason = checkCommand(words, scratchDir);
@@ -130,19 +120,15 @@ function checkCommand(raw: string[], scratchDir: string): string | undefined {
 	return undefined;
 }
 
-/** The paths a file-writing command (or in-place `sed`/`perl`) creates, changes, or deletes. */
 function writtenPaths(name: string, args: string[], inPlace: boolean): string[] {
 	const paths = args.filter((a) => !a.startsWith("-"));
-	// A mode, owner, or script comes before the paths.
 	if (inPlace || name === "chmod" || name === "chown") return paths.slice(1);
 	if (name !== "cp" && name !== "ln" && name !== "mv") return paths;
 	const dir = targetDirectory(args);
-	// A move also removes its sources; a copy or link writes only its destination.
 	if (name === "mv") return dir === undefined ? paths : [dir, ...paths];
 	return dir === undefined ? paths.slice(-1) : [dir];
 }
 
-/** The directory given with `-t` or `--target-directory`, if any. */
 function targetDirectory(args: string[]): string | undefined {
 	for (let k = 0; k < args.length; k++) {
 		const a = args[k] as string;
@@ -154,10 +140,6 @@ function targetDirectory(args: string[]): string | undefined {
 	return undefined;
 }
 
-/**
- * Splits a shell command line into simple commands (lists of words with quotes removed). Command
- * substitutions and subshells become separate commands, so `echo $(curl x)` yields ["echo"], ["curl", "x"].
- */
 function splitCommands(line: string): string[][] {
 	type Quote = "'" | '"' | undefined;
 	const commands: string[][] = [];
@@ -165,7 +147,6 @@ function splitCommands(line: string): string[][] {
 	let word = "";
 	let inWord = false;
 	let quote: Quote;
-	// Open substitutions: the char that closes each one and the quote state to resume after it.
 	const open: Array<{ close: ")" | "`"; quote: Quote }> = [];
 	const endWord = () => {
 		if (inWord) words.push(word);
@@ -196,7 +177,6 @@ function splitCommands(line: string): string[][] {
 			continue;
 		}
 		if (c === "`" || (c === "$" && line[i + 1] === "(")) {
-			// Substitutions run even inside double quotes; their body is parsed unquoted.
 			endCommand();
 			open.push({ close: c === "`" ? "`" : ")", quote });
 			quote = undefined;

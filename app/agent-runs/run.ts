@@ -10,9 +10,7 @@ import { AgentRunRecorder } from "./recorder.js";
 import { followRun, LineRelay } from "./relay.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
-/** Extra time the host gives run-agent.sh beyond the runner's own timeout, to flush events and exit. */
 const EXEC_GRACE_MS = 60_000;
-/** run-agent.sh's stderr kept for a runner_lost message. */
 const STDERR_KEPT = 2000;
 
 export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
@@ -29,17 +27,12 @@ export class AgentError extends Error {
 }
 
 export interface RunAgentOptions {
-	/** Tools run only here, never in a Workflows task. */
 	sandbox: Sandbox;
-	/** Root task run of the GitHub task; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
-	/** The thread the run works on, if any; its events carry it. */
 	thread?: ThreadKey;
-	/** Default 30 minutes. */
 	timeoutMs?: number;
 	signal?: AbortSignal;
-	/** The event log the run is recorded in. Default: the Workflows process's pool. */
 	db?: Db;
 }
 
@@ -50,11 +43,6 @@ export interface AgentRun<Output extends OutputSchema> {
 	turns: number;
 }
 
-/**
- * Runs `agent` in `opts.sandbox` on `message`, the task for this run, and returns the submission parsed by the
- * agent's Zod schema. Every failure throws an AgentError. Either way, the run is recorded in the event log as an
- * agent run, ending with `agent_run.finished` and its usage and cost.
- */
 export async function runAgent<Tools extends readonly ToolName[], Output extends OutputSchema>(
 	agent: Agent<Tools, Output>,
 	message: string,
@@ -126,22 +114,10 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 }
 
 interface RunnerOutput {
-	/** The runner's stdout: RunnerEvent JSONL. */
 	text: string;
-	/** What went wrong around the runner, for a runner_lost message. */
 	detail?: string;
 }
 
-/**
- * Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it writes its PID to `<runDir>.pid`,
- * reads and deletes `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that
- * user from REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by
- * `<runDir>/input.json`. It writes the runner's stdout both to its own stdout and to `<runDir>.jsonl`, and the exit
- * status to `<runDir>.exit`. `<runDir>` must be root-only (mode 700) when the key is uploaded, so the runner user
- * can't reach the key file before it's deleted.
- *
- * The live copy reaches `relay` as the runner writes it; the downloaded `<runDir>.jsonl` is the result.
- */
 async function runInSandbox(
 	sandbox: Sandbox,
 	input: RunnerInput,
@@ -198,9 +174,7 @@ interface Summary {
 	costUsd: number;
 	turns: number;
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
-	/** From the runner's `started` event: what actually ran, which the host can't always know. */
 	harnessVersion?: string;
-	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
 
@@ -233,7 +207,6 @@ function parseLine(line: string): RunnerEvent | undefined {
 	}
 }
 
-/** Sums usage up to the terminal event. Turns come from `result`, else count model calls. */
 function summarize(events: readonly RunnerEvent[], invalidLines: number): Summary {
 	const summary = { ...emptySummary(), invalidLines };
 	let calls = 0;

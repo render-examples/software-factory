@@ -1,14 +1,8 @@
-/**
- * The GitHub App manifest flow: a page on 127.0.0.1 that POSTs the manifest to GitHub, and the callback that
- * exchanges GitHub's code for the App's credentials.
- * https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest
- */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { REQUIRED_EVENTS, REQUIRED_PERMISSIONS } from "./requirements.js";
 
-/** The gateway doesn't exist yet. setup:github sets the real URL; the hook stays inactive until then. */
 export const PLACEHOLDER_WEBHOOK_URL = "https://example.com/software-factory-gateway-not-deployed";
 const HOMEPAGE = "https://github.com/render-examples/software-factory";
 
@@ -36,7 +30,6 @@ export function buildManifest(opts: { name: string; redirectUrl: string }): Mani
 	};
 }
 
-/** GitHub's credentials response, trimmed to what setup uses. */
 export interface ManifestConversion {
 	id: number;
 	slug: string;
@@ -61,7 +54,6 @@ function stateMatches(expected: string, received: string | null): boolean {
 	return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Where the manifest form posts: the user's or an organization's "new App" page, carrying `state`. */
 export function registrationUrl(webUrl: string, state: string, org?: string): string {
 	const path = org ? `/organizations/${encodeURIComponent(org)}/settings/apps/new` : "/settings/apps/new";
 	return `${webUrl}${path}?state=${encodeURIComponent(state)}`;
@@ -76,7 +68,6 @@ function page(title: string, body: string): string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body>${body}</body></html>`;
 }
 
-/** The form GitHub requires: the manifest arrives as a browser form POST. Every interpolated value is escaped. */
 export function formPage(manifest: Manifest, action: string, repos: readonly string[]): string {
 	const repoList = repos.map((r) => `<li><code>${escapeHtml(r)}</code></li>`).join("");
 	return page(
@@ -103,25 +94,19 @@ function successPage(app: ManifestConversion): string {
 
 export interface CallbackServerOptions {
 	state: string;
-	/** Builds the form page once the server's port is known. */
 	form: (redirectUrl: string) => string;
 	exchange: (code: string) => Promise<ManifestConversion>;
-	/** 0 picks a free port. */
 	port?: number;
-	/** GitHub's manifest code expires after an hour. */
 	timeoutMs?: number;
 }
 
 export interface CallbackServer {
-	/** http://127.0.0.1:<port> */
 	url: string;
 	redirectUrl: string;
-	/** Resolves with the App's credentials after a callback with the right state exchanges successfully. */
 	result: Promise<ManifestConversion>;
 	close(): Promise<void>;
 }
 
-/** Serves the form and waits for GitHub's redirect. Binds 127.0.0.1 only, and rejects a callback whose state differs. */
 export async function startCallbackServer(opts: CallbackServerOptions): Promise<CallbackServer> {
 	let settle!: { resolve: (app: ManifestConversion) => void; reject: (error: Error) => void };
 	const result = new Promise<ManifestConversion>((resolve, reject) => {
@@ -177,7 +162,6 @@ export async function startCallbackServer(opts: CallbackServerOptions): Promise<
 	return { url, redirectUrl, result, close };
 }
 
-/** POST /app-manifests/{code}/conversions: unauthenticated; the code is the credential. */
 export async function exchangeManifestCode(code: string, apiUrl: string, fetchImpl: typeof fetch = fetch): Promise<ManifestConversion> {
 	const response = await fetchImpl(`${apiUrl}/app-manifests/${encodeURIComponent(code)}/conversions`, {
 		method: "POST",

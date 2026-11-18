@@ -18,17 +18,13 @@ import { ThreadKey } from "../threads/index.js";
 import { errorMessage } from "../util/index.js";
 
 const FLUSH_MS = 250;
-/** Log events kept while the database is unreachable; later ones are dropped. */
 const MAX_QUEUED = 1000;
-/** A delta part's text, in bytes once JSON-encoded, leaving room in the 8,000-byte NOTIFY payload for the envelope. */
 const MAX_PART_BYTES = 6000;
 const TRUNCATED = "…[truncated]";
 
 export interface RecorderOptions {
 	db: Db;
-	/** The Workflows task run the agent runs in. */
 	runId: string;
-	/** The thread the run works on, if any. */
 	thread?: ThreadKey;
 }
 
@@ -44,11 +40,6 @@ export interface AgentRunSummary {
 
 type Pending = Omit<NewEvent, "stream">;
 
-/**
- * Records one agent run in the log as `agent_run:<id>`, its only writer. Runner output is untrusted: it becomes
- * display events on this stream and nothing else. Writes are batched every 250 ms; deltas go out over NOTIFY in
- * the same transaction and are never stored. A database error is logged and never reaches the agent run.
- */
 export class AgentRunRecorder {
 	readonly id = `ar_${randomUUID()}`;
 	readonly stream = `agent_run:${this.id}`;
@@ -58,7 +49,6 @@ export class AgentRunRecorder {
 	readonly #runId: string;
 	#queue: Pending[] = [];
 	#deltas = new Map<string, string>();
-	/** Messages with deltas sent but no final text yet. */
 	readonly #open = new Set<string>();
 	#finals: string[] = [];
 	#localSeq = 0;
@@ -71,7 +61,6 @@ export class AgentRunRecorder {
 		this.#db = opts.db;
 		this.#runId = opts.runId;
 		this.#source = `workflow:${opts.runId}`;
-		// append() rejects a malformed thread key, which would fail every write for the rest of the run.
 		if (opts.thread === undefined || ThreadKey.safeParse(opts.thread).success) this.#thread = opts.thread;
 		else warn("agent run recorded without its thread: invalid thread key", { agentRunId: this.id });
 	}
@@ -116,7 +105,6 @@ export class AgentRunRecorder {
 		}
 	}
 
-	/** Flushes, then appends `agent_run.finished` from the host's summary. Never throws. */
 	async finish(summary: AgentRunSummary): Promise<void> {
 		this.#finished = true;
 		this.#finals.push(...this.#open);
@@ -131,15 +119,10 @@ export class AgentRunRecorder {
 			...(summary.invalidLines ? { invalid_lines: summary.invalidLines } : {}),
 		});
 		if (await this.#flush()) return;
-		// Whatever kept the stream from being written, the run's outcome and cost still belong in the log.
 		this.#queue = this.#queue.filter(lifecycle);
 		await this.#flush();
 	}
 
-	/**
-	 * Queues an event only if append() will accept it: a rejected event in a batch would fail every later write, so
-	 * the database errors that #write retries must be the only failures left.
-	 */
 	#push(type: Pending["type"], payload: unknown): void {
 		const parsed = type.payload.safeParse(payload);
 		if (!parsed.success) {
@@ -159,7 +142,6 @@ export class AgentRunRecorder {
 		this.#schedule();
 	}
 
-	/** After `finish`, nothing retries: its own flushes are the last. */
 	#schedule(): void {
 		if (this.#finished) return;
 		this.#timer ??= setTimeout(() => void this.#flush(), FLUSH_MS).unref();
@@ -172,7 +154,6 @@ export class AgentRunRecorder {
 		return this.#writing;
 	}
 
-	/** One transaction: deltas, then log events, then finals, so a message's final follows its last delta. */
 	async #write(): Promise<boolean> {
 		const events = this.#queue;
 		const deltas = this.#deltas;
@@ -201,7 +182,6 @@ export class AgentRunRecorder {
 				for (const messageId of finals) await notify(tx, { type: "final", stream: this.stream, message_id: messageId });
 			});
 		} catch (error) {
-			// Deltas are only worth sending live; the log events wait for the next write.
 			const requeued = [...events, ...this.#queue];
 			this.#queue = requeued.filter((event, index) => index < MAX_QUEUED || lifecycle(event));
 			this.#dropped += requeued.length - this.#queue.length;
@@ -218,14 +198,12 @@ export class AgentRunRecorder {
 	}
 }
 
-/** The run's first and last events, which the bounded queue never drops. */
 const lifecycle = (event: Pending) => event.type === agentRunStarted || event.type === agentRunFinished;
 
 async function notify(tx: Tx, notice: LiveNotice): Promise<void> {
 	await tx.query("select pg_notify($1, $2)", [LIVE_CHANNEL, JSON.stringify(notice)]);
 }
 
-/** Splits text into parts whose JSON encoding fits MAX_PART_BYTES, never inside a character. */
 function chunks(text: string): string[] {
 	const parts: string[] = [];
 	let current = "";
@@ -244,16 +222,11 @@ function chunks(text: string): string[] {
 	return parts;
 }
 
-/** Postgres text and JSON reject NUL characters and unpaired surrogates, which model and tool output can contain. */
 function clean(text: string): string {
 	return text.replaceAll("\u0000", "").replace(LONE_SURROGATE, "\ufffd");
 }
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
-/**
- * Cuts text to whole characters whose JSON encoding fits `maxBytes` of UTF-8, marked TRUNCATED when cut. A control
- * character such as ESC takes 6 bytes in JSON, so a character count alone can't bound an event's size.
- */
 function clip(text: string, maxBytes: number): string {
 	const safe = clean(text);
 	if (jsonBytes(safe) <= maxBytes) return safe;
@@ -268,7 +241,6 @@ function clip(text: string, maxBytes: number): string {
 	return safe.slice(0, end) + TRUNCATED;
 }
 
-/** Text's size once JSON-encoded, in UTF-8 bytes, without the quotes. */
 const jsonBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
 
 function warn(msg: string, fields: Record<string, unknown>): void {

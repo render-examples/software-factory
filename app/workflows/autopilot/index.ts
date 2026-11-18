@@ -30,10 +30,6 @@ export interface AutopilotDeps extends GitHubTaskDeps {
 	prReview?: (input: PrReviewInput) => Promise<TaskResult>;
 }
 
-/**
- * Runs the three built-in GitHub tasks as children of one issue-level root.
- * Child results, not GitHub labels, move the workflow to its next stage.
- */
 async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx: GitHubTaskContext): Promise<Outcome<AutopilotData>> {
 	const stages: AutopilotStage[] = [];
 	const record = <Data>(task: StageName, result: TaskResult<Data>): TaskResult<Data> => {
@@ -66,7 +62,6 @@ async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx:
 	const base = { repo: input.repo, installationId: input.installationId, actor: input.actor };
 	await run.reportProgress("running Triage");
 	const triage = record("triage", await runTriage({ ...base, issue: input.issue, commentId: input.commentId }));
-	// A skipped reply, such as a deleted comment, leaves the questions unanswered.
 	if (triage.state === "done" && (triage.outcome === "asked" || triage.outcome === "skipped")) {
 		return { ...finish("waiting_for_answers", triage.summary), waiting: "reply" };
 	}

@@ -2,25 +2,18 @@ import pg from "pg";
 import { LIVE_CHANNEL, LiveNotice } from "../events/index.js";
 import { type Delta, LiveCache, type PartialMessage } from "./live.js";
 
-/** Subscribes to commits on every stream. The `events` channel names only the stream, so thread readers use it. */
 export const ANY_STREAM = "*";
 const RECONNECT_MS = 5_000;
 
-/**
- * Fans this instance's Postgres notifications out to its stream readers: `events` says a stream has new rows,
- * which readers fetch from their own cursors; `live` carries deltas, folded into the cache of partial messages.
- */
 export class EventHub {
 	readonly #events = new Map<string, Set<() => void>>();
 	readonly #deltas = new Map<string, Set<(delta: Delta) => void>>();
 	readonly #cache = new LiveCache();
 
-	/** Calls `listener` when an event on `stream` (or any stream, for ANY_STREAM) commits. Returns an unsubscribe. */
 	onEvents(stream: string, listener: () => void): () => void {
 		return add(this.#events, stream, listener);
 	}
 
-	/** Calls `listener` with each new delta on a stream or thread. Returns an unsubscribe. */
 	onDelta(key: string, listener: (delta: Delta) => void): () => void {
 		return add(this.#deltas, key, listener);
 	}
@@ -29,7 +22,6 @@ export class EventHub {
 		return this.#cache.partials(key);
 	}
 
-	/** Handles one notification from the database. */
 	receive(channel: string, payload: string): void {
 		if (channel === LIVE_CHANNEL) {
 			this.#receiveLive(payload);
@@ -53,10 +45,6 @@ export class EventHub {
 	}
 }
 
-/**
- * Holds one LISTEN connection for `events` and `live`, and reconnects after it fails. Readers' polls cover the
- * events missed meanwhile; deltas missed meanwhile are lost.
- */
 export function listen(hub: EventHub, connectionString: string): { stop(): Promise<void> } {
 	let stopped = false;
 	let client: pg.Client | undefined;

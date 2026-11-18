@@ -102,7 +102,6 @@ describe("GET /agent-runs/:id/stream", () => {
 		const r = startRun();
 		feed(r, text("Hello", "m1"), delta("Work", "m2"));
 		await vi.waitFor(() => expect(hub.partials(r.stream)).toEqual([expect.objectContaining({ message_id: "m2" })]), { timeout: 2000 });
-		// The cache still holds m1, as it does between the commit of its message and the arrival of its final.
 		hub.receive("live", JSON.stringify({ type: "delta", stream: r.stream, thread: THREAD, message_id: "m1", local_seq: 1, part: 0, text: "Hello" }));
 
 		const stream = readSse(await get(`/agent-runs/${r.id}/stream`));

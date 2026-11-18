@@ -16,11 +16,9 @@ import {
 } from "./types.js";
 
 export interface GitHubForOptions extends GitHubHttpOptions {
-	/** Overrides the installation token, for tests and scripts. */
 	token?: TokenProvider;
 }
 
-/** A GitHub client for one repository, acting as the App installation that delivered the webhook. */
 export function githubFor(repo: Pick<RepoContext, "owner" | "name" | "installationId">, opts: GitHubForOptions = {}): GitHubClient {
 	const token = opts.token ?? (() => githubToken({ installationId: repo.installationId, repo: repo.name, fetch: opts.fetch }));
 	return new GitHubClient(repo.owner, repo.name, new GitHubHttp(token, opts), opts);
@@ -28,7 +26,6 @@ export function githubFor(repo: Pick<RepoContext, "owner" | "name" | "installati
 
 const botLogins = new Map<string, Promise<string>>();
 
-/** Workflow-owned GitHub operations. Agents never get this. */
 export class GitHubClient {
 	private readonly base: string;
 
@@ -41,7 +38,6 @@ export class GitHubClient {
 		this.base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 	}
 
-	/** The App's bot login, `<app-slug>[bot]`, from GET /app with the App JWT. Cached per process. */
 	botLogin(): Promise<string> {
 		const key = this.http.apiUrl;
 		let login = botLogins.get(key);
@@ -58,7 +54,6 @@ export class GitHubClient {
 		return toIssue(await this.http.json<RawIssue>("GET", `${this.base}/issues/${number}`));
 	}
 
-	/** Every comment, oldest first. */
 	async listIssueComments(number: number): Promise<IssueComment[]> {
 		return (await this.http.paginate<RawComment>(`${this.base}/issues/${number}/comments`)).map(toComment);
 	}
@@ -80,7 +75,6 @@ export class GitHubClient {
 		await this.http.json("DELETE", `${this.base}/issues/comments/${commentId}`);
 	}
 
-	/** Creates a repository label; an existing one (422) is left as it is. */
 	async ensureLabel(name: string, color: string, description = ""): Promise<void> {
 		try {
 			await this.http.json("POST", `${this.base}/labels`, { body: { name, color, description } });
@@ -95,7 +89,6 @@ export class GitHubClient {
 		await this.http.json("POST", `${this.base}/issues/${number}/labels`, { body: { labels }, idempotent: true });
 	}
 
-	/** A label that isn't on the issue (404) is fine. */
 	async removeLabel(number: number, label: string): Promise<void> {
 		try {
 			await this.http.json("DELETE", `${this.base}/issues/${number}/labels/${encodeURIComponent(label)}`);
@@ -105,10 +98,6 @@ export class GitHubClient {
 		}
 	}
 
-	/**
-	 * The user's repository permission. `permission` folds maintain into write and triage into read, so this reads
-	 * `role_name`, and for custom roles the permission flags. A non-collaborator (404) has "none".
-	 */
 	async getPermission(login: string): Promise<Permission> {
 		try {
 			const raw = await this.http.json<RawPermission>("GET", `${this.base}/collaborators/${encodeURIComponent(login)}/permission`);
@@ -119,7 +108,6 @@ export class GitHubClient {
 		}
 	}
 
-	/** Times a label was applied to the issue or PR, oldest first. */
 	async getLabelEvents(number: number, label: string): Promise<LabelEvent[]> {
 		const events = await this.http.paginate<RawIssueEvent>(`${this.base}/issues/${number}/events`);
 		return events
@@ -131,7 +119,6 @@ export class GitHubClient {
 		return toPull(await this.http.json<RawPull>("GET", `${this.base}/pulls/${number}`));
 	}
 
-	/** The PR's unified diff. */
 	async getPullDiff(number: number): Promise<string> {
 		return this.http.text("GET", `${this.base}/pulls/${number}`, { accept: "application/vnd.github.diff" });
 	}
@@ -153,7 +140,6 @@ export class GitHubClient {
 		return (await this.http.paginate<RawReview>(`${this.base}/pulls/${pr}/reviews`)).map(toReview);
 	}
 
-	/** Posts a COMMENT review. The type admits no other event: the factory never approves or requests changes. */
 	async createReview(
 		pr: number,
 		review: { commitId: string; body: string; event: "COMMENT"; comments: ReviewComment[] },
@@ -165,10 +151,6 @@ export class GitHubClient {
 		);
 	}
 
-	/**
-	 * Makes an open PR from `head` exist with this title and body: updates the open one, or opens a new one.
-	 * Safe to repeat: a replayed run finds the PR the first one opened.
-	 */
 	async ensurePull(args: {
 		head: string;
 		base: string;
@@ -184,7 +166,6 @@ export class GitHubClient {
 			});
 			return { pull: toPull(raw), created: true };
 		} catch (error) {
-			// Lost a race with another run, or a retried POST that had succeeded.
 			if (error instanceof GitHubError && error.status === 422) {
 				const raced = await this.findOpenPull(args.head);
 				if (raced) return { pull: raced, created: false };

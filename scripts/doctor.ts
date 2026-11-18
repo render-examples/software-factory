@@ -1,10 +1,3 @@
-/**
- * Read-only checks of a deployment. Never prints a secret; exits 1 when any check fails.
- *
- *   npm run doctor [-- --service gateway|workflows|all]
- *
- * Checks the environment it runs in: locally that's .env; in a service's Render Shell it's that service's env.
- */
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";
 import { runDoctor } from "./lib/doctor.js";

@@ -168,7 +168,6 @@ describe("runPrReview", () => {
 		expect(result).toMatchObject({ state: "done", outcome: "reviewed", traceId: "trn-root", runId: "trn-run" });
 		expect(result.summary).toBe("posted a COMMENT review: risk **medium**, 1 inline comment.");
 
-		// One sandbox at the PR head with the repository's base branch; the PR's code runs only as the runner user.
 		expect(sandbox.opened).toEqual([{ repo, kind: "pull", number: 34, headSha: HEAD, baseBranch }]);
 		expect(sandbox.closed).toBe(1);
 		expect(sandbox.execs.map((e) => e.command)).toEqual(expect.arrayContaining([...verify]));

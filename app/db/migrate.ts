@@ -3,11 +3,6 @@ import type { Db, Queryable } from "./pool.js";
 
 const MIGRATIONS = new URL("./migrations/", import.meta.url);
 
-/**
- * Applies pending migrations in order, in one transaction, and returns their names. Both services call it at
- * startup; the advisory lock makes the later one wait and then find nothing to apply. Keep migrations additive
- * (new tables, new nullable columns): the other service may still be running the previous code.
- */
 export async function migrate(db: Db): Promise<string[]> {
 	return db.withTx(async (tx) => {
 		await tx.query("select pg_advisory_xact_lock(hashtext('software-factory:migrate'))");
@@ -21,7 +16,6 @@ export async function migrate(db: Db): Promise<string[]> {
 	});
 }
 
-/** Migration files in this checkout that the database hasn't applied, in order. */
 export async function pendingMigrations(db: Queryable): Promise<string[]> {
 	const files = (await readdir(MIGRATIONS)).filter((name) => /^\d{3}_\w+\.sql$/.test(name)).sort();
 	const { rows } = await db.query<{ exists: boolean }>("select to_regclass('schema_migrations') is not null as exists");

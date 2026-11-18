@@ -4,20 +4,13 @@ import type { ExecOptions, ExecResult, ExecStreamOptions, OpenedSandbox, Sandbox
 
 type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;
 
-/** One JSONL line as the runner would write it. */
 export const eventLine = (event: WithoutAt<RunnerEvent>): string => asciiJson(JSON.stringify({ at: new Date().toISOString(), ...event }));
 
 export interface FakeSandboxOptions {
-	/** The runner's stdout, served as `<runDir>.jsonl`; null makes the download fail. */
 	jsonl: string | null;
-	/** run-agent.sh's stdout as the host receives it, chunk by chunk; an Error drops the stream. Default: `jsonl` in one chunk. */
 	live?: (string | Error)[];
 }
 
-/**
- * Records every call; serves a canned `.jsonl` for whatever run directory `runAgent` creates, live while
- * run-agent.sh runs, and from a byte offset to the follow command's `tail -c +<offset+1> -f`.
- */
 export class FakeSandbox implements Sandbox {
 	readonly id = "sbx-fake";
 	readonly execs: Array<{ command: string; opts?: ExecOptions | ExecStreamOptions }> = [];
@@ -69,10 +62,6 @@ type Answer = ExecResult | Error;
 
 export const ok = (stdout = ""): ExecResult => ({ exitCode: 0, stdout, stderr: "" });
 
-/**
- * A sandbox a workflow opened. Answers each command from the first `results` key it starts with: a list answers in
- * turn and repeats its last entry; anything else gets "ok".
- */
 export class FakeOpenedSandbox implements OpenedSandbox {
 	readonly id: string;
 	readonly headSha: string;
@@ -89,7 +78,6 @@ export class FakeOpenedSandbox implements OpenedSandbox {
 		this.results = opts.results ?? {};
 	}
 
-	/** An `openSandbox` dependency that records the repository and ref it opens. */
 	open = async (repo: { fullName: string }, ref: SandboxRef): Promise<OpenedSandbox> => {
 		this.opened.push({ repo: repo.fullName, ...ref });
 		return this;

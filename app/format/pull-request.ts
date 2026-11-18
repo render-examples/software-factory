@@ -2,10 +2,8 @@ import type { Implementation, Spec } from "../schemas/index.js";
 import { acceptanceChecklist } from "./spec.js";
 import { BODY_MAX_CHARS, bullets, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
-/** GitHub's limit on a pull request title. */
 const TITLE_MAX_CHARS = 256;
 
-/** A verify command as the workflow ran it. */
 export interface VerifyResult {
 	command: string;
 	passed: boolean;
@@ -21,13 +19,10 @@ export interface PullRequestBodyInput {
 	issue: number;
 	spec: Spec;
 	implementation: Implementation;
-	/** The workflow's own verify run. Without it, the implementer's self-reported results are shown as such. */
 	verification?: readonly VerifyResult[];
-	/** Link to the spec comment. */
 	specUrl?: string;
 }
 
-/** The draft PR's body. The caller appends its hidden marker. */
 export function pullRequestBody(input: PullRequestBodyInput): string {
 	const { spec, implementation } = input;
 	const sections: string[] = [`## Summary\n\n${sanitize(implementation.summary)}`, `## Acceptance criteria\n\n${acceptanceChecklist(spec)}`];
@@ -52,7 +47,6 @@ export function pullRequestBody(input: PullRequestBodyInput): string {
 	);
 }
 
-/** A Markdown table of verify results. */
 export function verificationTable(results: readonly VerifyResult[]): string {
 	if (results.length === 0) return "No verify commands are configured.";
 	const rows = results.map((r) => {
@@ -62,7 +56,6 @@ export function verificationTable(results: readonly VerifyResult[]): string {
 	return ["| Result | Command | Duration |", "| --- | --- | --- |", ...rows].join("\n");
 }
 
-/** Escapes characters that end a table cell. */
 function escapeCell(text: string): string {
 	return text.replaceAll("|", "\\|");
 }

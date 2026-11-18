@@ -84,7 +84,6 @@ describe.skipIf(!TEST_DATABASE_URL)("runs on Postgres", () => {
 		const thread = newThread();
 		expect(await startOnThread(db, starting(thread, "trn-root"))).toEqual({ displaced: null });
 
-		// A newer root's start stays uncommitted while the child reads the thread and appends behind it.
 		let commit = () => {};
 		const committed = new Promise<void>((resolve) => {
 			commit = resolve;

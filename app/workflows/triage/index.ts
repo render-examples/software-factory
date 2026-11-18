@@ -12,17 +12,11 @@ import { readThread, specWriterMessage, triageMessage } from "./thread.js";
 
 export type { TriageHandoff };
 
-/** Test seams; production uses the real GitHub client, sandboxes, and runAgent. */
 export interface TriageDeps extends GitHubTaskDeps {
 	openSandbox?: (repo: RepoContext, ref: SandboxRef) => Promise<Sandbox>;
 	runAgent?: AgentRunner;
 }
 
-/**
- * Triage one issue: the triage agent reads the issue and the repository and decides to ask questions, draft
- * (or revise) the spec, or decline. Every GitHub write goes through the format helpers and carries a marker.
- * Every outcome but a decline waits for a reply, which resumes Triage.
- */
 export const triageWorkflow = defineGitHubTask(
 	{
 		name: TASKS.triage,

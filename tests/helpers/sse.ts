@@ -4,7 +4,6 @@ export interface SseFrame {
 	data: unknown;
 }
 
-/** Reads an SSE response one frame at a time, skipping comment lines. `next()` resolves null when the stream ends. */
 export function readSse(response: Response) {
 	if (!response.body) throw new Error("response has no body");
 	const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();

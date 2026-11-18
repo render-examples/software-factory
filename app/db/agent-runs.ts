@@ -3,7 +3,6 @@ import type { Projection } from "./projections.js";
 
 const STREAM_PREFIX = "agent_run:";
 
-/** One row per agent run: what ran, on which thread, and what it cost. */
 export const agentRuns: Projection = {
 	table: "agent_runs",
 	key: ["id"],

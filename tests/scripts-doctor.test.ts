@@ -29,7 +29,6 @@ beforeAll(async () => {
 	({ db } = await pgliteDb());
 });
 afterAll(() => db.end());
-/** The migrated test database, left open when doctor closes its connection. */
 const openTestDb = () => ({ ...db, end: async () => {} });
 
 const FULL_ENV = {

@@ -8,7 +8,6 @@ export type OpenSandbox = (repo: RepoContext, ref: SandboxRef) => Promise<Opened
 
 const HEAD_MOVED = "the PR changed after it was labeled; reapply the label";
 
-/** Opens one sandbox at the PR head with its base branch fetched, runs `fn`, and closes the sandbox whatever happens. */
 export function withPullSandbox<T>(open: OpenSandbox, repo: RepoContext, pull: PullRequest, fn: (sandbox: Sandbox) => Promise<T>): Promise<T> {
 	const openPull = () =>
 		open(repo, { kind: "pull", number: pull.number, headSha: pull.headSha, baseBranch: pull.baseRef }).catch((err: unknown) => {
@@ -22,10 +21,6 @@ export function headMoved(): ExpectedFailure {
 	return new ExpectedFailure(HEAD_MOVED, "head_moved");
 }
 
-/**
- * The commit the PR branched from: `git merge-base` of the PR head (checked out) and the base branch, which the
- * sandbox fetched to `refs/remotes/origin/<base>`. The reviewer diffs `<mergeBase>...HEAD`.
- */
 export async function mergeBase(sandbox: Sandbox, baseBranch: string): Promise<string> {
 	const res = await sandbox.exec(`git merge-base ${shq(`refs/remotes/origin/${baseBranch}`)} HEAD`, { asRunner: true });
 	const sha = res.stdout.trim();

@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-/** The triage agent's submission: whether a competent engineer would know what to build. */
 export const TriageDecision = z
 	.strictObject({
 		decision: z

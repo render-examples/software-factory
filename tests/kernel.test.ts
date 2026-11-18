@@ -5,7 +5,6 @@ import { executeHarness } from "../app/runner/core/kernel.js";
 import type { RunnerInput } from "../app/runner/core/protocol.js";
 import { GOOD, makeInput, makeWorkspace, parseEvents, terminal, toolResults } from "./helpers/runner.js";
 
-/** A driver whose conversation is `converse`, run with the kernel's context. */
 const driver = (converse: (ctx: DriverContext) => Promise<void>): Driver => ({
 	open: (ctx) => ({ version: "1.2.3", model: "fake-model", run: () => converse(ctx) }),
 });
@@ -26,7 +25,6 @@ async function execute(harness: Driver, input: RunnerInput = makeInput(undefined
 }
 
 describe("kernel", { timeout: 15_000 }, () => {
-	// Assertions run outside the driver: once the outcome is decided, the kernel ignores how the driver settles.
 	it("fails with invalid_input, without starting, when the driver can't run the configuration", async () => {
 		const invalid = await execute({
 			open: () => {

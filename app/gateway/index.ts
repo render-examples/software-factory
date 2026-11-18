@@ -13,18 +13,12 @@ export { EventHub, listen } from "./hub.js";
 export interface GatewayDeps extends StreamDeps {
 	startTask(task: TaskName, input: object, idempotencyKey: string): Promise<{ id: string }>;
 	webhookSecret: string;
-	/** Records every authenticated delivery before the gateway acts on it. */
 	db: Db;
 }
 
-/**
- * The webhook gateway. Every response says what happened to the delivery; GitHub keeps them under the App's
- * Recent Deliveries, so only failures the gateway can't explain there are logged.
- */
 export function createGateway(deps: GatewayDeps): Hono {
 	const app = new Hono();
 
-	// The gateway has no UI; people who open its URL in a browser should see that it's running, not a 404.
 	app.get("/", (c) =>
 		c.text(
 			"software-factory gateway is running.\n\n" +
@@ -62,7 +56,6 @@ export function createGateway(deps: GatewayDeps): Hono {
 		let decision: Decision;
 		try {
 			decision = routed.kind === "lookup" ? routed.decide(await threadState(deps.db, routed.thread)) : routed;
-			// A redelivery is already recorded and appends nothing, but still starts its task: the first attempt may have failed.
 			await deps.db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
 		} catch (error) {
 			warn("could not record delivery", { deliveryId, event, error: errorMessage(error) });
@@ -82,7 +75,6 @@ export function createGateway(deps: GatewayDeps): Hono {
 			return c.json({ runId: run.id, task }, 202);
 		} catch (error) {
 			warn("could not start task", { deliveryId, event, task, thread, error: errorMessage(error) });
-			// A 5xx marks the delivery failed in GitHub, where it can be redelivered by hand.
 			return c.json({ error: "could not start task", task }, 502);
 		}
 	});

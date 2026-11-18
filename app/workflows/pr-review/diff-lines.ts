@@ -1,15 +1,9 @@
 import { type GitHubClient, GitHubError, type PullFile } from "../../github/index.js";
 
-/** For each file in the new version, the lines a unified diff shows on its RIGHT side: added and context lines. */
 export type DiffLines = Map<string, Set<number>>;
 
 const HUNK = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
-/**
- * Parses a `git diff`-style unified diff (GitHub's `application/vnd.github.diff`). Hunk line counts decide
- * where a hunk ends, so a removed line that reads `-- x` (shown as `--- x`) is never taken for a file header.
- * Deleted files have no right side; renames are keyed by their new path.
- */
 function parseDiffLines(diff: string): DiffLines {
 	const files: DiffLines = new Map();
 	let lines: Set<number> | undefined;
@@ -50,7 +44,6 @@ function parseDiffLines(diff: string): DiffLines {
 	return files;
 }
 
-/** The same, from the per-file patches of the list-files API (hunks without file headers), for diffs too large to fetch whole. */
 function patchLines(files: readonly PullFile[]): DiffLines {
 	const lines: DiffLines = new Map();
 	for (const file of files) {
@@ -61,7 +54,6 @@ function patchLines(files: readonly PullFile[]): DiffLines {
 	return lines;
 }
 
-/** The PR's commentable lines from its unified diff, or from the per-file patches when GitHub won't serve a diff that large. */
 export async function pullDiffLines(gh: Pick<GitHubClient, "getPullDiff">, pr: number, files: readonly PullFile[]): Promise<DiffLines> {
 	try {
 		return parseDiffLines(await gh.getPullDiff(pr));
@@ -75,7 +67,6 @@ export function commentable(lines: DiffLines): (path: string, line: number) => b
 	return (path, line) => lines.get(path)?.has(line) ?? false;
 }
 
-/** `b/path` from a `+++` header, or null for `/dev/null`. Git quotes unusual names C-style and ends names with spaces in a tab. */
 function newPath(raw: string): string | null {
 	const name = raw.replace(/\t$/, "");
 	if (name === "/dev/null") return null;
@@ -95,7 +86,6 @@ const ESCAPES: Record<string, number> = {
 	"\\": 92,
 };
 
-/** Undoes git's C-style path quoting; octal escapes are UTF-8 bytes. */
 function unquote(quoted: string): string {
 	const bytes: number[] = [];
 	for (let i = 0; i < quoted.length; i++) {

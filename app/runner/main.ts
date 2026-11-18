@@ -11,9 +11,7 @@ import { PROTOCOL_VERSION, RUNNER_EXIT } from "./core/protocol.js";
 
 interface MainIO {
 	stdin: AsyncIterable<string | Uint8Array>;
-	/** Resolves once `chunk` is flushed. */
 	write(chunk: string): Promise<void>;
-	/** Replaces the bundled agents (tests). */
 	agents?: readonly Agent[];
 }
 
@@ -22,18 +20,11 @@ const processIO = (): MainIO => ({
 	write: (chunk) => new Promise((resolve, reject) => process.stdout.write(chunk, (err) => (err ? reject(err) : resolve()))),
 });
 
-/** Scratch is the only writable location besides cwd; the bash tool spills oversized output to os.tmpdir(). */
 function useScratch(scratchDir: string): void {
 	mkdirSync(scratchDir, { recursive: true });
 	process.env.TMPDIR = scratchDir;
 }
 
-/**
- * `runner.mjs --key-stdin`: the model key on the first line of stdin, then a RunnerInput; RunnerEvent JSONL on
- * stdout. The input's `agent_id` selects the agent, and so its harness, from the bundle. Returns the exit code.
- *
- * `runner.mjs --self-test` checks that the bundle and every agent definition in it load, and prints one JSON line.
- */
 export async function main(argv: string[], io: MainIO = processIO()): Promise<number> {
 	const startedAt = Date.now();
 	const agents = io.agents ?? AGENTS;
@@ -62,7 +53,6 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 		agents.map((a) => a.harness.credential),
 	))
 		emit.redact(secret);
-	// stdout carries only RunnerEvent JSONL; route any library console output to stderr.
 	console.log = console.info = console.debug = console.error;
 
 	let stdin: string | undefined;
@@ -102,7 +92,6 @@ export async function main(argv: string[], io: MainIO = processIO()): Promise<nu
 	}
 }
 
-/** Reaching this proves the bundle and every agent definition in it load in this sandbox. Prints one JSON line. */
 async function selfTest(io: MainIO, agents: readonly Agent[]): Promise<number> {
 	const report = {
 		ok: true,
@@ -131,6 +120,5 @@ function isEntryPoint(): boolean {
 if (isEntryPoint()) {
 	const code = await main(process.argv.slice(2));
 	process.exitCode = code;
-	// Output is flushed; don't let lingering keep-alive sockets or timers in the provider SDKs hold the process open.
 	setTimeout(() => process.exit(code), 1_000).unref();
 }

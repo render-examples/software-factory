@@ -33,7 +33,6 @@ const SnapshotManifestSchema = z.object({
 	createdAt: z.string(),
 }) satisfies z.ZodType<SnapshotManifest>;
 
-/** A handle on a running sandbox by id. */
 function connectSandbox(id: string, client?: SandboxClient): Sandbox {
 	const get = () => client ?? sandboxClient();
 	return {
@@ -65,11 +64,6 @@ export interface OpenSandboxDeps extends SnapshotDeps {
 	buildSnapshot?: (client: SandboxClient, repo: RepoContext, sha: string, deps: SnapshotDeps) => Promise<BuiltSnapshot>;
 }
 
-/**
- * Restores the repository's named snapshot (building it inline once if none is available), verifies it,
- * fetches `ref` as the runner user, and reinstalls dependencies if the lockfiles changed. Terminates the
- * sandbox if anything after creation fails; the caller closes it in `finally` otherwise.
- */
 export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: OpenSandboxDeps = {}): Promise<OpenedSandbox> {
 	checkRef(ref);
 	const client = deps.client ?? sandboxClient();
@@ -79,7 +73,6 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 		await client.waitRunning(id);
 		await ensureRunnerPayload(client, id);
 		const info = await verifySandbox(client, id);
-		// verify.sh can only probe /proc as root; a sandbox where it couldn't check never gets a model key.
 		if (!info.runnerNonDumpable) throw new Error(`could not confirm the runner is non-dumpable in ${id}`);
 		const manifest = SnapshotManifestSchema.parse(JSON.parse((await client.download(id, `${APP_DIR}/manifest.json`)).toString("utf8")));
 		if (manifest.repo !== repo.fullName) throw new Error(`snapshot in ${id} is for ${manifest.repo}, not ${repo.fullName}`);
@@ -100,10 +93,6 @@ export async function openSandbox(repo: RepoContext, ref: SandboxRef, deps: Open
 	}
 }
 
-/**
- * Opens a sandbox, runs `fn` with it, and closes it whatever happens. Every task uses this, so no task can forget
- * to close one; the provider-side timeout covers a Workflows process that dies before `finally` runs.
- */
 export async function withSandbox<S extends Sandbox, T>(open: () => Promise<S>, fn: (sandbox: S) => Promise<T>): Promise<T> {
 	const sandbox = await open();
 	try {
@@ -158,15 +147,10 @@ async function createFromSnapshot(client: SandboxClient, repo: RepoContext, egre
 	}
 }
 
-/**
- * Fetches `ref` into REPO_DIR as the runner user and checks it out detached. The read token is a file only the
- * runner user can read, deleted (and checked for leaks) right after the fetch, whether or not it succeeded.
- */
 async function fetchRef(client: SandboxClient, id: string, repo: RepoContext, ref: SandboxRef, deps: SnapshotDeps): Promise<string> {
 	const dir = `/tmp/factory-fetch-${randomUUID()}`;
 	const quick = { timeoutMs: client.t.verifyTimeoutMs };
 	const source = ref.kind === "branch" ? `refs/heads/${ref.name}` : `refs/pull/${ref.number}/head`;
-	// FETCH_HEAD's first line is the first refspec, so `source` stays first.
 	const refspecs = [source];
 	if (ref.kind === "pull" && ref.baseBranch) refspecs.push(`+refs/heads/${ref.baseBranch}:refs/remotes/origin/${ref.baseBranch}`);
 	await client.check(id, `mkdir -m 700 ${dir}`, quick);

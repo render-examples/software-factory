@@ -8,7 +8,6 @@ import type { RepoContext } from "../app/config/index.js";
 import { buildSnapshot, type OpenSandboxDeps, openSandbox, type SandboxApi, SandboxClient, type SnapshotManifest } from "../app/sandbox/index.js";
 import { runnerPayload } from "../app/sandbox/snapshot.js";
 
-/** The files in a gzipped tar, by path. */
 async function untar(data: Buffer): Promise<Map<string, string>> {
 	const files = new Map<string, string>();
 	await pipeline(
@@ -71,7 +70,6 @@ function snapshot(id: string, status: "creating" | "available" | "failed", name:
 	};
 }
 
-/** In-memory stand-in for the SDK's SandboxesClient that records every call. */
 class FakeApi {
 	calls: Call[] = [];
 	createError?: (input: Parameters<SandboxApi["create"]>[0]) => Error | undefined;
@@ -162,7 +160,6 @@ class FakeApi {
 		return this.calls.flatMap((c) => (c.op === op && "input" in c ? [c.input] : []));
 	}
 
-	/** Index of the first call matching `pred`; -1 when none. */
 	index(pred: (c: Call) => boolean): number {
 		return this.calls.findIndex(pred);
 	}

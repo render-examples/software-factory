@@ -7,7 +7,6 @@ import { type ChangedFile, checkChanges, type PublishLimits, parseChangesFile, t
 
 export { blobSha, type ChangedFile, type RefusalReason } from "./changes.js";
 
-/** `bash ${COLLECT_CHANGES_SCRIPT} <repo_dir> <base_sha> <out_file> <max_changed_files> <max_file_bytes>`; see the script. */
 const COLLECT_CHANGES_SCRIPT = `${APP_DIR}/collect-changes.sh`;
 
 const DEFAULT_IDENTITY = {
@@ -16,30 +15,22 @@ const DEFAULT_IDENTITY = {
 } as const;
 
 const COLLECT_TIMEOUT_MS = 10 * 60 * 1000;
-/** Slack per changed file in the output file for its diff record, size line, and blob header (paths cap at 4096). */
 const PER_FILE_OVERHEAD = 4096 + 300;
-/** Blob uploads in flight at once. */
 const BLOB_UPLOADS = 8;
 
 export interface PublishInput {
 	sandbox: Sandbox;
 	repo: RepoContext;
-	/** The commit the run started from; the branch's only parent. */
 	baseSha: string;
 	branch: string;
 	message: string;
-	/** Author and committer. Pass a fixed `date` to make retries produce the same commit. */
 	author?: GitIdentity;
 	gitData?: GitDataClient;
-	/** Defaults to `config.limits`. */
 	limits?: PublishLimits;
-	/** Commits an earlier attempt of this run created: the branch may be moved off them as well as off baseSha. */
 	ownedCommits?: readonly string[];
-	/** Throws once the caller may no longer publish. Called immediately before the branch moves. */
 	assertOwned: () => Promise<void>;
 }
 
-/** Test seams: where the script and checkout live, and where the output goes. */
 export interface PublishPaths {
 	scriptPath?: string;
 	repoDir?: string;
@@ -54,11 +45,6 @@ export interface Published {
 
 export type PublishResult = Published | { refused: RefusalReason[] };
 
-/**
- * Publishes the sandbox's working tree as one commit on `refs/heads/<branch>`, through the Git Data API with a
- * token that never enters the sandbox. Returns a refusal when the change breaks a publishing rule, and throws
- * on any verification mismatch, before a ref moves.
- */
 export async function publish(input: PublishInput, paths: PublishPaths = {}): Promise<PublishResult> {
 	const { sandbox, repo, baseSha, branch, message } = input;
 	if (!SHA.test(baseSha)) throw new Error(`Invalid base SHA: ${baseSha}`);
@@ -91,13 +77,11 @@ export async function publish(input: PublishInput, paths: PublishPaths = {}): Pr
 		author: identity,
 		committer: identity,
 	});
-	// Collecting and uploading can take minutes, so ownership is checked again right before the only durable write.
 	await input.assertOwned();
 	await moveBranch(git, branch, commitSha, new Set([baseSha]), new Set(input.ownedCommits ?? []));
 	return { commitSha, treeSha, changedFiles: checked.files };
 }
 
-/** Runs collect-changes.sh and downloads its one output file, checking its size before and after. */
 async function collect(sandbox: Sandbox, baseSha: string, limits: PublishLimits, paths: PublishPaths): Promise<Buffer> {
 	const outPath = paths.outPath ?? `/tmp/software-factory-changes-${randomUUID()}`;
 	const command = [
@@ -124,7 +108,6 @@ async function collect(sandbox: Sandbox, baseSha: string, limits: PublishLimits,
 	return file;
 }
 
-/** Calls `fn` on every item, at most `limit` at a time. Rejects with the first failure and starts no call after it. */
 async function forEachConcurrently<T>(items: Iterable<T>, limit: number, fn: (item: T) => Promise<void>): Promise<void> {
 	const queue = items[Symbol.iterator]();
 	let failed = false;
@@ -141,10 +124,6 @@ async function forEachConcurrently<T>(items: Iterable<T>, limit: number, fn: (it
 	await Promise.all(Array.from({ length: limit }, worker));
 }
 
-/**
- * Deletions go first: GitHub applies entries in order, so turning a file into a directory (or back) needs the
- * old entry gone before the new one lands.
- */
 function treeEntries(files: ChangedFile[]): TreeEntry[] {
 	const byPath = (a: ChangedFile, b: ChangedFile) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 	const deletions = files.filter((f) => f.sha === null).sort(byPath);
@@ -158,10 +137,6 @@ function treeEntries(files: ChangedFile[]): TreeEntry[] {
 	];
 }
 
-/**
- * Points the branch at `commitSha`: creates it, fast-forwards it from the base, or moves it off a commit this
- * run created. Any other target belongs to someone else and is left alone.
- */
 async function moveBranch(
 	git: GitDataClient,
 	branch: string,
@@ -193,7 +168,6 @@ async function moveBranch(
 	throw new Error(`refs/heads/${branch} kept changing while publishing`);
 }
 
-/** A branch name git and GitHub both accept, with nothing that reads as a refspec, option, or revision. */
 function isSafeBranch(branch: string): boolean {
 	return (
 		SAFE_REF.test(branch) &&

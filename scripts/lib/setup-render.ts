@@ -1,19 +1,12 @@
-/**
- * setup:render: create or update the environment groups render.yaml links, from local values. Idempotent.
- * It writes only the keys in ENV_GROUPS and leaves other variables in a group alone.
- * With --link-database, after the Blueprint is applied, it writes only WORKFLOWS_DATABASE_GROUP's DATABASE_URL.
- */
 import { randomBytes } from "node:crypto";
 import type { Env, ScriptDeps } from "./github.js";
 import { errorMessage, type Reporter } from "./output.js";
 import { ENV_GROUPS, type EnvGroupSpec, WORKFLOWS_DATABASE_GROUP } from "./requirements.js";
 
-/** A new bearer token for the gateway's event streams, unless `env` already has one. */
 export function newEventsReadToken(env: Env): string | undefined {
 	return env.EVENTS_READ_TOKEN?.trim() ? undefined : randomBytes(32).toString("hex");
 }
 
-/** Values safe to show; every other group value is redacted from output. */
 const NOT_SECRET = new Set(["RENDER_WORKSPACE_ID", "GITHUB_APP_ID"]);
 
 export interface SetupRenderOptions extends ScriptDeps {
@@ -85,7 +78,6 @@ export async function setupRender(opts: SetupRenderOptions, out: Reporter): Prom
 		missing = true;
 		out.fail("RENDER_WORKSPACE_ID is not a workspace ID", "It looks like tea-…; find it in Workspace Settings");
 	}
-	// Writing nothing until every value is present keeps a half-filled group from reaching a deploy.
 	if (missing || !workspace) return out.summary();
 	out.pass(`all ${ENV_GROUPS.reduce((n, group) => n + group.keys.length, 0)} values are set`);
 
@@ -104,10 +96,6 @@ export async function setupRender(opts: SetupRenderOptions, out: Reporter): Prom
 
 const APPLY_BLUEPRINT_FIRST = "Apply the Blueprint first: it links factory-db to factory-gateway. Then rerun this command";
 
-/**
- * setup:render --link-database: after the Blueprint is applied, copy the DATABASE_URL it linked to the gateway into
- * the group Workflows reads it from. Idempotent; never prints the value.
- */
 export async function linkDatabase(opts: SetupRenderOptions, out: Reporter): Promise<number> {
 	const { env } = opts;
 	const apiKey = env.RENDER_API_KEY?.trim();
@@ -135,11 +123,9 @@ export async function linkDatabase(opts: SetupRenderOptions, out: Reporter): Pro
 	return out.summary();
 }
 
-/** Render may add a suffix to a name the Blueprint declares. */
 const GATEWAY_NAME = /^factory-gateway(-[a-z0-9]+)?$/;
 const PAGE_SIZE = 100;
 
-/** The DATABASE_URL set on the workspace's one factory-gateway service; reports why there is none. */
 async function gatewayDatabaseUrl(api: RenderApi, workspace: string, out: Reporter): Promise<string | undefined> {
 	out.heading("factory-gateway");
 	const gateways: Service[] = [];
@@ -177,7 +163,6 @@ async function gatewayDatabaseUrl(api: RenderApi, workspace: string, out: Report
 	return value;
 }
 
-/** Whether RENDER_API_KEY can read the workspace; reports why not. */
 async function canAccessWorkspace(api: RenderApi, workspace: string, out: Reporter): Promise<boolean> {
 	out.heading(`Render workspace ${workspace}`);
 	const owner = await api.request<{ name?: string }>("GET", `/owners/${encodeURIComponent(workspace)}`);
@@ -201,7 +186,6 @@ async function syncGroup(api: RenderApi, spec: EnvGroupSpec, workspace: string, 
 	out.heading(`Env group ${spec.name} (${spec.services.map((s) => `factory-${s}`).join(", ")})`);
 	const query = new URLSearchParams({ name: spec.name, ownerId: workspace, limit: "100" });
 	const listed = await api.expect<{ envGroup: EnvGroup }[]>("GET", `/env-groups?${query}`);
-	// Blueprints link groups by name, so a second group with the same name makes the link ambiguous.
 	const matches = (listed ?? []).map((item) => item.envGroup).filter((group) => group.name === spec.name && group.ownerId === workspace);
 	if (matches.length > 1) {
 		out.fail(`${matches.length} env groups are named ${spec.name}`, "Delete or rename the extra groups in the Render Dashboard");

@@ -9,10 +9,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const RUNTIME = fileURLToPath(new URL("../sandbox/", import.meta.url));
 const TOKEN = "ghs_scrubTestToken000000000000000000000";
 
-/**
- * Stand-in for the bundled runner.mjs that follows its CLI contract. input.mode "fail" exits 3; "no-read" exits 0
- * after one read of stdin. input.keyFile is checked for existence; input.probe receives the runner's argv and env.
- */
 const FAKE_RUNNER = `
 import { existsSync, readFileSync, readSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -42,10 +38,6 @@ if (input.mode === "hang") setInterval(() => {}, 1000);
 else process.exit(input.mode === "fail" ? 3 : 0);
 `;
 
-/**
- * coreutils timeout is missing on macOS. This one ignores options, runs the command with the caller's stdin, and
- * exits 124 if it had to stop it at the duration.
- */
 const TIMEOUT_SHIM = `#!/usr/bin/env bash
 while [ "\${1#-}" != "$1" ]; do shift; done
 seconds=$1
@@ -61,7 +53,6 @@ kill "$watcher" 2>/dev/null || exit 124
 exit "$status"
 `;
 
-/** BSD tee on macOS has no -p. */
 const TEE_SHIM = `#!/bin/sh
 [ "$1" = -p ] && shift
 exec /usr/bin/tee "$@"
@@ -81,8 +72,6 @@ function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.Pro
 			resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout, stderr });
 		});
 		child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
-			// Some failure cases exit before reading stdin. The process callback
-			// carries the result; a closed pipe is not a separate test failure.
 			if (error.code !== "EPIPE") reject(error);
 		});
 		child.stdin?.end(opts.input ?? "");
@@ -171,7 +160,6 @@ describe("verify.sh", { timeout: 30_000 }, () => {
 			runnerNonDumpable: false,
 			selfTest: { ok: true },
 		});
-		// The write probes are cleaned up.
 		expect(await git(["-C", repo, "status", "--porcelain"])).toBe("");
 	});
 

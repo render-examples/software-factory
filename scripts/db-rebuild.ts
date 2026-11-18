@@ -1,8 +1,3 @@
-/**
- * Rebuilds every projection from the event log, keeping operational columns. Appends wait until it commits.
- *
- *   npm run db:rebuild
- */
 import { requireEnv } from "../app/config/index.js";
 import { createDb, rebuild } from "../app/db/index.js";
 

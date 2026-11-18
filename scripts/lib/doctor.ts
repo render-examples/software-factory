@@ -1,4 +1,3 @@
-/** doctor: read-only checks of one or both services' environment, the database, the GitHub App, and Workflows tasks. */
 import { z } from "zod";
 import { type Agent, AGENTS } from "../../app/agents/index.js";
 import { TASKS } from "../../app/config/index.js";
@@ -23,9 +22,7 @@ import { appSettingsUrl } from "./setup-github.js";
 export interface DoctorOptions extends ScriptDeps, DatabaseDeps {
 	services: readonly Service[];
 	repos: readonly string[];
-	/** The CLI supplies configured branches; callers without branch checks still verify repository capabilities. */
 	baseBranches?: Readonly<Record<string, string>>;
-	/** The agents whose harnesses to check; defaults to every agent the factory runs. */
 	agents?: readonly Agent[];
 	renderApiUrl?: string;
 }
@@ -73,7 +70,6 @@ function setFix(service: Service, name: string): string {
 	return `Set it in the ${group.name} env group: add it to .env and run \`npm run setup:render\``;
 }
 
-/** Each harness the agents use, the agents on it, and whether its key is set. */
 function checkHarnesses(env: Env, agents: readonly Agent[], out: Reporter): void {
 	out.heading("Agent harnesses");
 	const groups = new Map<string, { agent: Agent; ids: string[] }>();
@@ -157,7 +153,6 @@ async function checkWebhook(app: GitHubApp, info: Awaited<ReturnType<GitHubApp["
 		out.fail(`could not read the webhook config: ${errorMessage(error)}`);
 	}
 
-	// The config endpoint omits Active. A successful old or differently targeted attempt cannot establish current delivery health.
 	const fix = `Open ${settings}, check Webhook > Active and save; redeliver a ping in Advanced, then rerun doctor`;
 	try {
 		const [latest] = await app.recentDeliveries(1);
@@ -225,10 +220,6 @@ async function checkRepo(app: GitHubApp, info: { slug: string; html_url: string 
 
 const taskRows = z.array(z.object({ task: z.object({ name: z.string().min(1).max(255) }) })).max(100);
 
-/**
- * The Render API's GET /v1/tasks, filtered by slug, for each task the gateway starts. The SDK's workflows client
- * has no list-tasks method, so this is a plain request. Unverified registration must not pass readiness.
- */
 async function checkTasks(opts: DoctorOptions, out: Reporter): Promise<void> {
 	out.heading("Workflows tasks");
 	const apiKey = opts.env.RENDER_API_KEY?.trim();

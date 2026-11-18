@@ -3,18 +3,13 @@ import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
 
-/** A table derived from the log. Each row records the `updated_seq` of the last event applied to it. */
 export interface Projection {
 	table: string;
-	/** Columns that identify a row, so a rebuild can carry its operational columns over. */
 	key: readonly string[];
-	/** Operational metadata rather than derived state, such as a status comment's ID; marked in the migration too. */
 	operational: readonly string[];
-	/** Applies one event; ignores event types the projection doesn't derive from. */
 	apply(tx: Tx, event: LogEvent): Promise<void>;
 }
 
-/** Each task run's state. Only a running row changes, so a run's own late events can't rewrite how it was stopped. */
 const runs: Projection = {
 	table: "runs",
 	key: ["run_id"],
@@ -69,7 +64,6 @@ const runs: Projection = {
 	},
 };
 
-/** The latest run started on each thread. */
 const threads: Projection = {
 	table: "threads",
 	key: ["thread"],
@@ -85,7 +79,6 @@ const threads: Projection = {
 	},
 };
 
-/** Threads whose work runs on another thread. */
 const threadLinks: Projection = {
 	table: "thread_links",
 	key: ["thread"],
@@ -102,18 +95,12 @@ const threadLinks: Projection = {
 
 export const PROJECTIONS: readonly Projection[] = [runs, threads, threadLinks, agentRuns];
 
-/** Applies an event to every projection, in the transaction that appends it. */
 export async function project(tx: Tx, event: LogEvent): Promise<void> {
 	for (const projection of PROJECTIONS) await projection.apply(tx, event);
 }
 
-/**
- * Truncates the projections, replays the whole log through them in `seq` order, and restores their operational
- * columns. Returns the number of events replayed. A projection that can't be rebuilt this way is a bug.
- */
 export async function rebuild(db: Db, projections = PROJECTIONS): Promise<number> {
 	return db.withTx(async (tx) => {
-		// Waits for running appends and blocks new ones until the rebuild commits, so the replay sees the whole log.
 		await tx.query("lock table events in share mode");
 		for (const { table, key, operational } of projections) {
 			if (operational.length) {

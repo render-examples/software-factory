@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Verifies a factory sandbox: the builder before it is snapshotted, and every sandbox restored from the snapshot.
-# Fails unless the layout, tools, and credential hygiene are as built, the checkout is at the manifest's commit
-# and writable by the runner user, scratch is writable, and the runner passes its self-test. As root it also
-# confirms the runner's node is non-dumpable. Prints one JSON line describing the sandbox.
-# Usage: verify.sh
 set -euo pipefail
 
 app=$(dirname "${BASH_SOURCE[0]}")
@@ -16,8 +11,6 @@ fail() {
 as_runner() { bash "$app/as-runner.sh" "$@"; }
 [ $# -eq 0 ] || fail "unexpected arguments: $*"
 
-# ── Layout and tools ─────────────────────────────────────────────────────
-
 for d in "$FACTORY_APP_DIR" "$FACTORY_REPO_DIR" "$FACTORY_SCRATCH_DIR"; do [ -d "$d" ] || fail "missing $d"; done
 for f in as-runner.sh run-agent.sh lockfile-hash.sh build/git-credential-staged.sh build/scrub-credentials.sh runner/runner.mjs manifest.json; do
 	[ -f "$FACTORY_APP_DIR/$f" ] || fail "missing $FACTORY_APP_DIR/$f"
@@ -25,9 +18,6 @@ done
 for tool in git rg timeout sha256sum; do PATH="$FACTORY_PATH" command -v "$tool" >/dev/null || fail "missing $tool"; done
 node_version=$("$FACTORY_NODE" -p 'process.versions.node') || fail "node does not run"
 [ "${node_version%%.*}" -ge 22 ] || fail "node $node_version is older than 22"
-
-# ── Credential hygiene ───────────────────────────────────────────────────
-# No stored credentials or credential helpers may survive into the snapshot.
 
 pattern='^(credential\.|url\..*\.insteadof|http\..*\.extraheader)'
 for f in "$HOME/.git-credentials" "$FACTORY_SCRATCH_DIR/home/.git-credentials"; do [ ! -e "$f" ] || fail "$f exists"; done
@@ -41,8 +31,6 @@ if g config --local --get-regexp "$pattern" >/dev/null 2>&1; then fail "credenti
 url=$(g config --local --get remote.origin.url || true)
 case "$url" in *@*) fail "remote URL carries credentials" ;; esac
 
-# ── Manifest and checkout ────────────────────────────────────────────────
-
 commit=$("$FACTORY_NODE" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).sha)' "$FACTORY_APP_DIR/manifest.json") ||
 	fail "cannot read manifest"
 head=$(g rev-parse HEAD 2>&1) || fail "$head"
@@ -50,12 +38,7 @@ head=$(g rev-parse HEAD 2>&1) || fail "$head"
 dirty=$(g status --porcelain --untracked-files=no 2>&1) || fail "git status failed: $dirty"
 [ -z "$dirty" ] || fail "tracked files modified in $FACTORY_REPO_DIR: $(printf '%s' "$dirty" | head -n 5 | tr '\n' ' ')"
 
-# ── Runner self-test ─────────────────────────────────────────────────────
-
 self_test=$(as_runner "$FACTORY_RUNNER_NODE" "$FACTORY_APP_DIR/runner/runner.mjs" --self-test) || fail "runner self-test failed"
-
-# ── Non-dumpable check ───────────────────────────────────────────────────
-# An execute-only runner node keeps its memory (the model key) from same-uid tool subprocesses via /proc.
 
 non_dumpable=false
 if [ "$(id -u)" = 0 ] && [ "$FACTORY_RUN_AS" != root ]; then
@@ -81,8 +64,6 @@ if [ "$(id -u)" = 0 ] && [ "$FACTORY_RUN_AS" != root ]; then
 	case "$err" in *"Permission denied"*) non_dumpable=true ;; *) fail "dumpability probe inconclusive: $err" ;; esac
 fi
 
-# ── Permissions ──────────────────────────────────────────────────────────
-
 probe=".factory-write-probe-$$"
 as_runner touch "$FACTORY_REPO_DIR/$probe" 2>/dev/null || fail "$FACTORY_REPO_DIR is not writable by $FACTORY_RUN_AS"
 rm -f "$FACTORY_REPO_DIR/$probe"
@@ -94,9 +75,6 @@ if [ "$(id -u)" = 0 ] && [ "$FACTORY_RUN_AS" != root ]; then
 		fail "$FACTORY_APP_DIR is writable by $FACTORY_RUN_AS"
 	fi
 fi
-
-# ── Cleanup and report ───────────────────────────────────────────────────
-# Only tmp is cleared: HOME may hold dependency caches an install relies on (Go modules, Poetry venvs).
 
 find "$FACTORY_SCRATCH_DIR/tmp" -mindepth 1 -delete
 

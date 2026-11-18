@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
-# Runs the agent runner once as the runner user from the repository checkout, bounded by coreutils timeout.
-# Usage: run-agent.sh <run_dir> <timeout_seconds>
-# <run_dir>/input.json is fed on stdin. <run_dir>/key is the model API key. It is read and deleted while <run_dir>
-# is still root-only (mode 700), before <run_dir> is handed to the runner user, and reaches the runner as the first
-# line of its stdin (--key-stdin), so it never exists as a file the runner user can read.
-# The runner's stdout (JSONL events) goes to this script's stdout, the live copy the host relays, and to
-# <run_dir>.jsonl, the record the host acts on. The exit status goes to <run_dir>.exit (124 or 137 on timeout) and
-# this script's PID to <run_dir>.pid, so the host can follow <run_dir>.jsonl until the script exits. These files
-# sit beside <run_dir> rather than in it: <run_dir> is handed to the runner user, while these stay root-owned, so
-# the agent cannot rewrite what the host reads.
 set -euo pipefail
 
 run_dir=${1:?usage: run-agent.sh <run_dir> <timeout_seconds>}
 seconds=${2:?usage: run-agent.sh <run_dir> <timeout_seconds>}
 run_dir=${run_dir%/}
-# The file exists before the PID does, so a host that finds the PID can follow the file.
 : >"$run_dir.jsonl"
 echo "$$" >"$run_dir.pid"
 app=$(dirname "${BASH_SOURCE[0]}")
@@ -40,9 +29,6 @@ fi
 if [ "$(id -u)" = 0 ] && [ "$FACTORY_RUN_AS" != root ]; then chown -R "$FACTORY_RUN_AS": "$run_dir"; fi
 
 set +e
-# key is never exported and printf is a bash builtin, so it reaches no process's argv or environment.
-# tee -p keeps writing the file if the host's stream goes away, rather than dying of SIGPIPE and taking the runner
-# with it. The runner is the pipeline's second command; tee's status is ignored.
 { printf '%s\n' "$key"; cat "$run_dir/input.json"; } |
 	timeout --kill-after=10s "$seconds" bash "$app/as-runner.sh" "$FACTORY_RUNNER_NODE" "$FACTORY_APP_DIR/runner/runner.mjs" --key-stdin |
 	tee -p "$run_dir.jsonl"

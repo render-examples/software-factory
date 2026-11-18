@@ -8,7 +8,6 @@ export interface StatusLink {
 	url: string;
 }
 
-/** On the issue or PR while the thread's latest trace has a running run. */
 export const WORKING_LABEL = "factory:working";
 
 export type StatusGitHub = Pick<GitHubClient, "createComment" | "updateComment" | "deleteComment" | "ensureLabel" | "addLabels" | "removeLabel">;
@@ -23,12 +22,6 @@ interface StatusView {
 	links: StatusLink[];
 }
 
-/**
- * Renders the status comment from the thread's latest trace, then writes the comment and the working label to
- * GitHub, unless the body equals `shown`, the last one this caller wrote. Returns the body. The view shows the run
- * that started last while it runs, and otherwise the trace's root, which reports how the trace ended. The comment
- * is a view: nothing reads it back.
- */
 export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, thread: GitHubThread, shown?: string): Promise<string | undefined> {
 	const key = githubThread(repo, thread);
 	const { rows } = await db.query<StatusView & { commentId: string | number | null; working: boolean }>(
@@ -45,7 +38,6 @@ export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, thread:
 	if (!view) return undefined;
 	const body = statusBody(view, repo, thread);
 	if (body === shown) return body;
-	// `pg` returns bigint as a string.
 	const commentId = view.commentId === null ? null : Number(view.commentId);
 	const written = await writeComment(gh, thread.number, commentId, body);
 	if (written !== commentId) await saveComment(db, gh, key, commentId, written, body);
@@ -58,10 +50,6 @@ export async function syncStatus(db: Db, gh: StatusGitHub, repo: string, thread:
 	return body;
 }
 
-/**
- * Records the comment this sync created in place of `replaced`, unless another sync recorded one first. Then that
- * one is the status comment: this one is deleted and the other gets the body.
- */
 async function saveComment(db: Db, gh: StatusGitHub, thread: ThreadKey, replaced: number | null, created: number, body: string): Promise<void> {
 	const saved = await db.query(
 		"update threads set status_comment_id = $3 where thread = $1 and status_comment_id is not distinct from $2::bigint returning thread",
@@ -76,10 +64,6 @@ async function saveComment(db: Db, gh: StatusGitHub, thread: ThreadKey, replaced
 	if (winner != null) await gh.updateComment(Number(winner), body);
 }
 
-/**
- * Shows a rejected run on a thread with no runs, the first time a run is rejected there. A rejected run never
- * starts on the thread, and showing every one would let anyone who can comment make the bot comment.
- */
 export async function showRejection(
 	db: Db,
 	gh: StatusGitHub,
@@ -110,7 +94,6 @@ function statusBody(s: StatusView, repo: string, thread: GitHubThread): string {
 	return [line, ...(links.length ? ["", ...links] : []), "", footer, "", marker].join("\n");
 }
 
-/** Updates the status comment, or creates it when there is none or someone deleted it. Returns its ID. */
 async function writeComment(gh: StatusGitHub, number: number, commentId: number | null, body: string): Promise<number> {
 	if (commentId !== null) {
 		try {

@@ -65,7 +65,6 @@ const write = (dir: string, path: string, data: string | Buffer): void => {
 	writeFileSync(join(dir, path), data);
 };
 
-/** A repository with one base commit whose attributes would change bytes under `git archive`. */
 function makeRepo(): { dir: string; base: string } {
 	const dir = join(tmp, `repo-${++counter}`);
 	mkdirSync(dir);
@@ -82,9 +81,6 @@ function makeRepo(): { dir: string; base: string } {
 	git(dir, "commit", "-q", "-m", "base");
 	return { dir, base: git(dir, "rev-parse", "HEAD") };
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Fake GitHub: an in-memory Git Data API that hashes trees the way git does.
 
 interface Entry {
 	mode: string;
@@ -140,7 +136,6 @@ class FakeGitHub {
 	readonly interceptors: Interceptor[] = [];
 	readonly sleeps: number[] = [];
 
-	/** Seeds the base commit from the real repository, before any sandbox tampering. */
 	static fromRepo(dir: string, base: string): FakeGitHub {
 		const gh = new FakeGitHub();
 		const flat = new Map<string, Entry>();
@@ -279,14 +274,10 @@ class FakeGitHub {
 		return false;
 	}
 
-	/** Paths and contents of a stored tree, for comparing with git. */
 	files(tree: string): Map<string, Entry> {
 		return this.trees.get(tree) ?? new Map();
 	}
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Fake sandbox: exec runs the command locally; download reads the local file.
 
 class LocalSandbox implements Sandbox {
 	readonly id = "sbx-local";
@@ -354,7 +345,6 @@ function refusals(result: Awaited<ReturnType<typeof publish>>): RefusalReason[] 
 
 const BINARY = Buffer.concat([Buffer.from([0, 1, 2, 0xff, 0xfe, 13, 10, 13, 0]), randomBytes(4000)]);
 
-/** The agent's edits: every case the legacy archive transfer got wrong. */
 function editWorkingTree(dir: string): void {
 	write(dir, "a.txt", "hello\r\nworld\r\n");
 	write(dir, "crlf.txt", "one\r\ntwo\r\n");
@@ -382,7 +372,6 @@ describe("publish", () => {
 		const result = await h.run();
 		if ("refused" in result) throw new Error(JSON.stringify(result.refused));
 
-		// The sandbox's repository is untouched.
 		expect(git(dir, "status", "--porcelain", "-z")).toBe(statusBefore);
 		expect(sha1(readFileSync(join(dir, ".git/index")))).toBe(indexBefore);
 
@@ -449,7 +438,6 @@ describe("publish", () => {
 });
 
 describe("publish against a subverted sandbox", () => {
-	/** Builds a parentless commit whose tree is the base tree plus an `evil` symlink. */
 	function forgedBase(dir: string, base: string): { commit: string; tree: string } {
 		const env = { ...GIT_ENV, GIT_INDEX_FILE: join(dir, ".git/forged-index") };
 		const run = (...args: string[]) =>
@@ -508,7 +496,6 @@ describe("publish against a subverted sandbox", () => {
 });
 
 describe("publish blob uploads", () => {
-	/** A sandbox with 20 new files, and a Git Data client whose blob uploads go through `createBlob`. */
 	function setup(createBlob: (upload: () => Promise<string>, call: number) => Promise<string>) {
 		const { dir, base } = makeRepo();
 		for (let i = 0; i < 20; i++) write(dir, `many/${i}.txt`, `file ${i}\n`);

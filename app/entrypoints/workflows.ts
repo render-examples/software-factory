@@ -3,8 +3,6 @@ import { migrate, workflowsDb } from "../db/index.js";
 const applied = await migrate(workflowsDb());
 if (applied.length) console.log(`applied migrations: ${applied.join(", ")}`);
 
-// Importing the module registers every task with the Render Workflows SDK, which starts serving them right after,
-// so it must follow the migration.
 await import("../workflows/index.js");
 
 console.log("software-factory workflows ready");

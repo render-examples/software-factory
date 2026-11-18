@@ -11,16 +11,11 @@ import { commentable, pullDiffLines } from "./diff-lines.js";
 import { reviewerMessage } from "./messages.js";
 import { findReview, postReview } from "./post.js";
 
-/** Test seams: everything that reaches GitHub, Sandboxes, or a model. */
 export interface PrReviewDeps extends GitHubTaskDeps {
 	openSandbox?: OpenSandbox;
 	runAgent?: typeof runAgent;
 }
 
-/**
- * PR Reviewer: verify the PR head, review it in one sandbox, and post one COMMENT review.
- * It never approves or requests changes.
- */
 export const prReviewWorkflow = defineGitHubTask(
 	{
 		name: TASKS.prReview,
@@ -33,7 +28,6 @@ export const prReviewWorkflow = defineGitHubTask(
 	async (run, input, deps: PrReviewDeps): Promise<Outcome> => {
 		const { gh, repo } = run;
 
-		// 1. The PR must be open, still at the labeled commit, and not yet reviewed there.
 		const pull = await gh.getPull(input.pr);
 		if (pull.state !== "open" || pull.merged) {
 			return { outcome: "pr_closed", summary: "the pull request is closed, so there's nothing to review." };
@@ -50,7 +44,6 @@ export const prReviewWorkflow = defineGitHubTask(
 		const files = await gh.listPullFiles(input.pr);
 		const diffLines = await pullDiffLines(gh, input.pr, files);
 
-		// 2. One sandbox at the PR head: verify, then review the complete change.
 		await run.reportProgress("opening a sandbox");
 		const { verify, review } = await withPullSandbox(deps.openSandbox ?? openSandbox, repo, pull, async (sandbox) => {
 			await run.trackSandbox(sandbox);
@@ -64,7 +57,6 @@ export const prReviewWorkflow = defineGitHubTask(
 			return { verify, review };
 		});
 
-		// 3. One COMMENT review on the head commit. Comments GitHub can't place inline go in the body.
 		await run.reportProgress("posting the review");
 		const { posted, inlineComments } = await postReview(gh, {
 			pr: input.pr,

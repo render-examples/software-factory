@@ -23,7 +23,6 @@ describe.skipIf(!TEST_DATABASE_URL)("event log on Postgres", () => {
 		await database.drop();
 	});
 
-	/** Runs `work` in a transaction and keeps it open until `commit()`. */
 	async function hold(work: (tx: Tx) => Promise<unknown>): Promise<{ commit(): Promise<void> }> {
 		let release = () => {};
 		const released = new Promise<void>((resolve) => {
@@ -64,7 +63,6 @@ describe.skipIf(!TEST_DATABASE_URL)("event log on Postgres", () => {
 		const late = await hold((tx) => append(tx, note("run:late", "late", thread)));
 		await db.withTx((tx) => append(tx, note("run:early", "early", thread)));
 
-		// Paging by seq alone would deliver the early event now and then skip the late one, whose seq is lower.
 		expect(await readThread(db, thread, start)).toEqual([]);
 		await late.commit();
 		const events = await readThread(db, thread, start);

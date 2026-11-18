@@ -5,29 +5,21 @@ import type { Tx } from "./pool.js";
 import { project } from "./projections.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
 
-/** An event payload's largest JSON encoding, in UTF-8 bytes. */
 export const MAX_PAYLOAD_BYTES = 256 * 1024;
 
 export interface NewEvent<S extends z.ZodType = z.ZodType> {
 	type: EventSpec<S>;
 	stream: string;
-	/** Set on every event about a thread, whatever its stream. */
 	thread?: ThreadKey;
-	/** "github", "gateway", or "workflow:<run_id>". Nothing in a Sandbox writes events. */
 	source: string;
 	payload: z.input<NoInfer<S>>;
 	idempotencyKey?: string;
 }
 
 export interface AppendOptions {
-	/** Fails with VersionConflict unless the stream is at exactly this version (0 for a new stream). */
 	expectedVersion?: number;
 }
 
-/**
- * The stream wasn't at the expected version, or a concurrent append took the same version. A collision aborts the
- * transaction, so retry, if at all, in a new one.
- */
 export class VersionConflict extends Error {
 	override readonly name = "VersionConflict";
 	constructor(readonly stream: string) {
@@ -43,12 +35,6 @@ const INSERT = `
 	on conflict (idempotency_key) do nothing
 	returning ${EVENT_COLUMNS}`;
 
-/**
- * Appends one event at the stream's next version, applies projections, and notifies `events` listeners with
- * "<stream> <stream_version>", all in the caller's transaction, so listeners hear only of committed events.
- * A repeated idempotency key returns null and changes nothing. Keep the transaction short: it holds back
- * cross-stream readers until it ends.
- */
 export async function append<S extends z.ZodType>(tx: Tx, event: NewEvent<S>, { expectedVersion }: AppendOptions = {}): Promise<LogEvent | null> {
 	const payload = JSON.stringify(event.type.payload.parse(event.payload));
 	if (Buffer.byteLength(payload) > MAX_PAYLOAD_BYTES) throw new Error(`${event.type.type} payload is larger than 256 KB`);
@@ -80,7 +66,6 @@ export async function append<S extends z.ZodType>(tx: Tx, event: NewEvent<S>, { 
 	return logged;
 }
 
-/** Appends events to one stream in order, as `append` does, and returns those not skipped as repeats. */
 export async function appendMany(
 	tx: Tx,
 	stream: string,

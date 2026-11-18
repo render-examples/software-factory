@@ -21,7 +21,6 @@ beforeAll(async () => {
 afterAll(() => db.end());
 beforeEach(() => resetDb(db));
 
-/** An autopilot root running its Spec-to-PR child, with the status comment showing it. */
 async function autopilotAtSpecToPr(gh: FakeGitHub, childState: "running" | "done" = "running") {
 	await startRun(db, REPO, thread, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
 	await startRun(db, REPO, thread, { traceId: "trn-root", runId: "trn-1", task: "spec-to-pr", title: "Spec-to-PR", sandboxId: "sbx-1" });

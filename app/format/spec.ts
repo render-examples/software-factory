@@ -2,10 +2,8 @@ import { config } from "../config/index.js";
 import type { Spec } from "../schemas/index.js";
 import { bullets, codeSpan, fitAround, sanitize, sanitizeInline, truncate } from "./text.js";
 
-/** The rendered spec comment's budget: the caller's marker carries the spec again as JSON, up to SPEC_MAX_JSON_CHARS. */
 const SPEC_BODY_MAX_CHARS = 32_000;
 
-/** The spec's sections as Markdown, with no heading or instructions: for the spec comment and the implementer's message. */
 export function renderSpecSections(spec: Spec): string {
 	const sections: string[] = [`**${sanitizeInline(spec.title)}**`, sanitize(spec.summary)];
 	const section = (heading: string, body: string) => {
@@ -24,21 +22,16 @@ export function renderSpecSections(spec: Spec): string {
 	return sections.join("\n\n");
 }
 
-/** The acceptance criteria as a Markdown task list. */
 export function acceptanceChecklist(spec: Spec): string {
 	return spec.acceptanceCriteria.map((c) => `- [ ] **${sanitizeInline(c.id)}**: ${sanitizeInline(c.text)} _(${c.verification})_`).join("\n");
 }
 
 export interface RenderSpecOptions {
-	/** Shown in the heading; omit for an unversioned spec. */
 	version?: number;
-	/** `validateSpec` warnings to show the maintainer. */
 	warnings?: readonly string[];
-	/** The spec writer's `changeSummary`, shown for a revision. */
 	changeSummary?: string;
 }
 
-/** The spec comment's visible body. The caller appends the hidden marker that carries the spec as JSON. */
 export function renderSpec(spec: Spec, opts: RenderSpecOptions = {}): string {
 	const approve = codeSpan(config.labels.specApproved);
 	const head = `## Specification${opts.version ? ` v${opts.version}` : ""}\n\n`;

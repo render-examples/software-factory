@@ -4,7 +4,6 @@ import type { QueryResultRow } from "pg";
 import { createDb, type Db, migrate } from "../../app/db/index.js";
 import { PROJECTIONS } from "../../app/db/projections.js";
 
-/** A fresh, migrated, in-memory database. PGlite runs one transaction at a time; concurrency tests use `postgresDatabase`. */
 export async function pgliteDb(): Promise<{ db: Db; pglite: PGlite }> {
 	const pglite = new PGlite();
 	const db: Db = {
@@ -16,22 +15,18 @@ export async function pgliteDb(): Promise<{ db: Db; pglite: PGlite }> {
 	return { db, pglite };
 }
 
-/** Empties the log and every projection, so tests sharing a database can reuse task run IDs. */
 export async function resetDb(db: Db): Promise<void> {
 	await db.query(`truncate events, ${PROJECTIONS.map((projection) => projection.table).join(", ")}`);
 }
 
-// `pg` sends a query without values over the simple protocol, which allows several statements; PGlite needs exec for that.
 async function run<R extends QueryResultRow>(target: PGlite | Transaction, text: string, values?: unknown[]): Promise<{ rows: R[] }> {
 	if (values) return target.query<R>(text, values);
 	const results = await target.exec(text);
 	return { rows: (results.at(-1)?.rows ?? []) as R[] };
 }
 
-/** Real Postgres for tests that need concurrent transactions; they skip without it. */
 export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
-/** A fresh, empty database on TEST_DATABASE_URL's server. */
 export async function postgresDatabase(): Promise<{ url: string; drop(): Promise<void> }> {
 	if (!TEST_DATABASE_URL) throw new Error("TEST_DATABASE_URL is not set");
 	const admin = createDb(TEST_DATABASE_URL, 1);

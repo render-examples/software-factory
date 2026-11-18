@@ -2,14 +2,11 @@ import { type Review, type ReviewComment, SEVERITIES, type Severity } from "../s
 import { type VerifyResult, verificationTable } from "./pull-request.js";
 import { BODY_MAX_CHARS, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
-/** Inline comments posted with one review; the rest go in the body. */
 const MAX_INLINE_COMMENTS = 50;
 const INLINE_BODY_MAX_CHARS = 8_000;
 
-/** The only review event the factory posts: it never approves or requests changes. */
 const REVIEW_EVENT = "COMMENT";
 
-/** One inline comment, as GitHub's create-review API takes it. */
 export interface InlineComment {
 	path: string;
 	line: number;
@@ -24,19 +21,13 @@ export interface ReviewPayload {
 }
 
 export interface RenderReviewOptions {
-	/** The workflow's verify run at the PR head. */
 	verification?: readonly VerifyResult[];
-	/**
-	 * Whether GitHub accepts an inline comment at this line of the PR's diff (it rejects the whole review
-	 * otherwise). Comments it refuses move to the body. Without it, every comment is posted inline.
-	 */
 	isCommentable?: (file: string, line: number) => boolean;
 }
 
 const rank = (severity: Severity) => SEVERITIES.indexOf(severity);
 const label = (severity: Severity) => severity.charAt(0).toUpperCase() + severity.slice(1);
 
-/** The review as a COMMENT review: a body and at most MAX_INLINE_COMMENTS inline comments, most severe first. */
 export function renderReview(review: Review, opts: RenderReviewOptions = {}): ReviewPayload {
 	const sorted = review.comments
 		.map((comment, index) => ({ comment, index }))

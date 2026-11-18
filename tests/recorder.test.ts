@@ -43,7 +43,6 @@ type Logged = Awaited<ReturnType<typeof logged>>;
 const payloadOf = (events: Logged, type: string) => (events.find((e) => e.type === type)?.payload ?? {}) as Record<string, string | undefined>;
 const jsonBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
 
-/** A database whose first `failures` transactions fail. */
 function flaky(failures: number): Db & { attempts: number } {
 	const wrapper = {
 		...db,
@@ -112,7 +111,6 @@ describe("AgentRunRecorder", () => {
 			},
 		},
 		{
-			// ESC is one character but six bytes in JSON: 60,000 of them are about 360 KB, over the 256 KB payload cap.
 			name: "clips by JSON-encoded bytes, so escape-heavy text can't block the events after it",
 			events: [
 				{ type: "assistant_text", at, message_id: "m1", text: "\u001b".repeat(60_000) },

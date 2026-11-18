@@ -1,6 +1,5 @@
 const MAX_BODY_BYTES = 256 * 1024;
 
-/** Reads the raw body bytes with a hard cap. Returns null when exceeded. */
 export async function readBody(request: Request, maxBytes = MAX_BODY_BYTES): Promise<Buffer | null> {
 	const declared = Number(request.headers.get("content-length"));
 	if (Number.isFinite(declared) && declared > maxBytes) return null;

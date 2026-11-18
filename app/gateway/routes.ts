@@ -6,33 +6,23 @@ import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecT
 import { type GitHubThread, githubThread, parseGitHubThread, type ThreadKey } from "../threads/index.js";
 import { SHA } from "../util/index.js";
 
-/** What a delivery does. */
 export type Decision =
 	| {
 			kind: "start";
 			task: TaskName;
-			/** Already validated with the task's input schema; every one names the repository. */
 			input: { repo: string };
 			idempotencyKey: string;
-			/** The issue or pull request, for the delivery event. */
 			thread?: ThreadKey;
 	  }
 	| { kind: "ignore"; reason: string }
-	/** An authenticated delivery that maps to a task but not to a valid input for it: a bug worth a failed delivery. */
 	| { kind: "invalid"; task: TaskName; reason: string; thread?: ThreadKey };
 
-/** What Postgres knows about a thread that changes what a delivery on it means. */
 export interface ThreadState {
-	/** The thread its work runs on instead, as a factory pull request's runs on its issue's. */
 	linked: ThreadKey | null;
-	/** The task of the thread's latest trace, when the trace's root run finished waiting for a reply. */
 	waiting: string | null;
 }
 
-export type Route =
-	| Decision
-	/** A delivery whose meaning depends on its thread's state: the gateway reads the state and calls `decide`. */
-	| { kind: "lookup"; thread: ThreadKey; decide(state: ThreadState): Decision };
+export type Route = Decision | { kind: "lookup"; thread: ThreadKey; decide(state: ThreadState): Decision };
 
 const Envelope = z.object({
 	action: z.string().optional(),
@@ -76,7 +66,6 @@ const ZERO_SHA = "0".repeat(40);
 const ignore = (reason: string): Decision => ({ kind: "ignore", reason });
 const isPullRequest = (issue: z.infer<typeof Issue>) => issue.pull_request !== undefined && issue.pull_request !== null;
 
-/** Maps one GitHub delivery to the task it starts, or why it starts nothing, given its thread's state. No I/O. */
 export function route(event: string, payload: unknown, deliveryId: string): Route {
 	if (event === "ping") return ignore("ping");
 
@@ -98,7 +87,6 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, thread };
 		return { kind: "start", task, input: parsed.data as { repo: string }, idempotencyKey, thread };
 	};
-	// A factory pull request shares its issue's thread, so work started from it runs there.
 	const onPull = (number: number, decide: (thread: GitHubThread) => Decision): Route => {
 		const pr = { kind: "pr", number } as const;
 		return { kind: "lookup", thread: on(pr), decide: ({ linked }) => decide((linked && parseGitHubThread(repo.fullName, linked)) ?? pr) };
@@ -116,7 +104,6 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 				return start(TASKS.triage, TriageInput, { issue: issue.number, actor }, thread);
 			}
 			if (label?.name === config.labels.specApproved) {
-				// GitHub bumps updated_at when the label is applied.
 				return start(TASKS.specToPr, SpecToPrInput, { issue: issue.number, actor, approval: { kind: "label", labeledAt: issue.updated_at } }, thread);
 			}
 			if (label?.name === config.labels.autopilot) {
@@ -150,7 +137,6 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			}
 			if (isPullRequest(issue)) return ignore("comment on pull request");
 			const thread = { kind: "issue", number: issue.number } as const;
-			// A comment is a reply only while the thread waits for one; then it resumes the task that asked.
 			return {
 				kind: "lookup",
 				thread: on(thread),
@@ -178,7 +164,6 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 	}
 }
 
-/** The `delivery.received` event the gateway appends before acting on a delivery. */
 export function deliveryEvent(deliveryId: string, event: string, decision: Decision): NewEvent<typeof deliveryReceived.payload> {
 	const payload =
 		decision.kind === "ignore"

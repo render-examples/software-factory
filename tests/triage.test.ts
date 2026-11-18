@@ -67,13 +67,11 @@ function setup(steps: Record<string, AgentStep[]>, files = ["src/theme.ts", "pac
 	return { gh, sandbox, calls: agents.calls, deps };
 }
 
-/** Comments other than the status comment withRun keeps. */
 const written = (gh: FakeGitHub) => gh.comments.filter((c) => !parseMarker(c.body, "status"));
 
 const specComment = (gh: FakeGitHub, s: Spec, version: number, login = BOT, notes?: unknown) =>
 	gh.comment(12, login, `## Specification v${version}\n\n${renderMarker("spec", { spec: s, hash: contentHash(s), version, notes })}`);
 
-/** Starts a newer run on the issue before the agent returns `output`. */
 const thenLoseThread = (output: unknown) => async () => {
 	await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
 	return output;

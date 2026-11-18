@@ -34,25 +34,18 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
 export interface PiDriverOptions {
 	model: Model<Api>;
 	thinkingLevel: ThinkingLevel;
-	/** Providers added to Pi's built-in catalog, each replacing a built-in provider with the same ID. */
 	models?: () => MutableModels;
 }
 
 const MAX_OUTPUT_TOKENS = 16_384;
-/** Passed to Pi so the max_tokens cap below stays in step with Pi's thinking budget. */
 const THINKING_BUDGETS = { minimal: 1024, low: 2048, medium: 8192, high: 16_384 } as const;
 
-/**
- * Pi restarts a model request that failed transiently (overloaded, rate limited, dropped stream) with this backoff.
- * Cache warming re-sends requests on a timer, which would spend the run's turns, so it's off.
- */
 const SETTINGS = {
 	thinkingBudgets: THINKING_BUDGETS,
 	retry: { enabled: true, maxRetries: 2, baseDelayMs: 2_000 },
 	cacheWarming: "off",
 } as const;
 
-/** Runs agents on Pi (`@earendil-works/pi-coding-agent`). */
 export function piDriver(opts: PiDriverOptions): Driver {
 	return {
 		async open(ctx) {
@@ -71,7 +64,6 @@ export function piDriver(opts: PiDriverOptions): Driver {
 	};
 }
 
-/** Pi's catalog with in-memory credentials: the key is set per run, and nothing is read from or written to disk. */
 async function createRuntime(custom: MutableModels | undefined): Promise<ModelRuntime> {
 	const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
 	for (const provider of custom?.getProviders() ?? []) runtime.registerNativeProvider(provider);
@@ -79,12 +71,6 @@ async function createRuntime(custom: MutableModels | undefined): Promise<ModelRu
 }
 
 async function converse(ctx: DriverContext, runtime: ModelRuntime, model: Model<Api>, thinkingLevel: ThinkingLevel): Promise<void> {
-	/**
-	 * The loop ends only when every tool result in a batch sets `terminate`, so a submission batched with other
-	 * calls (e.g. `ls` + submit) would cost another LLM request. The submit tool terminates on acceptance; its
-	 * siblings terminate whenever the batch submits. A rejected submission carries no `terminate`, so the model still
-	 * gets to retry. Listeners see each assistant message before its tools run.
-	 */
 	let submitting = false;
 	const tools = [...ctx.tools.map((tool) => piTool(tool, () => submitting)), piSubmitTool(ctx.submit)];
 	const session = await openSession(ctx, runtime, model, thinkingLevel, tools);
@@ -108,11 +94,6 @@ async function converse(ctx: DriverContext, runtime: ModelRuntime, model: Model<
 	}
 }
 
-/**
- * A session that loads nothing from `cwd`, the untrusted checkout, or from `agentDir`: no context files such as
- * AGENTS.md, skills, prompt templates, themes, or extensions. An extension would run repository code in this
- * process, next to the key. The system prompt is the agent's alone, and the tools are exactly `tools`.
- */
 async function openSession(
 	ctx: DriverContext,
 	runtime: ModelRuntime,
@@ -150,10 +131,6 @@ async function openSession(
 	return session;
 }
 
-/**
- * `runtime`, with every model request (retries, compaction, and summaries included) passing the kernel's turn limit
- * first: the session sends them all through `streamSimple`.
- */
 function limited(runtime: ModelRuntime, requestModel: () => boolean): ModelRuntime {
 	return new Proxy(runtime, {
 		get(target, prop) {
@@ -168,14 +145,12 @@ function limited(runtime: ModelRuntime, requestModel: () => boolean): ModelRunti
 	});
 }
 
-/** Applies the Anthropic thinking token budget only for anthropic-messages models; others use effort levels. */
 function capMaxTokens(model: Model<Api>, level: ThinkingLevel): Model<Api> {
 	if (model.api !== "anthropic-messages") return model;
 	const thinking = level === "off" ? 0 : THINKING_BUDGETS[level];
 	return { ...model, maxTokens: Math.min(model.maxTokens, MAX_OUTPUT_TOKENS + thinking) };
 }
 
-/** A request the kernel refused, ended the way Pi ends an aborted one. */
 function refused(model: Model<Api>): AssistantMessageEventStream {
 	const message: AssistantMessage = {
 		role: "assistant",
@@ -194,7 +169,6 @@ function refused(model: Model<Api>): AssistantMessageEventStream {
 	return stream;
 }
 
-/** Translates Pi's events, naming each assistant message at its start so its deltas and final text share an ID. */
 function reporter(out: Report, model: Model<Api>): (event: AgentSessionEvent) => void {
 	let messages = 0;
 	let messageId = "";
@@ -228,10 +202,6 @@ function reporter(out: Report, model: Model<Api>): (event: AgentSessionEvent) =>
 	};
 }
 
-/**
- * Undefined for all-zero usage (e.g. a request aborted before it was sent). When the provider reports no cost
- * (the test stub never does), the cost is computed from the model's prices.
- */
 function toUsage(u: PiUsage, model: Model<Api>): Usage | undefined {
 	const count = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
 	const usage: Usage = {

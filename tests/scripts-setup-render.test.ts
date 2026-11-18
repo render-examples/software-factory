@@ -28,7 +28,6 @@ interface StoredService {
 	envVars: { key: string; value: string }[];
 }
 
-/** A Render API with an in-memory set of env groups and web services. Unknown groups, services, and keys fall through to a 404. */
 function renderWorld(opts: { groups?: StoredGroup[]; services?: StoredService[]; owner?: Response } = {}) {
 	const groups = opts.groups ?? [];
 	const services = opts.services ?? [];
@@ -166,7 +165,6 @@ describe("setup:render --link-database", () => {
 		ownerId: WORKSPACE,
 		envVars: [{ key: "GITHUB_APP_ID", value: "1" }],
 	});
-	/** More than one page of other web services, then the Blueprint's gateway under a suffixed name. */
 	const servicesWithGateway = (envVars: StoredService["envVars"]): StoredService[] => [
 		...Array.from({ length: 100 }, (_, i) => ({ id: `srv-${i}`, name: `app-${i}`, envVars: [] })),
 		{ id: "srv-gw", name: "factory-gateway-ygz3", envVars },
@@ -230,7 +228,6 @@ describe("setup:render --link-database", () => {
 describe("render.yaml env groups", () => {
 	const blueprint = readFileSync(new URL("../render.yaml", import.meta.url), "utf8");
 
-	/** One service's block of render.yaml, up to the next service or the databases. */
 	function serviceBlock(service: string): string {
 		const start = blueprint.search(new RegExp(`- type: \\w+\\n\\s+name: ${service}\\n`));
 		const next = blueprint.slice(start + 1).search(/- type:|databases:/);

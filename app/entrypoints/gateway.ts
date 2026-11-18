@@ -8,7 +8,6 @@ const port = Number(process.env.PORT ?? 3000);
 const webhookSecret = requireEnv("GITHUB_WEBHOOK_SECRET");
 const eventsReadToken = requireEnv("EVENTS_READ_TOKEN");
 const workflowSlug = requireEnv("RENDER_WORKFLOW_SLUG");
-// Reads RENDER_API_KEY and throws without it.
 const render = new Render();
 
 const databaseUrl = requireEnv("DATABASE_URL");

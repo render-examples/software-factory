@@ -2,7 +2,6 @@ import { statSync } from "node:fs";
 import { PROTOCOL_VERSION, RunnerInput } from "./protocol.js";
 import { outputSchemaProblem } from "./submit.js";
 
-/** Validates a RunnerInput, including what Zod can't see: the protocol version, the output schema's root, and the directories. */
 export function parseInput(json: unknown): RunnerInput | string {
 	const version = (json as { protocol_version?: unknown } | null)?.protocol_version;
 	if (version !== PROTOCOL_VERSION) {

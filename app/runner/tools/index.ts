@@ -31,13 +31,8 @@ export interface ToolOptions {
 	scratchDir: string;
 }
 
-/** Without edit or write the agent is read-only, and bash applies the read-only shell policy. */
 const isReadOnly = (tools: readonly ToolName[]): boolean => !tools.includes("edit") && !tools.includes("write");
 
-/**
- * Builds the child env from an allowlist so nothing from the runner's environment (model credentials,
- * the Render API key) can reach a model-controlled process.
- */
 function shellEnv(path: string | undefined, scratchDir: string): Record<string, string> {
 	return {
 		PATH: path || "/usr/local/bin:/usr/bin:/bin",
@@ -49,14 +44,12 @@ function shellEnv(path: string | undefined, scratchDir: string): Record<string, 
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_TERMINAL_PROMPT: "0",
 		GIT_OPTIONAL_LOCKS: "0",
-		// The checkout can be owned by another uid; without this git refuses "dubious ownership".
 		GIT_CONFIG_COUNT: "1",
 		GIT_CONFIG_KEY_0: "safe.directory",
 		GIT_CONFIG_VALUE_0: "*",
 	};
 }
 
-/** The tools named in `opts.tools`, in that order, all rooted at `opts.cwd`. */
 // biome-ignore lint/suspicious/noExplicitAny: tools with different parameter schemas share one list, as in Pi.
 function createTools(opts: ToolOptions): AgentTool<any>[] {
 	// biome-ignore lint/suspicious/noExplicitAny: see above.
@@ -70,22 +63,15 @@ function createTools(opts: ToolOptions): AgentTool<any>[] {
 	return [...new Set(opts.tools)].map((name) => factories[name]());
 }
 
-/** A factory tool as any harness registers it: JSON Schema parameters and a text result, no library types. */
 export interface FactoryTool {
 	name: ToolName;
 	description: string;
-	/** JSON Schema of the arguments. */
 	parameters: Record<string, unknown>;
-	/** Validates `args`, runs the tool, and never throws: a failure comes back with `isError`. */
 	execute(args: unknown, signal?: AbortSignal): Promise<{ text: string; isError: boolean }>;
 }
 
 let nextCallId = 0;
 
-/**
- * The tools named in `opts.tools` as FactoryTools: the same implementations, environment, policy, and limits as
- * `createTools`, so every harness gives an agent identical tool behavior.
- */
 export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
 	return createTools(opts).map((tool) => ({
 		name: tool.name as ToolName,
@@ -106,13 +92,11 @@ export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
 	}));
 }
 
-/** A tool result's text content; other content types become a placeholder. */
 export function contentText(content: unknown): string {
 	if (!Array.isArray(content)) return "";
 	return content.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`)).join("\n");
 }
 
-/** Pi's read tool without image attachments: images only cost tokens. */
 function createTextReadTool({ cwd }: ToolOptions) {
 	const inner = createReadTool(cwd, { autoResizeImages: false });
 	const tool: typeof inner = {
@@ -153,13 +137,11 @@ function createLsTool({ cwd }: ToolOptions): AgentTool<typeof LsParams> {
 	};
 }
 
-/** Pi's local shell, but every command runs with `env` and nothing else. */
 function localShell(env: Record<string, string>): BashOperations {
 	const local = createLocalBashOperations();
 	return { exec: (command, cwd, options) => local.exec(command, cwd, { ...options, env }) };
 }
 
-/** Pi's bash tool with an allowlisted env and bounded timeouts; read-only agents also get the shell policy. */
 function createShellTool({ cwd, scratchDir }: ToolOptions, readOnly: boolean) {
 	const inner = createBashTool(cwd, { operations: localShell(shellEnv(process.env.PATH, scratchDir)), exposeSessionEnvironment: false });
 	const limits = `Output keeps the last ${OUTPUT_LIMIT}. timeout is in seconds: default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}.`;

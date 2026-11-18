@@ -1,18 +1,3 @@
-/**
- * Step 2 of setup, after the GitHub App exists and before the Blueprint is applied: create the Render environment
- * groups that render.yaml links, so the Blueprint deploys without asking for any value. Idempotent; never prints
- * a secret.
- *
- *   npm run setup:render [-- --workspace tea-…]
- *   npm run setup:render -- --link-database [--workspace tea-…]
- *
- * Reads RENDER_API_KEY, RENDER_WORKSPACE_ID, the GitHub App values, and ANTHROPIC_API_KEY from the environment
- * or .env. Generates EVENTS_READ_TOKEN when .env has none and saves it there first, so a rerun keeps it.
- * --link-database runs only once the Blueprint is applied: it copies the DATABASE_URL the Blueprint gave
- * factory-gateway into the software-factory-workflows group, and needs only RENDER_API_KEY and RENDER_WORKSPACE_ID.
- * --workspace overrides RENDER_WORKSPACE_ID and, after a successful run, saves it to .env.
- */
-
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";

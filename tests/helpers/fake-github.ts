@@ -23,7 +23,6 @@ type FailingMethod = "createComment" | "updateComment" | "createReview";
 
 const notFound = () => new GitHubError(404, "Not Found");
 
-/** One repository's issues, comments, labels, pull requests, reviews, and branches, as plain state tests seed and inspect. */
 export class FakeGitHub {
 	comments: FakeComment[] = [];
 	labelEvents: Array<LabelEvent & { issue: number }> = [];
@@ -43,12 +42,10 @@ export class FakeGitHub {
 		return labels;
 	}
 
-	/** Makes the next call to `method` throw `error`. */
 	failNext(method: FailingMethod, error: Error = new Error("GitHub is down")): void {
 		this.failures.push({ method, error });
 	}
 
-	/** Adds a comment by `login`, as if posted at `at`. */
 	comment(issue: number, login: string, body: string, at = "2026-10-01T00:00:00Z"): FakeComment {
 		const id = this.nextId++;
 		const author = { login, type: login.endsWith("[bot]") ? "Bot" : "User" };
@@ -57,7 +54,6 @@ export class FakeGitHub {
 		return { ...comment };
 	}
 
-	/** The newest status comment's body. */
 	status(): string {
 		return this.comments.filter((c) => parseMarker(c.body, "status")).at(-1)?.body ?? "";
 	}

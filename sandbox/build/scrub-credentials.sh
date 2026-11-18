@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Runs after a clone or fetch, before any agent or repository code. Fails if any staged token value made it
-# into a git config, a credential store, or the checkout's .git directory; otherwise deletes the staged
-# credentials and confirms no credential setting survives.
-# Usage: scrub-credentials.sh <creds_dir> <repo_dir> [<extra_home>...]
 set -euo pipefail
 
 creds_dir=$1
@@ -14,9 +10,6 @@ fail() {
 	exit 1
 }
 [ -d "$repo_dir/.git" ] || fail "$repo_dir is not a git checkout"
-
-# ── Search for each token value ──────────────────────────────────────────
-# grep -F -f reads the pattern from a file, so the token never appears in argv (visible in /proc).
 
 if [ -d "$creds_dir" ]; then
 	pattern_file=$(mktemp)
@@ -37,8 +30,6 @@ fi
 
 rm -rf "$creds_dir"
 [ ! -e "$creds_dir" ] || fail "could not delete $creds_dir"
-
-# ── No credential settings may survive ───────────────────────────────────
 
 settings='^(credential\.|url\..*\.insteadof|http\..*\.extraheader)'
 for h in "${homes[@]}"; do

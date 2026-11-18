@@ -12,7 +12,6 @@ const SandboxInfo = z.object({
 });
 type SandboxInfo = z.infer<typeof SandboxInfo>;
 
-/** Runs verify.sh, which fails unless the sandbox is as built, and parses the JSON line it prints last. */
 export async function verifySandbox(client: SandboxClient, id: string, opts: { waitReady?: boolean } = {}): Promise<SandboxInfo> {
 	const res = await client.exec(id, `bash ${APP_DIR}/verify.sh`, { timeoutMs: client.t.verifyTimeoutMs, waitReady: opts.waitReady });
 	if (res.exitCode !== 0) throw new Error(`verify.sh exited ${res.exitCode}: ${(res.stderr || res.stdout).trim().slice(-2000)}`);

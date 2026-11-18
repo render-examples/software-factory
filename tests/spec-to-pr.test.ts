@@ -173,7 +173,6 @@ describe("implement, verify, and publish", () => {
 		expect(t.sandbox.closed).toBe(1);
 		expect(t.gh.labels(ISSUE).has(config.labels.specApproved)).toBe(false);
 
-		// Work on the draft PR runs on the issue's thread.
 		const thread = githubThread(REPO, { kind: "pr", number: 34 });
 		expect(await readStream(db, `thread:${thread}`, 0)).toMatchObject([
 			{ type: "thread.linked", thread, payload: { to: githubThread(REPO, { kind: "issue", number: ISSUE }) } },
