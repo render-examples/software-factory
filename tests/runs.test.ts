@@ -8,7 +8,8 @@ import { type Run, type RunOptions, runEvent, syncStatus, WORKING_LABEL, withRun
 import { githubThread } from "../app/threads/index.js";
 import { REPO as REPO_NAME } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
-import { FakeGitHub, FakeRuns, runRow, startRun } from "./helpers/runs.js";
+import { FakeGitHub } from "./helpers/fake-github.js";
+import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
 const REPO = requireRepo(REPO_NAME, 5);
 const thread = { kind: "issue" as const, number: 12 };
@@ -48,7 +49,7 @@ describe("withRun", () => {
 		const gh = new FakeGitHub();
 		const outcome = await withRun(root("trn-run"), options(gh), async (run) => {
 			expect(gh.status()).toContain("**Triage** is running");
-			expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+			expect(gh.labels(12).has(WORKING_LABEL)).toBe(true);
 			await run.trackSandbox({ id: "sbx-run" });
 			await run.reportProgress("reading the issue");
 			expect(gh.status()).toContain("**Triage** is running: reading the issue");
@@ -62,7 +63,7 @@ describe("withRun", () => {
 		expect(body).toContain("**Triage** finished: asked 2 questions.\n\n- [Questions](https://github.test/q)");
 		expect(body).toContain(`run \`trn-run\` · events: \`/threads/github/${REPO.fullName}/issue/12/stream\``);
 		expect(parseMarker(body, "status")).toEqual({ runId: "trn-run", traceId: "trn-run", stage: "triage", title: "Triage", state: "done" });
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 		expect(await runRow(db, "trn-run")).toMatchObject({ state: "done", outcome: "asked" });
 	});
 
@@ -80,7 +81,7 @@ describe("withRun", () => {
 		expect(await runRow(db, "trn-2")).toMatchObject({ state: "rejected", outcome: "permission_denied" });
 		expect(await types(`thread:${KEY}`)).toEqual([]);
 		expect(await owner()).toBeUndefined();
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 	});
 
 	it("lets an unauthorized trigger displace nothing on a busy thread, and stays silent", async () => {
@@ -154,7 +155,7 @@ describe("withRun", () => {
 
 		expect(stage).toMatchObject({ state: "done", traceId: "trn-root", runId: "trn-triage" });
 		expect(runs.getTaskRun).not.toHaveBeenCalled();
-		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(true);
 		expect(await owner()).toEqual({ trace_id: "trn-root", run_id: "trn-triage" });
 
 		await startRun(db, REPO.fullName, thread, { traceId: "trn-new-root" });
@@ -189,7 +190,7 @@ describe("withRun", () => {
 		const body = gh.status();
 		expect(body).toContain("**Triage** failed: something went wrong");
 		expect(body).not.toContain("ghs_secret");
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 		expect(await runRow(db, "trn-run")).toMatchObject({ state: "failed", outcome: "error" });
 		expect(JSON.stringify(await readStream(db, "run:trn-run", 0))).not.toContain("ghs_secret");
 	});
@@ -230,14 +231,14 @@ describe("withRun", () => {
 
 	it("keeps working through a GitHub outage and retries the final status", async () => {
 		const gh = new FakeGitHub();
-		gh.outage = 1;
+		gh.failNext("createComment");
 		const outcome = await withRun(root("trn-run"), options(gh), async () => {
-			gh.outage = 1;
+			gh.failNext("createComment");
 			return { outcome: "done", summary: "all done." };
 		});
 		expect(outcome).toMatchObject({ state: "done" });
 		expect(gh.status()).toContain("**Triage** finished: all done.");
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 	});
 
 	it("recreates a status comment someone deleted", async () => {
@@ -260,16 +261,17 @@ describe("the status comment", () => {
 		const barrier = new Promise<void>((resolve) => {
 			bothCreating = resolve;
 		});
-		const create = gh.createComment.getMockImplementation();
-		gh.createComment.mockImplementation(async (number, body) => {
-			if (gh.createComment.mock.calls.length === 2) bothCreating();
+		let creating = 0;
+		const create = gh.createComment;
+		gh.createComment = async (number, body) => {
+			if (++creating === 2) bothCreating();
 			await barrier;
-			return (create as NonNullable<typeof create>)(number, body);
-		});
+			return create(number, body);
+		};
 
 		await Promise.all([syncStatus(db, gh, REPO.fullName, thread), syncStatus(db, gh, REPO.fullName, thread)]);
 
-		expect(gh.createComment).toHaveBeenCalledTimes(2);
+		expect(creating).toBe(2);
 		expect(gh.comments).toHaveLength(1);
 		const { rows } = await db.query<{ id: string | number }>("select status_comment_id as id from threads where thread = $1", [KEY]);
 		expect(Number(rows[0]?.id)).toBe(gh.comments[0]?.id);
@@ -289,14 +291,14 @@ describe("the status comment", () => {
 		);
 		await syncStatus(db, gh, REPO.fullName, thread);
 		expect(gh.status()).toContain("**Autopilot** is running: implementing the spec");
-		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(true);
 
 		await record(
 			runEvent(runFinished, "trn-root", KEY, { state: "done", outcome: "completed", summary: "opened PR #34.", links: [], duration_ms: 1 }),
 		);
 		await syncStatus(db, gh, REPO.fullName, thread);
 		expect(gh.status()).toContain("**Autopilot** finished: opened PR #34.");
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 		expect(gh.comments).toHaveLength(1);
 	});
 });

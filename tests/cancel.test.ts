@@ -6,7 +6,8 @@ import { githubThread } from "../app/threads/index.js";
 import { runCancel } from "../app/workflows/cancel.js";
 import { REPO } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
-import { FakeGitHub, FakeRuns, runRow, startRun } from "./helpers/runs.js";
+import { FakeGitHub } from "./helpers/fake-github.js";
+import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
 const ctx = { metadata: { taskRunId: "trn-cancel" } };
 const thread = { kind: "issue" as const, number: 12 };
@@ -35,7 +36,7 @@ describe("cancel task", () => {
 	it("stops the running trace and its current child, and shows that in the status comment", async () => {
 		const gh = new FakeGitHub();
 		await autopilotAtSpecToPr(gh);
-		expect(gh.labels.has(WORKING_LABEL)).toBe(true);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(true);
 		const runs = new FakeRuns({ "trn-root": "running" });
 
 		const result = await runCancel(ctx, input(), { gh: gh.asClient(), runs, db });
@@ -46,7 +47,7 @@ describe("cancel task", () => {
 		expect(runs.terminated).toEqual(["sbx-1"]);
 		expect(gh.comments).toHaveLength(1);
 		expect(gh.status()).toContain(`**Cancel** finished: ${summary}`);
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 		expect(await runRow(db, "trn-root")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
 		expect(await runRow(db, "trn-1")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
 		expect(await runRow(db, "trn-cancel")).toMatchObject({ state: "done", outcome: "cancelled" });
@@ -110,7 +111,7 @@ describe("cancel task", () => {
 			expect(result).toMatchObject({ state: "rejected", outcome: "permission_denied" });
 			expect(await runRow(db, taskRunId)).toMatchObject({ state: "rejected" });
 		}
-		expect(gh.createComment).toHaveBeenCalledTimes(1);
+		expect(gh.comments).toHaveLength(1);
 		expect(gh.status()).toContain("**Spec-to-PR** is running");
 		expect(runs.getTaskRun).not.toHaveBeenCalled();
 		expect(runs.terminateSandbox).not.toHaveBeenCalled();

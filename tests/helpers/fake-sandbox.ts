@@ -1,6 +1,6 @@
 import { asciiJson } from "../../app/runner/core/emit.js";
 import type { RunnerEvent } from "../../app/runner/core/protocol.js";
-import type { ExecOptions, ExecResult, ExecStreamOptions, Sandbox } from "../../app/sandbox/types.js";
+import type { ExecOptions, ExecResult, ExecStreamOptions, OpenedSandbox, Sandbox, SandboxRef, SnapshotManifest } from "../../app/sandbox/types.js";
 
 type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;
 
@@ -63,4 +63,58 @@ export class FakeSandbox implements Sandbox {
 	}
 
 	async close(): Promise<void> {}
+}
+
+type Answer = ExecResult | Error;
+
+export const ok = (stdout = ""): ExecResult => ({ exitCode: 0, stdout, stderr: "" });
+
+/**
+ * A sandbox a workflow opened. Answers each command from the first `results` key it starts with: a list answers in
+ * turn and repeats its last entry; anything else gets "ok".
+ */
+export class FakeOpenedSandbox implements OpenedSandbox {
+	readonly id: string;
+	readonly headSha: string;
+	readonly manifest: SnapshotManifest;
+	readonly execs: Array<{ command: string; opts?: ExecOptions }> = [];
+	readonly opened: Array<SandboxRef & { repo: string }> = [];
+	closed = 0;
+	results: Record<string, Answer | Answer[]>;
+
+	constructor(opts: { id?: string; headSha?: string; results?: Record<string, Answer | Answer[]> } = {}) {
+		this.id = opts.id ?? "sbx-1";
+		this.headSha = opts.headSha ?? "b".repeat(40);
+		this.manifest = { repo: "", baseBranch: "main", sha: this.headSha, lockfileHash: "", install: null, createdAt: "" };
+		this.results = opts.results ?? {};
+	}
+
+	/** An `openSandbox` dependency that records the repository and ref it opens. */
+	open = async (repo: { fullName: string }, ref: SandboxRef): Promise<OpenedSandbox> => {
+		this.opened.push({ repo: repo.fullName, ...ref });
+		return this;
+	};
+
+	async exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
+		this.execs.push({ command, opts });
+		const key = Object.keys(this.results).find((prefix) => command.startsWith(prefix));
+		let answer = key === undefined ? undefined : this.results[key];
+		if (Array.isArray(answer)) answer = answer.length > 1 ? answer.shift() : answer[0];
+		if (answer instanceof Error) throw answer;
+		return answer ?? ok("ok\n");
+	}
+
+	async execStream(): Promise<number> {
+		throw new Error("not used");
+	}
+
+	async upload(): Promise<void> {}
+
+	async download(): Promise<Buffer> {
+		throw new Error("not used");
+	}
+
+	async close(): Promise<void> {
+		this.closed++;
+	}
 }

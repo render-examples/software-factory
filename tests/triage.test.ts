@@ -1,125 +1,23 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../app/db/index.js";
 import { REPO } from "./fixtures/config.js";
+import { type AgentStep, fakeAgents } from "./helpers/fake-agents.js";
+import { BOT, FakeGitHub } from "./helpers/fake-github.js";
+import { FakeOpenedSandbox, ok } from "./helpers/fake-sandbox.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
-import { runRow, startRun } from "./helpers/runs.js";
+import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
 const { config } = await import("../app/config/index.js");
 const { contentHash, parseMarker, renderMarker } = await import("../app/github/index.js");
 const { WORKING_LABEL } = await import("../app/runs/index.js");
 const { runTriage } = await import("../app/workflows/triage/index.js");
-type AgentRunner = import("../app/workflows/triage/agents.js").AgentRunner;
-type GitHubClient = import("../app/github/index.js").GitHubClient;
-type IssueComment = import("../app/github/index.js").IssueComment;
-type Permission = import("../app/github/index.js").Permission;
 type Spec = import("../app/schemas/index.js").Spec;
 type SpecDraft = import("../app/schemas/index.js").SpecDraft;
 type SpecNotes = import("../app/schemas/index.js").SpecNotes;
 type TriageDecision = import("../app/schemas/index.js").TriageDecision;
-type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 
-const BOT = "software-factory[bot]";
 const ctx = { metadata: { taskRunId: "trn-triage", rootTaskRunId: "trn-triage" } };
 const input = { repo: REPO, installationId: 5, issue: 12, actor: "maintainer" };
-
-class FakeGitHub {
-	comments: IssueComment[] = [];
-	labels = new Set<string>([config.labels.triage]);
-	permissions: Record<string, Permission> = { maintainer: "maintain" };
-	private nextId = 100;
-
-	botLogin = async () => BOT;
-	getIssue = async (number: number) => ({
-		number,
-		title: "Add a dark mode toggle",
-		body: "Users want dark mode.",
-		state: "open",
-		labels: [...this.labels],
-		author: { login: "reporter", type: "User" },
-		isPull: false,
-		htmlUrl: `https://github.test/issues/${number}`,
-	});
-	listIssueComments = async () => this.comments.map((c) => ({ ...c }));
-	createComment = vi.fn(async (_number: number, body: string) => this.add(BOT, body));
-	updateComment = vi.fn(async (id: number, body: string) => {
-		const comment = this.comments.find((c) => c.id === id);
-		if (!comment) throw new Error(`no comment ${id}`);
-		comment.body = body;
-		return { ...comment };
-	});
-	ensureLabel = async () => {};
-	addLabels = async (_number: number, labels: readonly string[]) => {
-		for (const label of labels) this.labels.add(label);
-	};
-	removeLabel = vi.fn(async (_number: number, label: string) => {
-		this.labels.delete(label);
-	});
-	getPermission = async (login: string) => this.permissions[login] ?? "none";
-
-	add(login: string, body: string): IssueComment {
-		const id = this.nextId++;
-		const comment = {
-			id,
-			body,
-			author: { login, type: login.endsWith("[bot]") ? "Bot" : "User" },
-			createdAt: "2026-10-01T00:00:00Z",
-			updatedAt: "2026-10-01T00:00:00Z",
-			htmlUrl: `https://github.test/c/${id}`,
-		};
-		this.comments.push(comment);
-		return { ...comment };
-	}
-
-	/** Comments other than the status comment withRun keeps. */
-	written(): IssueComment[] {
-		return this.comments.filter((c) => !parseMarker(c.body, "status"));
-	}
-
-	status(): string {
-		return this.comments.find((c) => parseMarker(c.body, "status"))?.body ?? "";
-	}
-
-	asClient(): GitHubClient {
-		return this as unknown as GitHubClient;
-	}
-}
-
-class FakeSandbox {
-	readonly id = "sbx-triage";
-	closed = 0;
-	constructor(private readonly files: string[]) {}
-	exec = async () => {
-		return { exitCode: 0, stdout: this.files.map((f) => `${f}\0`).join(""), stderr: "" };
-	};
-	execStream = async (): Promise<number> => {
-		throw new Error("not used");
-	};
-	upload = async () => {};
-	download = async () => Buffer.from("");
-	close = async () => {
-		this.closed++;
-	};
-}
-
-type Step = { output: unknown } | Error;
-interface AgentCall {
-	agent: string;
-	message: string;
-}
-
-const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
-
-function fakeRunner(steps: Record<string, Step[]>) {
-	const calls: AgentCall[] = [];
-	const run = (async (agent: { id: string }, message: string) => {
-		calls.push({ agent: agent.id, message });
-		const step = steps[agent.id]?.shift();
-		if (!step) throw new Error(`unexpected call to ${agent.id}`);
-		if (step instanceof Error) throw step;
-		return { output: step.output, usage: USAGE, costUsd: 0, turns: 1 };
-	}) as unknown as AgentRunner;
-	return { run, calls };
-}
 
 const decision = (overrides: Partial<TriageDecision>): TriageDecision => ({
 	decision: "draft",
@@ -160,33 +58,26 @@ const invalidSpec = () =>
 		],
 	});
 
-function setup(steps: Record<string, Step[]>, files = ["src/theme.ts", "package.json"]) {
+function setup(steps: Record<string, AgentStep[]>, files = ["src/theme.ts", "package.json"]) {
 	const gh = new FakeGitHub();
-	const sandbox = new FakeSandbox(files);
-	const opened: SandboxRef[] = [];
-	const openSandbox = vi.fn(async (_repo: unknown, ref: SandboxRef) => {
-		opened.push(ref);
-		return sandbox;
-	});
-	const runner = fakeRunner(steps);
-	const runs = { getTaskRun: async () => ({ status: "succeeded" }), cancelTaskRun: async () => {}, terminateSandbox: async () => {} };
-	const deps = { gh: gh.asClient(), runs, db, openSandbox, runAgent: runner.run };
-	return { gh, sandbox, opened, openSandbox, calls: runner.calls, deps };
+	gh.labels(12).add(config.labels.triage);
+	const sandbox = new FakeOpenedSandbox({ id: "sbx-triage", results: { "git ls-files": ok(files.map((f) => `${f}\0`).join("")) } });
+	const agents = fakeAgents(steps);
+	const deps = { gh: gh.asClient(), runs: new FakeRuns(), db, openSandbox: sandbox.open, runAgent: agents.run };
+	return { gh, sandbox, calls: agents.calls, deps };
 }
 
-function specComment(gh: FakeGitHub, s: Spec, version: number, login = BOT, notes?: unknown): IssueComment {
-	return gh.add(login, `## Specification v${version}\n\n${renderMarker("spec", { spec: s, hash: contentHash(s), version, notes })}`);
-}
+/** Comments other than the status comment withRun keeps. */
+const written = (gh: FakeGitHub) => gh.comments.filter((c) => !parseMarker(c.body, "status"));
 
-/** Wraps the agent runner so a newer run starts on the issue as soon as `agentId` returns. */
-function loseThreadAfter(deps: { runAgent: AgentRunner }, agentId: string): void {
-	const run = deps.runAgent;
-	deps.runAgent = (async (...args: Parameters<AgentRunner>) => {
-		const result = await run(...args);
-		if (args[0].id === agentId) await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
-		return result;
-	}) as AgentRunner;
-}
+const specComment = (gh: FakeGitHub, s: Spec, version: number, login = BOT, notes?: unknown) =>
+	gh.comment(12, login, `## Specification v${version}\n\n${renderMarker("spec", { spec: s, hash: contentHash(s), version, notes })}`);
+
+/** Starts a newer run on the issue before the agent returns `output`. */
+const thenLoseThread = (output: unknown) => async () => {
+	await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-newer" });
+	return output;
+};
 
 let db: Db;
 beforeAll(async () => {
@@ -197,16 +88,16 @@ beforeEach(() => resetDb(db));
 
 describe("triage task", () => {
 	it("asks questions in a marked comment, from a sandbox at the base branch", async () => {
-		const { gh, sandbox, opened, deps } = setup({
+		const { gh, sandbox, deps } = setup({
 			triage: [{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) }],
 		});
 
 		const outcome = await runTriage(ctx, input, deps);
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "asked", summary: "asked 2 questions." });
-		expect(opened).toEqual([{ kind: "branch", name: "main" }]);
+		expect(sandbox.opened).toEqual([{ repo: REPO, kind: "branch", name: "main" }]);
 
-		const [questions] = gh.written().filter((c) => c.author.login === BOT);
+		const [questions] = written(gh).filter((c) => c.author.login === BOT);
 		expect(questions?.body).toContain("1. Should it follow the OS setting?");
 		expect(parseMarker(questions?.body ?? "", "questions")).toEqual({
 			round: 1,
@@ -214,21 +105,21 @@ describe("triage task", () => {
 		});
 		expect(gh.status()).toContain("**Triage** finished: asked 2 questions.");
 		expect(gh.status()).toContain(`(${questions?.htmlUrl})`);
-		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
 		expect(sandbox.closed).toBe(1);
 		expect(await runRow(db, "trn-triage")).toMatchObject({ state: "done", outcome: "asked", waiting: "reply" });
 	});
 
 	it("updates the same questions comment on the next round and shows the earlier questions as the factory's", async () => {
 		const { gh, calls, deps } = setup({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
-		const earlier = gh.add(BOT, `old\n\n${renderMarker("questions", { round: 1, questions: ["Should it follow the OS setting?"] })}`);
-		gh.add("maintainer", "Yes, follow the OS.");
+		const earlier = gh.comment(12, BOT, `old\n\n${renderMarker("questions", { round: 1, questions: ["Should it follow the OS setting?"] })}`);
+		gh.comment(12, "maintainer", "Yes, follow the OS.");
 
 		const outcome = await runTriage(ctx, { ...input, commentId: gh.comments.at(-1)?.id }, deps);
 
 		expect(outcome).toMatchObject({ outcome: "asked", summary: "asked 1 question." });
 		expect(calls[0]?.message).toContain('<factory-questions round="1">\n1. Should it follow the OS setting?\n</factory-questions>');
-		const questions = gh.written().filter((c) => c.author.login === BOT);
+		const questions = written(gh).filter((c) => c.author.login === BOT);
 		expect(questions).toHaveLength(1);
 		expect(questions[0]?.id).toBe(earlier.id);
 		expect(parseMarker(questions[0]?.body ?? "", "questions")).toEqual({ round: 2, questions: ["Which pages?"] });
@@ -242,7 +133,7 @@ describe("triage task", () => {
 		const outcome = await runTriage(ctx, input, deps);
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "declined" });
-		const [declined] = gh.written();
+		const [declined] = written(gh);
 		expect(declined?.body).toContain("The factory declined this issue");
 		expect(declined?.body).not.toContain("@everyone");
 		expect(declined?.body).not.toContain("<!--");
@@ -265,7 +156,7 @@ describe("triage task", () => {
 			data: { kind: "spec", commentId: expect.any(Number), hash: expect.any(String), version: 1 },
 		});
 
-		const [comment] = gh.written();
+		const [comment] = written(gh);
 		expect(comment?.body).toMatch(/^## Specification v1\n/);
 		expect(comment?.body).toContain("src/new.ts does not exist yet");
 		const drafted = spec({ affectedAreas: [{ path: "src/new.ts", change: "new file" }] });
@@ -287,14 +178,14 @@ describe("triage task", () => {
 		});
 		const saved: SpecNotes = { findings: "The palette is defined in src/theme.ts.", relevantPaths: ["src/theme.ts", "src/app.css"] };
 		const original = specComment(gh, spec(), 1, BOT, saved);
-		gh.add("maintainer", "It should remember the choice.");
+		gh.comment(12, "maintainer", "It should remember the choice.");
 
 		const outcome = await runTriage(ctx, { ...input, commentId: gh.comments.at(-1)?.id }, deps);
 
 		expect(outcome).toMatchObject({ outcome: "revised" });
 		expect(outcome.summary).toBe("revised the spec to v2.");
 
-		const specs = gh.written().filter((c) => parseMarker(c.body, "spec"));
+		const specs = written(gh).filter((c) => parseMarker(c.body, "spec"));
 		expect(specs).toHaveLength(1);
 		expect(specs[0]?.id).toBe(original.id);
 		expect(specs[0]?.body).toMatch(/^## Specification v2\n/);
@@ -319,7 +210,7 @@ describe("triage task", () => {
 		expect(calls.map((c) => c.agent)).toEqual(["triage", "spec-writer", "spec-writer"]);
 		expect(calls[2]?.message).toContain("## Your previous submission was rejected");
 		expect(calls[2]?.message).toContain("- Duplicate acceptance criterion IDs: AC-1");
-		expect(parseMarker(gh.written()[0]?.body ?? "", "spec")?.spec).toEqual(spec());
+		expect(parseMarker(written(gh)[0]?.body ?? "", "spec")?.spec).toEqual(spec());
 	});
 
 	it("fails the task when the spec is still invalid, posting no spec and closing the sandbox", async () => {
@@ -333,25 +224,24 @@ describe("triage task", () => {
 		expect(outcome).toMatchObject({ state: "failed", outcome: "spec_invalid" });
 		expect(outcome.summary).toContain("the spec failed validation twice: Duplicate acceptance criterion IDs: AC-1");
 		expect(calls.filter((c) => c.agent === "spec-writer")).toHaveLength(2);
-		expect(gh.written()).toEqual([]);
+		expect(written(gh)).toEqual([]);
 		expect(gh.status()).toContain("**Triage** failed: the spec failed validation twice");
 		expect(sandbox.closed).toBe(1);
 	});
 
-	it.each<{ stage: string; revising: boolean; steps: Record<string, Step[]> }>([
-		{ stage: "triage", revising: false, steps: { triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] } },
+	it.each<{ stage: string; revising: boolean; steps: Record<string, AgentStep[]> }>([
+		{ stage: "triage", revising: false, steps: { triage: [thenLoseThread(decision({ decision: "ask", questions: ["Which pages?"] }))] } },
 		{
 			stage: "spec-writer",
 			revising: true,
-			steps: { triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] },
+			steps: { triage: [{ output: decision({}) }], "spec-writer": [thenLoseThread(draft(spec({ goals: ["Changed"] })))] },
 		},
-	])("writes nothing once a newer run starts on the issue after $stage returns", async ({ stage, revising, steps }) => {
+	])("writes nothing once a newer run starts on the issue after $stage returns", async ({ revising, steps }) => {
 		const { gh, deps } = setup(steps);
 		const original = revising ? [specComment(gh, spec(), 1).body] : [];
-		loseThreadAfter(deps, stage);
 
 		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(gh.written().map((c) => c.body)).toEqual(original);
+		expect(written(gh).map((c) => c.body)).toEqual(original);
 	});
 
 	it("keeps the issue waiting when the reply that started it no longer exists", async () => {
@@ -366,15 +256,15 @@ describe("triage task", () => {
 		const ask = () => ({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
 		const labeled = setup(ask());
 		await runTriage(ctx, input, labeled.deps);
-		expect(labeled.gh.labels.has(config.labels.triage)).toBe(false);
+		expect(labeled.gh.labels(12).has(config.labels.triage)).toBe(false);
 
 		const reply = setup(ask());
-		reply.gh.add("maintainer", "All of them.");
+		reply.gh.comment(12, "maintainer", "All of them.");
 		await runTriage({ metadata: { taskRunId: "trn-reply" } }, { ...input, commentId: reply.gh.comments.at(-1)?.id }, reply.deps);
-		expect(reply.gh.removeLabel).not.toHaveBeenCalledWith(12, config.labels.triage);
+		expect(reply.gh.labels(12).has(config.labels.triage)).toBe(true);
 
 		const rejected = setup({});
 		await runTriage({ metadata: { taskRunId: "trn-bob" } }, { ...input, actor: "bob" }, rejected.deps);
-		expect(rejected.gh.labels.has(config.labels.triage)).toBe(true);
+		expect(rejected.gh.labels(12).has(config.labels.triage)).toBe(true);
 	});
 });
