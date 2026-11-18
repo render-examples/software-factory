@@ -49,15 +49,13 @@ function startRun(thread: ThreadKey = THREAD): AgentRunRecorder {
 }
 
 describe("stream authentication", () => {
-	it.each([
-		["no header", {}],
-		["a wrong token", { authorization: "Bearer not-the-token" }],
-		["another scheme", { authorization: `Basic ${TOKEN}` }],
-	])("rejects a request with %s", async (_, headers) => {
-		for (const path of ["/agent-runs/ar_00000000-0000-0000-0000-000000000000/stream", THREAD_PATH]) {
-			const res = await app.request(path, { headers });
-			expect(res.status).toBe(401);
-			expect(res.headers.get("www-authenticate")).toBe("Bearer");
+	it("rejects a request with no header, a wrong token, or another scheme", async () => {
+		for (const headers of [{}, { authorization: "Bearer not-the-token" }, { authorization: `Basic ${TOKEN}` }] as Record<string, string>[]) {
+			for (const path of ["/agent-runs/ar_00000000-0000-0000-0000-000000000000/stream", THREAD_PATH]) {
+				const res = await app.request(path, { headers });
+				expect(res.status).toBe(401);
+				expect(res.headers.get("www-authenticate")).toBe("Bearer");
+			}
 		}
 	});
 
@@ -174,20 +172,7 @@ describe("GET /threads/:thread/stream", () => {
 		await resumed.close();
 	});
 
-	it("serves a GitHub issue or pull request at its alias path, the same as at its thread key", async () => {
-		const thread = "github:acme/web#pr-34";
-		await db.withTx((tx) => append(tx, { type: opened, stream: `thread:${thread}`, thread, source: "workflow:trn-3", payload: { run_id: "trn-3" } }));
-		const frames = [];
-		for (const path of [`/threads/${encodeURIComponent(thread)}/stream`, "/threads/github/acme/web/pr/34/stream"]) {
-			const stream = readSse(await get(path));
-			frames.push(await stream.take(1));
-			await stream.close();
-		}
-		expect(frames[0]).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread }) })]);
-		expect(frames[1]).toEqual(frames[0]);
-	});
-
-	it("streams a factory pull request's issue thread, which its work runs on", async () => {
+	it("serves an issue at its key and alias paths, and a factory pull request's alias as its issue's thread", async () => {
 		const issue = "github:acme/web#issue-55";
 		const pr = "github:acme/web#pr-56";
 		await db.withTx((tx) => append(tx, { type: threadLinked, stream: `thread:${pr}`, thread: pr, source: "workflow:trn-4", payload: { to: issue } }));
@@ -195,8 +180,14 @@ describe("GET /threads/:thread/stream", () => {
 			append(tx, { type: opened, stream: `thread:${issue}`, thread: issue, source: "workflow:trn-4", payload: { run_id: "trn-4" } }),
 		);
 
-		const stream = readSse(await get("/threads/github/acme/web/pr/56/stream"));
-		expect(await stream.take(1)).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread: issue }) })]);
-		await stream.close();
+		for (const path of [
+			`/threads/${encodeURIComponent(issue)}/stream`,
+			"/threads/github/acme/web/issue/55/stream",
+			"/threads/github/acme/web/pr/56/stream",
+		]) {
+			const stream = readSse(await get(path));
+			expect(await stream.take(1)).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread: issue }) })]);
+			await stream.close();
+		}
 	});
 });

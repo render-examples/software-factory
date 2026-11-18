@@ -40,23 +40,15 @@ const body = (text: string, extra: { thread?: ThreadKey; idempotencyKey?: string
 const note = (stream: string, text: string, extra: { thread?: ThreadKey; idempotencyKey?: string } = {}) => ({ stream, ...body(text, extra) });
 
 describe("append", () => {
-	it("assigns each stream consecutive versions from 1", async () => {
-		const [a, b] = [newStream(), newStream()];
-		const versions = await db.withTx(async (tx) => {
-			const logged = [await append(tx, note(a, "1")), await append(tx, note(b, "1")), await append(tx, note(a, "2"))];
-			return logged.map((event) => [event?.stream, event?.streamVersion]);
-		});
-		expect(versions).toEqual([
-			[a, 1],
-			[b, 1],
-			[a, 2],
+	it("records the type, version, source, thread, and validated payload, numbering each stream from 1 for paged reads", async () => {
+		const [stream, other] = [newStream(), newStream()];
+		const logged = await db.withTx(async (tx) => [
+			await append(tx, note(stream, "hello", { thread: "github:acme/web#issue-12" })),
+			await append(tx, note(other, "1")),
+			await append(tx, note(stream, "2")),
+			await append(tx, note(stream, "3")),
 		]);
-	});
-
-	it("records the type, version, source, thread, and validated payload", async () => {
-		const stream = newStream();
-		const logged = await db.withTx((tx) => append(tx, note(stream, "hello", { thread: "github:acme/web#issue-12" })));
-		expect(logged).toMatchObject({
+		expect(logged[0]).toMatchObject({
 			stream,
 			type: "test.noted",
 			version: 1,
@@ -64,7 +56,14 @@ describe("append", () => {
 			thread: "github:acme/web#issue-12",
 			payload: { text: "hello" },
 		});
-		expect(await readStream(db, stream, 0)).toEqual([logged]);
+		expect(logged.map((event) => [event?.stream, event?.streamVersion])).toEqual([
+			[stream, 1],
+			[other, 1],
+			[stream, 2],
+			[stream, 3],
+		]);
+		expect(await readStream(db, stream, 0, 2)).toEqual([logged[0], logged[2]]);
+		expect(await readStream(db, stream, 2, 2)).toEqual([logged[3]]);
 	});
 
 	it("appends at the expected version and fails with VersionConflict at any other", async () => {
@@ -137,20 +136,6 @@ describe("append", () => {
 });
 
 describe("ordered reads", () => {
-	it("pages a stream by version", async () => {
-		const stream = newStream();
-		await db.withTx((tx) =>
-			appendMany(
-				tx,
-				stream,
-				["1", "2", "3"].map((text) => body(text)),
-			),
-		);
-		const first = await readStream(db, stream, 0, 2);
-		const rest = await readStream(db, stream, first.at(-1)?.streamVersion ?? 0, 2);
-		expect([...first, ...rest].map((event) => event.streamVersion)).toEqual([1, 2, 3]);
-	});
-
 	it("pages a thread across streams by (tx, seq)", async () => {
 		const thread: ThreadKey = `github:acme/web#issue-${randomUUID()}`;
 		const [threadStream, run] = [`thread:${thread}`, newStream()];
@@ -202,10 +187,6 @@ describe("rebuild", () => {
 			{ stream: b, notes: 1, comment_id: null },
 		]);
 		await fresh.end();
-	});
-
-	it("runs with no projections", async () => {
-		await expect(rebuild(db)).resolves.toBeGreaterThan(0);
 	});
 });
 

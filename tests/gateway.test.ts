@@ -5,7 +5,6 @@ import { append, type Db, readStream } from "../app/db/index.js";
 import { runFinished, threadLinked } from "../app/events/index.js";
 import { createGateway, EventHub, type GatewayDeps } from "../app/gateway/index.js";
 import { runEvent } from "../app/runs/index.js";
-import { TriageInput } from "../app/schemas/tasks.js";
 import { githubThread } from "../app/threads/index.js";
 import { REPO } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
@@ -113,15 +112,60 @@ describe("gateway", () => {
 		expect(startTask).not.toHaveBeenCalled();
 	});
 
-	it("starts the routed task with the delivery id as idempotency key", async () => {
+	it("records the delivery and where it went, then starts its task keyed by the delivery id", async () => {
 		const res = await app.fetch(webhook(JSON.stringify(triagePayload)));
 		expect(res.status).toBe(202);
 		expect(await res.json()).toEqual({ runId: "trn-123", task: "triage" });
-		expect(startTask).toHaveBeenCalledTimes(1);
-		const [task, input, key] = startTask.mock.calls[0] as [string, unknown, string];
-		expect(task).toBe("triage");
-		expect(key).toBe("delivery-1");
-		expect(TriageInput.safeParse(input).success).toBe(true);
+		expect(startTask).toHaveBeenCalledExactlyOnceWith("triage", { repo: REPO, installationId: 7, issue: 12, actor: "maintainer" }, "delivery-1");
+		expect(await readStream(db, "delivery:github:delivery-1", 0)).toMatchObject([
+			{
+				type: "delivery.received",
+				thread: `github:${REPO}#issue-12`,
+				source: "github",
+				payload: { event: "issues", repo: REPO, task: "triage" },
+			},
+		]);
+	});
+
+	const SHA = "a".repeat(40);
+	const AT = "2026-10-18T10:00:00Z";
+	const approval = { kind: "label", labeledAt: AT };
+	const PR = githubThread(REPO, { kind: "pr", number: 34 });
+	const { repository, installation, sender } = triagePayload;
+	type Delivery = [event: string, payload: object];
+	const labeled = (label: string): Delivery => ["issues", { ...triagePayload, label: { name: label }, issue: { number: 12, updated_at: AT } }];
+	const prLabeled = (state: string): Delivery => [
+		"pull_request",
+		{ ...triagePayload, label: { name: config.labels.prReview }, pull_request: { number: 34, state, head: { sha: SHA } } },
+	];
+	const comment = (body: string): Delivery => ["issue_comment", commentPayload(body)];
+	const push = (branch: string): Delivery => ["push", { repository, installation, sender, ref: `refs/heads/${branch}`, after: SHA }];
+	type Outcome = { task: TaskName; input: object; key?: string; thread?: string } | { ignored: string };
+
+	it.each<[string, Delivery, Outcome]>([
+		["spec-approved label starts spec-to-pr", labeled(config.labels.specApproved), { task: "spec-to-pr", input: { approval } }],
+		["autopilot label starts autopilot", labeled(config.labels.autopilot), { task: "autopilot", input: { issue: 12 } }],
+		["a reply while Triage waits resumes triage", comment("Details."), { task: "triage", input: { issue: 12, commentId: 99 } }],
+		["pr-review label on an unlinked PR runs on its thread", prLabeled("open"), { task: "pr-review", input: { pr: 34, headSha: SHA }, thread: PR }],
+		["cancel command on an issue starts cancel", comment(`${config.commandPrefix} cancel`), { task: "cancel", input: { number: 12, kind: "issue" } }],
+		["push to the base branch refreshes the snapshot", push("main"), { task: "refresh-snapshot", input: { sha: SHA }, key: `${REPO}@${SHA}` }],
+		["ignores a bot sender", ["issues", { ...triagePayload, sender: { login: "factory[bot]", type: "Bot" } }], { ignored: "bot sender" }],
+		["ignores an unconfigured repo", ["issues", { ...triagePayload, repository: { full_name: "someone/else" } }], { ignored: "unconfigured repo" }],
+		["ignores a closed PR labeled for review", prLabeled("closed"), { ignored: "pull request not open" }],
+		["ignores a push to another branch", push("feature"), { ignored: "not base branch" }],
+	])("%s", async (_name, [event, payload], outcome) => {
+		await startRun(db, REPO, ISSUE, { traceId: "trn-triage" });
+		await finishRun("trn-triage", "asked", "reply");
+		const res = await app.fetch(webhook(JSON.stringify(payload), { event }));
+		if ("ignored" in outcome) {
+			expect(await res.json()).toEqual(outcome);
+			expect(startTask).not.toHaveBeenCalled();
+			return;
+		}
+		const { task, input, key = "delivery-1", thread } = outcome;
+		expect(res.status).toBe(202);
+		expect(startTask).toHaveBeenCalledExactlyOnceWith(task, expect.objectContaining({ repo: REPO, ...input }), key);
+		if (thread) expect((await readStream(db, "delivery:github:delivery-1", 0))[0]?.thread).toBe(thread);
 	});
 
 	it("returns 502 and logs why when startTask fails, so GitHub records a failed delivery", async () => {
@@ -135,18 +179,6 @@ describe("gateway", () => {
 			error: "render down",
 		});
 		warn.mockRestore();
-	});
-
-	it("records the delivery and where it went before starting the task", async () => {
-		await app.fetch(webhook(JSON.stringify(triagePayload)));
-		expect(await readStream(db, "delivery:github:delivery-1", 0)).toMatchObject([
-			{
-				type: "delivery.received",
-				thread: `github:${REPO}#issue-12`,
-				source: "github",
-				payload: { event: "issues", repo: REPO, task: "triage" },
-			},
-		]);
 	});
 
 	it("records an ignored delivery with the reason", async () => {
