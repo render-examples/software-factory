@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AgentRunRecorder, type AgentRunSummary } from "../app/agent-runs/index.js";
 import { append, type Db } from "../app/db/index.js";
-import { defineEvent, threadLinked } from "../app/events/index.js";
+import { defineEvent } from "../app/events/index.js";
 import { createGateway, EventHub } from "../app/gateway/index.js";
 import type { RunnerEvent } from "../app/runner/core/protocol.js";
 import type { ThreadKey } from "../app/threads/index.js";
@@ -171,19 +171,13 @@ describe("GET /threads/:thread/stream", () => {
 		await resumed.close();
 	});
 
-	it("serves an issue at its key and alias paths, and a factory pull request's alias as its issue's thread", async () => {
+	it("serves an issue's thread at its key path and its GitHub alias path", async () => {
 		const issue = "github:acme/web#issue-55";
-		const pr = "github:acme/web#pr-56";
-		await db.withTx((tx) => append(tx, { type: threadLinked, stream: `thread:${pr}`, thread: pr, source: "workflow:trn-4", payload: { to: issue } }));
 		await db.withTx((tx) =>
 			append(tx, { type: opened, stream: `thread:${issue}`, thread: issue, source: "workflow:trn-4", payload: { run_id: "trn-4" } }),
 		);
 
-		for (const path of [
-			`/threads/${encodeURIComponent(issue)}/stream`,
-			"/threads/github/acme/web/issue/55/stream",
-			"/threads/github/acme/web/pr/56/stream",
-		]) {
+		for (const path of [`/threads/${encodeURIComponent(issue)}/stream`, "/threads/github/acme/web/issue/55/stream"]) {
 			const stream = readSse(await get(path));
 			expect(await stream.take(1)).toEqual([expect.objectContaining({ event: "test.opened", data: expect.objectContaining({ thread: issue }) })]);
 			await stream.close();

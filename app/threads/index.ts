@@ -14,9 +14,3 @@ export interface GitHubThread {
 export function githubThread(repo: string, thread: GitHubThread): ThreadKey {
 	return `github:${repo}#${thread.kind}-${thread.number}`;
 }
-
-export function parseGitHubThread(repo: string, key: string): GitHubThread | null {
-	const match = /^github:(.+)#(issue|pr)-([1-9]\d*)$/.exec(key);
-	if (match?.[1] !== repo) return null;
-	return { kind: match[2] === "pr" ? "pr" : "issue", number: Number(match[3]) };
-}

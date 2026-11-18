@@ -1,4 +1,4 @@
-import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped, threadLinked } from "../events/index.js";
+import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
 import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
@@ -79,21 +79,7 @@ const threads: Projection = {
 	},
 };
 
-const threadLinks: Projection = {
-	table: "thread_links",
-	key: ["thread"],
-	operational: [],
-	async apply(tx, event) {
-		if (event.type !== threadLinked.type) return;
-		await tx.query(
-			`insert into thread_links (thread, linked_to, updated_seq) values ($1, $2, $3)
-			 on conflict (thread) do update set linked_to = excluded.linked_to, updated_seq = excluded.updated_seq`,
-			[event.thread, threadLinked.payload.parse(event.payload).to, event.seq],
-		);
-	},
-};
-
-export const PROJECTIONS: readonly Projection[] = [runs, threads, threadLinks, agentRuns];
+export const PROJECTIONS: readonly Projection[] = [runs, threads, agentRuns];
 
 export async function project(tx: Tx, event: LogEvent): Promise<void> {
 	for (const projection of PROJECTIONS) await projection.apply(tx, event);

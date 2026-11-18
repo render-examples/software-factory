@@ -3,7 +3,7 @@ import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
 import type { NewEvent } from "../db/index.js";
 import { deliveryReceived } from "../events/index.js";
 import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
-import { type GitHubThread, githubThread, parseGitHubThread, type ThreadKey } from "../threads/index.js";
+import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 import { SHA } from "../util/index.js";
 
 export type Decision =
@@ -18,7 +18,6 @@ export type Decision =
 	| { kind: "invalid"; task: TaskName; reason: string; thread?: ThreadKey };
 
 export interface ThreadState {
-	linked: ThreadKey | null;
 	waiting: string | null;
 }
 
@@ -87,10 +86,6 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 		if (!parsed.success) return { kind: "invalid", task, reason: parsed.error.message, thread };
 		return { kind: "start", task, input: parsed.data as { repo: string }, idempotencyKey, thread };
 	};
-	const onPull = (number: number, decide: (thread: GitHubThread) => Decision): Route => {
-		const pr = { kind: "pr", number } as const;
-		return { kind: "lookup", thread: on(pr), decide: ({ linked }) => decide((linked && parseGitHubThread(repo.fullName, linked)) ?? pr) };
-	};
 
 	switch (event) {
 		case "issues": {
@@ -119,10 +114,7 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const { label, pull_request: pr } = parsed.data;
 			if (label?.name !== config.labels.prReview) return ignore("unhandled label");
 			if (pr.state !== "open") return ignore("pull request not open");
-			return onPull(pr.number, (thread) => {
-				const input = { pr: pr.number, headSha: pr.head.sha, actor, ...(thread.kind === "issue" && { issue: thread.number }) };
-				return start(TASKS.prReview, PrReviewInput, input, thread);
-			});
+			return start(TASKS.prReview, PrReviewInput, { pr: pr.number, headSha: pr.head.sha, actor }, { kind: "pr", number: pr.number });
 		}
 
 		case "issue_comment": {
@@ -132,8 +124,8 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 			const { issue, comment } = parsed.data;
 			const firstLine = (comment.body ?? "").split(/\r?\n/, 1)[0]?.trim();
 			if (firstLine === `${config.commandPrefix} cancel`) {
-				const cancel = (thread: GitHubThread) => start(TASKS.cancel, CancelInput, { ...thread, actor }, thread);
-				return isPullRequest(issue) ? onPull(issue.number, cancel) : cancel({ kind: "issue", number: issue.number });
+				const thread = { kind: isPullRequest(issue) ? "pr" : "issue", number: issue.number } as const;
+				return start(TASKS.cancel, CancelInput, { ...thread, actor }, thread);
 			}
 			if (isPullRequest(issue)) return ignore("comment on pull request");
 			const thread = { kind: "issue", number: issue.number } as const;

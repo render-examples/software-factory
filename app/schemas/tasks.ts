@@ -43,7 +43,6 @@ export const PrReviewInput = RepoInput.extend({
 	pr: z.number().int().positive(),
 	headSha: z.string().regex(SHA),
 	actor: ActorLogin,
-	issue: z.number().int().positive().optional(),
 });
 
 export const CancelInput = RepoInput.extend({

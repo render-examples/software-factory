@@ -77,7 +77,7 @@ The factory uses GitHub labels to trigger actions:
 | `factory:triage` | Issue | Triage, which asks questions, drafts a spec, or declines. |
 | `factory:spec-approved` | Issue | Spec-to-PR, which implements the current spec and opens a draft pull request. |
 | `factory:pr-review` | Pull request | PR Reviewer, which reviews the pull request's head commit. |
-| `factory:autopilot` | Issue | All three stages in one Render Workflow, with no approval between them. |
+| `factory:autopilot` | Issue | Triage and Spec-to-PR with no approval between them, then PR Reviewer on the draft pull request. |
 
 Each label is a command. The factory removes it when the run starts, so apply
 it again to run the stage again. The factory shows `factory:working` while a
@@ -91,9 +91,10 @@ run is in progress.
 - **One run at a time:** starting a run on an issue or pull request stops
   whatever was running there.
 - **Cancel:** comment `/factory cancel` on the issue or pull request.
-- **Factory pull requests:** a draft pull request the factory opens belongs to
-  its issue. A label or `/factory cancel` on it acts on the issue's work, and
-  its status appears on the issue.
+- **Each issue and pull request stands alone:** work runs on the issue or pull
+  request it acts on, and its status appears there. When Autopilot opens a
+  draft pull request, it starts PR Reviewer on that pull request, so you follow,
+  cancel, or rerun the review there like any other.
 - **Permission:** only people with `minimumPermission` on the repository
   (`write` by default) can start a run.
 

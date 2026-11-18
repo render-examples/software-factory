@@ -6,7 +6,6 @@ import { type Db, type LogEvent, readStream, readThread } from "../db/index.js";
 import { agentRunFinished, assistantMessage } from "../events/index.js";
 import { githubThread, ThreadKey } from "../threads/index.js";
 import { ANY_STREAM, type EventHub } from "./hub.js";
-import { threadState } from "./state.js";
 
 export interface StreamDeps {
 	db: Db;
@@ -69,10 +68,9 @@ export function githubThreadStream(deps: StreamDeps): Handler {
 	};
 }
 
-async function serveThread(c: Context, { db, hub }: StreamDeps, requested: ThreadKey | null): Promise<Response> {
+async function serveThread(c: Context, { db, hub }: StreamDeps, thread: ThreadKey | null): Promise<Response> {
 	const after = cursor(c, /^(\d{1,20})-(\d{1,15})$/);
-	if (!requested || !after) return c.json({ error: "invalid thread or cursor" }, 400);
-	const thread = (await threadState(db, requested)).linked ?? requested;
+	if (!thread || !after) return c.json({ error: "invalid thread or cursor" }, 400);
 	let position = { tx: after[1] ?? "0", seq: Number(after[2] ?? 0) };
 	return serve(c, hub, {
 		key: thread,

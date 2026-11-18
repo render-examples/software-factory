@@ -244,8 +244,6 @@ durable writes; a person starts a fresh run instead.
   links.
 - Return `waiting: "reply"` when the thread waits for a person's reply, and
   route the reply in `route()` (see [Workflow](../architecture.md#workflow)).
-- Call `run.linkThread()` when opening a pull request that shares its issue's
-  thread (see [Coordination](../architecture.md#coordination)).
 
 Only code in the Workflows service may call GitHub write methods. Format model
 text through `app/format/` before publishing it.
@@ -321,15 +319,14 @@ ownership for issue or pull request work.
 `route()` maps an authenticated delivery to a validated task input without I/O.
 GitHub labels and other payload state never carry thread state on their own.
 When a delivery's meaning depends on thread state, `route()` returns a
-`lookup`: the gateway reads `linked` (the issue thread a factory pull request
-belongs to) and `waiting` (the root task waiting for a reply) from Postgres and
-passes them to `decide()`.
+`lookup`: the gateway reads `waiting` (the root task waiting for a reply) from
+Postgres and passes it to `decide()`.
 
 1. Add the task name and input schema first.
 2. Update `route()` in `app/gateway/routes.ts`.
 3. Derive repository, installation, actor, issue or pull request, and commit
-   from the authenticated payload. Resolve pull request deliveries through
-   `onPull`, so a factory pull request's work runs on its issue's thread.
+   from the authenticated payload. Work on a pull request runs on the pull
+   request's own thread.
 4. Use the GitHub delivery ID as the task idempotency key. For content-addressed
    maintenance work, use a deterministic key such as `repo@sha`.
 5. Update `REQUIRED_EVENTS`, `REQUIRED_PERMISSIONS`, or `LABELS` in

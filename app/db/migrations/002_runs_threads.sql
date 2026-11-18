@@ -24,9 +24,3 @@ create table threads (
   status_comment_id bigint,
   updated_seq       bigint not null
 );
-
-create table thread_links (
-  thread      text primary key,
-  linked_to   text not null,
-  updated_seq bigint not null
-);

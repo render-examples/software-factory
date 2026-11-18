@@ -38,8 +38,9 @@ task execution. The status comment is a view and is never read back.
 
 Postgres, not GitHub labels, decides what a delivery means. Trigger labels are
 commands, removed when their run starts. A comment resumes an issue only while
-its latest root run finished waiting for a reply. A draft pull request the
-factory opens shares its issue's thread.
+its latest root run finished waiting for a reply. Every issue and pull request
+is its own thread; Autopilot starts PR Reviewer as a separate run on the draft
+pull request it opens.
 
 Two dependency rules are mandatory:
 

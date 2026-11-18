@@ -21,7 +21,7 @@ export const prReviewWorkflow = defineGitHubTask(
 		name: TASKS.prReview,
 		title: "PR Reviewer",
 		input: PrReviewInput,
-		thread: (input) => (input.issue ? { kind: "issue", number: input.issue } : { kind: "pr", number: input.pr }),
+		thread: (input) => ({ kind: "pr", number: input.pr }),
 		trigger: (input) => ({ label: config.labels.prReview, number: input.pr }),
 		timeoutSeconds: 2 * 60 * 60,
 	},

@@ -30,8 +30,6 @@ export const runStarted = defineEvent(
 	z.strictObject({ run_id: id, trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
 );
 
-export const threadLinked = defineEvent("thread.linked", 1, z.strictObject({ to: ThreadKey }));
-
 export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ trace_id: id, task: name, title: name, actor: name, reason: summary }));
 
 export const runProgress = defineEvent("run.progress", 1, z.strictObject({ summary }));

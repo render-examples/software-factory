@@ -102,7 +102,6 @@ export const specToPrWorkflow = defineGitHubTask(
 				body: pullRequestBody({ issue: input.issue, spec, implementation, verification, specUrl: comment.htmlUrl }),
 				draft: true,
 			});
-			await run.linkThread({ kind: "pr", number: pull.number });
 			return {
 				outcome: "pr_opened",
 				summary: `opened draft PR #${pull.number}. Review it before marking it ready.`,

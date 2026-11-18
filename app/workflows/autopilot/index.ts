@@ -3,13 +3,13 @@ import { config, TASKS } from "../../config/index.js";
 import type { Outcome, Run, TaskResult } from "../../runs/index.js";
 import { AutopilotInput, type PrReviewInput, type SpecToPrInput, type TriageInput } from "../../schemas/index.js";
 import { defineGitHubTask, type GitHubTaskContext, type GitHubTaskDeps } from "../github-task.js";
-import { prReviewWorkflow } from "../pr-review/index.js";
 import { type SpecToPrHandoff, specToPrWorkflow } from "../spec-to-pr/index.js";
+import { startTask } from "../start-task.js";
 import { type TriageHandoff, triageWorkflow } from "../triage/index.js";
 
 const TIMEOUT_SECONDS = 8 * 60 * 60;
 
-type StageName = "triage" | "spec-to-pr" | "pr-review";
+type StageName = "triage" | "spec-to-pr";
 type StageTaskResult = TaskResult<TriageHandoff | SpecToPrHandoff | undefined>;
 
 export interface AutopilotStage {
@@ -27,7 +27,7 @@ export interface AutopilotData {
 export interface AutopilotDeps extends GitHubTaskDeps {
 	triage?: (input: TriageInput) => Promise<TaskResult<TriageHandoff>>;
 	specToPr?: (input: SpecToPrInput) => Promise<TaskResult<SpecToPrHandoff>>;
-	prReview?: (input: PrReviewInput) => Promise<TaskResult>;
+	startPrReview?: (input: PrReviewInput, idempotencyKey: string) => Promise<{ id: string }>;
 }
 
 async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx: GitHubTaskContext): Promise<Outcome<AutopilotData>> {
@@ -57,7 +57,7 @@ async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx:
 
 	const runTriage = child(deps.triage, triageWorkflow);
 	const runSpecToPr = child(deps.specToPr, specToPrWorkflow);
-	const runPrReview = child(deps.prReview, prReviewWorkflow);
+	const startPrReview = deps.startPrReview ?? ((reviewInput, key) => startTask(ctx, TASKS.prReview, reviewInput, key));
 
 	const base = { repo: input.repo, installationId: input.installationId, actor: input.actor };
 	await run.reportProgress("running Triage");
@@ -83,11 +83,16 @@ async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx:
 	);
 	if (specToPr.state !== "done" || specToPr.data?.kind !== "pull_request") return stop("spec-to-pr", specToPr);
 
-	await run.reportProgress("reviewing the draft pull request");
-	const review = record("pr-review", await runPrReview({ ...base, pr: specToPr.data.pr, headSha: specToPr.data.headSha, issue: input.issue }));
-	if (review.state !== "done" || !["reviewed", "already_reviewed"].includes(review.outcome)) return stop("pr-review", review);
-
-	return finish("completed", `opened and reviewed draft PR #${specToPr.data.pr}.`);
+	const { pr, headSha } = specToPr.data;
+	await run.assertCurrent();
+	try {
+		await startPrReview({ ...base, pr, headSha }, `${run.traceId}:pr-review:${headSha}`);
+	} catch (error) {
+		console.error(JSON.stringify({ level: "warn", msg: "could not start PR Reviewer", pr, error: String(error) }));
+		const summary = `opened draft PR #${pr}, but PR Reviewer couldn't start. Apply \`${config.labels.prReview}\` to the pull request to review it.`;
+		return finish("review_not_started", summary, "failed");
+	}
+	return finish("pr_opened", `opened draft PR #${pr}; PR Reviewer is reviewing it on the pull request.`);
 }
 
 export const autopilotWorkflow = defineGitHubTask(

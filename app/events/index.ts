@@ -16,7 +16,6 @@ export {
 	runStarted,
 	runStopped,
 	TOOL_TEXT_MAX,
-	threadLinked,
 	toolCall,
 	toolResult,
 	usage,

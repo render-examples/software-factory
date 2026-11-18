@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { type Db, readStream } from "../app/db/index.js";
-import { githubThread } from "../app/threads/index.js";
+import type { Db } from "../app/db/index.js";
 import { BUILD_COMMAND, REPO, TEST_COMMAND } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 import { type AgentStep, fakeAgents } from "./helpers/fake-agents.js";
@@ -172,11 +171,6 @@ describe("implement, verify, and publish", () => {
 		expect(t.gh.status()).toContain(`[Draft PR #34](${t.gh.pulls[0]?.htmlUrl})`);
 		expect(t.sandbox.closed).toBe(1);
 		expect(t.gh.labels(ISSUE).has(config.labels.specApproved)).toBe(false);
-
-		const thread = githubThread(REPO, { kind: "pr", number: 34 });
-		expect(await readStream(db, `thread:${thread}`, 0)).toMatchObject([
-			{ type: "thread.linked", thread, payload: { to: githubThread(REPO, { kind: "issue", number: ISSUE }) } },
-		]);
 	});
 
 	it("repairs a failing verify and publishes once it passes", async () => {

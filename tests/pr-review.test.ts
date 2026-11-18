@@ -17,7 +17,6 @@ type PrReviewDeps = import("../app/workflows/pr-review/index.js").PrReviewDeps;
 const HEAD = "a".repeat(40);
 const MERGE_BASE = "b".repeat(40);
 const ctx = { metadata: { taskRunId: "trn-run", rootTaskRunId: "trn-root" } };
-const childCtx = { metadata: { ...ctx.metadata, parentTaskRunId: "trn-parent" } };
 const input = {
 	repo: REPO,
 	installationId: 5,
@@ -179,32 +178,22 @@ describe("runPrReview", () => {
 		expect(gh.status()).toContain(`(${gh.reviews[0]?.htmlUrl})`);
 	});
 
-	it("keeps an autopilot review's status and sandbox on the workflow issue", async () => {
-		await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
-		const result = await runPrReview(childCtx, { ...input, issue: 12 }, deps());
-		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
-		expect(gh.comments.map((c) => c.issue)).toEqual([12]);
-		expect(await runRow(db, "trn-run")).toMatchObject({ sandbox_id: "sbx-pr" });
-		expect(gh.labels(34).has(config.labels.prReview)).toBe(true);
-	});
-
-	it("takes over the issue's thread for a labeled review of its factory PR, and removes the label from the PR", async () => {
-		await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-autopilot", task: "autopilot", title: "Autopilot" });
+	it("takes over a review already running on the pull request, keeps its status there, and removes the label", async () => {
 		await startRun(
 			db,
 			REPO,
-			{ kind: "issue", number: 12 },
-			{ traceId: "trn-autopilot", runId: "trn-child", task: "pr-review", sandboxId: "sbx-child" },
+			{ kind: "pr", number: 34 },
+			{ traceId: "trn-earlier", task: "pr-review", title: "PR Reviewer", sandboxId: "sbx-earlier" },
 		);
-		const runs = new FakeRuns({ "trn-autopilot": "running" });
+		const runs = new FakeRuns({ "trn-earlier": "running" });
 
-		const result = await runPrReview(ctx, { ...input, issue: 12 }, deps({ runs }));
+		const result = await runPrReview(ctx, input, deps({ runs }));
 
 		expect(result).toMatchObject({ state: "done", outcome: "reviewed" });
-		expect(runs.cancelled).toEqual(["trn-autopilot"]);
-		expect(runs.terminated).toEqual(["sbx-child"]);
-		expect(await runRow(db, "trn-child")).toMatchObject({ state: "cancelled" });
-		expect(gh.comments.map((c) => c.issue)).toEqual([12]);
+		expect(runs.cancelled).toEqual(["trn-earlier"]);
+		expect(runs.terminated).toEqual(["sbx-earlier"]);
+		expect(await runRow(db, "trn-earlier")).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(gh.comments.map((c) => c.issue)).toEqual([34]);
 		expect(gh.labels(34).has(config.labels.prReview)).toBe(false);
 	});
 

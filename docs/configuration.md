@@ -110,7 +110,7 @@ After adding a repository:
 | `labels.triage` | `factory:triage` | Starts Triage |
 | `labels.specApproved` | `factory:spec-approved` | Starts Spec-to-PR |
 | `labels.prReview` | `factory:pr-review` | Starts PR Reviewer |
-| `labels.autopilot` | `factory:autopilot` | Runs all three stages through a reviewed draft PR |
+| `labels.autopilot` | `factory:autopilot` | Runs Triage and Spec-to-PR, then starts PR Reviewer on the draft PR |
 | `commandPrefix` | `/factory` | Prefix for commands such as `/factory cancel` |
 | `minimumPermission` | `write` | Live repository permission required to start work |
 | `limits.repairRounds` | `2` | Repair attempts after failed verification |
@@ -310,9 +310,9 @@ request comment (requires `minimumPermission`):
 
 Cancel takes over the thread, stops the active root workflow and child task,
 terminates recorded Sandboxes, and clears runs left in `running` after a task
-stopped. Reapply the trigger label to restart work. For linked draft pull
-requests and `factory:autopilot` behavior, see
-[Coordination](architecture.md#coordination) and
+stopped. Reapply the trigger label to restart work. Cancel acts on the issue or
+pull request it's posted on: to stop the review Autopilot started, comment on
+the draft pull request. See [Coordination](architecture.md#coordination) and
 [Autopilot](architecture.md#autopilot).
 
 ## Event streams

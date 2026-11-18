@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { config, type TaskName } from "../app/config/index.js";
 import { append, type Db, readStream } from "../app/db/index.js";
-import { runFinished, threadLinked } from "../app/events/index.js";
+import { runFinished } from "../app/events/index.js";
 import { createGateway, EventHub, type GatewayDeps } from "../app/gateway/index.js";
 import { runEvent } from "../app/runs/index.js";
 import { githubThread } from "../app/threads/index.js";
@@ -146,8 +146,13 @@ describe("gateway", () => {
 		["spec-approved label starts spec-to-pr", labeled(config.labels.specApproved), { task: "spec-to-pr", input: { approval } }],
 		["autopilot label starts autopilot", labeled(config.labels.autopilot), { task: "autopilot", input: { issue: 12 } }],
 		["a reply while Triage waits resumes triage", comment("Details."), { task: "triage", input: { issue: 12, commentId: 99 } }],
-		["pr-review label on an unlinked PR runs on its thread", prLabeled("open"), { task: "pr-review", input: { pr: 34, headSha: SHA }, thread: PR }],
+		["pr-review label on a PR runs on its thread", prLabeled("open"), { task: "pr-review", input: { pr: 34, headSha: SHA }, thread: PR }],
 		["cancel command on an issue starts cancel", comment(`${config.commandPrefix} cancel`), { task: "cancel", input: { number: 12, kind: "issue" } }],
+		[
+			"cancel command on a PR runs on its thread",
+			["issue_comment", commentPayload(`${config.commandPrefix} cancel`, { number: 34, pull_request: {} })],
+			{ task: "cancel", input: { number: 34, kind: "pr" }, thread: PR },
+		],
 		["push to the base branch refreshes the snapshot", push("main"), { task: "refresh-snapshot", input: { sha: SHA }, key: `${REPO}@${SHA}` }],
 		["ignores a bot sender", ["issues", { ...triagePayload, sender: { login: "factory[bot]", type: "Bot" } }], { ignored: "bot sender" }],
 		["ignores an unconfigured repo", ["issues", { ...triagePayload, repository: { full_name: "someone/else" } }], { ignored: "unconfigured repo" }],
@@ -227,32 +232,12 @@ describe("gateway", () => {
 		});
 	});
 
-	it("runs a factory pull request's cancel and review on its issue's thread", async () => {
-		const pr = githubThread(REPO, { kind: "pr", number: 34 });
-		await db.withTx((tx) =>
-			append(tx, { type: threadLinked, stream: `thread:${pr}`, thread: pr, source: "workflow:trn-spec", payload: { to: githubThread(REPO, ISSUE) } }),
-		);
-		const cancel = commentPayload(`${config.commandPrefix} cancel`, { number: 34, pull_request: {} });
-		const review = {
-			...triagePayload,
-			label: { name: config.labels.prReview },
-			pull_request: { number: 34, state: "open", head: { sha: "a".repeat(40) } },
-		};
-
-		await app.fetch(webhook(JSON.stringify(cancel), { event: "issue_comment" }));
-		await app.fetch(webhook(JSON.stringify(review), { event: "pull_request", delivery: "delivery-2" }));
-
-		expect(startTask.mock.calls.map(([task, input]) => [task, input])).toEqual([
-			["cancel", { repo: REPO, installationId: 7, number: 12, kind: "issue", actor: "maintainer" }],
-			["pr-review", { repo: REPO, installationId: 7, pr: 34, headSha: "a".repeat(40), actor: "maintainer", issue: 12 }],
-		]);
-		expect((await readStream(db, "delivery:github:delivery-2", 0))[0]?.thread).toBe(githubThread(REPO, ISSUE));
-	});
-
 	it("returns 502 without starting the task when the delivery can't be recorded", async () => {
 		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 		const down: Db = { ...db, withTx: async () => Promise.reject(new Error("connection refused")) };
-		const res = await createGateway({ startTask, webhookSecret: SECRET, db: down, hub: new EventHub(), eventsReadToken: "events-token" }).fetch(webhook(JSON.stringify(triagePayload)));
+		const res = await createGateway({ startTask, webhookSecret: SECRET, db: down, hub: new EventHub(), eventsReadToken: "events-token" }).fetch(
+			webhook(JSON.stringify(triagePayload)),
+		);
 		expect(res.status).toBe(502);
 		expect(startTask).not.toHaveBeenCalled();
 		expect(JSON.parse(warn.mock.calls[0]?.[0] as string)).toMatchObject({ msg: "could not record delivery", deliveryId: "delivery-1" });

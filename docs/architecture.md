@@ -83,8 +83,7 @@ specifications are GitHub comments with hidden markers.
 Spec-to-PR confirms that the approved specification has not changed. It
 implements that specification in a Sandbox, runs the configured verification
 commands, allows a bounded number of repairs, and opens a draft pull request
-on `factory/issue-<number>`. The draft pull request shares the issue's thread
-(see [Coordination](#coordination)).
+on `factory/issue-<number>`.
 
 ### PR Reviewer
 
@@ -95,14 +94,17 @@ security, correctness, performance, and tests.
 ### Autopilot
 
 Applying `factory:autopilot` grants upfront approval for Triage, Spec-to-PR, and PR Reviewer.
-The parent starts each GitHub task with `ctx.run`, so every stage is its own run, with
-its own compute, status, and Sandbox.
+The parent runs Triage and Spec-to-PR as child tasks with `ctx.run`, so each stage
+is its own run, with its own compute and Sandbox.
 
 Autopilot does not apply the manual transition labels. Triage returns the
 exact App-authored spec comment and content hash to Spec-to-PR, which verifies
 that the current spec still matches. Spec-to-PR returns the pull request
-number and head commit directly to PR Reviewer, which runs on the issue's
-thread. If Triage asks questions, the parent finishes waiting for a reply, and
+number and head commit, and the parent starts PR Reviewer on that pull request
+as an independent root run through the Render API, then finishes. The review
+runs on the pull request's own thread, with its own status comment there, so
+`/factory cancel` or `factory:pr-review` on the pull request act on it like any
+review. If Triage asks questions, the parent finishes waiting for a reply, and
 a human reply starts a new parent run that resumes Triage. A reply Triage
 skips, such as a deleted comment, leaves the parent waiting.
 
@@ -112,7 +114,7 @@ Each kind of state has one owner:
 
 | State | Owner |
 |---|---|
-| Deliveries, task runs, the run that owns each thread, whether it waits for a reply, linked threads, outcomes, and Sandboxes | Postgres event log |
+| Deliveries, task runs, the run that owns each thread, whether it waits for a reply, outcomes, and Sandboxes | Postgres event log |
 | Agent runs: messages, tool calls, outcome, usage, and cost | Postgres event log |
 | Whether a task process is alive, and its input and result | Render Workflows |
 | Issues, labels, specifications, pull requests, and reviews | GitHub |
@@ -171,14 +173,9 @@ trace even when stopping it fails: it stops at its next ownership check. A
 child run starts only while its own trace is the thread's latest, so a stale
 child can never take the thread back.
 
-A factory pull request shares its issue's thread. When Spec-to-PR opens or
-finds its draft pull request, it appends `thread.linked`, naming the issue's
-thread, to the pull request's thread stream. The gateway resolves every
-delivery on a linked pull request to the issue's thread: `/factory cancel`
-there stops the issue's work, and `factory:pr-review` runs PR Reviewer on the
-issue's thread, taking it over like any root run. The status comment for that
-work stays on the issue, and requesting the pull request's event stream serves
-the issue's stream. A pull request a person opens has its own thread.
+Every issue and pull request is its own thread, and work runs on the thread
+of the object it acts on. A draft pull request the factory opens is no
+different from one a person opens.
 
 The actor's permission is checked before a run starts. A rejected run never
 appends to `thread:<thread>`, so it displaces nothing. Its `run.rejected` is

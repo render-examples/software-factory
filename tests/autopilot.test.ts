@@ -46,8 +46,9 @@ beforeEach(async () => {
 });
 
 describe("autopilot", () => {
-	it("runs Triage, Spec-to-PR, and PR Reviewer in order", async () => {
+	it("runs Triage and Spec-to-PR, then starts PR Reviewer on the draft pull request", async () => {
 		const order: string[] = [];
+		const startPrReview = vi.fn(async () => ({ id: "trn-review" }));
 		const output = await run({
 			triage: async () => {
 				order.push("triage");
@@ -62,22 +63,37 @@ describe("autopilot", () => {
 					data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) },
 				});
 			},
-			prReview: async (stageInput) => {
-				order.push("pr-review");
-				expect(stageInput).toMatchObject({ pr: 34, headSha: "a".repeat(40), issue: 12 });
-				return result("trn-review", "reviewed");
-			},
+			startPrReview,
 		});
 
-		expect(order).toEqual(["triage", "spec-to-pr", "pr-review"]);
-		expect(output).toMatchObject({ state: "done", outcome: "completed", summary: "opened and reviewed draft PR #34." });
-		expect(output.data?.stages.map((stage) => [stage.task, stage.runId])).toEqual([
-			["triage", "trn-triage"],
-			["spec-to-pr", "trn-spec"],
-			["pr-review", "trn-review"],
-		]);
+		expect(order).toEqual(["triage", "spec-to-pr"]);
+		expect(startPrReview).toHaveBeenCalledExactlyOnceWith(
+			{ repo: REPO, installationId: 5, actor: "maintainer", pr: 34, headSha: "a".repeat(40) },
+			`trn-autopilot:pr-review:${"a".repeat(40)}`,
+		);
+		expect(output).toMatchObject({
+			state: "done",
+			outcome: "pr_opened",
+			summary: "opened draft PR #34; PR Reviewer is reviewing it on the pull request.",
+		});
+		expect(output.data?.stages.map((stage) => stage.task)).toEqual(["triage", "spec-to-pr"]);
 		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
-		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "done", outcome: "completed" });
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "done", outcome: "pr_opened" });
+	});
+
+	it("says how to review the draft pull request when PR Reviewer can't start", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const output = await run({
+			triage: async () => result<TriageHandoff>("trn-triage", "drafted", { data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 } }),
+			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "pr_opened", { data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) } }),
+			startPrReview: async () => {
+				throw new Error("Render API returned 503");
+			},
+		});
+		warn.mockRestore();
+
+		expect(output).toMatchObject({ state: "failed", outcome: "review_not_started" });
+		expect(output.summary).toContain(`Apply \`${config.labels.prReview}\` to the pull request`);
 	});
 
 	it.each(["asked", "skipped"])("waits for a reply when its resumed Triage %s", async (outcome) => {
@@ -100,19 +116,19 @@ describe("autopilot", () => {
 	});
 
 	it("stops after a terminal stage result and removes the autopilot label", async () => {
-		const prReview = vi.fn();
+		const startPrReview = vi.fn();
 		const output = await run({
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "unchanged", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 2 },
 				}),
 			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "verification_failed", { state: "failed", summary: "verification failed." }),
-			prReview,
+			startPrReview,
 		});
 
 		expect(output).toMatchObject({ state: "failed", outcome: "stopped_at_spec_to_pr", summary: "verification failed." });
 		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
-		expect(prReview).not.toHaveBeenCalled();
+		expect(startPrReview).not.toHaveBeenCalled();
 	});
 
 	it.each([
@@ -135,20 +151,20 @@ describe("autopilot", () => {
 	});
 
 	it("stops when a child rejects the actor's permission", async () => {
-		const prReview = vi.fn();
+		const startPrReview = vi.fn();
 		const output = await run({
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "drafted", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 },
 				}),
 			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "permission_denied", { state: "rejected" }),
-			prReview,
+			startPrReview,
 		});
 
 		expect(output).toMatchObject({ state: "failed", outcome: "stopped_at_spec_to_pr" });
 		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
 		expect(gh.labels(12)).not.toContain(config.labels.specApproved);
-		expect(prReview).not.toHaveBeenCalled();
+		expect(startPrReview).not.toHaveBeenCalled();
 	});
 
 	it("removes the autopilot label and rethrows an unexpected stage error", async () => {
