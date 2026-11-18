@@ -30,6 +30,9 @@ npm run dev:workflows
 RENDER_USE_LOCAL_DEV=true npm run dev:gateway
 ```
 
+`RENDER_USE_LOCAL_DEV=true` directs the Render SDK to start tasks on the local
+`dev:workflows` server instead of the Render API.
+
 Expose port 3000 over public HTTPS:
 
 ```bash
@@ -113,30 +116,13 @@ Follow [docs/runbooks/extend.md](docs/runbooks/extend.md) to:
 The runbook is the canonical procedure. Keep implementation details in code
 and architectural reasons in [Architecture](docs/architecture.md).
 
-## Add persistent state
-
-Persistent factory state goes in the event log in `app/db/`. GitHub owns
-collaboration artifacts, Render Workflows owns task execution, and warnings
-go to the service logs. To add state:
-
-1. Declare each event type with `defineEvent` in `app/events/catalog.ts`.
-   Bound every string and array; bump the version when a payload changes.
-2. Add tables in a new `app/db/migrations/NNN_name.sql`. Keep it additive:
-   both services migrate at startup, and the other may still run the previous
-   code. Mark operational columns, which hold metadata rather than state
-   derived from events.
-3. Add a projection to `PROJECTIONS` in `app/db/projections.ts`. Derive its
-   rows only from events, so `npm run db:rebuild` can recreate them.
-4. Append inside `withTx` and keep the transaction short: it holds back
-   readers of a thread's events until it ends.
-
 ## Documentation ownership
 
 - `README.md`: product entry point.
 - `docs/quickstart.md`: human setup handoff.
 - `docs/runbooks/setup.md`: first-deployment agent protocol.
-- `docs/configuration.md`: settings, run control, deployment checks, and
-  snapshot procedures.
+- `docs/configuration.md`: settings, environment groups, and Day-2 operations
+  (runs, event streams, snapshots, deployment checks, and the database).
 - `docs/architecture.md`: state, boundaries, invariants, and accepted risks.
 - `docs/runbooks/extend.md`: extension agent protocol.
 - `CONTRIBUTING.md`: local development and verification.

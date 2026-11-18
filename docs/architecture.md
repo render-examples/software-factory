@@ -42,6 +42,17 @@ The Blueprint deploys two services and a database:
 The application does not implement its own queue, dispatcher, heartbeat
 process, or maintenance loop.
 
+Work in the event log is organized around four nested units:
+
+- **Thread** (`thread:<channel>:<id>`, such as `github:owner/name#issue-12`):
+  the conversation unit (today a GitHub issue or pull request) that owns status
+  and serializes work.
+- **Trace**: a root workflow run and any child task runs it starts with
+  `ctx.run` (for a standalone task, `traceId` equals `runId`).
+- **Run** (`run:<run ID>`): one Render Workflows task execution on a thread.
+- **Agent run** (`agent_run:<id>`): one model session inside a Sandbox during a
+  task run.
+
 ## Workflow
 
 ```text
@@ -118,11 +129,9 @@ to a stream and takes the stream's next version. An append can require the
 stream to be at an expected version, so two writers can't both act on the same
 state. Payloads are validated against the types declared in `app/events/catalog.ts`.
 
-Events about a thread also record it, whatever their stream. A thread is a
-channel's unit of conversation that the factory runs work on: today a GitHub
-issue or pull request. Its key is `<channel>:<id>`, such as
-`github:owner/name#issue-12` or `github:owner/name#pr-34`. `app/threads/`
-owns the format and each channel's key builder; the log never parses the id,
+Events about a thread also record its key (`<channel>:<id>`, such as
+`github:owner/name#issue-12` or `github:owner/name#pr-34`). `app/threads/`
+owns the format and each channel's key builder; the log never parses the ID,
 and an append rejects a key outside the format, so every thread is namespaced
 by its channel.
 
@@ -147,20 +156,20 @@ at three boundaries:
 3. Hidden markers identify App-authored specifications, pull requests, and
    reviews so writes can update or reuse them.
 
-A run belongs to a trace: the root workflow run and its child task runs. A run
-starts on its thread by appending `run.started`, with its run and trace IDs, to
-the thread's stream, and the trace whose run started last owns the thread
-until its runs finish. Each run's progress, Sandbox, and end are events on its
-own `run:<run ID>` stream.
+A run starts on its thread by appending `run.started`, with its run and trace
+IDs, to `thread:<thread>`. The trace whose run started last owns the thread
+until all of its runs finish. Each run's progress, attached Sandbox, and end
+are events on its own `run:<run ID>` stream.
 
-A root run appends `run.started` at the version it read, so of two runs that
-read the same latest trace only one appends; the other rereads and tries again.
-If the trace it displaced still has running runs, the new run then cancels that
-trace's root if Render still has it active, terminates the Sandboxes those runs
-recorded, and appends `run.stopped` for each. Starting first fences the
-displaced trace even when stopping it fails: it stops at its next ownership
-check. A child run starts only while its own trace is the thread's latest, so a
-stale child can never take the thread back.
+A root run appends `run.started` at the `thread:<thread>` version it read. If a
+concurrent run appended first, the loser rereads the new version and retries so
+it displaces the new winner rather than running unfenced. If the displaced
+trace still has running runs, the new run cancels that trace's root if Render
+still has it active, terminates the Sandboxes those runs recorded, and appends
+`run.stopped` for each. Appending `run.started` first fences the displaced
+trace even when stopping it fails: it stops at its next ownership check. A
+child run starts only while its own trace is the thread's latest, so a stale
+child can never take the thread back.
 
 A factory pull request shares its issue's thread. When Spec-to-PR opens or
 finds its draft pull request, it appends `thread.linked`, naming the issue's
@@ -168,13 +177,14 @@ thread, to the pull request's thread stream. The gateway resolves every
 delivery on a linked pull request to the issue's thread: `/factory cancel`
 there stops the issue's work, and `factory:pr-review` runs PR Reviewer on the
 issue's thread, taking it over like any root run. The status comment for that
-work is on the issue, and the pull request's event stream is the issue's. A
-pull request a person opens has its own thread.
+work stays on the issue, and requesting the pull request's event stream serves
+the issue's stream. A pull request a person opens has its own thread.
 
 The actor's permission is checked before a run starts. A rejected run never
-appends to the thread's stream, so it displaces nothing. Its `run.rejected` is
-recorded on its own stream, and it is shown on GitHub only on a thread with no
-runs, the first time, so anyone who can comment can't make the factory comment.
+appends to `thread:<thread>`, so it displaces nothing. Its `run.rejected` is
+recorded on `run:<run ID>`, and GitHub posts a rejection comment at most once,
+only when the thread has no prior runs, so unprivileged commenters cannot
+trigger repeated status comments.
 
 `/factory cancel` is a run like any other. Starting it stops the running trace,
 root and current child; its result is what it stopped, or that nothing was
@@ -195,19 +205,19 @@ and its trace owning the thread until another run, such as `/factory cancel`,
 takes over. There is no sweeper.
 
 The status comment and `factory:working` are synced from Postgres after each
-start, progress update, and finish. The comment shows the thread's latest
-trace: the run that started last while it runs, and otherwise the trace's root,
-which reports how the trace ended. `factory:working` is present while that
-trace has a running run. A thread records one status comment; when two syncs
-create one at once, the one recorded first stays and the other is deleted. A
-GitHub failure while syncing is logged and never fails the run; the final sync
-retries. Editing or deleting the comment can't change who owns the issue or
-pull request.
+start, progress update, and finish. The comment reflects the thread's latest
+trace: if its most recently started run is still `running`, the comment shows
+that run; otherwise it shows the trace's root run and how the trace ended.
+`factory:working` is present while that trace has a running run. A thread
+records one status comment; when two syncs create one at once, the one recorded
+first stays and the other is deleted. A GitHub failure while syncing is logged
+and never fails the run; the final sync retries. Editing or deleting the
+comment can't change who owns the issue or pull request.
 
 ## Sandboxes and snapshots
 
 A base-branch push builds a repository snapshot with the runner, a base
-checkout, and installed dependencies. A GitHub task then:
+checkout, and installed dependencies. A task then:
 
 1. restores the newest snapshot;
 2. replaces the snapshot's runner bundle with this deployment's when their

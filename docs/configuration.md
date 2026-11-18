@@ -4,8 +4,7 @@
 configuration. The gateway and Workflows service both import it.
 
 Edit it before the first deployment and whenever you change repositories,
-labels, model assignments, permissions, publishing limits, or Sandbox
-lifetimes.
+labels, permissions, publishing limits, or Sandbox lifetimes.
 
 ## Example
 
@@ -116,25 +115,17 @@ After adding a repository:
 | `minimumPermission` | `write` | Live repository permission required to start work |
 | `limits.repairRounds` | `2` | Repair attempts after failed verification |
 | `limits.maxChangedFiles` | `200` | Maximum files in a published change |
-| `limits.maxFileBytes` | `1000000` | Maximum size of one changed file |
+| `limits.maxFileBytes` | `1000000` | Maximum size of one changed file in bytes |
 | `sandbox.timeoutSeconds` | `14400` | Provider-side Sandbox lifetime in seconds |
 
-`minimumPermission` accepts `triage`, `write`, `maintain`, or `admin`. The
-factory checks the triggering actor's current permission at the start of
-every GitHub task.
+`minimumPermission` accepts `triage`, `write`, `maintain`, or `admin`, checked
+at the start of every GitHub task. A rejected run leaves its trigger label in
+place; an accepted run removes it immediately so reapplying starts a new run
+(see [Workflow](architecture.md#workflow)).
 
-Trigger labels are commands: the factory removes a label as soon as its run
-starts, so applying it again starts another run. A rejected run leaves its
-label in place. A comment on an issue resumes Triage or Autopilot
-only while the issue waits for a reply, after Triage asked questions or posted
-a spec. Other comments start nothing, whatever labels the issue has.
-
-`setup:github` also creates `factory:working`. This label records an active
-run; it is not a trigger.
-
-If you rename a trigger label, deploy both services and rerun
-`npm run setup:github`. The command creates required labels but does not
-remove old ones.
+`setup:github` also creates `factory:working`, which marks an active run and is
+not a trigger. If you rename a trigger label, deploy both services and rerun
+`npm run setup:github` (old labels are not removed).
 
 Keep `sandbox.timeoutSeconds` at least as long as the longest Workflows task.
 
@@ -192,6 +183,88 @@ the read-only shell policy behave the same on any harness.
 Use a key dedicated to this deployment with a provider-enforced spend limit.
 The factory has no hard dollar budget.
 
+## Environment variables
+
+Local variables are listed in [`.env.example`](../.env.example). The
+Blueprint supplies `RENDER_WORKFLOW_SLUG` and `DATABASE_URL` to the gateway
+from the Workflows service and `factory-db`. Every other deployed value,
+including Workflows' `DATABASE_URL`, comes from an
+[environment group](#environment-groups).
+
+### Gateway
+
+| Variable | Purpose |
+|---|---|
+| `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
+| `EVENTS_READ_TOKEN` | Authenticate readers of the [event streams](#event-streams); `npm run setup:render` generates it |
+| `RENDER_API_KEY` | Start Workflows tasks |
+| `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
+| `DATABASE_URL` | Connect to the [database](#database); the Blueprint links it |
+| `PORT` | HTTP port; defaults to `3000` |
+
+### Workflows
+
+| Variable | Purpose |
+|---|---|
+| `RENDER_API_KEY` | Manage Sandboxes, snapshots, and task cancellation |
+| `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
+| `GITHUB_APP_ID` | Authenticate the GitHub App |
+| `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
+| `DATABASE_URL` | Connect to the [database](#database); linked after the Blueprint is applied |
+| `ANTHROPIC_API_KEY` | Call the default models; each agent's harness declares the key it needs |
+| `GITHUB_API_URL` | Optional GitHub API base URL |
+
+`GITHUB_API_URL` is not in the Blueprint. GitHub Enterprise Server users must
+set it in local `.env` for setup commands and add it to the
+`software-factory-workflows` env group in the Render Dashboard.
+
+Never commit `.env` or provider keys.
+
+## Environment groups
+
+Secrets never pass through `render.yaml` or the Blueprint form. Each service
+links Render
+[environment groups](https://render.com/docs/configure-environment-variables#environment-groups)
+instead:
+
+| Group | Linked to | Variables |
+|---|---|---|
+| `software-factory-shared` | both services | `RENDER_API_KEY` |
+| `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET`, `EVENTS_READ_TOKEN` |
+| `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL` |
+
+The gateway links no group that holds GitHub App credentials or a model key.
+`DATABASE_URL` is copied into `software-factory-workflows` after the Blueprint
+is applied (see [Database](#database)). `ENV_GROUPS` in
+[`scripts/lib/requirements.ts`](../scripts/lib/requirements.ts) defines this
+layout for setup and `doctor`.
+
+Create or update the groups from local `.env` before applying the Blueprint:
+
+```bash
+npm run setup:render -- --workspace <tea-...>
+```
+
+The command runs the [pre-deployment checks](runbooks/setup.md#phase-6-create-the-render-env-groups)
+before writing any group (use `npm run setup:preflight -- --workspace <tea-...>`
+to run those checks alone). It updates only values that changed, leaves other
+variables in each group alone, and never prints a secret. A second group with
+the same name makes it stop, because a Blueprint links groups by name.
+
+To rotate a secret, change it in `.env`, rerun `npm run setup:render`, and
+redeploy the services that link the group.
+
+### Create the groups in the Dashboard
+
+To keep the Render API key out of local `.env`, create the groups by hand
+before applying the Blueprint. In the workspace, open **Environment Groups**
+and create each group in the table with the exact name and variables shown,
+except `DATABASE_URL`: after the Blueprint is applied, copy the gateway's
+`DATABASE_URL` into `software-factory-workflows`.
+Paste values from `.env` or from their source without showing them in chat.
+Workflows `doctor` still reads these values locally, so export them in the
+shell where it runs.
+
 ## What must be redeployed
 
 | Change | Required action |
@@ -206,60 +279,21 @@ The factory has no hard dollar budget.
 | Database migration in `app/db/migrations/` | Deploy both services; whichever starts first applies it |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 
-## Snapshots
-
-Each configured repository has a dependency-installed Sandbox snapshot. A
-push to its base branch refreshes it. If no snapshot exists, the first task
-builds one.
-
-A failed refresh does not delete the previous usable snapshot.
-
-### Refresh a snapshot
-
-Start the `refresh-snapshot` task with the repository, its GitHub App
-installation ID, and the base branch's current commit:
-
-```bash
-git ls-remote https://github.com/<owner>/<name>.git refs/heads/<base-branch>
-
-cat > input.json <<'JSON'
-[{"repo":"<owner>/<name>","installationId":<id>,"sha":"<commit>"}]
-JSON
-
-render workflows tasks runs start \
-  <workflow-slug>/refresh-snapshot \
-  --input-file input.json
-```
-
-The installation ID is the number at the end of the installation settings
-URL:
-
-```text
-https://github.com/settings/installations/<id>
-```
-
-Organization installations use the equivalent organization settings URL.
-
 ## Follow and control runs
 
-While a factory run is working on an issue or pull request, it has `factory:working`.
-The App-authored status comment shows progress, the run ID, the path of the
-issue or pull request's [event stream](#event-streams), and the final result. It is a view of the
-[database](#database): editing or deleting it changes nothing, and the next
-update recreates it.
+Active issues and pull requests carry `factory:working`. The App-authored
+status comment shows progress, the run ID, the [event stream](#event-streams)
+path, and the final result. It is a view of the [database](#database): editing
+or deleting it changes nothing, and the next update recreates it. Open that run
+under `factory-workflows` in the Render Dashboard to inspect its input, logs,
+and result.
 
-Open that run under `factory-workflows` in the Render Dashboard to inspect its
-input, logs, and result.
-
-Every delivery, task run, and agent run is recorded in the
-[database](#database). The `runs` table holds each task run's state, outcome,
-summary, and Sandbox, including runs rejected for permission; `threads` holds
-the latest run started on each issue or pull request, whose trace owns it while
-any of its runs is running; `agent_runs` holds each agent run's agent, model,
-outcome, turns, token usage, and cost. Follow a run live over an
-[event stream](#event-streams), or query the tables. Each row names its thread:
-`github:owner/name#issue-12` for an issue, `github:owner/name#pr-34` for a pull
-request.
+In Postgres, `runs` holds each task run (`run_id`, `trace_id`, `task`, `state`,
+`outcome`, `summary`, `sandbox_id`), including permission rejections; `threads`
+holds each thread's latest `trace_id` and `run_id`; and `agent_runs` holds each
+model session (`id`, `run_id`, `agent_id`, `model`, `state`, `turns`, `usage`,
+`cost_usd`, `tool_calls`). Rows name their thread as
+`github:owner/name#issue-12` or `github:owner/name#pr-34`:
 
 ```sql
 select run_id, task, state, outcome, summary from runs where thread = 'github:owner/name#issue-12' order by started_at;
@@ -267,30 +301,19 @@ select t.thread, r.task, r.state from threads t join runs r on r.trace_id = t.tr
 select thread, sum(cost_usd) from agent_runs group by thread order by 2 desc;
 ```
 
-To cancel a run, post this as the first line of an issue or pull request
-comment:
+To cancel a run, post `/factory cancel` as the first line of an issue or pull
+request comment (requires `minimumPermission`):
 
 ```text
 /factory cancel
 ```
 
-The commenter needs `minimumPermission`. Cancel is a run like any other:
-starting it takes over the issue or pull request, which stops the running
-workflow and its current child task and terminates their recorded Sandboxes.
-The status comment then shows what it cancelled, or that nothing was running.
-It also closes runs still recorded as `running` after their task stopped.
-A draft pull request the factory opened shares its issue's thread, so
-`/factory cancel` there stops the issue's work and reports on the issue.
-
-To restart work, apply the trigger label again.
-
-`factory:autopilot` grants upfront approval to draft a spec, implement it,
-open a draft pull request, and post a COMMENT review. It never approves or
-merges the pull request, and it does not apply the three manual transition
-labels. If Triage asks questions, the issue waits for a reply, and a human
-reply starts the continuation. Applying `factory:pr-review` to its draft pull
-request takes over the issue's work with a new review. Use `/factory cancel`
-to stop an active root workflow.
+Cancel takes over the thread, stops the active root workflow and child task,
+terminates recorded Sandboxes, and clears runs left in `running` after a task
+stopped. Reapply the trigger label to restart work. For linked draft pull
+requests and `factory:autopilot` behavior, see
+[Coordination](architecture.md#coordination) and
+[Autopilot](architecture.md#autopilot).
 
 ## Event streams
 
@@ -303,9 +326,10 @@ The gateway serves server-sent events (SSE) to anyone with
 | `GET /threads/<thread>/stream` | The same for any thread, by its URL-encoded key | Never; disconnect when done |
 | `GET /agent-runs/<id>/stream` | One agent run, whose ID is the `agent_run:<id>` stream of its events | After `agent_run.finished` |
 
-A thread is what the factory works on in a channel. Its key is
-`<channel>:<id>`; on GitHub, `github:<owner>/<repo>#issue-<number>` or
-`github:<owner>/<repo>#pr-<number>`. These two requests read the same stream:
+On GitHub, a thread key is `github:<owner>/<repo>#issue-<number>` or
+`github:<owner>/<repo>#pr-<number>` (a factory draft pull request resolves to
+its issue's stream; see [Coordination](architecture.md#coordination)). These
+two requests read the same stream:
 
 ```bash
 curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
@@ -313,9 +337,6 @@ curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
 curl -N -H "Authorization: Bearer $EVENTS_READ_TOKEN" \
   https://<gateway-host>/threads/github%3Aacme%2Fweb%23issue-12/stream
 ```
-
-A draft pull request the factory opened shares its issue's thread, so its
-stream is the issue's.
 
 Each stream sends the stored events first, then the text so far of each
 message the model is still writing as `live.partial`, then new events as they
@@ -332,6 +353,30 @@ model output, tool output, and repository text: treat it as untrusted, and
 share the token only with people allowed to read every repository the factory
 works on.
 
+## Snapshots
+
+Each configured repository has a dependency-installed Sandbox snapshot. A
+push to its base branch refreshes it. If no snapshot exists, the first task
+builds one. A failed refresh does not delete the previous usable snapshot.
+
+### Refresh a snapshot
+
+Start the `refresh-snapshot` task with the repository, its GitHub App
+installation ID, and the base branch's current commit (private repositories
+require local Git credentials for `git ls-remote`):
+
+```bash
+git ls-remote https://github.com/<owner>/<name>.git refs/heads/<base-branch>
+
+render workflows tasks runs start \
+  <workflow-slug>/refresh-snapshot \
+  --input='[{"repo":"<owner>/<name>","installationId":<id>,"sha":"<commit>"}]'
+```
+
+The installation ID is the number at the end of
+`https://github.com/settings/installations/<id>` (or the equivalent
+organization settings URL).
+
 ## Check a deployment
 
 `doctor` is read-only, does not print secret values, and exits nonzero when a
@@ -347,8 +392,7 @@ before rerunning doctor. GitHub's API does not report the Active setting, so a
 successful delivery proves delivery only at the reported time; it cannot guarantee
 that the hook has not since been disabled.
 
-From a local checkout, this checks the services and credentials represented
-by local `.env`:
+From a local checkout, check the values in local `.env`:
 
 ```bash
 npm run doctor
@@ -408,95 +452,3 @@ It replays every event in one transaction and keeps operational columns:
 metadata a projection stores that isn't derived from events. Appends wait
 until it commits. Run it in the gateway's Render Shell, or locally with the
 external URL.
-
-## Environment variables
-
-Local variables are listed in [`.env.example`](../.env.example). The
-Blueprint supplies `RENDER_WORKFLOW_SLUG` and `DATABASE_URL` to the gateway,
-from the Workflows service and `factory-db`. Every other deployed value,
-including Workflows' `DATABASE_URL`, comes from an
-[environment group](#environment-groups).
-
-### Gateway
-
-| Variable | Purpose |
-|---|---|
-| `GITHUB_WEBHOOK_SECRET` | Verify GitHub webhook signatures |
-| `EVENTS_READ_TOKEN` | Authenticate readers of the [event streams](#event-streams); `npm run setup:render` generates it |
-| `RENDER_API_KEY` | Start Workflows tasks |
-| `RENDER_WORKFLOW_SLUG` | Address the deployed Workflows service |
-| `DATABASE_URL` | Connect to the [database](#database); the Blueprint links it |
-| `PORT` | HTTP port; defaults to `3000` |
-
-### Workflows
-
-| Variable | Purpose |
-|---|---|
-| `RENDER_API_KEY` | Manage Sandboxes, snapshots, and task cancellation |
-| `RENDER_WORKSPACE_ID` | Workspace that owns Sandboxes and snapshots |
-| `GITHUB_APP_ID` | Authenticate the GitHub App |
-| `GITHUB_APP_PRIVATE_KEY` | Mint installation tokens |
-| `DATABASE_URL` | Connect to the [database](#database); `npm run setup:render -- --link-database` sets it after the Blueprint is applied |
-| `ANTHROPIC_API_KEY` | Call the default models; each agent's harness declares the key it needs |
-| `GITHUB_API_URL` | Optional GitHub API base URL |
-
-`GITHUB_API_URL` is not in the Blueprint. GitHub Enterprise Server users must
-set it in local `.env` for setup commands and add it to the
-`software-factory-workflows` env group in the Render Dashboard.
-
-Never commit `.env` or provider keys.
-
-## Environment groups
-
-Secrets never pass through `render.yaml` or the Blueprint form. Each service
-links Render
-[environment groups](https://render.com/docs/configure-environment-variables#environment-groups)
-instead:
-
-| Group | Linked to | Variables |
-|---|---|---|
-| `software-factory-shared` | both services | `RENDER_API_KEY` |
-| `software-factory-gateway` | `factory-gateway` | `GITHUB_WEBHOOK_SECRET`, `EVENTS_READ_TOKEN` |
-| `software-factory-workflows` | `factory-workflows` | `RENDER_WORKSPACE_ID`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL` |
-
-The gateway links no group that holds GitHub App credentials or a model key.
-`DATABASE_URL` is the only value that doesn't come from `.env`:
-`npm run setup:render -- --link-database` copies it from the gateway after
-the Blueprint is applied (see [Database](#database)).
-`ENV_GROUPS` in
-[`scripts/lib/requirements.ts`](../scripts/lib/requirements.ts) defines this
-layout for setup and `doctor`.
-
-A Blueprint can't define a group that holds secrets it doesn't commit, so the
-groups must exist in the workspace before the Blueprint is applied. Create or
-update them from local `.env`:
-
-```bash
-npm run setup:render -- --workspace <tea-...>
-```
-
-The command runs the [pre-deployment checks](runbooks/setup.md#phase-6-create-the-render-env-groups)
-before writing any group: required values, pinned Node version, workspace
-access, repository Issues availability, and configured base branches must
-pass. Run `npm run setup:preflight -- --workspace <tea-...>` to check without
-updating groups. Model and Sandbox execution remain unverified until the
-approved smoke test.
-
-It updates only values
-that changed, leaves other variables in each group alone, and never prints a
-secret. A second group with the same name makes it stop, because a Blueprint
-links groups by name.
-
-To rotate a secret, change it in `.env`, rerun `npm run setup:render`, and
-redeploy the services that link the group.
-
-### Create the groups in the Dashboard
-
-To keep the Render API key out of local `.env`, create the groups by hand
-before applying the Blueprint. In the workspace, open **Environment Groups**
-and create each group in the table with the exact name and variables shown,
-except `DATABASE_URL`: after the Blueprint is applied, copy the gateway's
-`DATABASE_URL` into `software-factory-workflows`.
-Paste values from `.env` or from their source without showing them in chat.
-Workflows `doctor` still reads these values locally, so export them in the
-shell where it runs.

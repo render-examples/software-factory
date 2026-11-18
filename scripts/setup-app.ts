@@ -12,7 +12,6 @@ const { values } = parseArgs({
 		org: { type: "string" },
 		name: { type: "string" },
 		port: { type: "string" },
-		"write-env": { type: "boolean", default: true },
 	},
 });
 
@@ -62,8 +61,8 @@ for (const repo of repos) console.log(`   - ${repo}`);
 await writeEnvFile(".env", env);
 console.log(`\n${green("✓")} Wrote GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_WEBHOOK_SECRET to .env`);
 
-console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY, RENDER_WORKSPACE_ID, and ANTHROPIC_API_KEY to .env:`);
-console.log("   npm run setup:render");
+console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY and ANTHROPIC_API_KEY to .env:`);
+console.log("   npm run setup:render -- --workspace <tea-...>");
 
 console.log(`\n${bold("3. Deploy the Blueprint")}, then connect the webhook once the gateway is live:`);
 console.log("   npm run setup:github -- --gateway-url https://<gateway>.onrender.com");

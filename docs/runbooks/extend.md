@@ -222,9 +222,9 @@ export const runExample = exampleWorkflow.run;
   dependencies for tests.
 
 `trigger` names the label that started a root run, if one did, and the issue
-or pull request it's on. Labels are commands: `defineGitHubTask()` removes it
-once the run has started on its thread. Omit `trigger` for tasks that only
-comments or parent workflows start.
+or pull request it's on (`defineGitHubTask()` removes the command label once
+the run starts; omit `trigger` for tasks started only by comments or parent
+workflows).
 
 GitHub tasks do not retry automatically. A retry can repeat model spend or
 durable writes; a person starts a fresh run instead.
@@ -242,11 +242,10 @@ durable writes; a person starts a fresh run instead.
   GitHub.
 - Return a short snake_case `outcome`, user-facing `summary`, and relevant
   links.
-- Return `waiting: "reply"` when the thread waits for a person's reply. A
-  comment resumes only a thread whose latest root run finished waiting; route
-  the reply to the task in `route()`.
-- Call `run.linkThread()` when the task opens a pull request that belongs to
-  its issue, so work on that pull request runs on the issue's thread.
+- Return `waiting: "reply"` when the thread waits for a person's reply, and
+  route the reply in `route()` (see [Workflow](../architecture.md#workflow)).
+- Call `run.linkThread()` when opening a pull request that shares its issue's
+  thread (see [Coordination](../architecture.md#coordination)).
 
 Only code in the Workflows service may call GitHub write methods. Format model
 text through `app/format/` before publishing it.
@@ -265,19 +264,23 @@ Use a GitHub-task parent to run registered child tasks in order:
 ```typescript
 export const pipeline = defineGitHubTask(
   {
-    name: "pipeline",
+    name: TASKS.pipeline,
     title: "Pipeline",
     input: PipelineInput,
-    thread: input => ({ kind: "issue", number: input.issue }),
+    thread: (input) => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
   async (_run, input, _deps, ctx) => {
     if (!ctx.run) throw new Error("pipeline requires a Workflows context");
     const first = await ctx.run(firstWorkflow.task, input);
     if (first.state !== "done" || !first.data) {
-      return { state: "failed", outcome: "stopped", summary: first.summary };
+      const state = first.state === "done" ? "done" : "failed";
+      return { state, outcome: "stopped_at_first", summary: first.summary };
     }
     const second = await ctx.run(secondWorkflow.task, first.data);
+    if (second.state !== "done") {
+      return { state: "failed", outcome: "stopped_at_second", summary: second.summary };
+    }
     return { outcome: "completed", summary: second.summary };
   },
 );
@@ -315,12 +318,12 @@ ownership for issue or pull request work.
 
 ## Add a GitHub trigger
 
-The gateway route is a pure mapping from an authenticated delivery to a
-validated task input. Labels and other GitHub state never decide what a
-delivery means beyond the event itself: when its meaning depends on the
-thread, `route()` returns a `lookup` whose `decide` receives the thread's
-state from Postgres, which is the thread a factory pull request links to and
-the task waiting for a reply.
+`route()` maps an authenticated delivery to a validated task input without I/O.
+GitHub labels and other payload state never carry thread state on their own.
+When a delivery's meaning depends on thread state, `route()` returns a
+`lookup`: the gateway reads `linked` (the issue thread a factory pull request
+belongs to) and `waiting` (the root task waiting for a reply) from Postgres and
+passes them to `decide()`.
 
 1. Add the task name and input schema first.
 2. Update `route()` in `app/gateway/routes.ts`.
@@ -366,19 +369,16 @@ Before handing off, confirm:
 
 ## Deploy the extension
 
-- Prompt, agent, schema, or Workflows changes require a Workflows deploy.
-- Gateway route changes require a gateway deploy.
-- App permission, event, or label changes require `npm run setup:github`.
-- A new secret, such as another provider key, goes in `ENV_GROUPS` in
-  `scripts/lib/requirements.ts`. Add it to `.env`, rerun
-  `npm run setup:render`, and redeploy the services that link its group. See
-  [Environment groups](../configuration.md#environment-groups).
-- A harness whose key is new needs the key in `.env`, `npm run setup:render`,
-  and a Workflows deploy. Setup and `doctor` derive the key list from the
-  agents' harnesses.
-- Changes under `app/runner/`, `app/harness/`, or agent definitions reach
-  Sandboxes with the Workflows deploy: each Sandbox gets the new runner bundle
-  when it opens. Changes under `sandbox/` also require a snapshot refresh for
-  every configured repository.
+Check [What must be redeployed](../configuration.md#what-must-be-redeployed)
+for which services and snapshots your change affects, plus:
+
+- For a new environment variable, add it to `.env.example`, `SERVICE_ENV`, and
+  `ENV_GROUPS` in `scripts/lib/requirements.ts` (and `SECRET_ENV` if it is a
+  non-harness secret), add the value to `.env`, rerun `npm run setup:render`,
+  and redeploy affected services (see
+  [Environment groups](../configuration.md#environment-groups)).
+- For a harness that introduces a new provider key, setup and `doctor` derive
+  its `credential` automatically; add the key to `.env`, rerun
+  `npm run setup:render`, and deploy `factory-workflows`.
 
 State the required deploy and refresh actions in the handoff.

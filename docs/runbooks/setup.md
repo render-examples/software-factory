@@ -21,14 +21,9 @@ Collect:
 - confirmation that the default Anthropic models are acceptable.
 
 Secrets reach Render through local `.env` and
-[environment groups](../configuration.md#environment-groups), never through
-chat or the Blueprint form:
-
-- `setup:app` writes the GitHub App private key and webhook secret to `.env`;
-- the user adds the Render API key and Anthropic API key to `.env`; and
-- `setup:render` copies them into the env groups that `render.yaml` links.
-
-Never ask the user to paste a secret into chat. Never print `.env`.
+[environment groups](../configuration.md#environment-groups) in Phase 6, never
+through chat or the Blueprint form. Never ask the user to paste a secret into
+chat. Never print `.env`.
 
 ## Rules
 
@@ -138,7 +133,7 @@ npm run setup:app -- --org <organization>
 Keep the command running while the user completes the browser flow.
 The command saves credentials to `.env` without printing their values. On
 POSIX systems, it makes new and existing `.env` files readable and writable
-only by the owner. The `--write-env` flag is still accepted for compatibility.
+only by the owner.
 
 ### Human checkpoint: create the App
 
@@ -349,12 +344,13 @@ Workflows services have no Shell. Run `doctor` locally with the values used by
 
 Local `.env` already holds the values `setup:render` copied into the
 `software-factory-shared` and `software-factory-workflows` groups. It also
-needs `RENDER_WORKFLOW_SLUG`, which is not a secret. Use the deployed workflow
-slug, including any suffix Render added: copy the exact value from
-`factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`. It
-also needs `DATABASE_URL`: ask the user to paste `factory-db`'s external URL
-from its **Connect** tab into `.env` with `?sslmode=verify-full` appended. It
-holds the database password; do not ask for it in chat.
+needs `RENDER_WORKFLOW_SLUG` (not a secret): copy the exact value, including
+any suffix Render added, by running `printenv RENDER_WORKFLOW_SLUG` in the
+gateway Render Shell above or reading `factory-gateway`'s **Environment** tab,
+and put it in local `.env`. It also needs `DATABASE_URL`: ask the user to
+paste `factory-db`'s external URL from its **Connect** tab into `.env` with
+`?sslmode=verify-full` appended. It holds the database password; do not ask
+for it in chat.
 
 Run:
 
@@ -362,13 +358,10 @@ Run:
 npm run doctor -- --service workflows
 ```
 
-A required check that cannot be verified exits nonzero. Before continuing,
-resolve failed checks on both services. Workflows doctor checks that the latest
-webhook delivery reached the configured gateway successfully. If it reports
-delivery as unverified, open the App's settings, confirm Webhook > Active, save,
-and redeliver a ping from Advanced. Then rerun doctor. A historical attempt to a
-placeholder URL does not verify this setup. A successful delivery is historical
-evidence; the smoke test below verifies the current end-to-end path.
+Resolve failed checks on both services before continuing. If Workflows `doctor`
+reports webhook delivery as unverified, open the App's settings, confirm
+**Webhook > Active**, save, redeliver a ping from **Advanced**, and rerun
+`doctor` (see [Check a deployment](../configuration.md#check-a-deployment)).
 The gateway's skipped GitHub checks are expected: it holds no App credentials.
 
 ## Phase 11: Smoke-test Triage
@@ -478,18 +471,15 @@ they can delete.
 ### `doctor` fails
 
 - Gateway: check the webhook secret, Render API key, and workflow slug.
-- Database: on Render, the gateway gets `DATABASE_URL` from the Blueprint;
-  rerun the Blueprint sync if it is missing. Workflows gets it from the
-  `software-factory-workflows` env group; run
-  `npm run setup:render -- --link-database` and redeploy `factory-workflows`
-  if it is missing. Locally, use the external URL with `?sslmode=verify-full`.
-  Migrations not yet applied mean neither service has started on the current
-  code.
+- Database: rerun Blueprint sync if missing on the gateway; run
+  `npm run setup:render -- --link-database` and redeploy `factory-workflows` if
+  missing on Workflows (see [Database](../configuration.md#database)); locally,
+  use the external URL with `?sslmode=verify-full`. Unapplied migrations mean
+  neither service has started on the current code.
 - Workflows: check the workspace ID, Render API key, App credentials,
   provider key, and registered tasks.
 - `No tasks found`: use the deployed workflow slug, not an assumed service
-  name. If `factory-workflows` never deployed successfully, check its deploy
-  log for `DATABASE_URL is not set`.
+  name, and confirm `factory-workflows` deployed cleanly.
 - App or label failure: fix App access and rerun `npm run setup:github`.
 
 ### No status comment appears
@@ -521,13 +511,16 @@ verification.
 
 ### An agent submits an invalid result
 
-The runner accepts three attempts. Each agent run's last schema errors are in
-its `agent_run.finished` event in `factory-db` (open a shell with
+The runner accepts three attempts, and the host validates the final submission
+against the agent's Zod schema. Recent schema errors are in
+`agent_run.finished` events in `factory-db` (open a shell with
 `render psql <factory-db-id>`):
 
 ```sql
-select stream, payload->>'message' from events
-where type = 'agent_run.finished' and payload->>'outcome' = 'invalid_submission'
+select stream, payload->>'outcome' as outcome, payload->>'message' as message
+from events
+where type = 'agent_run.finished'
+  and payload->>'outcome' in ('invalid_submission', 'output_invalid')
 order by seq desc limit 5;
 ```
 

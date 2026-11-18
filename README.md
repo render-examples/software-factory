@@ -6,23 +6,16 @@ run, change, or use as the foundation for your own automations.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
 
-The button forks this repository into your GitHub account and opens a
-Blueprint from your fork. Don't apply the Blueprint yet: it depends on
-environment groups that the setup runbook below creates, and your fork's
-`factory.config.ts` must first list the repositories the factory may access.
-The runbook has you apply the Blueprint once both are ready.
+The button forks this repository and opens a Render Blueprint. Don't click
+**Apply** yet: complete Phases 1–6 of the [Setup runbook](docs/runbooks/setup.md)
+first so your fork's `factory.config.ts` and Render environment groups exist.
 
-The recommended setup is agent-guided:
+Setup is agent-guided:
 
 1. Check the prerequisites in the [Quickstart](docs/quickstart.md).
 2. Ask a coding agent to follow the [Setup runbook](docs/runbooks/setup.md).
-3. Complete the GitHub, secret, and paid-resource checkpoints when the agent
-   asks.
-
-The runbook configures the fork before deployment, creates a GitHub App,
-stores secrets in Render environment groups, deploys the Render Blueprint,
-links its database to the Workflows service, connects the webhook, verifies
-both services, and runs one Triage smoke test.
+3. Approve the GitHub, secret, and paid-resource checkpoints when prompted
+   (applying the Blueprint at Phase 7).
 
 **What software-factory solves for you:**
 1. Authenticating GitHub events and routing them to durable Render Workflows tasks.
@@ -138,8 +131,8 @@ code or untrusted pull requests.
 - [Quickstart](docs/quickstart.md) — what you need and how to start setup.
 - [Setup runbook](docs/runbooks/setup.md) — agent protocol for the first
   deployment.
-- [Configuration](docs/configuration.md) — settings, run control, event
-  streams, the database, deployment checks, and snapshots.
+- [Configuration](docs/configuration.md) — settings, environment groups, run
+  control, event streams, snapshots, deployment checks, and the database.
 - [Architecture](docs/architecture.md) — execution, state, the event log,
   coordination, and trust boundaries.
 - [Extension runbook](docs/runbooks/extend.md) — add agents, Workflows tasks,
