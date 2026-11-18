@@ -5,8 +5,11 @@ import { bundleInputs } from "../app/runner-bundle/index.js";
 const agents = [triage, specWriter, implementer, prReviewer];
 
 describe("agent registry", () => {
-	it("bundles every built-in agent, each with a non-empty prompt", () => {
-		expect(AGENTS.map((agent) => agent.id)).toEqual(agents.map((agent) => agent.id));
+	it("bundles every built-in agent, each with a unique id and its own non-empty prompt", () => {
+		const ids = AGENTS.map((agent) => agent.id);
+		expect(ids).toEqual(agents.map((agent) => agent.id));
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(new Set(AGENTS.map((agent) => agent.promptPath)).size).toBe(ids.length);
 		for (const agent of AGENTS) expect(agent.prompt.trim(), agent.id).not.toBe("");
 	});
 
@@ -21,12 +24,6 @@ describe("agent registry", () => {
 });
 
 describe("agent authority", () => {
-	it("gives every agent a unique id and prompt file", () => {
-		const ids = agents.map((agent) => agent.id);
-		expect(new Set(ids).size).toBe(ids.length);
-		expect(new Set(agents.map((agent) => agent.promptPath)).size).toBe(ids.length);
-	});
-
 	it("gives only the implementer write tools and runs every agent in a sandbox", () => {
 		const writers = agents.filter((agent) => agent.tools.some((tool) => tool === "edit" || tool === "write")).map((agent) => agent.id);
 		expect(writers).toEqual(["implementer"]);

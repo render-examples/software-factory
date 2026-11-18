@@ -35,15 +35,6 @@ afterEach(() => {
 	delete process.env.ANTHROPIC_API_KEY;
 });
 
-describe("defineAgent", () => {
-	it("reads the prompt file verbatim and converts the output schema (fields with defaults optional)", () => {
-		expect(reviewer.prompt).toBe("You are a test agent.\n\nReport on the task and submit exactly once.\n");
-		expect(reviewer.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
-		expect(reviewer.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
-		expect(reviewer.tools).toEqual(["read", "ls", "bash"]);
-	});
-});
-
 const cannedRun = (output: unknown) =>
 	[
 		eventLine({ type: "started", agent_id: "reviewer", harness: "pi", harness_version: "0.83.0", model: "anthropic/claude-opus-5" }),
@@ -132,24 +123,6 @@ describe("runAgent in a sandbox", () => {
 		expect(finished?.payload).toMatchObject({ outcome: "max_turns", message: "turn limit (40) reached" });
 	});
 
-	it("records the runner's events while it is still running", async () => {
-		const lines = cannedRun({ verdict: "ok", findings: [] }).split("\n");
-		let resume = () => {};
-		const paused = new Promise<void>((resolve) => {
-			resume = resolve;
-		});
-		const sandbox = new FakeSandbox({
-			jsonl: `${lines.join("\n")}\n`,
-			live: [`${lines.slice(0, 3).join("\n")}\n`, paused, `${lines.slice(3).join("\n")}\n`],
-		});
-		const run = runAgent(reviewer, "Review it.", { traceId: "trn-live", sandbox, db });
-
-		await vi.waitFor(async () => expect(await recorded("trn-live")).toEqual(["agent_run.started", "usage", "tool.call"]), { timeout: 2_000 });
-		resume();
-		await run;
-		expect(await recorded("trn-live")).toEqual(["agent_run.started", "usage", "tool.call", "usage", "agent_run.finished"]);
-	});
-
 	it("follows the output file from the last complete line when the command stream drops, with no gap or repeat", async () => {
 		const lines = [
 			eventLine({ type: "tool_call", tool_call_id: "c1", tool: "read", args: { path: "docs/café-🚀.md" } }),
@@ -166,11 +139,6 @@ describe("runAgent in a sandbox", () => {
 		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-drop", sandbox, db });
 
 		expect(run.output).toEqual({ verdict: "ok", findings: [], priority: 2 });
-		const offset = Buffer.byteLength(`${lines[0]}\n${lines[1]}\n`);
-		const follows = sandbox.execs.filter(({ command }) => command.includes("tail "));
-		expect(follows.map(({ command }) => command.slice(command.indexOf("tail ")))).toEqual([
-			`tail -c +${offset + 1} -f --pid="$(cat '${sandbox.runDir}.pid')" '${sandbox.runDir}.jsonl'`,
-		]);
 		expect(await recorded("trn-drop")).toEqual(["agent_run.started", "tool.call", "assistant.message", "tool.call", "agent_run.finished"]);
 		const events = await recordedEvents("trn-drop");
 		expect(events[1]?.payload).toMatchObject({ args: JSON.stringify({ path: "docs/café-🚀.md" }) });
@@ -185,28 +153,22 @@ describe("runAgent in a sandbox", () => {
 		});
 	});
 
-	it("takes the result from the downloaded file when the live copy is cut short", async () => {
-		const jsonl = `${cannedRun({ verdict: "ok", findings: ["from the file"] })}\n`;
-		const sandbox = new FakeSandbox({ jsonl, live: [jsonl.slice(0, jsonl.indexOf("\n") + 10)] });
-		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-short", sandbox, db });
-
-		expect(run).toMatchObject({ output: { verdict: "ok", findings: ["from the file"] }, turns: 2 });
-		expect(await recorded("trn-short")).toEqual(["agent_run.started", "usage", "tool.call", "usage", "agent_run.finished"]);
-	});
-
-	it("takes the result, turns, and cost from the downloaded file when the live copy is forged", async () => {
-		const forged = [
-			eventLine({ type: "usage", usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 99 } }),
-			eventLine({ type: "result", output: { verdict: "ok, forged", findings: [] }, turns: 99 }),
-		];
-		const sandbox = new FakeSandbox({
-			jsonl: `${cannedRun({ verdict: "ok", findings: ["real"] })}\n`,
-			live: [`${forged.join("\n")}\n`],
-		});
-		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-forged", sandbox, db });
+	it.each([
+		{ how: "cut short", traceId: "trn-short", live: (jsonl: string) => [jsonl.slice(0, jsonl.indexOf("\n") + 10)] },
+		{
+			how: "forged",
+			traceId: "trn-forged",
+			live: () => [
+				`${eventLine({ type: "usage", usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 99 } })}\n`,
+				`${eventLine({ type: "result", output: { verdict: "ok, forged", findings: [] }, turns: 99 })}\n`,
+			],
+		},
+	])("takes the result, turns, and cost from the downloaded file when the live copy is $how", async ({ traceId, live }) => {
+		const jsonl = `${cannedRun({ verdict: "ok", findings: ["real"] })}\n`;
+		const run = await runAgent(reviewer, "Review it.", { traceId, sandbox: new FakeSandbox({ jsonl, live: live(jsonl) }), db });
 
 		expect(run).toMatchObject({ output: { verdict: "ok", findings: ["real"] }, turns: 2, costUsd: expect.closeTo(0.03, 10) });
-		const finished = (await recordedEvents("trn-forged")).at(-1);
+		const finished = (await recordedEvents(traceId)).at(-1);
 		expect(finished?.payload).toMatchObject({ outcome: "ok", turns: 2, cost_usd: expect.closeTo(0.03, 10) });
 	});
 

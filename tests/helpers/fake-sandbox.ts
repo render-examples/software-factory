@@ -7,18 +7,11 @@ type WithoutAt<E> = E extends unknown ? Omit<E, "at"> : never;
 /** One JSONL line as the runner would write it. */
 export const eventLine = (event: WithoutAt<RunnerEvent>): string => asciiJson(JSON.stringify({ at: new Date().toISOString(), ...event }));
 
-/** A step of run-agent.sh's live stdout: a chunk, a pause until the promise settles, or the stream dropping. */
-export type LiveStep = string | Promise<unknown> | Error;
-
 export interface FakeSandboxOptions {
 	/** The runner's stdout, served as `<runDir>.jsonl`; null makes the download fail. */
 	jsonl: string | null;
-	/** run-agent.sh's stdout as the host receives it. Default: `jsonl` in one chunk. */
-	live?: LiveStep[];
-	/** Exit code of run-agent.sh. */
-	runExitCode?: number;
-	/** How many follows find run-agent.sh not started yet. */
-	notStartedFollows?: number;
+	/** run-agent.sh's stdout as the host receives it, chunk by chunk; an Error drops the stream. Default: `jsonl` in one chunk. */
+	live?: (string | Error)[];
 }
 
 /**
@@ -29,9 +22,7 @@ export class FakeSandbox implements Sandbox {
 	readonly id = "sbx-fake";
 	readonly execs: Array<{ command: string; opts?: ExecOptions | ExecStreamOptions }> = [];
 	readonly uploads = new Map<string, string>();
-	readonly downloads: string[] = [];
 	runDir: string | undefined;
-	#notStarted = 0;
 
 	constructor(private readonly options: FakeSandboxOptions) {}
 
@@ -47,13 +38,11 @@ export class FakeSandbox implements Sandbox {
 		if (command.includes("run-agent.sh")) {
 			for (const step of this.options.live ?? [this.options.jsonl ?? ""]) {
 				if (step instanceof Error) throw step;
-				if (typeof step === "string") opts.onData("stdout", step);
-				else await step;
+				opts.onData("stdout", step);
 			}
-			return this.options.runExitCode ?? 0;
+			return 0;
 		}
 		const follow = /tail -c \+(\d+) -f /.exec(command);
-		if (follow && this.#notStarted++ < (this.options.notStartedFollows ?? 0)) return 75;
 		if (!follow || this.options.jsonl === null) return 1;
 		opts.onData(
 			"stdout",
@@ -69,7 +58,6 @@ export class FakeSandbox implements Sandbox {
 	}
 
 	async download(path: string): Promise<Buffer> {
-		this.downloads.push(path);
 		if (path === `${this.runDir}.jsonl` && this.options.jsonl !== null) return Buffer.from(this.options.jsonl);
 		throw new Error(`no such file: ${path}`);
 	}

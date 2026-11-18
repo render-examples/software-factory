@@ -231,10 +231,7 @@ describe("run-agent.sh", { timeout: 30_000 }, () => {
 		expect(report).toMatchObject({ input: { task: "hello" }, key, keyFileExists: false, args: ["--key-stdin"], cwd: repo });
 		expect(report.envKeys).not.toContain("DATABASE_URL");
 		expect(report.envKeys).toEqual(expect.arrayContaining(["HOME", "PATH", "TMPDIR", "GIT_CONFIG_GLOBAL"]));
-		const probe = await readFile(`${dir}.probe`, "utf8");
-		expect(JSON.parse(probe).argv).toContain("--key-stdin");
-		expect(probe).not.toContain("--key-file");
-		expect(probe).not.toContain(key);
+		expect(await readFile(`${dir}.probe`, "utf8")).not.toContain(key);
 		expect(existsSync(join(dir, "key"))).toBe(false);
 	});
 

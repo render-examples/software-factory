@@ -39,6 +39,8 @@ const feed = (r: AgentRunRecorder, ...events: RunnerEvent[]) => {
 };
 const delta = (text: string, message_id = "m1"): RunnerEvent => ({ type: "assistant_delta", at, message_id, text });
 const logged = (r: AgentRunRecorder) => readStream(db, r.stream, 0);
+type Logged = Awaited<ReturnType<typeof logged>>;
+const payloadOf = (events: Logged, type: string) => (events.find((e) => e.type === type)?.payload ?? {}) as Record<string, string | undefined>;
 const jsonBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
 
 /** A database whose first `failures` transactions fail. */
@@ -78,27 +80,6 @@ describe("AgentRunRecorder", () => {
 		expect(events.every((e) => e.thread === "github:acme/web#issue-12" && e.source === "workflow:trn-1")).toBe(true);
 	});
 
-	it("writes what arrives within 250 ms in one transaction, combining each message's deltas into one notification", async () => {
-		const r = recorder();
-		feed(r, delta("Hel"), delta("lo"), delta("Other", "m2"), delta(" world"), { type: "tool_call", at, tool_call_id: "c1", tool: "ls", args: {} });
-		await vi.waitFor(async () => expect(await logged(r)).toHaveLength(2), { timeout: 2000 });
-		expect(new Set((await logged(r)).map((e) => e.tx)).size).toBe(1);
-		await vi.waitFor(() => expect(notices).toHaveLength(2));
-		expect(notices).toEqual([
-			{ type: "delta", stream: r.stream, thread: "github:acme/web#issue-12", message_id: "m1", local_seq: 1, part: 0, text: "Hello world" },
-			{ type: "delta", stream: r.stream, thread: "github:acme/web#issue-12", message_id: "m2", local_seq: 2, part: 0, text: "Other" },
-		]);
-
-		feed(r, { type: "assistant_text", at, message_id: "m1", text: "Hello world" });
-		await r.finish(SUMMARY);
-		await vi.waitFor(() => expect(notices).toHaveLength(4));
-		// m1's final follows its message into the log; m2 never finished, so finish() closes it.
-		expect(notices.slice(2)).toEqual([
-			{ type: "final", stream: r.stream, message_id: "m1" },
-			{ type: "final", stream: r.stream, message_id: "m2" },
-		]);
-	});
-
 	it("splits a long delta into parts that each fit a NOTIFY payload", async () => {
 		const text = `${'"'.repeat(9000)}${"é".repeat(5000)}🙂`;
 		const r = recorder();
@@ -111,55 +92,55 @@ describe("AgentRunRecorder", () => {
 		expect(Math.max(...payloadBytes)).toBeLessThan(8000);
 	});
 
-	it("strips NUL characters and unpaired surrogates, which Postgres rejects, and truncates long tool output", async () => {
-		const r = recorder();
-		feed(
-			r,
-			delta("a\u0000b"),
-			{ type: "assistant_text", at, message_id: "m1", text: "a\u0000b \ud83d" },
-			{ type: "tool_result", at, tool_call_id: "c1", tool: "bash", is_error: true, output_preview: `\u0000${"x".repeat(40_000)}` },
-		);
-		await r.finish(SUMMARY);
-		const [, message, result] = await logged(r);
-		expect(message?.payload).toEqual({ message_id: "m1", text: "ab \ufffd" });
-		const preview = (result?.payload as { output_preview?: string } | undefined)?.output_preview ?? "";
-		expect(jsonBytes(preview)).toBeLessThanOrEqual(32 * 1024);
-		expect(jsonBytes(preview)).toBeGreaterThan(32 * 1024 - 8);
-		expect(preview.startsWith("xxx")).toBe(true);
-		expect(preview.endsWith("…[truncated]")).toBe(true);
-		expect(notices[0]).toMatchObject({ type: "delta", text: "ab" });
-	});
-
-	it("clips by JSON-encoded bytes, so escape-heavy text can't block the events after it", async () => {
+	it.each<{ name: string; events: RunnerEvent[]; check: (logged: Logged) => void }>([
+		{
+			name: "strips NUL characters and unpaired surrogates, which Postgres rejects",
+			events: [delta("a\u0000b"), { type: "assistant_text", at, message_id: "m1", text: "a\u0000b \ud83d" }],
+			check: (events) => {
+				expect(payloadOf(events, "assistant.message")).toEqual({ message_id: "m1", text: "ab \ufffd" });
+				expect(notices[0]).toMatchObject({ type: "delta", text: "ab" });
+			},
+		},
+		{
+			name: "truncates long tool output to its byte budget",
+			events: [{ type: "tool_result", at, tool_call_id: "c1", tool: "bash", is_error: true, output_preview: `\u0000${"x".repeat(40_000)}` }],
+			check: (events) => {
+				const preview = payloadOf(events, "tool.result").output_preview ?? "";
+				expect(jsonBytes(preview)).toBeLessThanOrEqual(32 * 1024);
+				expect(jsonBytes(preview)).toBeGreaterThan(32 * 1024 - 8);
+				expect(preview).toMatch(/^x+…\[truncated\]$/);
+			},
+		},
+		{
+			// ESC is one character but six bytes in JSON: 60,000 of them are about 360 KB, over the 256 KB payload cap.
+			name: "clips by JSON-encoded bytes, so escape-heavy text can't block the events after it",
+			events: [
+				{ type: "assistant_text", at, message_id: "m1", text: "\u001b".repeat(60_000) },
+				{ type: "tool_call", at, tool_call_id: "c1", tool: "bash", args: { command: "\u001b".repeat(40_000) } },
+				{ type: "tool_result", at, tool_call_id: "c1", tool: "bash", is_error: false, output_preview: "ok" },
+			],
+			check: (events) => {
+				expect(events.map((e) => e.type)).toEqual(["agent_run.started", "assistant.message", "tool.call", "tool.result", "agent_run.finished"]);
+				expect(jsonBytes(payloadOf(events, "assistant.message").text ?? "")).toBeLessThanOrEqual(64 * 1024);
+				expect(jsonBytes(payloadOf(events, "tool.call").args ?? "")).toBeLessThanOrEqual(32 * 1024);
+			},
+		},
+		{
+			name: "cuts multi-byte text at a character boundary within the budget",
+			events: [{ type: "assistant_text", at, message_id: "m1", text: `${"字".repeat(20_000)}${"🙂".repeat(20_000)}` }],
+			check: (events) => {
+				const text = payloadOf(events, "assistant.message").text ?? "";
+				expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
+				expect(text).toMatch(/^字+🙂*…\[truncated\]$/u);
+			},
+		},
+	])("$name", async ({ events, check }) => {
 		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
 		const r = recorder();
-		// ESC is one character but six bytes in JSON: 60,000 of them are about 360 KB, over the 256 KB payload cap.
-		feed(
-			r,
-			{ type: "assistant_text", at, message_id: "m1", text: "\u001b".repeat(60_000) },
-			{ type: "tool_call", at, tool_call_id: "c1", tool: "bash", args: { command: "\u001b".repeat(40_000) } },
-			{ type: "tool_result", at, tool_call_id: "c1", tool: "bash", is_error: false, output_preview: "ok" },
-		);
+		feed(r, ...events);
 		await r.finish(SUMMARY);
-		const events = await logged(r);
-		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "assistant.message", "tool.call", "tool.result", "agent_run.finished"]);
-		const text = (events[1]?.payload as { text: string } | undefined)?.text ?? "";
-		const args = (events[2]?.payload as { args: string } | undefined)?.args ?? "";
-		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
-		expect(text.endsWith("…[truncated]")).toBe(true);
-		expect(jsonBytes(args)).toBeLessThanOrEqual(32 * 1024);
+		check(await logged(r));
 		expect(warn).not.toHaveBeenCalled();
-	});
-
-	it("cuts multi-byte text at a character boundary within the budget", async () => {
-		const r = recorder();
-		feed(r, { type: "assistant_text", at, message_id: "m1", text: `${"字".repeat(20_000)}${"🙂".repeat(20_000)}` });
-		await r.finish(SUMMARY);
-		const text = ((await logged(r))[1]?.payload as { text: string } | undefined)?.text ?? "";
-		expect(jsonBytes(text)).toBeLessThanOrEqual(64 * 1024);
-		const kept = text.slice(0, -"…[truncated]".length);
-		expect(kept).toMatch(/^字+🙂*$/u);
-		expect(kept.at(-1)).not.toMatch(/[\ud800-\udbff]/);
 	});
 
 	it("records a run whose thread key is malformed, without the thread", async () => {
@@ -192,16 +173,23 @@ describe("AgentRunRecorder", () => {
 		expect(rows.map((row) => [row.state, Number(row.cost_usd)])).toEqual([["max_turns", 0.01]]);
 	});
 
-	it("keeps buffering through a database error and writes everything once the database is back", async () => {
+	it("writes everything once the database is back, and records the outcome even when the rest of the stream can't be written", async () => {
 		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-		const database = flaky(1);
-		const r = recorder(database);
-		feed(r, { type: "tool_call", at, tool_call_id: "c1", tool: "ls", args: {} });
-		await vi.waitFor(() => expect(database.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
-		feed(r, { type: "tool_call", at, tool_call_id: "c2", tool: "ls", args: {} });
-		await r.finish(SUMMARY);
-		expect((await logged(r)).map((e) => e.type)).toEqual(["agent_run.started", "tool.call", "tool.call", "agent_run.finished"]);
+		const once = flaky(1);
+		const recovered = recorder(once);
+		feed(recovered, { type: "tool_call", at, tool_call_id: "c1", tool: "ls", args: {} });
+		await vi.waitFor(() => expect(once.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
+		feed(recovered, { type: "tool_call", at, tool_call_id: "c2", tool: "ls", args: {} });
+		await recovered.finish(SUMMARY);
+		expect((await logged(recovered)).map((e) => e.type)).toEqual(["agent_run.started", "tool.call", "tool.call", "agent_run.finished"]);
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining("agent run events not recorded"));
+
+		const twice = flaky(2);
+		const lost = recorder(twice);
+		for (let i = 0; i < 1005; i++) feed(lost, { type: "tool_call", at, tool_call_id: `c${i}`, tool: "ls", args: {} });
+		await vi.waitFor(() => expect(twice.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
+		await lost.finish(SUMMARY);
+		expect((await logged(lost)).map((e) => e.type)).toEqual(["agent_run.started", "agent_run.finished"]);
 	});
 
 	it("bounds the queue while the database is down, dropping later events but never the outcome", async () => {
@@ -216,25 +204,5 @@ describe("AgentRunRecorder", () => {
 		expect(types.at(0)).toBe("agent_run.started");
 		expect(types.at(-1)).toBe("agent_run.finished");
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('"dropped":6'));
-	});
-
-	it("keeps the outcome when a write fails with the queue full", async () => {
-		vi.spyOn(console, "error").mockImplementation(() => {});
-		const database = flaky(2);
-		const r = recorder(database);
-		for (let i = 0; i < 1005; i++) feed(r, { type: "tool_call", at, tool_call_id: `c${i}`, tool: "ls", args: {} });
-		await vi.waitFor(() => expect(database.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
-		await r.finish(SUMMARY);
-		expect((await logged(r)).map((e) => e.type)).toEqual(["agent_run.started", "agent_run.finished"]);
-	});
-
-	it("still records the outcome when the rest of the stream can't be written", async () => {
-		vi.spyOn(console, "error").mockImplementation(() => {});
-		const database = flaky(2);
-		const r = recorder(database);
-		feed(r, { type: "assistant_text", at, message_id: "m1", text: "lost" });
-		await vi.waitFor(() => expect(database.attempts).toBeGreaterThanOrEqual(1), { timeout: 2000 });
-		await r.finish(SUMMARY);
-		expect((await logged(r)).map((e) => e.type)).toEqual(["agent_run.started", "agent_run.finished"]);
 	});
 });

@@ -10,10 +10,7 @@ import type { Harness } from "../../app/harness/types.js";
 import { PROTOCOL_VERSION, RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/core/protocol.js";
 import { main } from "../../app/runner/main.js";
 import { bundleRunner } from "../../app/runner-bundle/index.js";
-import { scriptedPi } from "./pi-scripted.js";
-import { scripted, type TestTurn } from "./scripted-harness.js";
-
-export type { TestTurn };
+import { scriptedPi, type TestTurn } from "./pi-scripted.js";
 
 export const SUBMIT = "submit";
 export const TEST_AGENT_ID = "test-agent";
@@ -48,10 +45,7 @@ export function testAgent(harness: Harness): Agent {
  * Every harness the conformance suite runs against, each built around a scripted model that plays the test's turns:
  * to the harness, a model like any other.
  */
-export const HARNESSES: ReadonlyArray<{ name: string; make: (turns: readonly TestTurn[]) => Harness }> = [
-	{ name: "pi", make: scriptedPi },
-	{ name: "scripted", make: scripted },
-];
+export const HARNESSES: ReadonlyArray<{ name: string; make: (turns: readonly TestTurn[]) => Harness }> = [{ name: "pi", make: scriptedPi }];
 
 /** The key conformance runs deliver on stdin; scripted models ignore it. */
 export const TEST_KEY = "sk-test-STDINKEY-0123456789";

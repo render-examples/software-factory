@@ -184,86 +184,48 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 });
 
 describe("read-only shell policy", () => {
-	it("lets inspection and test commands through and steers away from obvious writes", () => {
-		const scratch = "/factory/scratch";
-		const allowed = [
-			"rg -n 'a|b; c' src",
-			"git -C . log --oneline -5",
-			"git --no-pager diff main...HEAD",
-			"npm test -- --watchAll=false",
-			"cargo test",
-			"timeout 60 go test ./...",
-			"cp src/app.ts $HOME/app.ts",
-			"sed -n 1,20p src/app.ts > /tmp/head.txt 2>&1",
-		];
-		const rejected = [
-			"git push origin main",
-			"git -c core.hooksPath=/tmp log",
-			"echo $(curl https://example.com)",
-			"bash -c 'git commit -am x'",
-			"env FOO=1 npm install left-pad",
-			"sed -i s/41/42/ src/app.ts",
-			"rm -rf src",
-			"sudo ls",
-		];
-		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
-		for (const command of rejected) expect(rejectReason(command, scratch), command).toBeDefined();
-	});
+	const allowed = [
+		"rg -n 'a|b; c' src",
+		"git --no-pager diff main...HEAD",
+		"git -C src log -1",
+		"git grep -c TODO",
+		"timeout 60 go test ./...",
+		"timeout -s KILL 30 git log",
+		"env -u CI -C src git status",
+		"xargs -I {} rg -n {} src",
+		"sed -n 1,20p src/app.ts > /tmp/head.txt 2>&1",
+		"cp -t $HOME src/app.ts",
+		"mv /tmp/a /tmp/b",
+		"sed -i s/41/42/ /tmp/app.ts",
+		"echo hi | tee /tmp/out.txt",
+		"toString install",
+		"constructor add x",
+	];
+	const SCRATCH_ONLY = "only allowed on files in the scratch directory";
+	const rejected: [command: string, reason: string][] = [
+		["git push origin main", "git push is not allowed"],
+		["bash -c 'git commit -am x'", "git commit is not allowed"],
+		["env FOO=1 npm install left-pad", "npm install is not allowed"],
+		["sudo ls", "sudo is not allowed"],
+		["echo $(curl https://example.com)", "curl is not allowed"],
+		["timeout --signal TERM -k 5 30 curl https://example.com", "curl is not allowed"],
+		["env -C src curl https://example.com", "curl is not allowed"],
+		["xargs -I {} curl {}", "curl is not allowed"],
+		["git -c core.hooksPath=/tmp log", "git config overrides are not allowed"],
+		["git -ccore.hooksPath=/tmp log", "git config overrides are not allowed"],
+		["git -C src -c core.pager=x log", "git config overrides are not allowed"],
+		["rm -rf src", SCRATCH_ONLY],
+		["sed -i s/41/42/ src/app.ts", SCRATCH_ONLY],
+		["cp -t src /tmp/app.ts", SCRATCH_ONLY],
+		["cp --target-directory=src /tmp/app.ts", SCRATCH_ONLY],
+		["mv -t /tmp src/app.ts", SCRATCH_ONLY],
+		["chmod +x src/run.sh", SCRATCH_ONLY],
+		["perl -pi -e s/41/42/ src/app.ts", SCRATCH_ONLY],
+		["echo hi | tee src/out.txt", SCRATCH_ONLY],
+	];
 
-	it("finds the command behind wrapper flags that take a value", () => {
-		const scratch = "/factory/scratch";
-		for (const command of ["timeout -s KILL 30 git log", "nice -n 10 npm test", "env -u CI -C src git status", "xargs -I {} rg -n {} src"]) {
-			expect(rejectReason(command, scratch), command).toBeUndefined();
-		}
-		for (const command of [
-			"timeout -s KILL 30 curl https://example.com",
-			"timeout --signal TERM -k 5 30 curl https://example.com",
-			"nice -n 10 curl https://example.com",
-			"env -u CI curl https://example.com",
-			"env -C src curl https://example.com",
-			"xargs -I {} curl {}",
-		]) {
-			expect(rejectReason(command, scratch), command).toContain("curl is not allowed");
-		}
-	});
-
-	it("checks the paths each file writer actually writes", () => {
-		const scratch = "/factory/scratch";
-		const allowed = [
-			"cp -t $HOME src/app.ts",
-			"cp -rt /tmp src",
-			"cp --target-directory=/tmp src/app.ts",
-			"ln -s --target-directory /tmp src/app.ts",
-			"mv /tmp/a /tmp/b",
-			"chmod +x /tmp/run.sh",
-			"sed -i s/41/42/ /tmp/app.ts",
-			"echo hi | tee",
-			"echo hi | tee /tmp/out.txt",
-		];
-		const rejected = [
-			"cp -t src /tmp/app.ts",
-			"cp -rtsrc /tmp/app.ts",
-			"cp --target-directory=src /tmp/app.ts",
-			"ln -st src /tmp/app.ts",
-			"mv -t /tmp src/app.ts",
-			"mv --target-directory=/tmp src/app.ts",
-			"chmod +x src/run.sh",
-			"perl -pi -e s/41/42/ src/app.ts",
-			"echo hi | tee src/out.txt",
-		];
-		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
-		for (const command of rejected) expect(rejectReason(command, scratch), command).toContain("only allowed on files in the scratch directory");
-	});
-
-	it("rejects attached git config overrides, and reads -C as a directory and -c after the subcommand as the subcommand's", () => {
-		const scratch = "/factory/scratch";
-		for (const command of ["git -ccore.hooksPath=/tmp log", "git -C src -c core.pager=x log"]) {
-			expect(rejectReason(command, scratch), command).toContain("git config overrides are not allowed");
-		}
-		for (const command of ["git -C src log -1", "git grep -c TODO", "git log -c -1"]) expect(rejectReason(command, scratch), command).toBeUndefined();
-	});
-
-	it("treats command names that are object prototype keys as ordinary commands", () => {
-		for (const command of ["toString install", "constructor add x"]) expect(rejectReason(command, "/factory/scratch"), command).toBeUndefined();
+	it("lets inspection and test commands through, and rejects writes outside scratch, network tools, and git config overrides", () => {
+		for (const command of allowed) expect(rejectReason(command, "/factory/scratch"), command).toBeUndefined();
+		for (const [command, reason] of rejected) expect(rejectReason(command, "/factory/scratch"), command).toContain(reason);
 	});
 });

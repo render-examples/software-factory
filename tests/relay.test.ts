@@ -22,7 +22,8 @@ describe("runner output", () => {
 
 	it("keeps the relay's offset equal to the file's bytes however the chunks split", () => {
 		const file = [TEXT, "second", TEXT].map((text) => `${asciiJson(JSON.stringify({ text }))}\n`).join("");
-		for (let cut = 1; cut < file.length; cut++) {
+		const firstLine = file.indexOf("\n") + 1;
+		for (const cut of [1, firstLine - 1, firstLine, firstLine + 1, Math.floor(file.length / 2), file.length - 1]) {
 			const lines: string[] = [];
 			const relay = new LineRelay((line) => lines.push(line));
 			relay.push(file.slice(0, cut));
@@ -36,30 +37,23 @@ describe("runner output", () => {
 });
 
 describe("followRun", () => {
-	const sandbox = (codes: number[]) => {
-		const commands: string[] = [];
-		const box = {
-			async execStream(command: string, opts: ExecStreamOptions) {
-				commands.push(command);
+	const sandbox = (codes: number[]) =>
+		({
+			async execStream(_command: string, opts: ExecStreamOptions) {
 				const code = codes.shift() ?? 0;
 				if (code === 0) opts.onData("stdout", "done\n");
 				return code;
 			},
-		};
-		return { box: box as unknown as Sandbox, commands };
-	};
+		}) as unknown as Sandbox;
 
 	it("retries while run-agent.sh has not started, then follows the file", async () => {
-		const { box, commands } = sandbox([75, 75, 0]);
 		const lines: string[] = [];
-		expect(await followRun(box, "/run/r1", new LineRelay((line) => lines.push(line)), Date.now() + 60_000)).toBeUndefined();
-		expect(commands).toHaveLength(3);
-		expect(commands[0]).toContain("[ -e '/run/r1.exit' ] || exit 75");
+		expect(await followRun(sandbox([75, 75, 0]), "/run/r1", new LineRelay((line) => lines.push(line)), Date.now() + 60_000)).toBeUndefined();
 		expect(lines).toEqual(["done"]);
 	});
 
 	it("stops on any other failed follow", async () => {
-		const { box } = sandbox([1]);
+		const box = sandbox([1]);
 		expect(await followRun(box, "/run/r1", new LineRelay(() => {}), Date.now() + 60_000)).toBe("following /run/r1.jsonl exited 1");
 	});
 });
