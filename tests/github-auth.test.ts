@@ -1,6 +1,7 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { githubToken, resetTokenCache } from "../app/github/auth.js";
+import { fakeFetch, json } from "./helpers/fake-fetch.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -8,25 +9,12 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 	publicKeyEncoding: { type: "spki", format: "pem" },
 });
 
-interface Request {
-	url: string;
-	headers: Record<string, string>;
-	body: { repositories: string[]; permissions?: Record<string, string> };
-}
-
-function fakeFetch() {
-	const requests: Request[] = [];
+function tokenApi() {
 	let n = 0;
-	const fetch = (async (input: string | URL | globalThis.Request, init?: RequestInit) => {
-		requests.push({
-			url: String(input),
-			headers: init?.headers as Record<string, string>,
-			body: JSON.parse(String(init?.body)),
-		});
-		const expires = new Date(Date.now() + 60 * 60_000).toISOString();
-		return new Response(JSON.stringify({ token: `ghs_token_${++n}`, expires_at: expires }), { status: 201 });
-	}) as typeof globalThis.fetch;
-	return { fetch, requests };
+	return fakeFetch({
+		"POST /app/installations/:id/access_tokens": () =>
+			json({ token: `ghs_token_${++n}`, expires_at: new Date(Date.now() + 60 * 60_000).toISOString() }, 201),
+	});
 }
 
 function decodeJwt(jwt: string) {
@@ -53,14 +41,14 @@ afterEach(() => {
 
 describe("githubToken", () => {
 	it("mints a token restricted to one repository with an RS256 App JWT", async () => {
-		const { fetch, requests } = fakeFetch();
+		const { fetch, requests } = tokenApi();
 		const token = await githubToken({ installationId: 99, repo: "web", permissions: { contents: "read" }, fetch });
 		expect(token).toBe("ghs_token_1");
 		expect(requests).toHaveLength(1);
 		const [req] = requests;
-		expect(req?.url).toBe("https://api.github.com/app/installations/99/access_tokens");
+		expect(req?.url.href).toBe("https://api.github.com/app/installations/99/access_tokens");
 		expect(req?.body).toEqual({ repositories: ["web"], permissions: { contents: "read" } });
-		const jwt = decodeJwt((req?.headers.Authorization ?? "").replace(/^Bearer /, ""));
+		const jwt = decodeJwt((req?.headers.get("Authorization") ?? "").replace(/^Bearer /, ""));
 		expect(jwt.valid).toBe(true);
 		expect(jwt.header).toEqual({ alg: "RS256", typ: "JWT" });
 		const now = Math.floor(Date.now() / 1000);

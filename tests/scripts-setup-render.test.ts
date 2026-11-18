@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
 import { ENV_GROUPS, SERVICE_ENV, WORKFLOWS_DATABASE_GROUP } from "../scripts/lib/requirements.js";
 import { linkDatabase, setupRender } from "../scripts/lib/setup-render.js";
+import { type FakeRequest, fakeFetch, json } from "./helpers/fake-fetch.js";
 
 const WORKSPACE = "tea-abc123";
 const SECRETS = {
@@ -27,64 +28,37 @@ interface StoredService {
 	envVars: { key: string; value: string }[];
 }
 
-interface Call {
-	method: string;
-	path: string;
-	auth: string;
-	body: unknown;
-}
-
-/** A Render API with an in-memory set of env groups and web services. */
-function renderWorld(opts: { groups?: StoredGroup[]; services?: StoredService[]; ownerStatus?: number } = {}) {
+/** A Render API with an in-memory set of env groups and web services. Unknown groups, services, and keys fall through to a 404. */
+function renderWorld(opts: { groups?: StoredGroup[]; services?: StoredService[]; owner?: Response } = {}) {
 	const groups = opts.groups ?? [];
 	const services = opts.services ?? [];
-	const calls: Call[] = [];
-	const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-		const url = new URL(String(input));
-		const headers = (init?.headers ?? {}) as Record<string, string>;
-		const call: Call = {
-			method: init?.method ?? "GET",
-			path: url.pathname,
-			auth: headers.Authorization ?? "",
-			body: init?.body ? JSON.parse(String(init.body)) : undefined,
-		};
-		calls.push(call);
-		const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-		const groupPath = /^\/v1\/env-groups\/([^/]+)(?:\/env-vars\/([^/]+))?$/.exec(url.pathname);
-		if (call.method === "GET" && url.pathname === `/v1/owners/${WORKSPACE}`) {
-			return opts.ownerStatus ? json({ message: "nope" }, opts.ownerStatus) : json({ id: WORKSPACE, name: "Acme", type: "team" });
-		}
-		if (call.method === "GET" && url.pathname === "/v1/env-groups") {
-			const name = url.searchParams.get("name") ?? "";
-			return json(groups.filter((g) => g.name.includes(name)).map(({ envVars: _, ...envGroup }) => ({ cursor: envGroup.id, envGroup })));
-		}
-		if (call.method === "POST" && url.pathname === "/v1/env-groups") {
-			const body = call.body as Omit<StoredGroup, "id">;
-			const group = { ...body, id: `evg-${groups.length + 1}` };
+	const api = fakeFetch({
+		[`GET /v1/owners/${WORKSPACE}`]: opts.owner ?? { id: WORKSPACE, name: "Acme", type: "team" },
+		"GET /v1/env-groups": ({ url }) =>
+			groups
+				.filter((g) => g.name.includes(url.searchParams.get("name") ?? ""))
+				.map(({ envVars: _, ...envGroup }) => ({ cursor: envGroup.id, envGroup })),
+		"POST /v1/env-groups": ({ body }) => {
+			const group = { ...(body as Omit<StoredGroup, "id">), id: `evg-${groups.length + 1}` };
 			groups.push(group);
 			return json(group, 201);
-		}
-		if (call.method === "GET" && url.pathname === "/v1/services" && url.searchParams.get("ownerId") === WORKSPACE) {
-			const limit = Number(url.searchParams.get("limit"));
+		},
+		"GET /v1/env-groups/:id": (_, { id }) => groups.find((g) => g.id === id),
+		"PUT /v1/env-groups/:id/env-vars/:key": ({ body }, { id, key }) => {
+			const group = groups.find((g) => g.id === id);
+			if (group) group.envVars = [...group.envVars.filter((v) => v.key !== key), { key, value: (body as { value: string }).value }];
+			return group;
+		},
+		"GET /v1/services": ({ url }) => {
+			if (url.searchParams.get("ownerId") !== WORKSPACE) return undefined;
 			const start = services.findIndex((s) => s.id === url.searchParams.get("cursor")) + 1;
-			return json(
-				services.slice(start, start + limit).map(({ id, name }) => ({ cursor: id, service: { id, name, type: "web_service", ownerId: WORKSPACE } })),
-			);
-		}
-		const envVarPath = /^\/v1\/services\/([^/]+)\/env-vars\/([^/]+)$/.exec(url.pathname);
-		const envVar = envVarPath && services.find((s) => s.id === envVarPath[1])?.envVars.find((v) => v.key === envVarPath[2]);
-		if (call.method === "GET" && envVar) return json(envVar);
-		const group = groupPath && groups.find((g) => g.id === groupPath[1]);
-		if (group && call.method === "GET" && !groupPath[2]) return json(group);
-		if (group && call.method === "PUT" && groupPath[2]) {
-			const key = decodeURIComponent(groupPath[2]);
-			const value = (call.body as { value: string }).value;
-			group.envVars = [...group.envVars.filter((v) => v.key !== key), { key, value }];
-			return json(group);
-		}
-		return json({ message: "Not Found" }, 404);
-	}) as typeof globalThis.fetch;
-	return { fetch, calls, groups, services };
+			return services
+				.slice(start, start + Number(url.searchParams.get("limit")))
+				.map(({ id, name }) => ({ cursor: id, service: { id, name, type: "web_service", ownerId: WORKSPACE } }));
+		},
+		"GET /v1/services/:id/env-vars/:key": (_, { id, key }) => services.find((s) => s.id === id)?.envVars.find((v) => v.key === key),
+	});
+	return { ...api, groups, services };
 }
 
 async function run(world: ReturnType<typeof renderWorld>, env: Record<string, string | undefined> = ENV) {
@@ -93,7 +67,7 @@ async function run(world: ReturnType<typeof renderWorld>, env: Record<string, st
 	return { code, output: lines.join("\n") };
 }
 
-const writes = (calls: Call[]) => calls.filter((c) => c.method !== "GET");
+const writes = (requests: FakeRequest[]) => requests.filter((r) => r.method !== "GET");
 
 describe("setup:render", () => {
 	it("creates each group with exactly its keys, and keeps App and model credentials off the gateway", async () => {
@@ -113,7 +87,7 @@ describe("setup:render", () => {
 			},
 		});
 		expect(world.groups.every((g) => g.ownerId === WORKSPACE)).toBe(true);
-		expect(world.calls.every((c) => c.auth === `Bearer ${SECRETS.RENDER_API_KEY}`)).toBe(true);
+		expect(world.requests.every((r) => r.headers.get("Authorization") === `Bearer ${SECRETS.RENDER_API_KEY}`)).toBe(true);
 		for (const secret of Object.values(SECRETS)) expect(output).not.toContain(secret);
 	});
 
@@ -122,7 +96,7 @@ describe("setup:render", () => {
 		const { code, output } = await run(world, { ...ENV, ANTHROPIC_API_KEY: "" });
 		expect(code).toBe(1);
 		expect(output).toContain("ANTHROPIC_API_KEY is not set");
-		expect(world.calls).toEqual([]);
+		expect(world.requests).toEqual([]);
 	});
 
 	it("updates only changed keys and leaves keys it doesn't manage alone", async () => {
@@ -156,7 +130,7 @@ describe("setup:render", () => {
 
 		const again = renderWorld({ groups: world.groups });
 		await run(again);
-		expect(writes(again.calls)).toEqual([]);
+		expect(writes(again.requests)).toEqual([]);
 	});
 
 	it("refuses to pick between two groups with the same name", async () => {
@@ -171,15 +145,15 @@ describe("setup:render", () => {
 		expect(code).toBe(1);
 		expect(output).toContain("2 env groups are named software-factory-gateway");
 		expect(world.groups.filter((g) => g.name === "software-factory-gateway")).toHaveLength(2);
-		expect(writes(world.calls).filter((c) => /evg-[12]/.test(c.path))).toEqual([]);
+		expect(writes(world.requests).filter((r) => /evg-[12]/.test(r.url.pathname))).toEqual([]);
 	});
 
 	it("stops before any group work when the API key is rejected", async () => {
-		const world = renderWorld({ ownerStatus: 401 });
+		const world = renderWorld({ owner: json({ message: "nope" }, 401) });
 		const { code, output } = await run(world);
 		expect(code).toBe(1);
 		expect(output).toContain("RENDER_API_KEY was rejected");
-		expect(world.calls).toHaveLength(1);
+		expect(world.requests).toHaveLength(1);
 	});
 });
 
@@ -212,7 +186,7 @@ describe("setup:render --link-database", () => {
 			{ key: "GITHUB_APP_ID", value: "1" },
 			{ key: "DATABASE_URL", value: DATABASE_URL },
 		]);
-		expect(writes(world.calls).map((c) => `${c.method} ${c.path}`)).toEqual(["PUT /v1/env-groups/evg-w/env-vars/DATABASE_URL"]);
+		expect(writes(world.requests).map((r) => `${r.method} ${r.url.pathname}`)).toEqual(["PUT /v1/env-groups/evg-w/env-vars/DATABASE_URL"]);
 		expect(output).toContain("DATABASE_URL added");
 		expect(output).toContain("factory-workflows picks up DATABASE_URL on its next deploy");
 		expect(output).not.toContain(DATABASE_URL);
@@ -222,7 +196,7 @@ describe("setup:render --link-database", () => {
 		const rerun = await link(again);
 		expect(rerun.code).toBe(0);
 		expect(rerun.output).toContain("DATABASE_URL unchanged");
-		expect(writes(again.calls)).toEqual([]);
+		expect(writes(again.requests)).toEqual([]);
 	});
 
 	it.each([
@@ -234,7 +208,7 @@ describe("setup:render --link-database", () => {
 		expect(code).toBe(1);
 		expect(output).toContain(message);
 		expect(output).toContain("Apply the Blueprint first");
-		expect(writes(world.calls)).toEqual([]);
+		expect(writes(world.requests)).toEqual([]);
 	});
 
 	it("refuses to pick between two services that could be the gateway", async () => {
@@ -249,7 +223,7 @@ describe("setup:render --link-database", () => {
 		const { code, output } = await link(world);
 		expect(code).toBe(1);
 		expect(output).toContain("2 web services could be the gateway: factory-gateway, factory-gateway-ygz3");
-		expect(writes(world.calls)).toEqual([]);
+		expect(writes(world.requests)).toEqual([]);
 	});
 });
 

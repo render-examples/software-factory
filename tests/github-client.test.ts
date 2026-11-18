@@ -1,36 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { type GitHubError, GitHubHttp, githubFor } from "../app/github/index.js";
+import { fakeFetch, json } from "./helpers/fake-fetch.js";
 
 const API = "https://api.github.test";
-
-interface Call {
-	method: string;
-	url: string;
-	body: unknown;
-}
-
-type Route = (call: Call) => Response | Promise<Response>;
-
-function fakeFetch(...responses: (Response | Route | Error)[]) {
-	const calls: Call[] = [];
-	const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-		const call: Call = {
-			method: init?.method ?? "GET",
-			url: String(input),
-			body: init?.body ? JSON.parse(String(init.body)) : undefined,
-		};
-		calls.push(call);
-		const next = responses.length > 1 ? responses.shift() : responses[0];
-		if (!next) throw new Error(`unexpected request ${call.method} ${call.url}`);
-		if (next instanceof Error) throw next;
-		return typeof next === "function" ? next(call) : next.clone();
-	}) as typeof globalThis.fetch;
-	return { fetch, calls };
-}
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-	return new Response(JSON.stringify(body), { status: 200, ...init, headers: { "content-type": "application/json", ...init.headers } });
-}
 
 function http(fetch: typeof globalThis.fetch) {
 	return new GitHubHttp(() => "ghs_secret_token", { fetch, apiUrl: API, sleep: async () => {} });
@@ -42,7 +14,7 @@ function client(fetch: typeof globalThis.fetch) {
 
 describe("GitHubHttp", () => {
 	it("scrubs the token from error messages", async () => {
-		const { fetch } = fakeFetch(new Response("bad token ghs_secret_token", { status: 401 }));
+		const { fetch } = fakeFetch({ "GET /x": new Response("bad token ghs_secret_token", { status: 401 }) });
 		const error = (await http(fetch)
 			.json("GET", "/x")
 			.catch((e) => e)) as GitHubError;
@@ -65,11 +37,18 @@ describe("GitHubClient", () => {
 	};
 
 	it("ensurePull opens a draft, and recovers from losing a race", async () => {
-		const fresh = fakeFetch(json([]), json(rawPull, { status: 201 }));
+		const fresh = fakeFetch({ "GET /repos/acme/web/pulls": [], "POST /repos/acme/web/pulls": json(rawPull, 201) });
 		expect((await client(fresh.fetch).ensurePull({ head: "h", base: "main", title: "t", body: "b" })).created).toBe(true);
-		expect(fresh.calls[1]).toMatchObject({ method: "POST", body: { head: "h", base: "main", draft: true } });
+		expect(fresh.requests.find((r) => r.method === "POST")).toMatchObject({ body: { head: "h", base: "main", draft: true } });
 
-		const raced = fakeFetch(json([]), new Response("A pull request already exists", { status: 422 }), json([rawPull]));
+		const open: (typeof rawPull)[] = [];
+		const raced = fakeFetch({
+			"GET /repos/acme/web/pulls": () => open,
+			"POST /repos/acme/web/pulls": () => {
+				open.push(rawPull);
+				return new Response("A pull request already exists", { status: 422 });
+			},
+		});
 		expect(await client(raced.fetch).ensurePull({ head: "h", base: "main", title: "t", body: "b" })).toMatchObject({
 			created: false,
 			pull: { number: 9 },
