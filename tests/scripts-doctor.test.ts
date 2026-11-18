@@ -153,7 +153,7 @@ describe("doctor", () => {
 		await behind.query("delete from schema_migrations");
 		const { code, find } = await doctor({ openDb: () => behind });
 		expect(code).toBe(0);
-		expect(find("warn", "migrations not applied yet: 001_events.sql")).toBeDefined();
+		expect(find("warn", "migrations not applied yet: 001_event_log.sql")).toBeDefined();
 	});
 
 	it("fails when a service lacks DATABASE_URL", async () => {

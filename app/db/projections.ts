@@ -18,37 +18,37 @@ const runs: Projection = {
 		const runId = event.stream.slice("run:".length);
 		const close = (state: string, outcome: string, summary: string, links: readonly unknown[] = [], waiting: string | null = null) =>
 			tx.query(
-				`update runs set state = $2, outcome = $3, summary = $4, links = $5::jsonb, waiting = $6, finished_at = $7, updated_seq = $8
+				`update runs set state = $2, outcome = $3, summary = $4, links = $5::jsonb, waiting = $6, finished_at = $7
 				 where run_id = $1 and state = 'running'`,
-				[runId, state, outcome, summary, JSON.stringify(links), waiting, event.createdAt, event.seq],
+				[runId, state, outcome, summary, JSON.stringify(links), waiting, event.createdAt],
 			);
 		switch (event.type) {
 			case runStarted.type: {
 				const { run_id, trace_id, task, title } = runStarted.payload.parse(event.payload);
 				await tx.query(
-					`insert into runs (run_id, trace_id, task, title, thread, state, started_at, updated_seq)
-					 values ($1, $2, $3, $4, $5, 'running', $6, $7)`,
-					[run_id, trace_id, task, title, event.thread, event.createdAt, event.seq],
+					`insert into runs (run_id, trace_id, task, title, thread, state, started_at)
+					 values ($1, $2, $3, $4, $5, 'running', $6)`,
+					[run_id, trace_id, task, title, event.thread, event.createdAt],
 				);
 				return;
 			}
 			case runRejected.type: {
 				const { trace_id, task, title, reason } = runRejected.payload.parse(event.payload);
 				await tx.query(
-					`insert into runs (run_id, trace_id, task, title, thread, state, outcome, summary, links, started_at, finished_at, updated_seq)
-					 values ($1, $2, $3, $4, $5, 'rejected', 'permission_denied', $6, '[]', $7, $7, $8)`,
-					[runId, trace_id, task, title, event.thread, reason, event.createdAt, event.seq],
+					`insert into runs (run_id, trace_id, task, title, thread, state, outcome, summary, links, started_at, finished_at)
+					 values ($1, $2, $3, $4, $5, 'rejected', 'permission_denied', $6, '[]', $7, $7)`,
+					[runId, trace_id, task, title, event.thread, reason, event.createdAt],
 				);
 				return;
 			}
 			case runProgress.type: {
 				const { summary } = runProgress.payload.parse(event.payload);
-				await tx.query("update runs set summary = $2, updated_seq = $3 where run_id = $1 and state = 'running'", [runId, summary, event.seq]);
+				await tx.query("update runs set summary = $2 where run_id = $1 and state = 'running'", [runId, summary]);
 				return;
 			}
 			case runSandboxAttached.type: {
 				const { sandbox_id } = runSandboxAttached.payload.parse(event.payload);
-				await tx.query("update runs set sandbox_id = $2, updated_seq = $3 where run_id = $1 and state = 'running'", [runId, sandbox_id, event.seq]);
+				await tx.query("update runs set sandbox_id = $2 where run_id = $1 and state = 'running'", [runId, sandbox_id]);
 				return;
 			}
 			case runStopped.type: {
@@ -72,9 +72,9 @@ const threads: Projection = {
 		if (event.type !== runStarted.type) return;
 		const { trace_id, run_id } = runStarted.payload.parse(event.payload);
 		await tx.query(
-			`insert into threads (thread, trace_id, run_id, updated_seq) values ($1, $2, $3, $4)
-			 on conflict (thread) do update set trace_id = excluded.trace_id, run_id = excluded.run_id, updated_seq = excluded.updated_seq`,
-			[event.thread, trace_id, run_id, event.seq],
+			`insert into threads (thread, trace_id, run_id) values ($1, $2, $3)
+			 on conflict (thread) do update set trace_id = excluded.trace_id, run_id = excluded.run_id`,
+			[event.thread, trace_id, run_id],
 		);
 	},
 };
