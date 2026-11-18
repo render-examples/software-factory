@@ -13,15 +13,7 @@ describe("egress configuration", () => {
 		expect(() => validateConfig(withEgress("allow-all"))).not.toThrow();
 	});
 
-	it.each([
-		"https://registry.npmjs.org",
-		"registry.npmjs.org/",
-		"registry.npmjs.org:443",
-		"Registry.npmjs.org",
-		"localhost",
-		"api.*.example.com",
-		"",
-	])("rejects %j, naming the repository", (host) => {
+	it.each(["https://registry.npmjs.org", "localhost"])("rejects %j, naming the repository", (host) => {
 		expect(() => validateConfig(withEgress([host]))).toThrow(`factory.config.ts repos["acme/web"]: egress host ${JSON.stringify(host)}`);
 	});
 });

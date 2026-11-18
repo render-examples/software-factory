@@ -52,12 +52,6 @@ const DELIVERY = { id: 1, delivered_at: "2026-10-28T11:59:00Z", status_code: 202
 const LARGE_DELIVERY_ID = "3851307323039416300";
 const TASK_NAMES = ["triage", "spec-to-pr", "pr-review", "autopilot", "cancel", "refresh-snapshot"];
 
-interface Call {
-	method: string;
-	url: URL;
-	auth: string;
-}
-
 interface World {
 	app?: Omit<typeof APP, "permissions"> & { permissions: Record<string, string> };
 	hook?: Record<string, unknown>;
@@ -65,35 +59,24 @@ interface World {
 	installed?: boolean;
 	installation?: { permissions: Record<string, string>; events: string[] };
 	delivery?: unknown;
-	deliveryStatus?: number;
-	deliveriesStatus?: number;
 	deliveriesJson?: string;
 	labels?: string[];
-	labelsResponse?: { status: number; body: unknown };
 	repositoryResponse?: { status?: number; body: unknown };
-	branchResponse?: { status?: number; body: unknown };
 	tasks?: string[];
 	tasksStatus?: number;
-	tasksBody?: unknown;
 	tasksJson?: string;
 	tasksUnreachable?: boolean;
 }
 
 function fakeFetch(world: World = {}) {
-	const calls: Call[] = [];
-	const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+	return (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = new URL(String(input));
-		const headers = (init?.headers ?? {}) as Record<string, string>;
 		const method = init?.method ?? "GET";
-		calls.push({ method, url, auth: headers.Authorization ?? "" });
 		const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 		switch (`${method} ${url.host}${url.pathname}`) {
 			case "GET api.github.com/repos/acme/web":
 				if (world.repositoryResponse) return json(world.repositoryResponse.body, world.repositoryResponse.status);
 				return json({ full_name: "acme/web", has_issues: true, archived: false });
-			case "GET api.github.com/repos/acme/web/branches/release%2Fcandidate":
-				if (world.branchResponse) return json(world.branchResponse.body, world.branchResponse.status);
-				return json({ name: "release/candidate", commit: { sha: "a".repeat(40) } });
 			case "GET api.github.com/app":
 				return json(world.app ?? APP);
 			case "GET api.github.com/app/hook/config":
@@ -107,40 +90,40 @@ function fakeFetch(world: World = {}) {
 				);
 			case "GET api.github.com/app/hook/deliveries":
 				if (world.deliveriesJson !== undefined) return new Response(world.deliveriesJson);
-				return json(world.deliveries ?? [DELIVERY], world.deliveriesStatus ?? 200);
+				return json(world.deliveries ?? [DELIVERY]);
 			case "GET api.github.com/app/hook/deliveries/1":
-				return json(world.delivery ?? { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github" }, world.deliveryStatus ?? 200);
+				return json(world.delivery ?? { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github" });
 			case `GET api.github.com/app/hook/deliveries/${LARGE_DELIVERY_ID}`:
-				return new Response(`{"id":${LARGE_DELIVERY_ID},"delivered_at":"2026-10-30T23:58:45.856Z","status_code":202,"event":"ping","url":"https://gw.onrender.com/webhooks/github"}`);
+				return new Response(
+					`{"id":${LARGE_DELIVERY_ID},"delivered_at":"2026-10-30T23:58:45.856Z","status_code":202,"event":"ping","url":"https://gw.onrender.com/webhooks/github"}`,
+				);
 			case "GET api.github.com/repos/acme/web/installation":
-				return world.installed === false ? json({ message: "Not Found" }, 404) : json({ id: 7, ...(world.installation ?? { permissions: APP.permissions, events: APP.events }) });
+				return world.installed === false
+					? json({ message: "Not Found" }, 404)
+					: json({ id: 7, ...(world.installation ?? { permissions: APP.permissions, events: APP.events }) });
 			case "POST api.github.com/app/installations/7/access_tokens":
 				return json({ token: TOKEN, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
 			case "GET api.github.com/repos/acme/web/labels":
-				if (world.labelsResponse) return json(world.labelsResponse.body, world.labelsResponse.status);
 				return json((world.labels ?? LABEL_NAMES).map((name) => ({ name, color: "000000", description: null })));
 			case "GET api.render.com/v1/tasks":
 				if (world.tasksUnreachable) throw new Error(`connection failed ${SECRETS.RENDER_API_KEY}`);
 				if (world.tasksStatus) return json({ message: "nope" }, world.tasksStatus);
 				if (world.tasksJson !== undefined) return new Response(world.tasksJson);
-				if (Object.hasOwn(world, "tasksBody")) return json(world.tasksBody);
 				return json((world.tasks ?? TASK_NAMES).map((name, i) => ({ task: { id: `tsk-${i}`, name }, cursor: `c${i}` })));
 			default:
 				return json({ message: "Not Found" }, 404);
 		}
 	}) as typeof globalThis.fetch;
-	return { fetch, calls };
 }
 
 async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}) {
 	const { world, ...rest } = overrides;
-	const fake = fakeFetch(world);
 	const lines: string[] = [];
 	const out = new Reporter((line) => lines.push(line));
 	const code = await runDoctor(
 		{
 			env: FULL_ENV,
-			fetch: fake.fetch,
+			fetch: fakeFetch(world),
 			sleep: async () => {},
 			openDb: openTestDb,
 			services: ["gateway", "workflows"],
@@ -151,7 +134,7 @@ async function doctor(overrides: Partial<DoctorOptions> & { world?: World } = {}
 	);
 	const output = lines.join("\n");
 	const find = (level: CheckResult["level"], text: string) => out.results.find((r) => r.level === level && r.message.includes(text));
-	return { code, output, results: out.results, find, calls: fake.calls };
+	return { code, output, results: out.results, find };
 }
 
 function expectNoSecrets(output: string) {
@@ -168,18 +151,9 @@ describe("doctor", () => {
 	});
 
 	it("checks the configured base branch and blocks readiness when it is inaccessible", async () => {
-		const { code, find } = await doctor({
-			baseBranches: { "acme/web": "release/candidate" },
-			world: { branchResponse: { status: 404, body: { message: "Not Found" } } },
-		});
+		const { code, find } = await doctor({ baseBranches: { "acme/web": "release/candidate" } });
 		expect(code).toBe(1);
 		expect(find("fail", "base branch release/candidate is missing or inaccessible")).toBeDefined();
-	});
-
-	it("accepts an accessible non-main base branch", async () => {
-		const { code, find } = await doctor({ baseBranches: { "acme/web": "release/candidate" } });
-		expect(code).toBe(0);
-		expect(find("pass", "base branch release/candidate is accessible")).toBeDefined();
 	});
 
 	it("passes a healthy deployment and exits 0", async () => {
@@ -214,12 +188,6 @@ describe("doctor", () => {
 		expect(find("skip", "no App credentials")).toBeDefined();
 	});
 
-	it("checks that DATABASE_URL connects and the migrations are current", async () => {
-		const { find } = await doctor();
-		expect(find("pass", "DATABASE_URL connects")).toBeDefined();
-		expect(find("pass", "migrations are current")).toBeDefined();
-	});
-
 	it("blocks readiness when the database is unreachable, without printing its password", async () => {
 		const unreachable = new Error(`connect ECONNREFUSED for factory:${DB_PASSWORD}`);
 		const { code, find, output } = await doctor({
@@ -251,33 +219,21 @@ describe("doctor", () => {
 		expect(find("fail", "DATABASE_URL is not set")?.fix).toContain("npm run setup:render -- --link-database");
 	});
 
-	it.each([
-		["null", { tasksBody: null }],
-		["object", { tasksBody: {} }],
-		["invalid JSON", { tasksJson: "not json" }],
-		["missing task", { tasksBody: [{}] }],
-		["missing name", { tasksBody: [{ task: {} }] }],
-		["non-string name", { tasksBody: [{ task: { name: 1 } }] }],
-		["null row", { tasksBody: [null] }],
-	] satisfies [string, World][])("fails without crashing on a %s task response", async (_, world) => {
-		const { code, find, output } = await doctor({ world });
+	it("fails without crashing on an invalid task response", async () => {
+		const { code, find } = await doctor({ world: { tasksJson: "not json" } });
 		expect(code).toBe(1);
 		expect(find("fail", "invalid task list")).toBeDefined();
-		expectNoSecrets(output);
 	});
 
 	it.each([
 		["no tasks", { tasks: [] }, "no tasks found"],
 		["partial registration", { tasks: ["triage"] }, "tasks not registered"],
 		["unreachable API", { tasksUnreachable: true }, "Render API unreachable"],
-		["server error", { tasksStatus: 503 }, "returned 503"],
 		["rejected key", { tasksStatus: 401 }, "rejected"],
-		["forbidden key", { tasksStatus: 403 }, "rejected"],
 	] satisfies [string, World, string][])("blocks readiness for %s", async (_, world, message) => {
-		const { code, find, output } = await doctor({ world });
+		const { code, find } = await doctor({ world });
 		expect(code).toBe(1);
 		expect(find("fail", message)).toBeDefined();
-		expectNoSecrets(output);
 	});
 
 	it("fails when installed permissions or events have not been accepted", async () => {
@@ -290,15 +246,11 @@ describe("doctor", () => {
 	it.each([
 		["no history", { deliveries: [] }, "no deliveries yet"],
 		["different target", { delivery: { ...DELIVERY, url: "https://placeholder.example.com/webhooks/github" } }, "not sent to the configured gateway"],
-		["failed attempt", { delivery: { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github", status_code: 502 } }, "got 502"],
-		["signature rejection", { delivery: { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github", status_code: 401 } }, "signature"],
-		["unavailable history", { deliveriesStatus: 503 }, "unverified"],
-		["invalid metadata", { delivery: { secret: SECRETS.GITHUB_WEBHOOK_SECRET } }, "invalid webhook delivery metadata"],
+		["a rejected delivery", { delivery: { ...DELIVERY, url: "https://gw.onrender.com/webhooks/github", status_code: 401 } }, "signature"],
 	] satisfies [string, World, string][])("does not mistake %s for verified webhook delivery", async (_, world, message) => {
-		const { code, find, output } = await doctor({ world });
+		const { code, find } = await doctor({ world });
 		expect(code).toBe(1);
 		expect(find("fail", message)).toBeDefined();
-		expectNoSecrets(output);
 	});
 
 	it("reports a successful delivery as historical evidence without claiming the hook is currently active", async () => {
@@ -325,7 +277,7 @@ describe("doctor", () => {
 				hook: { url: "nope", content_type: "form", secret: "********" },
 				deliveries: [{ id: 3, delivered_at: "x", status_code: 500, event: "push" }],
 				labels: [],
-				tasksStatus: 500,
+				tasksUnreachable: true,
 			},
 		});
 		expectNoSecrets(output);

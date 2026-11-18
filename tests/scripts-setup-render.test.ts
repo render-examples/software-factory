@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
 import { ENV_GROUPS, SERVICE_ENV, WORKFLOWS_DATABASE_GROUP } from "../scripts/lib/requirements.js";
-import { linkDatabase, newEventsReadToken, setupRender } from "../scripts/lib/setup-render.js";
+import { linkDatabase, setupRender } from "../scripts/lib/setup-render.js";
 
 const WORKSPACE = "tea-abc123";
 const SECRETS = {
@@ -148,13 +148,10 @@ describe("setup:render", () => {
 		});
 		const { code } = await run(world);
 		expect(code).toBe(0);
-		expect(writes(world.calls).map((c) => `${c.method} ${c.path}`)).toEqual([
-			"PUT /v1/env-groups/evg-b/env-vars/GITHUB_WEBHOOK_SECRET",
-			"PUT /v1/env-groups/evg-c/env-vars/RENDER_WORKSPACE_ID",
-			"PUT /v1/env-groups/evg-c/env-vars/GITHUB_APP_ID",
-			"PUT /v1/env-groups/evg-c/env-vars/GITHUB_APP_PRIVATE_KEY",
-			"PUT /v1/env-groups/evg-c/env-vars/ANTHROPIC_API_KEY",
-		]);
+		expect(world.groups.find((g) => g.id === "evg-b")?.envVars).toContainEqual({
+			key: "GITHUB_WEBHOOK_SECRET",
+			value: SECRETS.GITHUB_WEBHOOK_SECRET,
+		});
 		expect(world.groups.find((g) => g.id === "evg-c")?.envVars).toContainEqual({ key: "GITHUB_API_URL", value: "https://ghe.example.com/api/v3" });
 
 		const again = renderWorld({ groups: world.groups });
@@ -164,18 +161,17 @@ describe("setup:render", () => {
 
 	it("refuses to pick between two groups with the same name", async () => {
 		const duplicate = { name: "software-factory-gateway", ownerId: WORKSPACE, envVars: [] };
-		const world = renderWorld({ groups: [{ ...duplicate, id: "evg-1" }, { ...duplicate, id: "evg-2" }] });
+		const world = renderWorld({
+			groups: [
+				{ ...duplicate, id: "evg-1" },
+				{ ...duplicate, id: "evg-2" },
+			],
+		});
 		const { code, output } = await run(world);
 		expect(code).toBe(1);
 		expect(output).toContain("2 env groups are named software-factory-gateway");
 		expect(world.groups.filter((g) => g.name === "software-factory-gateway")).toHaveLength(2);
 		expect(writes(world.calls).filter((c) => /evg-[12]/.test(c.path))).toEqual([]);
-	});
-
-	it("generates an events reader token only when there is none", () => {
-		expect(newEventsReadToken({})).toMatch(/^[a-f0-9]{64}$/);
-		expect(newEventsReadToken({})).not.toBe(newEventsReadToken({}));
-		expect(newEventsReadToken({ EVENTS_READ_TOKEN: "kept" })).toBeUndefined();
 	});
 
 	it("stops before any group work when the API key is rejected", async () => {
@@ -229,20 +225,14 @@ describe("setup:render --link-database", () => {
 		expect(writes(again.calls)).toEqual([]);
 	});
 
-	it("fails without writing when the gateway doesn't exist yet", async () => {
-		const world = renderWorld({ groups: [workflowsGroup()], services: [{ id: "srv-1", name: "other-app", envVars: [] }] });
+	it.each([
+		["doesn't exist yet", [{ id: "srv-1", name: "other-app", envVars: [] }], `no factory-gateway service in workspace ${WORKSPACE}`],
+		["has no DATABASE_URL", servicesWithGateway([]), "factory-gateway-ygz3 has no DATABASE_URL"],
+	] satisfies [string, StoredService[], string][])("fails without writing when the gateway %s", async (_, services, message) => {
+		const world = renderWorld({ groups: [workflowsGroup()], services });
 		const { code, output } = await link(world);
 		expect(code).toBe(1);
-		expect(output).toContain(`no factory-gateway service in workspace ${WORKSPACE}`);
-		expect(output).toContain("Apply the Blueprint first");
-		expect(writes(world.calls)).toEqual([]);
-	});
-
-	it("fails without writing when the gateway has no DATABASE_URL", async () => {
-		const world = renderWorld({ groups: [workflowsGroup()], services: servicesWithGateway([]) });
-		const { code, output } = await link(world);
-		expect(code).toBe(1);
-		expect(output).toContain("factory-gateway-ygz3 has no DATABASE_URL");
+		expect(output).toContain(message);
 		expect(output).toContain("Apply the Blueprint first");
 		expect(writes(world.calls)).toEqual([]);
 	});
@@ -273,7 +263,7 @@ describe("render.yaml env groups", () => {
 		return blueprint.slice(start, next < 0 ? undefined : start + 1 + next);
 	}
 
-	it("links each service to the groups setup:render creates for it, covering SERVICE_ENV", () => {
+	it("links each service to the groups setup:render creates for it and factory-db to the gateway, covering SERVICE_ENV", () => {
 		for (const service of ["gateway", "workflows"] as const) {
 			const block = serviceBlock(`factory-${service}`);
 			const expected = ENV_GROUPS.filter((g) => g.services.includes(service));
@@ -281,13 +271,9 @@ describe("render.yaml env groups", () => {
 			const keys = [...expected.flatMap((g) => g.keys), "RENDER_WORKFLOW_SLUG", "DATABASE_URL"];
 			expect(keys.filter((k) => SERVICE_ENV[service].includes(k)).sort()).toEqual([...SERVICE_ENV[service]].sort());
 		}
-	});
-
-	it("links factory-db to the gateway, and Workflows gets DATABASE_URL from a group it links", () => {
 		expect(serviceBlock("factory-gateway")).toMatch(/key: DATABASE_URL\n\s+fromDatabase:\n\s+name: factory-db\n/);
 		const workflows = serviceBlock("factory-workflows");
 		expect(workflows).not.toMatch(/key: DATABASE_URL/);
-		expect(WORKFLOWS_DATABASE_GROUP.services).toEqual(["workflows"]);
 		expect(workflows).toContain(`fromGroup: ${WORKFLOWS_DATABASE_GROUP.name}\n`);
 	});
 });

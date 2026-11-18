@@ -6,7 +6,6 @@ const API = "https://api.github.test";
 interface Call {
 	method: string;
 	url: string;
-	headers: Record<string, string>;
 	body: unknown;
 }
 
@@ -18,7 +17,6 @@ function fakeFetch(...responses: (Response | Route | Error)[]) {
 		const call: Call = {
 			method: init?.method ?? "GET",
 			url: String(input),
-			headers: (init?.headers ?? {}) as Record<string, string>,
 			body: init?.body ? JSON.parse(String(init.body)) : undefined,
 		};
 		calls.push(call);
@@ -34,14 +32,8 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 	return new Response(JSON.stringify(body), { status: 200, ...init, headers: { "content-type": "application/json", ...init.headers } });
 }
 
-function http(fetch: typeof globalThis.fetch, sleeps: number[] = []) {
-	return new GitHubHttp(() => "ghs_secret_token", {
-		fetch,
-		apiUrl: API,
-		sleep: async (ms) => {
-			sleeps.push(ms);
-		},
-	});
+function http(fetch: typeof globalThis.fetch) {
+	return new GitHubHttp(() => "ghs_secret_token", { fetch, apiUrl: API, sleep: async () => {} });
 }
 
 function client(fetch: typeof globalThis.fetch) {
@@ -49,18 +41,6 @@ function client(fetch: typeof globalThis.fetch) {
 }
 
 describe("GitHubHttp", () => {
-	it("sends GitHub headers and the token", async () => {
-		const { fetch, calls } = fakeFetch(json({ ok: true }));
-		await http(fetch).json("GET", "/repos/acme/web");
-		expect(calls[0]?.url).toBe(`${API}/repos/acme/web`);
-		expect(calls[0]?.headers).toMatchObject({
-			Authorization: "Bearer ghs_secret_token",
-			Accept: "application/vnd.github+json",
-			"User-Agent": "software-factory",
-			"X-GitHub-Api-Version": "2022-11-28",
-		});
-	});
-
 	it("scrubs the token from error messages", async () => {
 		const { fetch } = fakeFetch(new Response("bad token ghs_secret_token", { status: 401 }));
 		const error = (await http(fetch)

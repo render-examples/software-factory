@@ -116,7 +116,7 @@ describe("setup:github", () => {
 			insecure_ssl: "0",
 			secret: SECRET,
 		});
-		expect(patch?.auth.split(".")).toHaveLength(3);
+		expect(patch?.auth).toMatch(/^Bearer \S+\.\S+\.\S+$/);
 
 		const created = calls.filter((c) => c.method === "POST" && c.path === "/repos/acme/web/labels");
 		expect(created.map((c) => (c.body as { name: string }).name)).toEqual(LABELS.filter((l) => l.name !== "factory:triage").map((l) => l.name));
