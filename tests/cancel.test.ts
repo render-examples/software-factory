@@ -76,12 +76,19 @@ describe("cancel task", () => {
 		expect(await runRow(db, "trn-dead")).toMatchObject({ state: "cancelled" });
 	});
 
-	it("shows that nothing was running in the status comment, and posts nothing else", async () => {
+	it.each([
+		{
+			thread: "a finished trace",
+			seed: async (gh: FakeGitHub) => {
+				await autopilotAtSpecToPr(gh, "done");
+				const finished = { state: "done" as const, outcome: "completed", summary: "done.", links: [], duration_ms: 1 };
+				await db.withTx((tx) => append(tx, runEvent(runFinished, "trn-root", KEY, finished)));
+			},
+		},
+		{ thread: "no runs", seed: async () => {} },
+	])("shows that nothing was running on a thread with $thread in one status comment, and posts nothing else", async ({ seed }) => {
 		const gh = new FakeGitHub();
-		await autopilotAtSpecToPr(gh, "done");
-		await db.withTx((tx) =>
-			append(tx, runEvent(runFinished, "trn-root", KEY, { state: "done", outcome: "completed", summary: "done.", links: [], duration_ms: 1 })),
-		);
+		await seed(gh);
 		const runs = new FakeRuns();
 
 		expect(await runCancel(ctx, input(), { gh: gh.asClient(), runs, db })).toMatchObject({
@@ -91,13 +98,6 @@ describe("cancel task", () => {
 		expect(gh.comments).toHaveLength(1);
 		expect(gh.status()).toContain("**Cancel** finished: nothing was running.");
 		expect(runs.getTaskRun).not.toHaveBeenCalled();
-	});
-
-	it("shows that nothing was running on a thread with no runs in one status comment", async () => {
-		const gh = new FakeGitHub();
-		expect(await runCancel(ctx, input(), { gh: gh.asClient(), runs: new FakeRuns(), db })).toMatchObject({ outcome: "nothing_running" });
-		expect(gh.comments).toHaveLength(1);
-		expect(gh.status()).toContain("**Cancel** finished: nothing was running.");
 	});
 
 	it("refuses actors without permission without touching the run or commenting on a busy thread", async () => {

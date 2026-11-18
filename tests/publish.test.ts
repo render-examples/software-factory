@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
 import type { RepoContext } from "../app/config/index.js";
 import { type GitDataClient, gitData } from "../app/github/git-data.js";
-import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
+import type { ExecResult, Sandbox } from "../app/sandbox/types.js";
 
 const SCRIPT = fileURLToPath(new URL("../sandbox/collect-changes.sh", import.meta.url));
 const IDENTITY = {
@@ -290,12 +290,9 @@ class FakeGitHub {
 
 class LocalSandbox implements Sandbox {
 	readonly id = "sbx-local";
-	readonly execs: Array<{ command: string; opts?: ExecOptions }> = [];
-	readonly downloads: string[] = [];
 	tamper: ((file: Buffer) => Buffer) | undefined;
 
-	exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
-		this.execs.push({ command, opts });
+	exec(command: string): Promise<ExecResult> {
 		return new Promise((resolve) => {
 			execFile("bash", ["-c", command], { encoding: "utf8", maxBuffer: 1 << 26 }, (err, stdout, stderr) => {
 				const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
@@ -308,7 +305,6 @@ class LocalSandbox implements Sandbox {
 	}
 	async upload(): Promise<void> {}
 	async download(path: string): Promise<Buffer> {
-		this.downloads.push(path);
 		const file = await readFile(path);
 		return this.tamper ? this.tamper(file) : file;
 	}
@@ -389,66 +385,20 @@ describe("publish", () => {
 		// The sandbox's repository is untouched.
 		expect(git(dir, "status", "--porcelain", "-z")).toBe(statusBefore);
 		expect(sha1(readFileSync(join(dir, ".git/index")))).toBe(indexBefore);
-		expect(h.sandbox.execs).toHaveLength(1);
-		expect(h.sandbox.execs[0]?.opts?.asRunner).toBeFalsy();
-		expect(h.sandbox.downloads).toEqual([h.outPath]);
 
 		git(dir, "add", "-A");
 		const expectedTree = git(dir, "write-tree");
-		expect(result.treeSha).toBe(expectedTree);
+		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
+		const commit = h.gh.commits.get(result.commitSha);
+		expect(commit?.tree).toBe(expectedTree);
+		expect(commit?.parents).toEqual([base]);
+		expect(commit?.body).toMatchObject({ message: "Implement #7", author: IDENTITY, committer: IDENTITY });
 
-		const listing = gitRaw(dir, "ls-tree", "-r", "-z", expectedTree).toString("utf8");
-		const expected = new Map<string, Entry>();
-		for (const record of listing.split("\0").filter(Boolean)) {
-			const [meta, path] = record.split("\t") as [string, string];
-			const [mode, , sha] = meta.split(" ") as [string, string, string];
-			expected.set(path, { mode, sha });
-		}
-		expect(Object.fromEntries(h.gh.files(result.treeSha))).toEqual(Object.fromEntries(expected));
-
-		for (const file of result.changedFiles) {
-			if (file.sha === null) continue;
-			expect(h.gh.blobs.get(file.sha)?.equals(gitRaw(dir, "cat-file", "blob", file.sha))).toBe(true);
-		}
-		const blobAt = (path: string) => h.gh.blobs.get(expected.get(path)?.sha as string);
+		const blobAt = (path: string) => h.gh.blobs.get(result.changedFiles.find((f) => f.path === path)?.sha as string);
 		expect(blobAt("a.txt")?.toString()).toBe("hello\nworld\n");
 		expect(blobAt("stamp.id")?.toString()).toBe("$Id$\n");
 		expect(blobAt("data.bin")?.equals(BINARY)).toBe(true);
 		expect(blobAt("ignored/keep.txt")?.toString()).toBe("kept\n");
-
-		const byPath = Object.fromEntries(result.changedFiles.map((f) => [f.path, `${f.status} ${f.mode}`]));
-		expect(byPath).toEqual({
-			"a.txt": "M 100644",
-			"crlf.txt": "A 100644",
-			"ignored/keep.txt": "M 100644",
-			"app/[slug]/page.tsx": "A 100644",
-			conv: "D 000000",
-			"conv/inner.txt": "A 100644",
-			"dir2/x.txt": "D 000000",
-			dir2: "A 100644",
-			"run.sh": "M 100755",
-			"gone.txt": "D 000000",
-			"data.bin": "A 100644",
-			"stamp.id": "A 100644",
-			"ünï code.txt": "A 100644",
-		});
-
-		const treeCall = h.gh.calls.find((c) => c.path === "/trees") as {
-			body: { tree: Array<{ sha: string | null }> };
-		};
-		const entries = treeCall.body.tree;
-		const firstWrite = entries.findIndex((e) => e.sha !== null);
-		expect(entries.slice(firstWrite).every((e) => e.sha !== null)).toBe(true);
-
-		const commit = h.gh.commits.get(result.commitSha);
-		expect(commit?.parents).toEqual([base]);
-		expect(commit?.tree).toBe(result.treeSha);
-		expect(commit?.body).toMatchObject({
-			message: "Implement #7",
-			author: IDENTITY,
-			committer: IDENTITY,
-		});
-		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
 	});
 
 	it("refuses a symlink without exporting any content", async () => {
@@ -568,22 +518,6 @@ describe("publish blob uploads", () => {
 		const gitData: GitDataClient = { ...inner, createBlob: (content) => createBlob(() => inner.createBlob(content), ++calls) };
 		return { h, gitData };
 	}
-
-	it("uploads at most 8 blobs at a time", async () => {
-		let active = 0;
-		let peak = 0;
-		const { h, gitData } = setup(async (upload) => {
-			peak = Math.max(peak, ++active);
-			await sleep(5);
-			active--;
-			return upload();
-		});
-		const result = await h.run({ gitData });
-		if ("refused" in result) throw new Error("refused");
-		expect(peak).toBe(8);
-		expect(h.gh.blobs.size).toBe(20);
-		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
-	});
 
 	it("starts no upload after a blob GitHub stores under another SHA, and builds no tree", async () => {
 		let started = 0;

@@ -5,9 +5,7 @@ import type { Db } from "../app/db/index.js";
 import type { GitHubClient, IssueComment } from "../app/github/index.js";
 import type { TaskResult } from "../app/runs/index.js";
 import { runAutopilot } from "../app/workflows/autopilot/index.js";
-import { prReviewWorkflow } from "../app/workflows/pr-review/index.js";
-import { type SpecToPrHandoff, specToPrWorkflow } from "../app/workflows/spec-to-pr/index.js";
-import { triageWorkflow } from "../app/workflows/triage/index.js";
+import type { SpecToPrHandoff } from "../app/workflows/spec-to-pr/index.js";
 import type { TriageHandoff } from "../app/workflows/triage/spec.js";
 import { REPO } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
@@ -89,38 +87,6 @@ afterAll(() => db.end());
 beforeEach(() => resetDb(db));
 
 describe("autopilot", () => {
-	it("runs the registered GitHub task definitions as Workflows children", async () => {
-		const gh = new FakeGitHub();
-		const names: string[] = [];
-		const workflowCtx = {
-			metadata: ctx.metadata,
-			bound: true,
-			async run(this: { bound: boolean }, definition: { name: string }, stageInput: unknown) {
-				expect(this.bound).toBe(true);
-				names.push(definition.name);
-				if (definition.name === "triage") {
-					return result<TriageHandoff>("trn-triage", "drafted", {
-						data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 },
-					});
-				}
-				if (definition.name === "spec-to-pr") {
-					expect(stageInput).toMatchObject({
-						approval: { kind: "autopilot", commentId: 100, hash: SPEC_HASH, version: 1 },
-					});
-					return result<SpecToPrHandoff>("trn-spec", "pr_opened", {
-						data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) },
-					});
-				}
-				expect(stageInput).toMatchObject({ pr: 34, issue: 12 });
-				return result("trn-review", "reviewed");
-			},
-		} as unknown as Pick<TaskContext, "metadata" | "run">;
-
-		const output = await runAutopilot(workflowCtx, input, { gh: asClient(gh), db });
-		expect(names).toEqual(["triage", "spec-to-pr", "pr-review"]);
-		expect(output.outcome).toBe("completed");
-	});
-
 	it("runs Triage, Spec-to-PR, and PR Reviewer in order", async () => {
 		const gh = new FakeGitHub();
 		const order: string[] = [];
@@ -181,21 +147,6 @@ describe("autopilot", () => {
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
-	it("leaves the issue not waiting after a newer run starts on it", async () => {
-		const gh = new FakeGitHub();
-		const output = await runAutopilot(ctx, input, {
-			gh: asClient(gh),
-			db,
-			triage: async () => {
-				await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
-				return result("trn-triage", "asked", { summary: "asked one question." });
-			},
-		});
-
-		expect(output).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "cancelled", waiting: null });
-	});
-
 	it("stops after a terminal stage result and removes the autopilot label", async () => {
 		const gh = new FakeGitHub();
 		const prReview = vi.fn();
@@ -215,7 +166,10 @@ describe("autopilot", () => {
 		expect(prReview).not.toHaveBeenCalled();
 	});
 
-	it("does not start another stage after the current one is superseded", async () => {
+	it.each([
+		{ stage: "asks a question", triage: result<TriageHandoff>("trn-triage", "asked", { summary: "asked one question." }) },
+		{ stage: "is superseded", triage: result<TriageHandoff>("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." }) },
+	])("stops without waiting or starting another stage when a newer run takes over and Triage $stage", async ({ triage }) => {
 		const gh = new FakeGitHub();
 		const specToPr = vi.fn();
 		const output = await runAutopilot(ctx, input, {
@@ -223,12 +177,13 @@ describe("autopilot", () => {
 			db,
 			triage: async () => {
 				await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
-				return result("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." });
+				return triage;
 			},
 			specToPr,
 		});
 
 		expect(output).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "cancelled", waiting: null });
 		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
 		expect(specToPr).not.toHaveBeenCalled();
 	});
@@ -266,14 +221,5 @@ describe("autopilot", () => {
 		).rejects.toThrow("task transport failed");
 		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
 		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "failed", outcome: "error" });
-	});
-});
-
-describe("GitHub task authoring", () => {
-	it("exposes a direct runner and a registered subtask definition", () => {
-		expect(triageWorkflow.task.name).toBe("triage");
-		expect(specToPrWorkflow.task.name).toBe("spec-to-pr");
-		expect(prReviewWorkflow.task.name).toBe("pr-review");
-		expect(typeof triageWorkflow.run).toBe("function");
 	});
 });

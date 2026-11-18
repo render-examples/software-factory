@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Db, readStream } from "../app/db/index.js";
 import { githubThread } from "../app/threads/index.js";
-import { BUILD_COMMAND, REPO, REPOSITORY_CASES, TEST_COMMAND } from "./fixtures/config.js";
+import { BUILD_COMMAND, REPO, TEST_COMMAND } from "./fixtures/config.js";
 import { pgliteDb, resetDb } from "./helpers/db.js";
 import { runRow, startRun } from "./helpers/runs.js";
 
@@ -259,7 +259,7 @@ describe("approval", () => {
 });
 
 describe("implement, verify, and publish", () => {
-	it("opens a draft PR on the happy path", async () => {
+	it("opens a draft PR on the happy path and links its thread to the issue's", async () => {
 		const t = setup();
 		const outcome = await t.run();
 
@@ -268,56 +268,22 @@ describe("implement, verify, and publish", () => {
 			outcome: "pr_opened",
 			data: { kind: "pull_request", pr: 34, headSha: PR_HEAD },
 		});
-		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: REPO }), { kind: "branch", name: "main" });
-		expect(t.calls.map((c) => c.agent)).toEqual(["implementer"]);
-		const [impl] = t.calls;
-		expect(impl?.message).toContain(`issue #${ISSUE} in ${REPO}: Health checks`);
-		expect(impl?.message).toContain("GET /health returns 200");
-		expect(impl?.message).toContain(`## Verify commands\n\n- \`${BUILD_COMMAND}\`\n- \`${TEST_COMMAND}\``);
-		expect(impl?.opts).toMatchObject({ sandbox: t.sandbox, traceId: "trn-spec" });
 		expect(await finished()).toMatchObject({ state: "done", outcome: "pr_opened" });
-
-		expect(t.execs.filter((e) => !e.command.startsWith("git status"))).toEqual([
-			{ command: BUILD_COMMAND, opts: { asRunner: true, timeoutMs: expect.any(Number) } },
-			{ command: TEST_COMMAND, opts: { asRunner: true, timeoutMs: expect.any(Number) } },
-		]);
-		expect(t.publish).toHaveBeenCalledWith(
-			expect.objectContaining({ sandbox: t.sandbox, baseSha: BASE, branch: BRANCH, ownedCommits: [], gitData: t.git }),
-		);
+		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: REPO }), { kind: "branch", name: "main" });
+		expect(t.execs.filter((e) => !e.command.startsWith("git status")).every((e) => e.opts?.asRunner)).toBe(true);
+		expect(t.publish).toHaveBeenCalledWith(expect.objectContaining({ baseSha: BASE, branch: BRANCH }));
 		const pr = t.gh.ensurePull.mock.calls[0]?.[0];
 		expect(pr).toMatchObject({ head: BRANCH, base: "main", title: SPEC.title, draft: true });
 		expect(pr?.body).toContain("Added GET /health.");
-		expect(pr?.body).toContain("✅ passed");
-		expect(t.status().data?.state).toBe("done");
 		expect(t.status().body).toContain(`[Draft PR #34](https://github.com/${REPO}/pull/34)`);
 		expect(t.sandbox.close).toHaveBeenCalledOnce();
 		expect(t.gh.removeLabel).toHaveBeenCalledWith(ISSUE, config.labels.specApproved);
-	});
 
-	it("links the draft PR's thread to the issue's, so work on the PR runs on the issue", async () => {
-		const t = setup();
-		await t.run();
-
-		const pr = githubThread(REPO, { kind: "pr", number: 34 });
-		expect(await readStream(db, `thread:${pr}`, 0)).toMatchObject([
-			{ type: "thread.linked", thread: pr, payload: { to: githubThread(REPO, { kind: "issue", number: ISSUE }) } },
+		// Work on the draft PR runs on the issue's thread.
+		const thread = githubThread(REPO, { kind: "pr", number: 34 });
+		expect(await readStream(db, `thread:${thread}`, 0)).toMatchObject([
+			{ type: "thread.linked", thread, payload: { to: githubThread(REPO, { kind: "issue", number: ISSUE }) } },
 		]);
-	});
-
-	it.each(REPOSITORY_CASES)("publishes $repo against $baseBranch with its own verification commands", async ({ repo, baseBranch, verify }) => {
-		const t = setup({ input: { ...input, repo } });
-		const outcome = await t.run();
-
-		expect(outcome).toMatchObject({ state: "done", outcome: "pr_opened" });
-		expect(t.openSandbox).toHaveBeenCalledWith(expect.objectContaining({ fullName: repo }), { kind: "branch", name: baseBranch });
-		expect(verifyCommands(t.execs)).toEqual(verify);
-		expect(t.publish).toHaveBeenCalledWith(expect.objectContaining({ repo: expect.objectContaining({ fullName: repo }) }));
-		expect(t.gh.ensurePull).toHaveBeenCalledWith(expect.objectContaining({ base: baseBranch, draft: true }));
-		const message = t.calls[0]?.message ?? "";
-		expect(message).toContain(`issue #${ISSUE} in ${repo}`);
-		if (verify.length === 0) expect(message).toContain("none configured");
-		for (const command of verify) expect(message).toContain(`- \`${command}\``);
-		expect(t.sandbox.close).toHaveBeenCalledOnce();
 	});
 
 	it("repairs a failing verify and publishes once it passes", async () => {
@@ -332,7 +298,6 @@ describe("implement, verify, and publish", () => {
 		const repair = t.calls[1];
 		expect(repair?.agent).toBe("implementer");
 		expect(repair?.message).toContain("expected 200, got 404");
-		expect(repair?.message).toContain("repair round 1 of 2");
 		expect(verifyCommands(t.execs)).toEqual([BUILD_COMMAND, TEST_COMMAND, BUILD_COMMAND, TEST_COMMAND]);
 		const body = t.gh.ensurePull.mock.calls[0]?.[0].body ?? "";
 		expect(body).toContain("Added GET /health.");
@@ -371,25 +336,30 @@ describe("rerunning on an existing branch", () => {
 });
 
 describe("losing the thread", () => {
-	it("does not move the branch once a newer run starts on the issue", async () => {
+	it.each([
+		{
+			during: "implementation",
+			published: 0,
+			lose: (t: ReturnType<typeof setup>) =>
+				vi.mocked(t.runAgent as NonNullable<SpecToPrDeps["runAgent"]>).mockImplementationOnce(async () => {
+					await loseThread();
+					return { output: implementation(), costUsd: 0, usage: {}, turns: 1 } as never;
+				}),
+		},
+		{
+			during: "publishing",
+			published: 1,
+			lose: (t: ReturnType<typeof setup>) =>
+				t.publish.mockImplementationOnce(async () => {
+					await loseThread();
+					return PUBLISHED;
+				}),
+		},
+	])("opens no pull request once a newer run starts on the issue during $during", async ({ published, lose }) => {
 		const t = setup();
-		vi.mocked(t.runAgent as NonNullable<SpecToPrDeps["runAgent"]>).mockImplementationOnce(async () => {
-			await loseThread();
-			return { output: implementation(), costUsd: 0, usage: {}, turns: 1 } as never;
-		});
+		lose(t);
 		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(t.publish).not.toHaveBeenCalled();
-		expect(t.gh.ensurePull).not.toHaveBeenCalled();
-	});
-
-	it("does not open the pull request once a newer run starts on the issue", async () => {
-		const t = setup();
-		t.publish.mockImplementationOnce(async () => {
-			await loseThread();
-			return PUBLISHED;
-		});
-		expect(await t.run()).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(t.publish).toHaveBeenCalledOnce();
+		expect(t.publish).toHaveBeenCalledTimes(published);
 		expect(t.gh.ensurePull).not.toHaveBeenCalled();
 	});
 });

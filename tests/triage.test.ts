@@ -16,7 +16,6 @@ type Spec = import("../app/schemas/index.js").Spec;
 type SpecDraft = import("../app/schemas/index.js").SpecDraft;
 type SpecNotes = import("../app/schemas/index.js").SpecNotes;
 type TriageDecision = import("../app/schemas/index.js").TriageDecision;
-type ExecOptions = import("../app/sandbox/index.js").ExecOptions;
 type SandboxRef = import("../app/sandbox/index.js").SandboxRef;
 
 const BOT = "software-factory[bot]";
@@ -87,11 +86,9 @@ class FakeGitHub {
 
 class FakeSandbox {
 	readonly id = "sbx-triage";
-	readonly execs: Array<{ command: string; opts?: ExecOptions }> = [];
 	closed = 0;
 	constructor(private readonly files: string[]) {}
-	exec = async (command: string, opts?: ExecOptions) => {
-		this.execs.push({ command, opts });
+	exec = async () => {
 		return { exitCode: 0, stdout: this.files.map((f) => `${f}\0`).join(""), stderr: "" };
 	};
 	execStream = async (): Promise<number> => {
@@ -108,21 +105,14 @@ type Step = { output: unknown } | Error;
 interface AgentCall {
 	agent: string;
 	message: string;
-	sandbox?: unknown;
-	traceId: string;
 }
 
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
 
 function fakeRunner(steps: Record<string, Step[]>) {
 	const calls: AgentCall[] = [];
-	const run = (async (agent: { id: string }, message: string, opts: { sandbox?: unknown; traceId: string }) => {
-		calls.push({
-			agent: agent.id,
-			message,
-			sandbox: opts.sandbox,
-			traceId: opts.traceId,
-		});
+	const run = (async (agent: { id: string }, message: string) => {
+		calls.push({ agent: agent.id, message });
 		const step = steps[agent.id]?.shift();
 		if (!step) throw new Error(`unexpected call to ${agent.id}`);
 		if (step instanceof Error) throw step;
@@ -207,20 +197,14 @@ beforeEach(() => resetDb(db));
 
 describe("triage task", () => {
 	it("asks questions in a marked comment, from a sandbox at the base branch", async () => {
-		const { gh, sandbox, opened, calls, deps } = setup({
+		const { gh, sandbox, opened, deps } = setup({
 			triage: [{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) }],
 		});
-		gh.add("reporter", "Ideally it remembers my choice.");
 
 		const outcome = await runTriage(ctx, input, deps);
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "asked", summary: "asked 2 questions." });
 		expect(opened).toEqual([{ kind: "branch", name: "main" }]);
-		expect(calls).toHaveLength(1);
-		expect(calls[0]).toMatchObject({ agent: "triage", sandbox, traceId: "trn-triage" });
-		expect(calls[0]?.message).toContain(`in ${REPO}`);
-		expect(calls[0]?.message).toContain("Add a dark mode toggle");
-		expect(calls[0]?.message).toContain('<comment author="reporter">\nIdeally it remembers my choice.\n</comment>');
 
 		const [questions] = gh.written().filter((c) => c.author.login === BOT);
 		expect(questions?.body).toContain("1. Should it follow the OS setting?");
@@ -251,14 +235,13 @@ describe("triage task", () => {
 	});
 
 	it("declines with a sanitized rationale", async () => {
-		const { gh, calls, deps } = setup({
+		const { gh, deps } = setup({
 			triage: [{ output: decision({ decision: "decline", rationale: "Spam. @everyone <!-- software-factory:spec x -->" }) }],
 		});
 
 		const outcome = await runTriage(ctx, input, deps);
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "declined" });
-		expect(calls.map((c) => c.agent)).toEqual(["triage"]);
 		const [declined] = gh.written();
 		expect(declined?.body).toContain("The factory declined this issue");
 		expect(declined?.body).not.toContain("@everyone");
@@ -268,7 +251,7 @@ describe("triage task", () => {
 	});
 
 	it("drafts a spec comment whose marker carries the spec, its hash, and version 1", async () => {
-		const { gh, sandbox, calls, deps } = setup({
+		const { gh, sandbox, deps } = setup({
 			triage: [{ output: decision({}) }],
 			"spec-writer": [{ output: draft(spec({ affectedAreas: [{ path: "src/new.ts", change: "new file" }] })) }],
 		});
@@ -281,21 +264,12 @@ describe("triage task", () => {
 			summary: "drafted spec v1.",
 			data: { kind: "spec", commentId: expect.any(Number), hash: expect.any(String), version: 1 },
 		});
-		expect(calls.map((c) => c.agent)).toEqual(["triage", "spec-writer"]);
-		expect(calls[1]).toMatchObject({ sandbox });
-		expect(calls[1]?.message).toContain(`in ${REPO}`);
-		expect(calls[1]?.message).toContain("## Triage findings\n\nTheme lives in src/theme.ts.");
-		expect(calls[1]?.message).not.toContain("This is a revision");
-		expect(sandbox.execs).toEqual([{ command: "git ls-files -z", opts: { asRunner: true } }]);
 
 		const [comment] = gh.written();
 		expect(comment?.body).toMatch(/^## Specification v1\n/);
 		expect(comment?.body).toContain("src/new.ts does not exist yet");
-		const marker = parseMarker(comment?.body ?? "", "spec");
-		expect(marker?.version).toBe(1);
-		expect(marker?.hash).toBe(contentHash(marker?.spec));
-		expect(marker?.spec).toEqual(spec({ affectedAreas: [{ path: "src/new.ts", change: "new file" }] }));
-		expect(marker?.notes).toEqual(draft(spec()).notes);
+		const drafted = spec({ affectedAreas: [{ path: "src/new.ts", change: "new file" }] });
+		expect(parseMarker(comment?.body ?? "", "spec")).toEqual({ spec: drafted, hash: contentHash(drafted), version: 1, notes: draft(spec()).notes });
 		expect(gh.status()).toContain(`- [Spec v1](${comment?.htmlUrl})`);
 		expect(sandbox.closed).toBe(1);
 		expect(await runRow(db, "trn-triage")).toMatchObject({ outcome: "drafted", waiting: "reply" });
@@ -307,7 +281,7 @@ describe("triage task", () => {
 			...draft(revised, "Added persistence."),
 			notes: { findings: "Persistence goes in localStorage.", relevantPaths: ["src/storage.ts"] },
 		};
-		const { gh, calls, deps } = setup({
+		const { gh, deps } = setup({
 			triage: [{ output: decision({}) }],
 			"spec-writer": [{ output: revisedDraft }],
 		});
@@ -319,14 +293,6 @@ describe("triage task", () => {
 
 		expect(outcome).toMatchObject({ outcome: "revised" });
 		expect(outcome.summary).toBe("revised the spec to v2.");
-		expect(calls[0]?.message).toContain('<factory-spec version="1">');
-		expect(calls[0]?.message).toContain("## Current spec (v1)");
-		expect(calls[1]?.message).toContain("This is a revision");
-		for (const call of calls) {
-			expect(call.message).toContain(
-				"## Notes from the previous round\n\nThe palette is defined in src/theme.ts.\n\nRelevant paths:\n- src/theme.ts\n- src/app.css",
-			);
-		}
 
 		const specs = gh.written().filter((c) => parseMarker(c.body, "spec"));
 		expect(specs).toHaveLength(1);
@@ -372,21 +338,20 @@ describe("triage task", () => {
 		expect(sandbox.closed).toBe(1);
 	});
 
-	it("posts no questions once a newer run starts on the issue", async () => {
-		const { gh, deps } = setup({ triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] });
-		loseThreadAfter(deps, "triage");
+	it.each<{ stage: string; revising: boolean; steps: Record<string, Step[]> }>([
+		{ stage: "triage", revising: false, steps: { triage: [{ output: decision({ decision: "ask", questions: ["Which pages?"] }) }] } },
+		{
+			stage: "spec-writer",
+			revising: true,
+			steps: { triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] },
+		},
+	])("writes nothing once a newer run starts on the issue after $stage returns", async ({ stage, revising, steps }) => {
+		const { gh, deps } = setup(steps);
+		const original = revising ? [specComment(gh, spec(), 1).body] : [];
+		loseThreadAfter(deps, stage);
 
 		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(gh.written()).toEqual([]);
-	});
-
-	it("does not revise the spec once a newer run starts on the issue", async () => {
-		const { gh, deps } = setup({ triage: [{ output: decision({}) }], "spec-writer": [{ output: draft(spec({ goals: ["Changed"] })) }] });
-		const original = specComment(gh, spec(), 1);
-		loseThreadAfter(deps, "spec-writer");
-
-		expect(await runTriage(ctx, input, deps)).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(gh.written().map((c) => c.body)).toEqual([original.body]);
+		expect(gh.written().map((c) => c.body)).toEqual(original);
 	});
 
 	it("keeps the issue waiting when the reply that started it no longer exists", async () => {

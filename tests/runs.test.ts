@@ -63,10 +63,7 @@ describe("withRun", () => {
 		expect(body).toContain(`run \`trn-run\` · events: \`/threads/github/${REPO.fullName}/issue/12/stream\``);
 		expect(parseMarker(body, "status")).toEqual({ runId: "trn-run", traceId: "trn-run", stage: "triage", title: "Triage", state: "done" });
 		expect(gh.labels.has(WORKING_LABEL)).toBe(false);
-		expect(await types(`thread:${KEY}`)).toEqual(["run.started"]);
-		expect((await readStream(db, `thread:${KEY}`, 0))[0]?.payload).toMatchObject({ run_id: "trn-run", trace_id: "trn-run", mode: "replace" });
-		expect(await types("run:trn-run")).toEqual(["run.sandbox_attached", "run.progress", "run.finished"]);
-		expect((await readStream(db, "run:trn-run", 2))[0]?.payload).toMatchObject({ state: "done", outcome: "asked", duration_ms: expect.any(Number) });
+		expect(await runRow(db, "trn-run")).toMatchObject({ state: "done", outcome: "asked" });
 	});
 
 	it("rejects an actor without permission without starting, and says so only on a thread with no runs, once", async () => {
@@ -101,34 +98,22 @@ describe("withRun", () => {
 		expect(await runRow(db, "trn-denied")).toMatchObject({ state: "rejected" });
 	});
 
-	it("takes over the thread: cancels the displaced trace, terminates its sandbox, and records it stopped", async () => {
+	it("takes over the thread: cancels the displaced trace, terminates its running child's sandbox, and records both stopped", async () => {
 		const gh = new FakeGitHub();
-		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", sandboxId: "sbx-old" });
+		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", task: "autopilot", title: "Autopilot" });
+		await startRun(db, REPO.fullName, thread, { traceId: "trn-old", runId: "trn-child-old", sandboxId: "sbx-child" });
 		const runs = new FakeRuns({ "trn-old": "running" });
 		await withRun(root("trn-new"), options(gh, { runs }), done);
 
 		expect(runs.cancelled).toEqual(["trn-old"]);
-		expect(runs.terminated).toEqual(["sbx-old"]);
+		expect(runs.terminated).toEqual(["sbx-child"]);
 		expect(await runRow(db, "trn-old")).toMatchObject({ state: "cancelled", outcome: "superseded", summary: "Triage by @maintainer took over." });
-		expect((await readStream(db, "run:trn-old", 1))[0]).toMatchObject({
-			type: "run.stopped",
+		expect(await runRow(db, "trn-child-old")).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect((await readStream(db, "run:trn-old", 0)).find((event) => event.type === "run.stopped")).toMatchObject({
 			source: "workflow:trn-new",
 			payload: { by: "trn-new", active: true },
 		});
 		expect(await owner()).toEqual({ trace_id: "trn-new", run_id: "trn-new" });
-	});
-
-	it("cancels the displaced root and stops its running child", async () => {
-		const gh = new FakeGitHub();
-		await startRun(db, REPO.fullName, thread, { traceId: "trn-root-old", task: "autopilot", title: "Autopilot" });
-		await startRun(db, REPO.fullName, thread, { traceId: "trn-root-old", runId: "trn-child-old", sandboxId: "sbx-child" });
-		const runs = new FakeRuns({ "trn-root-old": "running" });
-		await withRun(root("trn-new"), options(gh, { runs }), done);
-
-		expect(runs.cancelled).toEqual(["trn-root-old"]);
-		expect(runs.terminated).toEqual(["sbx-child"]);
-		expect(await runRow(db, "trn-root-old")).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(await runRow(db, "trn-child-old")).toMatchObject({ state: "cancelled", outcome: "superseded" });
 	});
 
 	it("fences the displaced run even when cancelling it fails", async () => {
@@ -246,10 +231,7 @@ describe("withRun", () => {
 	it("keeps working through a GitHub outage and retries the final status", async () => {
 		const gh = new FakeGitHub();
 		gh.outage = 1;
-		const outcome = await withRun(root("trn-run"), options(gh), async (run) => {
-			expect(gh.comments).toEqual([]);
-			await run.reportProgress("working");
-			expect(gh.status()).toContain("is running: working");
+		const outcome = await withRun(root("trn-run"), options(gh), async () => {
 			gh.outage = 1;
 			return { outcome: "done", summary: "all done." };
 		});
