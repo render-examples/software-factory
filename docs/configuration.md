@@ -336,7 +336,9 @@ request comment (requires `minimumPermission`):
 
 Cancel takes over the thread, stops the active root workflow and child task,
 terminates recorded Sandboxes, and clears runs left in `running` after a task
-stopped. Reapply the trigger label to restart work. Cancel acts on the issue or
+stopped. If Render doesn't confirm the cancel or a Sandbox termination, the
+status comment names what's unconfirmed; comment `/factory cancel` again to
+retry. Reapply the trigger label to restart work. Cancel acts on the issue or
 pull request it's posted on: to stop the review Autopilot started, comment on
 the draft pull request. See [Coordination](architecture.md#coordination) and
 [Autopilot](architecture.md#autopilot).

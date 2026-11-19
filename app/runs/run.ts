@@ -4,12 +4,12 @@ import type { z } from "zod";
 import { AgentError, type AgentErrorCode, type RunAgentOptions } from "../agent-runs/index.js";
 import { config, type RepoContext } from "../config/index.js";
 import { append, type Db, workflowsDb } from "../db/index.js";
-import { type EventSpec, runFinished, runProgress, runRejected, runSandboxAttached } from "../events/index.js";
+import { type EventSpec, runAwaitingReply, runFinished, runProgress, runRejected, runSandboxAttached } from "../events/index.js";
 import { type GitHubClient, githubFor, type RunState } from "../github/index.js";
 import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
 import { checkPermission } from "./permission.js";
 import { type StatusLink, showRejection, syncStatus, warn } from "./status.js";
-import { isCurrent, type RunControl, runEvent, startOnThread, stopTrace, workflowRuns } from "./thread.js";
+import { type Cleanup, isCurrent, type RunControl, retryCleanup, runEvent, startOnThread, stopTrace, workflowRuns } from "./thread.js";
 import { traceIds } from "./trace.js";
 
 export interface Run {
@@ -19,8 +19,10 @@ export interface Run {
 	readonly traceId: string;
 	readonly runId: string;
 	readonly displaced: { traceId: string; runIds: readonly string[] } | null;
+	readonly cleanup: Cleanup;
 	assertCurrent(): Promise<void>;
 	reportProgress(summary: string): Promise<void>;
+	awaitReply(): Promise<void>;
 	trackSandbox(sandbox: { id: string }): Promise<void>;
 	agentRunOptions(sandbox: RunAgentOptions["sandbox"]): RunAgentOptions;
 }
@@ -59,7 +61,8 @@ export interface RunOptions {
 	task: string;
 	title: string;
 	actor: string;
-	mode?: "replace" | "continue";
+	mode?: "replace" | "continue" | "reply";
+	replyTo?: string;
 	gh?: GitHubClient;
 	runs?: RunControl;
 	db?: Db;
@@ -72,7 +75,7 @@ export async function withRun<Data = undefined>(
 ): Promise<TaskResult<Data>> {
 	const run = new ThreadRun(ctx, opts);
 	if (!(await run.authorized())) return await run.reject<Data>();
-	if (!(await run.start())) return run.result<Data>("cancelled", SUPERSEDED);
+	if (!(await run.start())) return run.result<Data>("cancelled", opts.mode === "reply" ? STALE_REPLY : SUPERSEDED);
 	try {
 		await run.stopDisplaced();
 		return await run.finish(await work(run));
@@ -84,6 +87,7 @@ export async function withRun<Data = undefined>(
 class Superseded extends Error {}
 
 const SUPERSEDED = { outcome: "superseded", summary: "a newer run took over." };
+const STALE_REPLY = { outcome: "stale_reply", summary: "the issue moved on before this reply could resume it." };
 
 const AGENT_STOPS: Partial<Record<AgentErrorCode, string>> = {
 	max_turns: "ran out of turns",
@@ -102,6 +106,7 @@ class ThreadRun implements Run {
 	readonly traceId: string;
 	readonly runId: string;
 	displaced: Run["displaced"] = null;
+	cleanup: Cleanup = { confirmed: [], unconfirmed: [] };
 	readonly #opts: RunOptions;
 	readonly #db: Db;
 	readonly #key: ThreadKey;
@@ -129,6 +134,11 @@ class ThreadRun implements Run {
 		await this.#sync();
 	}
 
+	async awaitReply(): Promise<void> {
+		await this.assertCurrent();
+		await this.#append(runAwaitingReply, {});
+	}
+
 	async trackSandbox(sandbox: { id: string }): Promise<void> {
 		await this.#append(runSandboxAttached, { sandbox_id: sandbox.id });
 		await this.assertCurrent();
@@ -154,18 +164,23 @@ class ThreadRun implements Run {
 	}
 
 	async start(): Promise<boolean> {
-		const { task, title, actor, mode = "replace" } = this.#opts;
-		const started = await startOnThread(this.#db, { thread: this.#key, runId: this.runId, traceId: this.traceId, task, title, actor, mode });
+		const { task, title, actor, mode = "replace", replyTo } = this.#opts;
+		const started = await startOnThread(this.#db, { thread: this.#key, runId: this.runId, traceId: this.traceId, task, title, actor, mode, replyTo });
 		this.#previous = started?.displaced ?? null;
 		return started !== null;
 	}
 
 	async stopDisplaced(): Promise<void> {
+		const control = () => this.#opts.runs ?? workflowRuns();
+		const retried = await retryCleanup(this.#db, control, this.#key, this.runId);
+		const unconfirmed = [...retried.unconfirmed];
 		if (this.#previous) {
-			const { title, actor, runs = workflowRuns() } = this.#opts;
-			const runIds = await stopTrace(this.#db, runs, this.#previous, { by: this.runId, summary: `${title} by @${actor} took over.` });
-			if (runIds.length) this.displaced = { traceId: this.#previous, runIds };
+			const { title, actor } = this.#opts;
+			const stopped = await stopTrace(this.#db, control(), this.#previous, { by: this.runId, summary: `${title} by @${actor} took over.` });
+			if (stopped.runIds.length) this.displaced = { traceId: this.#previous, runIds: stopped.runIds };
+			unconfirmed.push(...stopped.unconfirmed);
 		}
+		this.cleanup = { confirmed: retried.confirmed, unconfirmed };
 		await this.#sync();
 	}
 

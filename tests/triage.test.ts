@@ -90,9 +90,17 @@ describe("triage task", () => {
 			triage: [{ output: decision({ decision: "ask", questions: ["Should it follow the OS setting?", "Where should the toggle go?"] }) }],
 		});
 
+		const waitingWhenPosted: (string | null)[] = [];
+		const createComment = gh.createComment;
+		gh.createComment = async (number, body) => {
+			if (body.includes("questions")) waitingWhenPosted.push((await runRow(db, "trn-triage")).waiting);
+			return createComment(number, body);
+		};
+
 		const outcome = await runTriage(ctx, input, deps);
 
 		expect(outcome).toMatchObject({ state: "done", outcome: "asked", summary: "asked 2 questions." });
+		expect(waitingWhenPosted).toEqual(["reply"]);
 		expect(sandbox.opened).toEqual([{ repo: REPO, kind: "branch", name: "main" }]);
 
 		const [questions] = written(gh).filter((c) => c.author.login === BOT);

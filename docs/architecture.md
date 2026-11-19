@@ -64,12 +64,15 @@ pull request --factory:pr-review--> COMMENT review
 Trigger labels are commands. A run that a label started removes the label
 once the run has started on its thread, so applying it again starts a new run.
 
-A comment is a reply only while its issue waits for one. A run records whether
-its thread waits for a reply when it finishes. A comment on an issue starts
-work only when the root run of the issue's latest trace finished waiting, and
-then it starts that root's task again: Triage waits after it asks questions or
-posts a spec, and Autopilot after Triage asks. A comment on any other issue,
-or while a trace is running, starts nothing.
+A comment is a reply only while its issue waits for one. A run marks its trace
+as waiting just before it posts the comment that asks for a reply, with
+`run.awaiting_reply`, and keeps waiting when it finishes: Triage waits when it
+asks questions or posts a spec, and Autopilot when Triage asks. A comment on an
+issue whose latest trace waits starts that trace's root task again, bound to
+the run it answers. The resumed run starts only if that run is still the
+issue's latest and still waiting, so a reply that arrives after newer work
+started, or a second reply to the same question, starts nothing. A comment on
+any other issue starts nothing.
 
 ### Triage
 
@@ -149,10 +152,13 @@ Webhook delivery is not exactly once. GitHub can redeliver events, and people
 can apply labels or post comments at the same time. The factory handles this
 at three boundaries:
 
-1. The gateway records each delivery in the log as the stream and idempotency
-   key `delivery:github:<delivery ID>`, so another channel's delivery IDs can't
-   collide with GitHub's. The bare delivery ID is the Workflows idempotency key. If Postgres is unavailable it
-   returns 502, so GitHub marks the delivery failed and it can be redelivered.
+1. The gateway records each delivery and its decision, the task and input it
+   starts or why it starts nothing, in the log as the stream and idempotency key
+   `delivery:github:<delivery ID>`, so another channel's delivery IDs can't
+   collide with GitHub's. A redelivery replays the recorded decision instead of
+   routing again. The bare delivery ID is the Workflows idempotency key. If
+   Postgres is unavailable it returns 502, so GitHub marks the delivery failed
+   and it can be redelivered.
 2. The version of a thread's `thread:<thread>` stream fences the runs that
    start on it.
 3. Hidden markers identify App-authored specifications, pull requests, and
@@ -169,7 +175,10 @@ it displaces the new winner rather than running unfenced. If the displaced
 trace still has running runs, the new run cancels that trace's root if Render
 still has it active, terminates the Sandboxes those runs recorded, and appends
 `run.stopped` for each. Appending `run.started` first fences the displaced
-trace even when stopping it fails: it stops at its next ownership check. A
+trace even when stopping it fails: it stops at its next ownership check. When
+Render doesn't confirm a cancel or a Sandbox termination, `run.stopped` records
+what is still unconfirmed, and the next run to start on the thread retries it
+and appends `run.cleaned_up` once Render confirms. A
 child run starts only while its own trace is the thread's latest, so a stale
 child can never take the thread back.
 
@@ -184,8 +193,9 @@ only when the thread has no prior runs, so unprivileged commenters cannot
 trigger repeated status comments.
 
 `/factory cancel` is a run like any other. Starting it stops the running trace,
-root and current child; its result is what it stopped, or that nothing was
-running.
+root and current child, and retries cleanup Render hasn't confirmed. Its result
+says "cancelled" only once Render confirms everything stopped; otherwise it
+names what's unconfirmed and asks for another `/factory cancel`.
 
 A run is current while its trace is the thread's latest and the run is still
 running. GitHub tasks check this immediately before progress updates and

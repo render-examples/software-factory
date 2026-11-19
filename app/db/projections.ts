@@ -1,4 +1,13 @@
-import { runFinished, runProgress, runRejected, runSandboxAttached, runStarted, runStopped } from "../events/index.js";
+import {
+	runAwaitingReply,
+	runCleanedUp,
+	runFinished,
+	runProgress,
+	runRejected,
+	runSandboxAttached,
+	runStarted,
+	runStopped,
+} from "../events/index.js";
 import { agentRuns } from "./agent-runs.js";
 import type { Db, Tx } from "./pool.js";
 import { EVENT_COLUMNS, type LogEvent, toEvent } from "./read.js";
@@ -52,7 +61,20 @@ const runs: Projection = {
 				return;
 			}
 			case runStopped.type: {
-				await close("cancelled", "superseded", runStopped.payload.parse(event.payload).summary);
+				const { summary, unconfirmed } = runStopped.payload.parse(event.payload);
+				await tx.query(
+					`update runs set state = 'cancelled', outcome = 'superseded', summary = $2, waiting = null, cleanup_pending = $3::jsonb, finished_at = $4
+					 where run_id = $1 and state = 'running'`,
+					[runId, summary, unconfirmed ? JSON.stringify(unconfirmed) : null, event.createdAt],
+				);
+				return;
+			}
+			case runAwaitingReply.type: {
+				await tx.query("update runs set waiting = 'reply' where run_id = (select trace_id from runs where run_id = $1)", [runId]);
+				return;
+			}
+			case runCleanedUp.type: {
+				await tx.query("update runs set cleanup_pending = null where run_id = $1", [runId]);
 				return;
 			}
 			case runFinished.type: {

@@ -26,6 +26,7 @@ create table runs (
   links       jsonb,
   waiting     text,
   sandbox_id  text,
+  cleanup_pending jsonb,
   started_at  timestamptz not null,
   finished_at timestamptz
 );

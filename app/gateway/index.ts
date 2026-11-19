@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import type { TaskName } from "../config/index.js";
-import { append, type Db } from "../db/index.js";
+import { append, type Db, readStream } from "../db/index.js";
 import { errorMessage } from "../util/index.js";
 import { readBody } from "./body.js";
-import { type Decision, deliveryEvent, route } from "./routes.js";
+import { type Decision, deliveryEvent, deliveryStream, recordedDecision, route } from "./routes.js";
 import { verifySignature } from "./signature.js";
 import { threadState } from "./state.js";
 import { agentRunStream, githubThreadStream, requireReader, type StreamDeps, threadStream } from "./stream.js";
@@ -52,11 +52,9 @@ export function createGateway(deps: GatewayDeps): Hono {
 			return c.json({ error: "invalid json" }, 400);
 		}
 
-		const routed = route(event, payload, deliveryId);
 		let decision: Decision;
 		try {
-			decision = routed.kind === "lookup" ? routed.decide(await threadState(deps.db, routed.thread)) : routed;
-			await deps.db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
+			decision = await decide(deps.db, event, payload, deliveryId);
 		} catch (error) {
 			warn("could not record delivery", { deliveryId, event, error: errorMessage(error) });
 			return c.json({ error: "could not record delivery" }, 502);
@@ -80,6 +78,19 @@ export function createGateway(deps: GatewayDeps): Hono {
 	});
 
 	return app;
+}
+
+async function decide(db: Db, event: string, payload: unknown, deliveryId: string): Promise<Decision> {
+	const recorded = async () => {
+		const [first] = await readStream(db, deliveryStream(deliveryId), 0);
+		return first && recordedDecision(first);
+	};
+	const earlier = await recorded();
+	if (earlier) return earlier;
+	const routed = route(event, payload, deliveryId);
+	const decision = routed.kind === "lookup" ? routed.decide(await threadState(db, routed.thread)) : routed;
+	const appended = await db.withTx((tx) => append(tx, deliveryEvent(deliveryId, event, decision)));
+	return appended ? decision : ((await recorded()) ?? decision);
 }
 
 function warn(msg: string, fields: Record<string, unknown>): void {

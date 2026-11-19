@@ -12,12 +12,14 @@ export const TriageInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
 	commentId: z.number().int().positive().optional(),
+	replyTo: z.string().min(1).max(200).optional(),
 });
 
 export const AutopilotInput = RepoInput.extend({
 	issue: z.number().int().positive(),
 	actor: ActorLogin,
 	commentId: z.number().int().positive().optional(),
+	replyTo: z.string().min(1).max(200).optional(),
 });
 
 export const SpecApproval = z.discriminatedUnion("kind", [

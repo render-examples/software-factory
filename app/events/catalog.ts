@@ -21,22 +21,39 @@ const finalState = z.enum(["done", "failed", "cancelled"]);
 export const deliveryReceived = defineEvent(
 	"delivery.received",
 	1,
-	z.strictObject({ event: name, repo: id.optional(), task: name.optional(), ignored: z.string().max(200).optional() }),
+	z.strictObject({
+		event: name,
+		repo: id.optional(),
+		task: name.optional(),
+		input: z.record(z.string(), z.unknown()).optional(),
+		idempotency_key: z.string().max(400).optional(),
+		ignored: z.string().max(200).optional(),
+	}),
 );
 
 export const runStarted = defineEvent(
 	"run.started",
 	1,
-	z.strictObject({ run_id: id, trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue"]) }),
+	z.strictObject({ run_id: id, trace_id: id, task: name, title: name, actor: name, mode: z.enum(["replace", "continue", "reply"]) }),
 );
 
 export const runRejected = defineEvent("run.rejected", 1, z.strictObject({ trace_id: id, task: name, title: name, actor: name, reason: summary }));
 
 export const runProgress = defineEvent("run.progress", 1, z.strictObject({ summary }));
 
+export const runAwaitingReply = defineEvent("run.awaiting_reply", 1, z.strictObject({}));
+
 export const runSandboxAttached = defineEvent("run.sandbox_attached", 1, z.strictObject({ sandbox_id: id }));
 
-export const runStopped = defineEvent("run.stopped", 1, z.strictObject({ by: id, active: z.boolean(), summary }));
+const unconfirmed = z.strictObject({ task_run: id.optional(), sandboxes: z.array(id).max(50) });
+
+export const runStopped = defineEvent(
+	"run.stopped",
+	1,
+	z.strictObject({ by: id, active: z.boolean(), summary, unconfirmed: unconfirmed.optional() }),
+);
+
+export const runCleanedUp = defineEvent("run.cleaned_up", 1, z.strictObject({ by: id }));
 
 export const runFinished = defineEvent(
 	"run.finished",

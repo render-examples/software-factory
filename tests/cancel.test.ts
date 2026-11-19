@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { append, type Db } from "../app/db/index.js";
 import { runFinished } from "../app/events/index.js";
 import { runEvent, syncStatus, WORKING_LABEL } from "../app/runs/index.js";
@@ -50,6 +50,31 @@ describe("cancel task", () => {
 		expect(await runRow(db, "trn-root")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
 		expect(await runRow(db, "trn-1")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
 		expect(await runRow(db, "trn-cancel")).toMatchObject({ state: "done", outcome: "cancelled" });
+	});
+
+	it("says when Render won't confirm the stop, and retries the cleanup on the next cancel", async () => {
+		const gh = new FakeGitHub();
+		await autopilotAtSpecToPr(gh);
+		const runs = new FakeRuns({ "trn-root": "running" });
+		runs.cancelTaskRun.mockRejectedValueOnce(new Error("render is down"));
+		runs.terminateSandbox.mockRejectedValueOnce(new Error("render is down"));
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const first = await runCancel(ctx, input(), { gh: gh.asClient(), runs, db });
+
+		expect(first).toMatchObject({ state: "failed", outcome: "cancel_unconfirmed" });
+		expect(first.summary).toContain("Render hasn't confirmed that `trn-root`, `sbx-1` stopped");
+		expect(gh.status()).toContain("Comment `/factory cancel` to try again.");
+		expect(await runRow(db, "trn-root")).toMatchObject({ state: "cancelled" });
+
+		const second = await runCancel({ metadata: { taskRunId: "trn-cancel-2" } }, input(), { gh: gh.asClient(), runs, db });
+		warn.mockRestore();
+
+		expect(second).toMatchObject({ state: "done", outcome: "cleaned_up", summary: "finished stopping `trn-root`, `sbx-1`." });
+		expect(runs.cancelled).toEqual(["trn-root"]);
+		expect(runs.terminated).toEqual(["sbx-1"]);
+		const third = await runCancel({ metadata: { taskRunId: "trn-cancel-3" } }, input(), { gh: gh.asClient(), runs, db });
+		expect(third).toMatchObject({ outcome: "nothing_running" });
 	});
 
 	it("cancels the root without reclassifying a child that already finished", async () => {

@@ -211,9 +211,20 @@ describe("gateway", () => {
 		expect(res.status).toBe(202);
 		expect(startTask).toHaveBeenCalledWith(
 			"autopilot",
-			{ repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99 },
+			{ repo: REPO, installationId: 7, issue: 12, actor: "maintainer", commentId: 99, replyTo: "trn-autopilot" },
 			"delivery-1",
 		);
+	});
+
+	it("replays a delivery's recorded decision on redelivery instead of routing it again", async () => {
+		const comment = JSON.stringify(commentPayload("Thanks!"));
+		expect(await (await app.fetch(webhook(comment, { event: "issue_comment" }))).json()).toEqual({ ignored: "thread is not waiting for a reply" });
+
+		await startRun(db, REPO, ISSUE, { traceId: "trn-triage" });
+		await finishRun("trn-triage", "asked", "reply");
+
+		expect(await (await app.fetch(webhook(comment, { event: "issue_comment" }))).json()).toEqual({ ignored: "thread is not waiting for a reply" });
+		expect(startTask).not.toHaveBeenCalled();
 	});
 
 	it("ignores a comment while a trace runs, and after a root run that isn't waiting", async () => {

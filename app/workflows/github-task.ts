@@ -18,6 +18,7 @@ export interface GitHubTaskSpec<Input> {
 	input: z.ZodType<Input>;
 	thread(input: Input): GitHubThread;
 	trigger?(input: Input): { label: string; number: number } | undefined;
+	replyTo?(input: Input): string | undefined;
 	timeoutSeconds: number;
 }
 
@@ -39,6 +40,7 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 		const repo = requireRepo(input.repo, input.installationId);
 		const root = !ctx.metadata.parentTaskRunId;
 		const trigger = root ? spec.trigger?.(input) : undefined;
+		const replyTo = root ? spec.replyTo?.(input) : undefined;
 		return withRun(
 			ctx,
 			{
@@ -47,7 +49,8 @@ export function defineGitHubTask<Input extends { repo: string; installationId: n
 				task: spec.name,
 				title: spec.title,
 				actor: input.actor,
-				mode: root ? "replace" : "continue",
+				mode: !root ? "continue" : replyTo ? "reply" : "replace",
+				replyTo,
 				gh: deps.gh,
 				runs: deps.runs,
 				db: deps.db,

@@ -13,6 +13,8 @@ export {
 	runProgress,
 	runRejected,
 	runSandboxAttached,
+	runAwaitingReply,
+	runCleanedUp,
 	runStarted,
 	runStopped,
 	TOOL_TEXT_MAX,

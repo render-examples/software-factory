@@ -24,6 +24,7 @@ export const triageWorkflow = defineGitHubTask(
 		input: TriageInput,
 		thread: (input) => ({ kind: "issue", number: input.issue }),
 		trigger: (input) => (input.commentId === undefined ? { label: config.labels.triage, number: input.issue } : undefined),
+		replyTo: (input) => input.replyTo,
 		timeoutSeconds: 3600,
 	},
 	async (run, input, deps: TriageDeps): Promise<Outcome<TriageHandoff>> => {
@@ -47,6 +48,7 @@ export const triageWorkflow = defineGitHubTask(
 
 			if (decision.decision === "ask") {
 				await run.reportProgress("posting questions");
+				await run.awaitReply();
 				const round = thread.questions ? thread.questions.round + 1 : 1;
 				const body = `${triageQuestionsBody(decision.questions)}\n\n${renderMarker("questions", { round, questions: decision.questions })}`;
 				const comment = thread.questions ? await gh.updateComment(thread.questions.comment.id, body) : await gh.createComment(issue.number, body);
@@ -64,6 +66,7 @@ export const triageWorkflow = defineGitHubTask(
 			await run.reportProgress(thread.spec ? "revising the spec" : "drafting the spec");
 			const drafted = await draftSpec(agents, sandbox, specWriterMessage(repo.fullName, thread, decision));
 			await run.reportProgress("posting the spec");
+			if (run.traceId === run.runId) await run.awaitReply();
 			return { ...(await publishSpec(gh, issue, thread.spec, drafted)), waiting: "reply" };
 		});
 	},

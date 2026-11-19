@@ -242,8 +242,9 @@ durable writes; a person starts a fresh run instead.
   GitHub.
 - Return a short snake_case `outcome`, user-facing `summary`, and relevant
   links.
-- Return `waiting: "reply"` when the thread waits for a person's reply, and
-  route the reply in `route()` (see [Workflow](../architecture.md#workflow)).
+- Call `run.awaitReply()` just before posting the comment that asks for a
+  reply, return `waiting: "reply"`, and route the reply in `route()` with
+  `replyTo` set to the waiting run (see [Workflow](../architecture.md#workflow)).
 
 Only code in the Workflows service may call GitHub write methods. Format model
 text through `app/format/` before publishing it.
@@ -319,8 +320,9 @@ ownership for issue or pull request work.
 `route()` maps an authenticated delivery to a validated task input without I/O.
 GitHub labels and other payload state never carry thread state on their own.
 When a delivery's meaning depends on thread state, `route()` returns a
-`lookup`: the gateway reads `waiting` (the root task waiting for a reply) from
-Postgres and passes it to `decide()`.
+`lookup`: the gateway reads `waiting` (the root run waiting for a reply, and its
+task) from Postgres and passes it to `decide()`. The gateway records each
+decision and replays it on redelivery.
 
 1. Add the task name and input schema first.
 2. Update `route()` in `app/gateway/routes.ts`.

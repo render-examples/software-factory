@@ -303,6 +303,48 @@ describe("the status comment", () => {
 	});
 });
 
+describe("replies", () => {
+	const asked = async () => ({ outcome: "asked", summary: "asked 1 question.", waiting: "reply" as const });
+	const reply = (gh: FakeGitHub, replyTo: string) => options(gh, { mode: "reply", replyTo });
+
+	it("resumes the run that waits for the reply, and only once", async () => {
+		const gh = new FakeGitHub();
+		await withRun(root("trn-asked"), options(gh), asked);
+
+		expect(await withRun(root("trn-reply-1"), reply(gh, "trn-asked"), done)).toMatchObject({ state: "done" });
+		expect(await withRun(root("trn-reply-2"), reply(gh, "trn-asked"), done)).toMatchObject({ state: "cancelled", outcome: "stale_reply" });
+		expect(await owner()).toEqual({ trace_id: "trn-reply-1", run_id: "trn-reply-1" });
+	});
+
+	it("leaves newer work alone when a delayed reply arrives", async () => {
+		const gh = new FakeGitHub();
+		await withRun(root("trn-asked"), options(gh), asked);
+		await startRun(db, REPO.fullName, thread, { traceId: "trn-spec", task: "spec-to-pr", title: "Spec-to-PR", sandboxId: "sbx-spec" });
+		const runs = new FakeRuns({ "trn-spec": "running" });
+
+		const result = await withRun(root("trn-reply"), { ...reply(gh, "trn-asked"), runs }, done);
+
+		expect(result).toMatchObject({ state: "cancelled", outcome: "stale_reply" });
+		expect(runs.cancelTaskRun).not.toHaveBeenCalled();
+		expect(await runRow(db, "trn-spec")).toMatchObject({ state: "running" });
+	});
+
+	it("takes a reply posted after the questions but before the run that asked them finished", async () => {
+		const gh = new FakeGitHub();
+		let replied: Promise<unknown> = Promise.resolve();
+		await withRun(root("trn-asked"), options(gh), async (run) => {
+			await run.awaitReply();
+			replied = withRun(root("trn-reply"), reply(gh, "trn-asked"), done);
+			await replied;
+			return asked();
+		});
+
+		expect(await replied).toMatchObject({ state: "done", runId: "trn-reply" });
+		expect(await runRow(db, "trn-asked")).toMatchObject({ state: "cancelled", outcome: "superseded" });
+		expect(await owner()).toEqual({ trace_id: "trn-reply", run_id: "trn-reply" });
+	});
+});
+
 describe("db:rebuild", () => {
 	it("recreates runs and threads from the log and keeps the status comment's ID", async () => {
 		const gh = new FakeGitHub();

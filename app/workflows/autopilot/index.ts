@@ -102,6 +102,7 @@ export const autopilotWorkflow = defineGitHubTask(
 		input: AutopilotInput,
 		thread: (input) => ({ kind: "issue", number: input.issue }),
 		trigger: (input) => (input.commentId === undefined ? { label: config.labels.autopilot, number: input.issue } : undefined),
+		replyTo: (input) => input.replyTo,
 		timeoutSeconds: TIMEOUT_SECONDS,
 	},
 	autopilot,

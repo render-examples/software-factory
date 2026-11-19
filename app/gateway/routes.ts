@@ -1,6 +1,6 @@
 import { type ZodType, z } from "zod";
 import { config, resolveRepo, TASKS, type TaskName } from "../config/index.js";
-import type { NewEvent } from "../db/index.js";
+import type { LogEvent, NewEvent } from "../db/index.js";
 import { deliveryReceived } from "../events/index.js";
 import { AutopilotInput, CancelInput, PrReviewInput, RefreshSnapshotInput, SpecToPrInput, TriageInput } from "../schemas/index.js";
 import { type GitHubThread, githubThread, type ThreadKey } from "../threads/index.js";
@@ -18,7 +18,7 @@ export type Decision =
 	| { kind: "invalid"; task: TaskName; reason: string; thread?: ThreadKey };
 
 export interface ThreadState {
-	waiting: string | null;
+	waiting: { task: string; runId: string } | null;
 }
 
 export type Route = Decision | { kind: "lookup"; thread: ThreadKey; decide(state: ThreadState): Decision };
@@ -133,9 +133,9 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 				kind: "lookup",
 				thread: on(thread),
 				decide: ({ waiting }) => {
-					const input = { issue: issue.number, actor, commentId: comment.id };
-					if (waiting === TASKS.triage) return start(TASKS.triage, TriageInput, input, thread);
-					if (waiting === TASKS.autopilot) return start(TASKS.autopilot, AutopilotInput, input, thread);
+					const input = { issue: issue.number, actor, commentId: comment.id, replyTo: waiting?.runId };
+					if (waiting?.task === TASKS.triage) return start(TASKS.triage, TriageInput, input, thread);
+					if (waiting?.task === TASKS.autopilot) return start(TASKS.autopilot, AutopilotInput, input, thread);
 					return ignore("thread is not waiting for a reply");
 				},
 			};
@@ -156,14 +156,25 @@ export function route(event: string, payload: unknown, deliveryId: string): Rout
 	}
 }
 
+export const deliveryStream = (deliveryId: string) => `delivery:github:${deliveryId}`;
+
 export function deliveryEvent(deliveryId: string, event: string, decision: Decision): NewEvent<typeof deliveryReceived.payload> {
 	const payload =
 		decision.kind === "ignore"
 			? { event, ignored: decision.reason }
 			: decision.kind === "invalid"
 				? { event, task: decision.task, ignored: "invalid task input" }
-				: { event, repo: decision.input.repo, task: decision.task };
+				: { event, repo: decision.input.repo, task: decision.task, input: decision.input, idempotency_key: decision.idempotencyKey };
 	const thread = decision.kind === "ignore" ? undefined : decision.thread;
-	const stream = `delivery:github:${deliveryId}`;
+	const stream = deliveryStream(deliveryId);
 	return { type: deliveryReceived, stream, thread, source: "github", payload, idempotencyKey: stream };
+}
+
+export function recordedDecision(event: LogEvent): Decision {
+	const { task, input, idempotency_key, ignored } = deliveryReceived.payload.parse(event.payload);
+	const thread = event.thread ?? undefined;
+	if (task && input && idempotency_key)
+		return { kind: "start", task: task as TaskName, input: input as { repo: string }, idempotencyKey: idempotency_key, thread };
+	if (task) return { kind: "invalid", task: task as TaskName, reason: ignored ?? "invalid task input", thread };
+	return { kind: "ignore", reason: ignored ?? "ignored" };
 }
