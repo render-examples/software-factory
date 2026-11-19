@@ -7,10 +7,11 @@ software-factory is a GitHub-native coding agent template for Render. AI agents
 triage issues, write specs, implement them in isolated Render Sandboxes, and
 review pull requests. You make the judgment calls.
 
-It's a foundation, not a finished product. The template handles authenticating
-GitHub events, running agents in isolated Sandboxes, coordinating overlapping
-runs and cancellation, validating agent output, publishing code safely, and
-recording every run. You bring the agents, prompts, triggers, approval gates,
+The template handles authenticating GitHub events, running agents in isolated Sandboxes, 
+coordinating overlapping runs and cancellation, validating agent output, 
+publishing code safely, and recording every run. 
+
+You bring the agents, prompts, triggers, approval gates,
 and channels your workflow needs.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
