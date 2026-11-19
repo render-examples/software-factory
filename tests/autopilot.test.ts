@@ -1,25 +1,15 @@
 import type { TaskContext } from "@renderinc/sdk/workflows";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TaskResult } from "../app/claims/index.js";
-import type { FactoryEvent } from "../app/events/index.js";
-import type { GitHubClient, IssueComment } from "../app/github/index.js";
-import { renderMarker } from "../app/github/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { config } from "../app/config/index.js";
+import type { Db } from "../app/db/index.js";
+import type { TaskResult } from "../app/runs/index.js";
+import { type AutopilotDeps, runAutopilot } from "../app/workflows/autopilot/index.js";
 import type { SpecToPrHandoff } from "../app/workflows/spec-to-pr/index.js";
 import type { TriageHandoff } from "../app/workflows/triage/spec.js";
 import { REPO } from "./fixtures/config.js";
-
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
-
-const { config } = await import("../app/config/index.js");
-const { runAutopilot } = await import("../app/workflows/autopilot/index.js");
-const { triageWorkflow } = await import("../app/workflows/triage/index.js");
-const { specToPrWorkflow } = await import("../app/workflows/spec-to-pr/index.js");
-const { prReviewWorkflow } = await import("../app/workflows/pr-review/index.js");
+import { pgliteDb, resetDb } from "./helpers/db.js";
+import { FakeGitHub } from "./helpers/fake-github.js";
+import { runRow, startRun } from "./helpers/runs.js";
 
 const SPEC_HASH = "b".repeat(64);
 
@@ -40,103 +30,26 @@ const result = <Data>(runId: string, outcome: string, overrides: Partial<TaskRes
 	...overrides,
 });
 
-class FakeGitHub {
-	readonly labels = new Map<number, Set<string>>([[12, new Set([config.labels.autopilot])]]);
-	readonly comments: IssueComment[] = [];
-	private nextId = 1;
+let gh: FakeGitHub;
+const run = (stages: Omit<AutopilotDeps, "gh" | "db">, extra: { commentId?: number } = {}) =>
+	runAutopilot(ctx, { ...input, ...extra }, { gh: gh.asClient(), db, ...stages });
 
-	botLogin = async () => "software-factory[bot]";
-	listIssueComments = async (_number: number) => this.comments.map((comment) => ({ ...comment }));
-	createComment = async (number: number, body: string) => {
-		const comment: IssueComment = {
-			id: this.nextId++,
-			body,
-			author: { login: "software-factory[bot]", type: "Bot" },
-			createdAt: "2026-10-25T11:00:00Z",
-			updatedAt: "2026-10-25T11:00:00Z",
-			htmlUrl: `https://github.test/issues/${number}#issuecomment-${this.nextId}`,
-		};
-		this.comments.push(comment);
-		return { ...comment };
-	};
-	updateComment = async (id: number, body: string) => {
-		const comment = this.comments.find((candidate) => candidate.id === id);
-		if (!comment) throw new Error(`missing comment ${id}`);
-		comment.body = body;
-		return { ...comment };
-	};
-	ensureLabel = async () => {};
-	addLabels = async (number: number, labels: readonly string[]) => {
-		const current = this.labels.get(number) ?? new Set<string>();
-		this.labels.set(number, current);
-		for (const label of labels) current.add(label);
-	};
-	getIssue = async (number: number) => ({
-		number,
-		title: "Autopilot issue",
-		body: "Build the feature.",
-		state: "open",
-		labels: [...(this.labels.get(number) ?? [])],
-		author: { login: "reporter", type: "User" },
-		isPull: false,
-		htmlUrl: `https://github.test/issues/${number}`,
-	});
-	getPermission = async () => "write" as const;
-	removeLabel = async (number: number, label: string) => {
-		this.labels.get(number)?.delete(label);
-	};
-
-	replaceOwner(traceId: string) {
-		const comment = this.comments[0];
-		if (!comment) throw new Error("status comment does not exist");
-		comment.body = renderMarker("status", { runId: `${traceId}-child`, traceId, stage: "triage", title: "Triage", state: "running" });
-	}
-}
-
-const asClient = (gh: FakeGitHub) => gh as unknown as GitHubClient;
-
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
+});
+afterAll(() => db.end());
+beforeEach(async () => {
+	await resetDb(db);
+	gh = new FakeGitHub();
+	gh.labels(12).add(config.labels.autopilot);
 });
 
 describe("autopilot", () => {
-	it("runs the registered GitHub task definitions as Workflows children", async () => {
-		const gh = new FakeGitHub();
-		const names: string[] = [];
-		const workflowCtx = {
-			metadata: ctx.metadata,
-			bound: true,
-			async run(this: { bound: boolean }, definition: { name: string }, stageInput: unknown) {
-				expect(this.bound).toBe(true);
-				names.push(definition.name);
-				if (definition.name === "triage") {
-					return result<TriageHandoff>("trn-triage", "drafted", {
-						data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 },
-					});
-				}
-				if (definition.name === "spec-to-pr") {
-					expect(stageInput).toMatchObject({
-						approval: { kind: "autopilot", commentId: 100, hash: SPEC_HASH, version: 1 },
-					});
-					return result<SpecToPrHandoff>("trn-spec", "pr_opened", {
-						data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) },
-					});
-				}
-				expect(stageInput).toMatchObject({ pr: 34, workflowIssue: 12 });
-				return result("trn-review", "reviewed");
-			},
-		} as unknown as Pick<TaskContext, "metadata" | "run">;
-
-		const output = await runAutopilot(workflowCtx, input, { gh: asClient(gh) });
-		expect(names).toEqual(["triage", "spec-to-pr", "pr-review"]);
-		expect(output.outcome).toBe("completed");
-	});
-
-	it("runs Triage, Spec-to-PR, and PR Reviewer in order", async () => {
-		const gh = new FakeGitHub();
+	it("runs Triage and Spec-to-PR, then starts PR Reviewer on the draft pull request", async () => {
 		const order: string[] = [];
-		const output = await runAutopilot(ctx, input, {
-			gh: asClient(gh),
+		const startPrReview = vi.fn(async () => ({ id: "trn-review" }));
+		const output = await run({
 			triage: async () => {
 				order.push("triage");
 				return result<TriageHandoff>("trn-triage", "drafted", {
@@ -150,121 +63,119 @@ describe("autopilot", () => {
 					data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) },
 				});
 			},
-			prReview: async (stageInput) => {
-				order.push("pr-review");
-				expect(stageInput).toMatchObject({ pr: 34, headSha: "a".repeat(40), workflowIssue: 12 });
-				return result("trn-review", "reviewed");
-			},
+			startPrReview,
 		});
 
-		expect(order).toEqual(["triage", "spec-to-pr", "pr-review"]);
-		expect(output).toMatchObject({ state: "done", outcome: "completed", summary: "opened and reviewed draft PR #34." });
-		expect(output.data?.stages.map((stage) => [stage.task, stage.runId])).toEqual([
-			["triage", "trn-triage"],
-			["spec-to-pr", "trn-spec"],
-			["pr-review", "trn-review"],
-		]);
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(events).toContainEqual(
-			expect.objectContaining({ type: "run.finished", payload: expect.objectContaining({ stage: "autopilot", outcome: "completed" }) }),
+		expect(order).toEqual(["triage", "spec-to-pr"]);
+		expect(startPrReview).toHaveBeenCalledExactlyOnceWith(
+			{ repo: REPO, installationId: 5, actor: "maintainer", pr: 34, headSha: "a".repeat(40) },
+			`trn-autopilot:pr-review:${"a".repeat(40)}`,
 		);
+		expect(output).toMatchObject({
+			state: "done",
+			outcome: "pr_opened",
+			summary: "opened draft PR #34; PR Reviewer is reviewing it on the pull request.",
+		});
+		expect(output.data?.stages.map((stage) => stage.task)).toEqual(["triage", "spec-to-pr"]);
+		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "done", outcome: "pr_opened" });
 	});
 
-	it("keeps the autopilot label while Triage waits for answers", async () => {
-		const gh = new FakeGitHub();
+	it("says how to review the draft pull request when PR Reviewer can't start", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const output = await run({
+			triage: async () => result<TriageHandoff>("trn-triage", "drafted", { data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 } }),
+			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "pr_opened", { data: { kind: "pull_request", pr: 34, headSha: "a".repeat(40) } }),
+			startPrReview: async () => {
+				throw new Error("Render API returned 503");
+			},
+		});
+		warn.mockRestore();
+
+		expect(output).toMatchObject({ state: "failed", outcome: "review_not_started" });
+		expect(output.summary).toContain(`Apply \`${config.labels.prReview}\` to the pull request`);
+	});
+
+	it.each(["asked", "skipped"])("waits for a reply when its resumed Triage %s", async (outcome) => {
 		const specToPr = vi.fn();
-		const output = await runAutopilot(
-			ctx,
-			{ ...input, commentId: 99 },
+		const output = await run(
 			{
-				gh: asClient(gh),
 				triage: async (stageInput) => {
 					expect(stageInput.commentId).toBe(99);
-					return result("trn-triage", "asked", { summary: "asked one question." });
+					return result("trn-triage", outcome, { summary: `${outcome}.` });
 				},
 				specToPr,
 			},
+			{ commentId: 99 },
 		);
 
-		expect(output).toMatchObject({ state: "done", outcome: "waiting_for_answers" });
-		expect(gh.labels.get(12)).toContain(config.labels.autopilot);
+		expect(output).toMatchObject({ state: "done", outcome: "waiting_for_answers", summary: `${outcome}.` });
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ outcome: "waiting_for_answers", waiting: "reply" });
+		expect(gh.labels(12)).toContain(config.labels.autopilot);
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
 	it("stops after a terminal stage result and removes the autopilot label", async () => {
-		const gh = new FakeGitHub();
-		const prReview = vi.fn();
-		const output = await runAutopilot(ctx, input, {
-			gh: asClient(gh),
+		const startPrReview = vi.fn();
+		const output = await run({
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "unchanged", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 2 },
 				}),
 			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "verification_failed", { state: "failed", summary: "verification failed." }),
-			prReview,
+			startPrReview,
 		});
 
 		expect(output).toMatchObject({ state: "failed", outcome: "stopped_at_spec_to_pr", summary: "verification failed." });
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(prReview).not.toHaveBeenCalled();
+		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
+		expect(startPrReview).not.toHaveBeenCalled();
 	});
 
-	it("does not start another stage after the current one is superseded", async () => {
-		const gh = new FakeGitHub();
+	it.each([
+		{ stage: "asks a question", triage: result<TriageHandoff>("trn-triage", "asked", { summary: "asked one question." }) },
+		{ stage: "is superseded", triage: result<TriageHandoff>("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." }) },
+	])("stops without waiting or starting another stage when a newer run takes over and Triage $stage", async ({ triage }) => {
 		const specToPr = vi.fn();
-		const output = await runAutopilot(ctx, input, {
-			gh: asClient(gh),
+		const output = await run({
 			triage: async () => {
-				gh.replaceOwner("trn-new-autopilot");
-				return result("trn-triage", "superseded", { state: "cancelled", summary: "a newer run took over." });
+				await startRun(db, REPO, { kind: "issue", number: 12 }, { traceId: "trn-new-autopilot" });
+				return triage;
 			},
 			specToPr,
 		});
 
 		expect(output).toMatchObject({ state: "cancelled", outcome: "superseded" });
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "cancelled", waiting: null });
+		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
 		expect(specToPr).not.toHaveBeenCalled();
 	});
 
 	it("stops when a child rejects the actor's permission", async () => {
-		const gh = new FakeGitHub();
-		const prReview = vi.fn();
-		const output = await runAutopilot(ctx, input, {
-			gh: asClient(gh),
+		const startPrReview = vi.fn();
+		const output = await run({
 			triage: async () =>
 				result<TriageHandoff>("trn-triage", "drafted", {
 					data: { kind: "spec", commentId: 100, hash: SPEC_HASH, version: 1 },
 				}),
 			specToPr: async () => result<SpecToPrHandoff>("trn-spec", "permission_denied", { state: "rejected" }),
-			prReview,
+			startPrReview,
 		});
 
 		expect(output).toMatchObject({ state: "failed", outcome: "stopped_at_spec_to_pr" });
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(gh.labels.get(12)).not.toContain(config.labels.specApproved);
-		expect(prReview).not.toHaveBeenCalled();
+		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
+		expect(gh.labels(12)).not.toContain(config.labels.specApproved);
+		expect(startPrReview).not.toHaveBeenCalled();
 	});
 
 	it("removes the autopilot label and rethrows an unexpected stage error", async () => {
-		const gh = new FakeGitHub();
 		await expect(
-			runAutopilot(ctx, input, {
-				gh: asClient(gh),
+			run({
 				triage: async () => {
 					throw new Error("task transport failed");
 				},
 			}),
 		).rejects.toThrow("task transport failed");
-		expect(gh.labels.get(12)).not.toContain(config.labels.autopilot);
-		expect(events).toContainEqual(expect.objectContaining({ type: "run.finished", payload: expect.objectContaining({ outcome: "error" }) }));
-	});
-});
-
-describe("GitHub task authoring", () => {
-	it("exposes a direct runner and a registered subtask definition", () => {
-		expect(triageWorkflow.task.name).toBe("triage");
-		expect(specToPrWorkflow.task.name).toBe("spec-to-pr");
-		expect(prReviewWorkflow.task.name).toBe("pr-review");
-		expect(typeof triageWorkflow.run).toBe("function");
+		expect(gh.labels(12)).not.toContain(config.labels.autopilot);
+		expect(await runRow(db, "trn-autopilot")).toMatchObject({ state: "failed", outcome: "error" });
 	});
 });

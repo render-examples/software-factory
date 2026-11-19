@@ -6,7 +6,6 @@ const Items = (max: number) => z.array(Item).max(max);
 export const AcceptanceCriterion = z.strictObject({
 	id: z.string().regex(/^AC-[1-9]\d*$/, 'criterion IDs look like "AC-1"'),
 	text: z.string().min(1).max(1000),
-	/** No browser testing at launch: a criterion is checked by tests or the build, or by a person. */
 	verification: z.enum(["automated", "manual"]),
 });
 
@@ -30,17 +29,15 @@ export const Spec = z.strictObject({
 	openQuestions: Items(20),
 });
 
-/** What the spec writer learned, kept with the spec so later rounds skip the research. */
 export const SpecNotes = z.strictObject({
 	findings: z.string().max(8000),
 	relevantPaths: z.array(z.string().min(1)).max(50),
 });
 
-/** The spec writer's submission. */
 export const SpecDraft = z.strictObject({
-	spec: Spec,
 	notes: SpecNotes,
 	changeSummary: z.string().max(2000).optional().describe("Only when revising a previous version: what changed and why."),
+	spec: Spec,
 });
 
 export type AcceptanceCriterion = z.infer<typeof AcceptanceCriterion>;
@@ -49,20 +46,13 @@ export type Spec = z.infer<typeof Spec>;
 export type SpecNotes = z.infer<typeof SpecNotes>;
 export type SpecDraft = z.infer<typeof SpecDraft>;
 
-/** The spec travels as JSON in its comment's hidden marker; past this size it no longer fits beside the rendered spec. */
 export const SPEC_MAX_JSON_CHARS = 20_000;
 
 export interface SpecValidation {
-	/** The spec can't be posted or implemented as is. */
 	errors: string[];
-	/** Worth showing the maintainer, but not blocking. */
 	warnings: string[];
 }
 
-/**
- * Rules the schema can't express. Paths that don't exist yet are warnings, not errors, because a spec may
- * add files; pass `existingPaths` (repository-relative) to check them.
- */
 export function validateSpec(spec: Spec, existingPaths?: ReadonlySet<string>): SpecValidation {
 	const errors: string[] = [];
 	const warnings: string[] = [];

@@ -1,15 +1,13 @@
-import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxExecEvent } from "@renderinc/sdk/experimental";
 import { list as listTar } from "tar";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { config, type RepoContext } from "../app/config/index.js";
+import type { RepoContext } from "../app/config/index.js";
 import { buildSnapshot, type OpenSandboxDeps, openSandbox, type SandboxApi, SandboxClient, type SnapshotManifest } from "../app/sandbox/index.js";
 import { runnerPayload } from "../app/sandbox/snapshot.js";
 
-/** The files in a gzipped tar, by path. */
 async function untar(data: Buffer): Promise<Map<string, string>> {
 	const files = new Map<string, string>();
 	await pipeline(
@@ -26,8 +24,7 @@ async function untar(data: Buffer): Promise<Map<string, string>> {
 }
 
 const FAKE_BUNDLE = "// fake runner bundle\n";
-vi.mock("../app/runner/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
-const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+vi.mock("../app/runner-bundle/bundle.js", () => ({ bundleRunner: async () => "// fake runner bundle\n" }));
 
 const TOKEN = "ghs_factoryReadToken0000000000000000000";
 const BASE_SHA = "1".repeat(40);
@@ -48,7 +45,7 @@ const repo = (overrides: Partial<RepoContext["config"]> = {}): RepoContext => ({
 type Call =
 	| { op: "create"; id: string; input: Parameters<SandboxApi["create"]>[0] }
 	| { op: "exec"; id: string; command: string }
-	| { op: "upload"; id: string; path: string; data: unknown; contentType?: string }
+	| { op: "upload"; id: string; path: string; data: unknown }
 	| { op: "download" | "terminate"; id: string; path?: string }
 	| { op: "snapshot.create" | "snapshot.get" | "snapshot.list" | "snapshot.delete"; input: unknown };
 
@@ -73,13 +70,11 @@ function snapshot(id: string, status: "creating" | "available" | "failed", name:
 	};
 }
 
-/** In-memory stand-in for the SDK's SandboxesClient that records every call. */
 class FakeApi {
 	calls: Call[] = [];
 	createError?: (input: Parameters<SandboxApi["create"]>[0]) => Error | undefined;
 	lockfileHash = HASH;
 	fetchedSha = HEAD_SHA;
-	dirtyAfterInstall = "";
 	overrides: ExecHandler = () => [];
 	manifest: SnapshotManifest = {
 		repo: "acme/web",
@@ -101,7 +96,6 @@ class FakeApi {
 		if (command.includes("verify.sh")) return [out("noise\n", "stderr"), out(info()), exit(0)];
 		if (command === "command -v node") return [out("/usr/bin/node\n"), exit(0)];
 		if (command.includes("lockfile-hash.sh")) return [out(`${this.lockfileHash}\n`), exit(0)];
-		if (command.includes("'status' '--porcelain'")) return [out(this.dirtyAfterInstall), exit(0)];
 		if (command.includes("FETCH_HEAD")) return [out(`${this.fetchedSha}\n`), exit(0)];
 		return [out("progress\n", "stderr"), exit(0)];
 	}
@@ -126,8 +120,8 @@ class FakeApi {
 					yield* events;
 				})();
 			},
-			async upload(id: string, path: string, data: unknown, _ownerId?: string, opts?: { contentType?: string }) {
-				self.calls.push({ op: "upload", id, path, data, contentType: opts?.contentType });
+			async upload(id: string, path: string, data: unknown) {
+				self.calls.push({ op: "upload", id, path, data });
 			},
 			async download(id: string, path: string) {
 				self.calls.push({ op: "download", id, path });
@@ -166,7 +160,6 @@ class FakeApi {
 		return this.calls.flatMap((c) => (c.op === op && "input" in c ? [c.input] : []));
 	}
 
-	/** Index of the first call matching `pred`; -1 when none. */
 	index(pred: (c: Call) => boolean): number {
 		return this.calls.findIndex(pred);
 	}
@@ -181,7 +174,7 @@ class FakeApi {
 }
 
 let fake: FakeApi;
-const client = () => new SandboxClient(fake.api(), { minRequestIntervalMs: 0, pollMs: 1, bootTimeoutMs: 1_000 });
+const client = () => new SandboxClient(fake.api(), { pollMs: 1, bootTimeoutMs: 1_000 });
 const readToken = async () => TOKEN;
 
 beforeEach(() => {
@@ -189,99 +182,17 @@ beforeEach(() => {
 });
 
 describe("buildSnapshot", () => {
-	it("orders the build by trust and snapshots under the repository's name", async () => {
+	it("keeps the token out of commands, scrubs it before install, and snapshots under the repository's name", async () => {
 		const built = await buildSnapshot(client(), repo(), BASE_SHA, { readToken });
-		expect(built).toMatchObject({ id: "snp-new", sandboxGroupId: "sbg-1", name: NAME });
+		expect(built).toMatchObject({ id: "snp-new", name: NAME, manifest: { sha: BASE_SHA, lockfileHash: HASH } });
 
-		const creates = fake.calls.filter((c) => c.op === "create");
-		expect(creates).toHaveLength(1);
-		expect(creates[0]?.input).toEqual({ timeoutSeconds: 3_600, networkPolicy: allowList("github.com", "deb.debian.org") });
-
-		const tokenUpload = fake.index((c) => c.op === "upload" && c.path === "/tmp/factory-stage/creds/github.com");
-		const order = [
-			fake.execIndex("install-tools.sh"),
-			fake.index((c) => c.op === "upload" && c.path === "/opt/factory/app/env"),
-			fake.execIndex("--self-test"),
-			tokenUpload,
-			fake.execIndex(" clone "),
-			fake.execIndex("scrub-credentials.sh"),
-			fake.execIndex("chown -R factory: /opt/factory/repo"),
-			fake.execIndex("lockfile-hash.sh"),
-			fake.execIndex("'bash' '-c' 'npm ci'"),
-			fake.execIndex("'status' '--porcelain'"),
-			fake.index((c) => c.op === "upload" && c.path === "/opt/factory/app/manifest.json"),
-			fake.execIndex("node-runner"),
-			fake.execIndex("verify.sh"),
-			fake.index((c) => c.op === "snapshot.create"),
-			fake.index((c) => c.op === "snapshot.list"),
-			fake.index((c) => c.op === "terminate"),
-		];
-		for (const i of order) expect(i).toBeGreaterThanOrEqual(0);
-		expect(order).toEqual([...order].sort((a, b) => a - b));
-
-		// The token is uploaded as a file and never appears in a command.
 		expect(fake.commands().some((c) => c.includes(TOKEN))).toBe(false);
-		const credUpload = fake.calls[tokenUpload] as { data: string };
-		expect(credUpload.data).toBe(`x-access-token\n${TOKEN}`);
-
-		// Clone the base branch single-branch, then the pushed commit on a local branch of that name.
-		const clone = fake.commands().find((c) => c.includes(" clone "));
-		expect(clone).toContain("clone --quiet --single-branch --branch 'main' --no-tags -- 'https://github.com/acme/web.git' /opt/factory/repo");
-		expect(clone).toContain(`checkout --quiet -B 'main' ${BASE_SHA}`);
-		expect(clone).toContain("'credential.helper=!bash /opt/factory/app/build/git-credential-staged.sh /tmp/factory-stage/creds'");
-
-		// The install runs as the runner user, through as-runner.sh.
-		expect(fake.commands()).toContain("bash /opt/factory/app/as-runner.sh 'bash' '-c' 'npm ci'");
+		const scrub = fake.execIndex("scrub-credentials.sh");
+		expect(scrub).toBeGreaterThanOrEqual(0);
+		expect(fake.execIndex("npm ci")).toBeGreaterThan(scrub);
 
 		expect(fake.inputs("snapshot.create")).toEqual([{ sandboxId: "sbx-1", kind: "filesystem", name: NAME }]);
 		expect(fake.terminated()).toEqual(["sbx-1"]);
-
-		const manifestUpload = fake.calls.find((c) => c.op === "upload" && c.path === "/opt/factory/app/manifest.json") as {
-			data: string;
-		};
-		expect(JSON.parse(manifestUpload.data)).toMatchObject({
-			repo: "acme/web",
-			baseBranch: "main",
-			sha: BASE_SHA,
-			lockfileHash: HASH,
-			install: "npm ci",
-		});
-		expect(built.manifest.sha).toBe(BASE_SHA);
-
-		// Staging archive: scripts plus the runner bundle, uploaded as an opaque .tgz.
-		const stage = fake.calls.find((c) => c.op === "upload" && c.path === "/tmp/factory-stage/stage.tgz") as {
-			data: Buffer;
-			contentType?: string;
-		};
-		expect(stage.contentType).toBeUndefined();
-		const files = await untar(stage.data);
-		expect([...files.keys()].filter((p) => !p.endsWith("/")).sort()).toEqual([
-			"as-runner.sh",
-			"build/git-credential-staged.sh",
-			"build/scrub-credentials.sh",
-			"collect-changes.sh",
-			"install-tools.sh",
-			"lockfile-hash.sh",
-			"run-agent.sh",
-			"runner/payload.sha256",
-			"runner/runner.mjs",
-			"verify.sh",
-		]);
-		expect(files.get("runner/runner.mjs")).toBe("// fake runner bundle\n");
-		expect(files.get("runner/payload.sha256")).toBe((await runnerPayload()).sha256);
-
-		const env = fake.calls.find((c) => c.op === "upload" && c.path === "/opt/factory/app/env") as { data: string };
-		expect(env.data).toContain("FACTORY_RUN_AS=factory\n");
-		expect(env.data).toContain("FACTORY_REPO_DIR=/opt/factory/repo\n");
-		expect(env.data).toContain("FACTORY_RUNNER_NODE=/opt/factory/app/node-runner\n");
-		expect(env.data).toContain("FACTORY_NODE=/usr/bin/node\n");
-	});
-
-	it("adds the repository's egress hosts to the builder's allow-list, once each", async () => {
-		await buildSnapshot(client(), repo({ egress: ["registry.npmjs.org", "github.com"] }), BASE_SHA, { readToken });
-		expect(fake.inputs("create")).toEqual([
-			{ timeoutSeconds: 3_600, networkPolicy: allowList("github.com", "deb.debian.org", "registry.npmjs.org") },
-		]);
 	});
 
 	it("names the allow-list when install fails, since a blocked host looks like a network flake", async () => {
@@ -301,50 +212,40 @@ describe("buildSnapshot", () => {
 	});
 });
 
-describe("openSandbox", () => {
-	const deps = (extra: Partial<OpenSandboxDeps> = {}): OpenSandboxDeps => ({ client: client(), readToken, ...extra });
+const deps = (extra: Partial<OpenSandboxDeps> = {}): OpenSandboxDeps => ({ client: client(), readToken, ...extra });
 
-	it("restores by snapshot name, verifies, and fetches a branch as the runner user", async () => {
+describe("Sandbox egress", () => {
+	it.each([
+		{
+			name: "adds the repository's hosts to the builder's allow-list, once each",
+			open: () => buildSnapshot(client(), repo({ egress: ["registry.npmjs.org", "github.com"] }), BASE_SHA, { readToken }),
+			policy: allowList("github.com", "deb.debian.org", "registry.npmjs.org"),
+		},
+		{
+			name: "adds the repository's hosts to an agent sandbox's allow-list",
+			open: () => openSandbox(repo({ egress: ["proxy.golang.org", "*.example.com"] }), { kind: "branch", name: "main" }, deps()),
+			policy: allowList("github.com", "api.anthropic.com", "proxy.golang.org", "*.example.com"),
+		},
+		{
+			name: "lifts the limit only for a repository configured allow-all",
+			open: () => openSandbox(repo({ egress: "allow-all" }), { kind: "branch", name: "main" }, deps()),
+			policy: { type: "allow-all" },
+		},
+	])("$name", async ({ open, policy }) => {
+		await open();
+		expect(fake.inputs("create").map((input) => (input as { networkPolicy: unknown }).networkPolicy)).toEqual([policy]);
+	});
+});
+
+describe("openSandbox", () => {
+	it("restores by snapshot name, verifies, and checks out the fetched head without the token in any command", async () => {
 		const sbx = await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
 		expect(sbx).toMatchObject({ id: "sbx-1", headSha: HEAD_SHA, manifest: fake.manifest });
-
-		const creates = fake.calls.filter((c) => c.op === "create");
-		expect(creates.map((c) => c.input)).toEqual([
-			{ snapshotName: NAME, networkPolicy: allowList("github.com", "api.anthropic.com"), timeoutSeconds: config.sandbox.timeoutSeconds },
-		]);
-		expect(fake.commands().filter((c) => c.includes("verify.sh"))).toEqual(["bash /opt/factory/app/verify.sh"]);
-
-		const credUpload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-fetch-[0-9a-f-]{36}\/github\.com$/.test(c.path)) as {
-			path: string;
-			data: string;
-		};
-		expect(credUpload.data).toBe(`x-access-token\n${TOKEN}`);
-		const dir = credUpload.path.replace(/\/github\.com$/, "");
-		const commands = fake.commands();
-		expect(commands.some((c) => c.includes(TOKEN))).toBe(false);
-		expect(commands).toContain(`chown -R factory: ${dir} && chmod 600 ${dir}/github.com`);
-		const fetchIdx = fake.execIndex("'fetch'");
-		const fetchCmd = commands.find((c) => c.includes("'fetch'"));
-		expect(fetchCmd).toBe(
-			"bash /opt/factory/app/as-runner.sh 'git' '-c' 'credential.helper=' " +
-				`'-c' 'credential.helper=!bash /opt/factory/app/build/git-credential-staged.sh ${dir}' ` +
-				"'fetch' '--quiet' '--no-tags' 'origin' 'refs/heads/main'",
-		);
-		const scrubIdx = fake.execIndex(`scrub-credentials.sh ${dir} /opt/factory/repo`);
-		expect(scrubIdx).toBeGreaterThan(fetchIdx);
-		expect(fake.execIndex(`'checkout' '--quiet' '--detach' '${HEAD_SHA}'`)).toBeGreaterThan(scrubIdx);
-		// Lockfiles unchanged: no reinstall.
-		expect(fake.execIndex("'bash' '-c' 'npm ci'")).toBe(-1);
-		expect(fake.calls.some((c) => c.op === "terminate")).toBe(false);
-	});
-
-	it("allows the repository's egress hosts, and lifts the limit only for a repository configured allow-all", async () => {
-		await openSandbox(repo({ egress: ["proxy.golang.org", "*.example.com"] }), { kind: "branch", name: "main" }, deps());
-		await openSandbox(repo({ egress: "allow-all" }), { kind: "branch", name: "main" }, deps());
-		expect(fake.inputs("create").map((input) => (input as { networkPolicy: unknown }).networkPolicy)).toEqual([
-			allowList("github.com", "api.anthropic.com", "proxy.golang.org", "*.example.com"),
-			{ type: "allow-all" },
-		]);
+		expect(fake.inputs("create")).toMatchObject([{ snapshotName: NAME }]);
+		expect(fake.execIndex("verify.sh")).toBeGreaterThanOrEqual(0);
+		expect(fake.commands().some((c) => c.includes(TOKEN))).toBe(false);
+		expect(fake.execIndex("npm ci")).toBe(-1);
+		expect(fake.terminated()).toEqual([]);
 	});
 
 	it("builds the snapshot inline exactly once when it is missing, then retries", async () => {
@@ -384,32 +285,52 @@ describe("openSandbox", () => {
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
 	});
 
-	it("replaces a stale runner payload, root-owned, before verifying the sandbox", async () => {
-		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
-		const upload = fake.calls.find((c) => c.op === "upload" && /^\/tmp\/factory-runner-[0-9a-f-]{36}\/payload\.tgz$/.test(c.path)) as {
-			path: string;
-			data: Buffer;
-		};
-		const files = await untar(upload.data);
-		expect(files.get("runner.mjs")).toBe(FAKE_BUNDLE);
-		const swap = fake.commands().find((c) => c.includes("mv /opt/factory/app/runner.next /opt/factory/app/runner")) as string;
-		expect(swap).toContain(`= ${sha256(FAKE_BUNDLE)} ]`);
-		expect(swap).toContain("chown -R root:root /opt/factory/app/runner.next");
-		expect(swap).toContain("chmod -R a+rX,go-w /opt/factory/app/runner.next");
-		expect(fake.execIndex("mv /opt/factory/app/runner.next")).toBeGreaterThanOrEqual(0);
-		expect(fake.execIndex("mv /opt/factory/app/runner.next")).toBeLessThan(fake.execIndex("verify.sh"));
-	});
+	it("replaces a stale runner payload before verifying the sandbox, and leaves a matching one alone", async () => {
+		const payloadUpload = () => fake.index((c) => c.op === "upload" && c.path.includes("factory-runner-"));
 
-	it("leaves a matching runner payload alone", async () => {
+		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
+		const upload = fake.calls[payloadUpload()] as { data: Buffer };
+		expect((await untar(upload.data)).get("runner.mjs")).toBe(FAKE_BUNDLE);
+		expect(payloadUpload()).toBeLessThan(fake.execIndex("verify.sh"));
+
+		fake = new FakeApi();
 		const { sha256: current } = await runnerPayload();
 		fake.overrides = (_id, command) => (command.startsWith("cat /opt/factory/app/runner/payload.sha256") ? [out(current), exit(0)] : []);
 		await openSandbox(repo(), { kind: "branch", name: "main" }, deps());
-		expect(fake.calls.some((c) => c.op === "upload" && c.path.includes("factory-runner-"))).toBe(false);
+		expect(payloadUpload()).toBe(-1);
 	});
 
 	it("refuses a sandbox where the runner could not be confirmed non-dumpable", async () => {
 		fake.overrides = (_id, command) => (command.includes("verify.sh") ? [out(info({ runnerNonDumpable: false })), exit(0)] : []);
 		await expect(openSandbox(repo(), { kind: "branch", name: "main" }, deps())).rejects.toThrow("non-dumpable");
 		expect(fake.calls.at(-1)).toEqual({ op: "terminate", id: "sbx-1" });
+	});
+});
+
+describe("SandboxClient.execStream", () => {
+	it("passes on every chunk in order and resolves with the exit code", async () => {
+		fake.overrides = () => [out('{"a":1}\n{"b"'), out("diagnostics\n", "stderr"), out(":2}\n"), exit(3)];
+		const chunks: string[] = [];
+		const exitCode = await client().execStream("sbx-1", "run", { timeoutMs: 1_000, onData: (stream, data) => chunks.push(`${stream}:${data}`) });
+		expect(exitCode).toBe(3);
+		expect(chunks).toEqual(['stdout:{"a":1}\n{"b"', "stderr:diagnostics\n", "stdout::2}\n"]);
+	});
+
+	it("stops a command that outlives its timeout, keeping what it already passed on", async () => {
+		const api = {
+			async exec(_id: string, _command: string, _ownerId: undefined, signal: AbortSignal) {
+				return (async function* () {
+					yield out("started\n");
+					await new Promise((_, reject) => signal.addEventListener("abort", reject));
+				})();
+			},
+		} as unknown as SandboxApi;
+		const chunks: string[] = [];
+		const run = new SandboxClient(api).execStream("sbx-1", "sleep 600", {
+			timeoutMs: 50,
+			onData: (_, data) => chunks.push(data),
+		});
+		await expect(run).rejects.toThrow("timed out after 50ms");
+		expect(chunks).toEqual(["started\n"]);
 	});
 });

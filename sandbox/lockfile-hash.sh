@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Prints the sha256 of the repository's dependency lockfiles: one "<sha256>  <name>" line per lockfile present
-# at the root of <repo_dir>, in sorted order, hashed together. With no lockfiles it prints the hash of nothing.
-# Usage: lockfile-hash.sh <repo_dir>
 set -euo pipefail
 
 cd "$1"

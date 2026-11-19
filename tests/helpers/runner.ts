@@ -8,17 +8,13 @@ import { z } from "zod";
 import { type Agent, defineAgent } from "../../app/agents/define.js";
 import type { Harness } from "../../app/harness/types.js";
 import { PROTOCOL_VERSION, RunnerEvent, type RunnerInput, type ToolName } from "../../app/runner/core/protocol.js";
-import { bundleRunner } from "../../app/runner/bundle.js";
 import { main } from "../../app/runner/main.js";
-import { scriptedPi } from "./pi-scripted.js";
-import { scripted, type TestTurn } from "./scripted-harness.js";
-
-export type { TestTurn };
+import { bundleRunner } from "../../app/runner-bundle/index.js";
+import { scriptedPi, type TestTurn } from "./pi-scripted.js";
 
 export const SUBMIT = "submit";
 export const TEST_AGENT_ID = "test-agent";
 
-/** The output schema most runner tests use: what `z.toJSONSchema` emits for a small object. */
 const OUTPUT_SCHEMA = {
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	type: "object",
@@ -32,7 +28,6 @@ const OUTPUT_SCHEMA = {
 } as const;
 export const GOOD = { summary: "All good.", files: ["README.md"], confidence: "high" };
 
-/** A test agent on `harness`; the runner takes its tools and schema from the input, so these are placeholders. */
 export function testAgent(harness: Harness): Agent {
 	return defineAgent({
 		id: TEST_AGENT_ID,
@@ -44,16 +39,8 @@ export function testAgent(harness: Harness): Agent {
 	});
 }
 
-/**
- * Every harness the conformance suite runs against, each built around a scripted model that plays the test's turns:
- * to the harness, a model like any other.
- */
-export const HARNESSES: ReadonlyArray<{ name: string; make: (turns: readonly TestTurn[]) => Harness }> = [
-	{ name: "pi", make: scriptedPi },
-	{ name: "scripted", make: scripted },
-];
+export const HARNESSES: ReadonlyArray<{ name: string; make: (turns: readonly TestTurn[]) => Harness }> = [{ name: "pi", make: scriptedPi }];
 
-/** The key conformance runs deliver on stdin; scripted models ignore it. */
 export const TEST_KEY = "sk-test-STDINKEY-0123456789";
 
 export interface Workspace {
@@ -62,7 +49,6 @@ export interface Workspace {
 	commit: string;
 }
 
-/** A one-commit git checkout plus a scratch directory, both in a fresh temp dir. */
 export function makeWorkspace(): Workspace {
 	const base = mkdtempSync(join(tmpdir(), "runner-test-"));
 	const cwd = join(base, "repo");
@@ -99,7 +85,6 @@ export function makeInput(ws: Workspace | undefined, overrides: Partial<RunnerIn
 	};
 }
 
-/** Parses stdout JSONL, asserting every line is a valid RunnerEvent. */
 export function parseEvents(stdout: string): RunnerEvent[] {
 	return stdout
 		.split("\n")
@@ -117,13 +102,8 @@ export function terminal(events: RunnerEvent[]) {
 
 export const toolResults = (events: RunnerEvent[]) => events.flatMap((e) => (e.type === "tool_result" ? [e] : []));
 
-/** One scripted model turn that makes one tool call. */
 export const call = (name: string, args: Record<string, unknown>): TestTurn => ({ calls: [{ name, args }] });
 
-/**
- * Runs main() in-process through the runner contract as the sandbox does: `key` on the first line of stdin, then
- * the input; RunnerEvent JSONL out. `harness` runs behind the test agent.
- */
 export async function runContract(harness: Harness, input: RunnerInput, key = TEST_KEY) {
 	let stdout = "";
 	const code = await main(["--key-stdin"], {
@@ -138,7 +118,6 @@ export async function runContract(harness: Harness, input: RunnerInput, key = TE
 
 let runnerPath: string | undefined;
 
-/** Bundles the runner into a fresh temp dir, outside the repo, so no node_modules is reachable from it. */
 export async function buildRunner(): Promise<string> {
 	runnerPath = join(mkdtempSync(join(tmpdir(), "runner-bundle-")), "runner.mjs");
 	writeFileSync(runnerPath, await bundleRunner());

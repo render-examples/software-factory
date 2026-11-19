@@ -9,26 +9,23 @@ import { ClientError, SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { SandboxSnapshot } from "@renderinc/sdk/experimental";
 import { create as createTar } from "tar";
 import type { RepoContext } from "../config/index.js";
-import { githubToken } from "../github/auth.js";
-import { bundleRunner } from "../runner/bundle.js";
+import { githubToken } from "../github/index.js";
+import { bundleRunner } from "../runner-bundle/index.js";
+import { errorMessage, SHA } from "../util/index.js";
 import { type SandboxApi, type SandboxClient, TRANSIENT } from "./client.js";
 import { builderEgress, egressHint } from "./egress.js";
-import { errorMessage, log, SAFE_REF, shq } from "./shell.js";
+import { log, SAFE_REF, shq } from "./shell.js";
 import { APP_DIR, REPO_DIR, RUN_AS, SANDBOX_ROOT, SCRATCH_DIR, type SnapshotManifest } from "./types.js";
 import { verifySandbox } from "./verify.js";
 
-/** The one named snapshot per repository: `factory-<owner>-<name>`, restricted to [A-Za-z0-9_.-]. */
 export function snapshotName(repo: Pick<RepoContext, "owner" | "name">): string {
 	return `factory-${repo.owner}-${repo.name}`.replace(/[^A-Za-z0-9_.-]/g, "-");
 }
 
-/** Snapshots kept per name: a sandbox that started restoring just before a new build finished must still find its own. */
 const KEEP_SNAPSHOTS = 2;
-/** Render terminates the builder after this, even if the task building it crashed. */
 const BUILDER_TIMEOUT_SECONDS = 3_600;
 const SANDBOX_SCRIPTS_DIR = fileURLToPath(new URL("../../sandbox/", import.meta.url));
 
-/** Copied into APP_DIR and kept in the snapshot. `build/` is needed again when a restored sandbox fetches. */
 const RUNTIME_SCRIPTS = [
 	"install-tools.sh",
 	"as-runner.sh",
@@ -43,11 +40,9 @@ const RUNTIME_SCRIPTS = [
 const STAGING_DIR = "/tmp/factory-stage";
 const STAGING_CREDS = `${STAGING_DIR}/creds`;
 const SANDBOX_GITCONFIG = "[core]\n\tfsmonitor = false\n[advice]\n\tdetachedHead = false\n";
-/** Username GitHub expects alongside an installation token. */
 const GITHUB_TOKEN_USER = "x-access-token";
 
 export interface SnapshotDeps {
-	/** A read-only token for the repository. Defaults to a GitHub App installation token with `contents: read`. */
 	readToken?: (repo: RepoContext) => Promise<string>;
 }
 
@@ -62,33 +57,20 @@ export function readToken(repo: RepoContext): Promise<string> {
 	return githubToken({ installationId: repo.installationId, repo: repo.name, permissions: { contents: "read" } });
 }
 
-/** Runs a command as the runner user from REPO_DIR (as-runner.sh), with each argument quoted. */
 export function asRunner(...argv: string[]): string {
 	return `bash ${APP_DIR}/as-runner.sh ${argv.map(shq).join(" ")}`;
 }
 
-/** The credential helper that answers git from a staged `<dir>/<host>` file; the token is never in argv or config. */
 export function credentialHelperArgs(credsDir: string): string[] {
 	return ["-c", "credential.helper=", "-c", `credential.helper=!bash ${APP_DIR}/build/git-credential-staged.sh ${credsDir}`];
 }
 
-/** The staged credential file's contents: username on line 1, token on line 2, no trailing newline. */
 export function credentialFile(token: string): string {
 	return `${GITHUB_TOKEN_USER}\n${token}`;
 }
 
-// ── Build ───────────────────────────────────────────────────────────────
-//
-// Each step is an exec or upload in a builder sandbox limited to builderEgress, ordered by trust:
-//
-//   1. Upload the scripts and runner payload; install tools; create the runner user; self-test the runner
-//   2. Upload a read-only token, clone at `sha`, scrub the token and verify none remains
-//   3. Hand REPO_DIR to the runner user and run the repository's install as that user (no secret present)
-//   4. Manifest, lockdown, verify.sh, named snapshot, prune
-
-/** Builds the repository's named snapshot at `sha` and prunes older ones, keeping the newest two. */
 export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sha: string, deps: SnapshotDeps = {}): Promise<BuiltSnapshot> {
-	if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`refusing to build ${repo.fullName} at ${JSON.stringify(sha)}: not a commit SHA`);
+	if (!SHA.test(sha)) throw new Error(`refusing to build ${repo.fullName} at ${JSON.stringify(sha)}: not a commit SHA`);
 	const branch = repo.config.baseBranch;
 	if (!SAFE_REF.test(branch)) throw new Error(`${repo.fullName}: unsupported base branch ${JSON.stringify(branch)}`);
 	const name = snapshotName(repo);
@@ -103,10 +85,7 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 	try {
 		await client.waitRunning(id);
 
-		// ── 1. Scripts, tools, runner user, self-test ───────────────────
 		await client.check(id, `mkdir -p -m 700 ${STAGING_DIR}`, { ...boot, waitReady: true });
-		// Uploaded as an opaque .tgz and extracted in the sandbox: the upload endpoint rejects an
-		// uncompressed tar of the bundled runner's JavaScript, and doesn't accept application/gzip.
 		const payload = await runnerPayload();
 		await client.upload(id, `${STAGING_DIR}/stage.tgz`, await stagingArchive(payload));
 		await client.check(id, `tar -xzf ${STAGING_DIR}/stage.tgz -C ${STAGING_DIR} && rm ${STAGING_DIR}/stage.tgz`, boot);
@@ -122,7 +101,6 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 		await client.check(id, createRunnerUserCommand(), boot);
 		await client.upload(id, `${APP_DIR}/env`, envFileContent(node));
 		await client.upload(id, `${APP_DIR}/gitconfig`, SANDBOX_GITCONFIG);
-		// The self-test executes third-party code (the bundled packages); the token arrives only after it passes.
 		await client.check(
 			id,
 			[
@@ -135,7 +113,6 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 			prepare,
 		);
 
-		// ── 2. Token, clone, scrub ───────────────────────────────────────
 		const token = await (deps.readToken ?? readToken)(repo);
 		await client.check(id, `mkdir -p -m 700 ${STAGING_CREDS}`, boot);
 		await client.upload(id, `${STAGING_CREDS}/github.com`, credentialFile(token));
@@ -143,13 +120,11 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 		const scrub = await client.exec(id, `bash ${APP_DIR}/build/scrub-credentials.sh ${STAGING_CREDS} ${REPO_DIR} ${SCRATCH_DIR}/home`, prepare);
 		if (scrub.exitCode !== 0) throw new Error(`credential scrub failed: ${(scrub.stderr || scrub.stdout).trim().slice(-2000)}`);
 
-		// ── 3. Runner-owned checkout, install as the runner ──────────────
 		await client.check(id, `chown -R ${RUN_AS}: ${REPO_DIR}`, prepare);
 		const lockfileHash = await computeLockfileHash(client, id);
 		const install = repo.config.install?.trim() || null;
 		if (install) await runInstall(client, id, install, egressHint(repo, egress));
 
-		// ── 4. Manifest, lockdown, verify, snapshot ──────────────────────
 		const manifest: SnapshotManifest = {
 			repo: repo.fullName,
 			baseBranch: branch,
@@ -171,14 +146,12 @@ export async function buildSnapshot(client: SandboxClient, repo: RepoContext, sh
 	}
 }
 
-/** The base image's node, which the runner and the repository's tools run under. */
 async function nodePath(client: SandboxClient, id: string): Promise<string> {
 	const path = (await client.check(id, "command -v node", { timeoutMs: client.t.bootTimeoutMs })).trim();
 	if (!path.startsWith("/")) throw new Error(`command -v node printed ${JSON.stringify(path.slice(0, 200))}`);
 	return path;
 }
 
-/** Creates the unprivileged runner user. */
 function createRunnerUserCommand(): string {
 	return (
 		`id -u ${RUN_AS} >/dev/null 2>&1` +
@@ -186,7 +159,6 @@ function createRunnerUserCommand(): string {
 	);
 }
 
-/** The env file that the sandbox scripts source. */
 function envFileContent(nodePath: string): string {
 	const nodeDir = nodePath.substring(0, nodePath.lastIndexOf("/"));
 	return `${[
@@ -201,7 +173,6 @@ function envFileContent(nodePath: string): string {
 	].join("\n")}\n`;
 }
 
-/** Clones the base branch into REPO_DIR and checks out `sha` on a local branch named after it. */
 function cloneCommand(repo: RepoContext, sha: string): string {
 	const url = `https://github.com/${repo.owner}/${repo.name}.git`;
 	const branch = repo.config.baseBranch;
@@ -213,17 +184,12 @@ function cloneCommand(repo: RepoContext, sha: string): string {
 	].join(" && ");
 }
 
-/** sha256 over the repository's lockfiles (lockfile-hash.sh), computed as the runner user. */
 export async function computeLockfileHash(client: SandboxClient, id: string): Promise<string> {
 	const out = (await client.check(id, asRunner("bash", `${APP_DIR}/lockfile-hash.sh`, "."), { timeoutMs: client.t.verifyTimeoutMs })).trim();
 	if (!/^[0-9a-f]{64}$/.test(out)) throw new Error(`lockfile-hash.sh printed ${JSON.stringify(out.slice(0, 200))}`);
 	return out;
 }
 
-/**
- * Runs the repository's install command as the runner user, then fails if it changed any tracked file: the
- * checkout is what agents edit and publish from, so a dirty tree would leak into every PR.
- */
 export async function runInstall(client: SandboxClient, id: string, install: string, failureHint = ""): Promise<void> {
 	const res = await client.exec(id, asRunner("bash", "-c", install), { timeoutMs: client.t.prepareTimeoutMs });
 	if (res.exitCode !== 0) {
@@ -242,7 +208,6 @@ export async function runInstall(client: SandboxClient, id: string, install: str
 	}
 }
 
-/** Makes APP_DIR root-owned and read-only and installs the execute-only node the runner runs under. */
 function lockdownCommand(nodePath: string): string {
 	return [
 		`chown root:root ${SANDBOX_ROOT}`,
@@ -269,12 +234,9 @@ async function createSnapshot(client: SandboxClient, sandboxId: string, name: st
 	return snap;
 }
 
-// ── Runner payload ──────────────────────────────────────────────────────
-
 const RUNNER_DIR = `${APP_DIR}/runner`;
 
 export interface RunnerPayload {
-	/** Paths relative to APP_DIR/runner/. */
 	files: ReadonlyMap<string, Buffer>;
 	sha256: string;
 	runnerSha256: string;
@@ -282,7 +244,6 @@ export interface RunnerPayload {
 
 let built: Promise<RunnerPayload> | undefined;
 
-/** The runner bundle, built once per process. */
 export function runnerPayload(): Promise<RunnerPayload> {
 	built ??= buildPayload().catch((err: unknown) => {
 		built = undefined;
@@ -304,7 +265,6 @@ async function buildPayload(): Promise<RunnerPayload> {
 	return { files, sha256: digest.digest("hex"), runnerSha256: sha256(runner) };
 }
 
-/** The payload as a gzipped tar rooted at APP_DIR/runner/. */
 async function payloadArchive(payload: RunnerPayload): Promise<Buffer> {
 	const dir = await mkdtemp(join(tmpdir(), "factory-payload-"));
 	try {
@@ -321,11 +281,6 @@ async function payloadArchive(payload: RunnerPayload): Promise<Buffer> {
 	}
 }
 
-/**
- * Replaces a restored sandbox's runner directory with this host's payload when they differ, so harness, model, and
- * agent changes reach existing snapshots without a rebuild. It runs before verify.sh, which self-tests the runner.
- * Returns whether it replaced the payload.
- */
 export async function ensureRunnerPayload(client: SandboxClient, id: string): Promise<boolean> {
 	const payload = await runnerPayload();
 	const quick = { timeoutMs: client.t.verifyTimeoutMs };
@@ -336,7 +291,6 @@ export async function ensureRunnerPayload(client: SandboxClient, id: string): Pr
 		const next = `${APP_DIR}/runner.next`;
 		await client.check(id, `mkdir -m 700 ${stage}`, quick);
 		try {
-			// Gzipped, as the staging archive: the upload endpoint rejects the bundle's raw JavaScript.
 			await client.upload(id, `${stage}/payload.tgz`, await payloadArchive(payload));
 			await client.check(
 				id,
@@ -362,7 +316,6 @@ export async function ensureRunnerPayload(client: SandboxClient, id: string): Pr
 	return replaced;
 }
 
-/** A gzipped tar of the runtime scripts and the runner payload under runner/. */
 async function stagingArchive(payload: RunnerPayload): Promise<Buffer> {
 	const dir = await mkdtemp(join(tmpdir(), "factory-stage-"));
 	try {
@@ -382,9 +335,6 @@ async function stagingArchive(payload: RunnerPayload): Promise<Buffer> {
 	}
 }
 
-// ── Prune ───────────────────────────────────────────────────────────────
-
-/** Deletes older available/failed snapshots with this name, keeping the newest `keep`. Logs instead of throwing. */
 async function pruneSnapshots(client: SandboxClient, sandboxGroupId: string, name: string, keep: number): Promise<void> {
 	try {
 		const list: Awaited<ReturnType<SandboxApi["snapshots"]["list"]>> = [];
@@ -411,12 +361,6 @@ async function pruneSnapshots(client: SandboxClient, sandboxGroupId: string, nam
 	}
 }
 
-// ── Base branch head (host side) ────────────────────────────────────────
-
-/**
- * Resolves the base branch tip with `git ls-remote` on the host. The token reaches git only through this
- * process's environment and a credential helper that reads it, never argv or a URL.
- */
 export async function resolveBaseHead(repo: RepoContext, deps: SnapshotDeps = {}): Promise<string> {
 	const branch = repo.config.baseBranch;
 	if (!SAFE_REF.test(branch)) throw new Error(`${repo.fullName}: unsupported base branch ${JSON.stringify(branch)}`);

@@ -21,14 +21,9 @@ Collect:
 - confirmation that the default Anthropic models are acceptable.
 
 Secrets reach Render through local `.env` and
-[environment groups](../configuration.md#environment-groups), never through
-chat or the Blueprint form:
-
-- `setup:app` writes the GitHub App private key and webhook secret to `.env`;
-- the user adds the Render API key and Anthropic API key to `.env`; and
-- `setup:render` copies them into the env groups that `render.yaml` links.
-
-Never ask the user to paste a secret into chat. Never print `.env`.
+[environment groups](../configuration.md#environment-groups) in Phase 6, never
+through chat or the Blueprint form. Never ask the user to paste a secret into
+chat. Never print `.env`.
 
 ## Rules
 
@@ -138,7 +133,7 @@ npm run setup:app -- --org <organization>
 Keep the command running while the user completes the browser flow.
 The command saves credentials to `.env` without printing their values. On
 POSIX systems, it makes new and existing `.env` files readable and writable
-only by the owner. The `--write-env` flag is still accepted for compatibility.
+only by the owner.
 
 ### Human checkpoint: create the App
 
@@ -232,9 +227,12 @@ definition of completed setup.
 After preflight passes, the command creates or updates:
 
 - `software-factory-shared`, for both services: `RENDER_API_KEY`;
-- `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET`; and
+- `software-factory-gateway`, for the gateway: `GITHUB_WEBHOOK_SECRET` and
+  `EVENTS_READ_TOKEN`, which the command generates and saves to `.env` when
+  it's missing; and
 - `software-factory-workflows`, for Workflows: `RENDER_WORKSPACE_ID`,
-  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`.
+  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `ANTHROPIC_API_KEY`. Phase 7
+  adds `DATABASE_URL` once the Blueprint has created the database.
 
 It saves the workspace ID to `.env`, never prints a secret, and is safe to
 rerun. Continue only when it reports no failed check.
@@ -245,11 +243,12 @@ create the same groups in the Dashboard instead. See
 
 ## Phase 7: Deploy the Blueprint
 
-[`render.yaml`](../../render.yaml) creates two paid resources in the
+[`render.yaml`](../../render.yaml) creates three paid resources in the
 `production` environment of a `software-factory` project:
 
-- `factory-gateway`, a Starter web service in Oregon; and
-- `factory-workflows`, a Workflows service in Oregon.
+- `factory-gateway`, a Starter web service in Oregon;
+- `factory-workflows`, a Workflows service in Oregon; and
+- `factory-db`, a Basic-256mb Postgres 17 database in Oregon.
 
 If the Render CLI is signed in to the same workspace, confirm that the
 Blueprint resolves its env groups:
@@ -267,10 +266,32 @@ Explain the resources and expected charges. Ask the user to create the
 Blueprint from the configured fork and branch, in the workspace from Phase 6,
 and apply it. The form asks for no values.
 
-Continue when both services have deployed and the gateway is live.
+Continue when the gateway is live. `factory-workflows` can't start until it
+has `DATABASE_URL`, which the next step provides, so expect its first deploy
+to fail with `DATABASE_URL is not set`.
 
 The gateway has no web UI. Opening its URL in a browser shows a short
 message that it is running; that is expected, not a failed deploy.
+
+### Link the database to Workflows
+
+A Blueprint can't reference a database from a Workflows service, so
+`render.yaml` links `factory-db` only to the gateway. Copy the gateway's
+`DATABASE_URL` into the `software-factory-workflows` env group:
+
+```bash
+npm run setup:render -- --link-database
+```
+
+The command finds `factory-gateway` in the workspace from Phase 6, reads the
+internal database URL the Blueprint gave it, and writes that value to the
+group without printing it. It is safe to rerun. If it reports that the
+gateway or its `DATABASE_URL` doesn't exist, the Blueprint hasn't finished
+creating them: wait for it, then rerun the command.
+
+`factory-workflows` reads the value on its next deploy. Ask the user to
+redeploy `factory-workflows` from the Render Dashboard, and continue when that
+deploy succeeds.
 
 ## Phase 8: Configure GitHub
 
@@ -323,9 +344,13 @@ Workflows services have no Shell. Run `doctor` locally with the values used by
 
 Local `.env` already holds the values `setup:render` copied into the
 `software-factory-shared` and `software-factory-workflows` groups. It also
-needs `RENDER_WORKFLOW_SLUG`, which is not a secret. Use the deployed workflow
-slug, including any suffix Render added: copy the exact value from
-`factory-gateway`'s deployed `RENDER_WORKFLOW_SLUG` into local `.env`.
+needs `RENDER_WORKFLOW_SLUG` (not a secret): copy the exact value, including
+any suffix Render added, by running `printenv RENDER_WORKFLOW_SLUG` in the
+gateway Render Shell above or reading `factory-gateway`'s **Environment** tab,
+and put it in local `.env`. It also needs `DATABASE_URL`: ask the user to
+paste `factory-db`'s external URL from its **Connect** tab into `.env` with
+`?sslmode=verify-full` appended. It holds the database password; do not ask
+for it in chat.
 
 Run:
 
@@ -333,13 +358,10 @@ Run:
 npm run doctor -- --service workflows
 ```
 
-A required check that cannot be verified exits nonzero. Before continuing,
-resolve failed checks on both services. Workflows doctor checks that the latest
-webhook delivery reached the configured gateway successfully. If it reports
-delivery as unverified, open the App's settings, confirm Webhook > Active, save,
-and redeliver a ping from Advanced. Then rerun doctor. A historical attempt to a
-placeholder URL does not verify this setup. A successful delivery is historical
-evidence; the smoke test below verifies the current end-to-end path.
+Resolve failed checks on both services before continuing. If Workflows `doctor`
+reports webhook delivery as unverified, open the App's settings, confirm
+**Webhook > Active**, save, redeliver a ping from **Advanced**, and rerun
+`doctor` (see [Check a deployment](../configuration.md#check-a-deployment)).
 The gateway's skipped GitHub checks are expected: it holds no App credentials.
 
 ## Phase 11: Smoke-test Triage
@@ -379,10 +401,10 @@ The smoke test passes when:
   and
 - the status comment shows the final outcome or a useful failure.
 
-Optionally confirm that the Workflows logs contain `run.finished`:
+Optionally confirm in `factory-db` that the run was recorded:
 
-```bash
-render logs -r <factory-workflows-id> --text run.finished
+```sql
+select task, state, outcome from runs order by started_at desc limit 1;
 ```
 
 ## Optional: Run the full pipeline
@@ -419,7 +441,8 @@ Offer two paths.
    opens a draft pull request. If the spec comment changes after the label is
    applied, Spec-to-PR stops; review the spec and reapply the label.
 3. Apply `factory:pr-review` to the draft pull request. PR Reviewer runs the
-   `verify` commands and posts a COMMENT review.
+   `verify` commands and posts a COMMENT review. Its status comment is on the
+   issue, which shares the draft pull request's thread.
 
 **Autopilot.** Apply `factory:autopilot` to a new issue instead. It grants
 upfront approval for the same three stages and runs them as child tasks of one
@@ -436,6 +459,8 @@ they can delete.
 
 - For `depends on non-existent group`, run `npm run setup:render` in the
   workspace that holds the Blueprint, then retry the Blueprint sync.
+- For `DATABASE_URL is not set` on `factory-workflows`, run
+  `npm run setup:render -- --link-database`, then redeploy `factory-workflows`.
 - For a missing or wrong value, fix it in `.env`, rerun
   `npm run setup:render`, and redeploy the affected service.
 - For a build failure, inspect the failing service's build log before changing
@@ -446,10 +471,15 @@ they can delete.
 ### `doctor` fails
 
 - Gateway: check the webhook secret, Render API key, and workflow slug.
+- Database: rerun Blueprint sync if missing on the gateway; run
+  `npm run setup:render -- --link-database` and redeploy `factory-workflows` if
+  missing on Workflows (see [Database](../configuration.md#database)); locally,
+  use the external URL with `?sslmode=verify-full`. Unapplied migrations mean
+  neither service has started on the current code.
 - Workflows: check the workspace ID, Render API key, App credentials,
   provider key, and registered tasks.
 - `No tasks found`: use the deployed workflow slug, not an assumed service
-  name.
+  name, and confirm `factory-workflows` deployed cleanly.
 - App or label failure: fix App access and rerun `npm run setup:github`.
 
 ### No status comment appears
@@ -460,11 +490,14 @@ Open the App's **Advanced** settings and inspect **Recent Deliveries**.
 - `401`: GitHub and `factory-gateway` have different webhook secrets.
 - `422`: inspect the gateway log entry
   `authenticated delivery produced an invalid task input`.
-- `502`: inspect `could not start task`; then check `RENDER_API_KEY`,
+- `502` with `could not record delivery`: the gateway can't reach Postgres;
+  check `DATABASE_URL` on `factory-gateway` and the `factory-db` status.
+- `502` with `could not start task`: check `RENDER_API_KEY`,
   `RENDER_WORKFLOW_SLUG`, and the Workflows deployment.
 - `200` with `{"ignored":"<reason>"}`: the event did not start a task. Common
-  reasons are `unconfigured repo`, `unhandled label`, `issue not in triage`,
-  `bot sender`, `pull request not open`, and `not base branch`.
+  reasons are `unconfigured repo`, `unhandled label`,
+  `thread is not waiting for a reply`, `bot sender`, `pull request not open`,
+  and `not base branch`.
 - `202`: the task started; inspect it under `factory-workflows`.
 
 If a task starts but the comment says it did not run, the triggering actor
@@ -478,12 +511,21 @@ verification.
 
 ### An agent submits an invalid result
 
-The runner accepts three attempts. Search Workflows logs for the last schema
-errors and submitted field names:
+The runner accepts three attempts, and the host validates the final submission
+against the agent's Zod schema. Recent schema errors are in
+`agent_run.finished` events in `factory-db` (open a shell with
+`render psql <factory-db-id>`):
 
-```bash
-render logs -r <factory-workflows-id> --text invalid_submission
+```sql
+select stream, payload->>'outcome' as outcome, payload->>'message' as message
+from events
+where type = 'agent_run.finished'
+  and payload->>'outcome' in ('invalid_submission', 'output_invalid')
+order by seq desc limit 5;
 ```
+
+The submitted arguments are its `tool.call` events: follow
+`/agent-runs/<id>/stream` (see [Event streams](../configuration.md#event-streams)).
 
 Repeated errors for one agent usually require a prompt or schema change.
 

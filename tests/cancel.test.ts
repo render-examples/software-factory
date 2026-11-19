@@ -1,158 +1,152 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FactoryEvent } from "../app/events/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { append, type Db } from "../app/db/index.js";
+import { runFinished } from "../app/events/index.js";
+import { runEvent, syncStatus, WORKING_LABEL } from "../app/runs/index.js";
+import { githubThread } from "../app/threads/index.js";
+import { runCancel } from "../app/workflows/cancel.js";
 import { REPO } from "./fixtures/config.js";
+import { pgliteDb, resetDb } from "./helpers/db.js";
+import { FakeGitHub } from "./helpers/fake-github.js";
+import { FakeRuns, runRow, startRun } from "./helpers/runs.js";
 
-const events: FactoryEvent[] = [];
-vi.mock("../app/events/index.js", () => ({
-	emit: (event: FactoryEvent) => {
-		events.push(event);
-	},
-}));
-
-const { parseMarker, renderMarker } = await import("../app/github/index.js");
-const { WORKING_LABEL } = await import("../app/claims/index.js");
-const { cancelRun } = await import("../app/workflows/cancel.js");
-type IssueComment = import("../app/github/index.js").IssueComment;
-type Permission = import("../app/github/index.js").Permission;
-
-const BOT = "software-factory[bot]";
 const ctx = { metadata: { taskRunId: "trn-cancel" } };
+const thread = { kind: "issue" as const, number: 12 };
+const KEY = githubThread(REPO, thread);
+const input = (actor = "alice") => ({ repo: REPO, installationId: 5, number: 12, kind: "issue", actor });
 
-function fakeGitHub(permission: Permission) {
-	const comments: IssueComment[] = [];
-	const labels = new Set<string>([WORKING_LABEL]);
-	let nextId = 1;
-	const add = (login: string, body: string): IssueComment => {
-		const comment = {
-			id: nextId++,
-			body,
-			author: { login, type: "Bot" },
-			createdAt: "",
-			updatedAt: "",
-			htmlUrl: "",
-		};
-		comments.push(comment);
-		return comment;
-	};
-	const gh = {
-		botLogin: async () => BOT,
-		listIssueComments: async () => comments.map((c) => ({ ...c })),
-		createComment: async (_n: number, body: string) => add(BOT, body),
-		updateComment: async (id: number, body: string) => {
-			const comment = comments.find((c) => c.id === id) as IssueComment;
-			comment.body = body;
-			return comment;
-		},
-		ensureLabel: async () => {},
-		addLabels: async () => {},
-		removeLabel: async (_n: number, label: string) => {
-			labels.delete(label);
-		},
-		getPermission: async () => permission,
-	};
-	return { gh, comments, labels, add };
-}
-
-function fakeRuns(statuses: Record<string, string>) {
-	return {
-		getTaskRun: vi.fn(async (id: string) => ({ status: statuses[id] ?? "succeeded" })),
-		cancelTaskRun: vi.fn(async (id: string) => {
-			statuses[id] = "canceled";
-		}),
-		terminateSandbox: vi.fn(async (_id: string) => {}),
-	};
-}
-
-beforeEach(() => {
-	events.length = 0;
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
+beforeEach(() => resetDb(db));
+
+async function autopilotAtSpecToPr(gh: FakeGitHub, childState: "running" | "done" = "running") {
+	await startRun(db, REPO, thread, { traceId: "trn-root", task: "autopilot", title: "Autopilot" });
+	await startRun(db, REPO, thread, { traceId: "trn-root", runId: "trn-1", task: "spec-to-pr", title: "Spec-to-PR", sandboxId: "sbx-1" });
+	if (childState === "done") {
+		const finished = { state: "done" as const, outcome: "pr_opened", summary: "opened draft PR #34.", links: [], duration_ms: 1 };
+		await db.withTx((tx) => append(tx, runEvent(runFinished, "trn-1", KEY, finished)));
+	}
+	await syncStatus(db, gh, REPO, thread);
+}
 
 describe("cancel task", () => {
-	it("cancels the active run recorded in the status comment, terminates its sandbox, and says who cancelled it", async () => {
-		const { gh, comments, labels, add } = fakeGitHub("write");
-		const marker = renderMarker("status", {
-			runId: "trn-1",
-			traceId: "trn-root",
-			rootStage: "autopilot",
-			stage: "spec-to-pr",
-			title: "Spec-to-PR",
-			state: "running",
-			sandboxId: "sbx-1",
-		});
-		add(BOT, `running\n\n${marker}`);
-		const runs = fakeRuns({ "trn-root": "running" });
-		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
-		expect(result).toEqual({ cancelled: true, runId: "trn-root", currentRunId: "trn-1" });
-		expect(runs.cancelTaskRun).toHaveBeenCalledWith("trn-root");
-		expect(runs.terminateSandbox).toHaveBeenCalledWith("sbx-1");
-		expect(comments).toHaveLength(1);
-		expect(comments[0]?.body).toContain("**Spec-to-PR** was cancelled: cancelled by @alice.");
-		expect(parseMarker(comments[0]?.body ?? "", "status")).toMatchObject({ runId: "trn-1", state: "cancelled" });
-		expect(labels.has(WORKING_LABEL)).toBe(false);
-		expect(events.map((e) => [e.type, e.runId])).toEqual([
-			["run.finished", "trn-1"],
-			["run.finished", "trn-root"],
-			["run.finished", "trn-cancel"],
-		]);
-		expect(events[0]?.payload).toMatchObject({ state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel" });
-		expect(events[0]).toMatchObject({ traceId: "trn-root", runId: "trn-1" });
-		expect(events[1]).toMatchObject({
-			traceId: "trn-root",
-			runId: "trn-root",
-			payload: { stage: "autopilot", state: "cancelled", outcome: "cancelled", stoppedBy: "trn-cancel", currentRunId: "trn-1" },
-		});
-		expect(events[2]).toMatchObject({ traceId: "trn-cancel", runId: "trn-cancel", repo: REPO });
+	it("stops the running trace and its current child, and shows that in the status comment", async () => {
+		const gh = new FakeGitHub();
+		await autopilotAtSpecToPr(gh);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(true);
+		const runs = new FakeRuns({ "trn-root": "running" });
+
+		const result = await runCancel(ctx, input(), { gh: gh.asClient(), runs, db });
+
+		const summary = "cancelled `trn-root` and its current run `trn-1`.";
+		expect(result).toMatchObject({ state: "done", outcome: "cancelled", summary });
+		expect(runs.cancelled).toEqual(["trn-root"]);
+		expect(runs.terminated).toEqual(["sbx-1"]);
+		expect(gh.comments).toHaveLength(1);
+		expect(gh.status()).toContain(`**Cancel** finished: ${summary}`);
+		expect(gh.labels(12).has(WORKING_LABEL)).toBe(false);
+		expect(await runRow(db, "trn-root")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
+		expect(await runRow(db, "trn-1")).toMatchObject({ state: "cancelled", summary: "Cancel by @alice took over." });
+		expect(await runRow(db, "trn-cancel")).toMatchObject({ state: "done", outcome: "cancelled" });
 	});
 
-	it("clears a status left running by a run that already stopped, and terminates its leftover sandbox", async () => {
-		const { gh, comments, labels, add } = fakeGitHub("write");
-		const marker = renderMarker("status", { runId: "trn-dead", stage: "triage", title: "Triage", state: "running", sandboxId: "sbx-dead" });
-		add(BOT, `running\n\n${marker}`);
-		const runs = fakeRuns({});
-		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
-		expect(result).toEqual({ cancelled: false, runId: "trn-dead", reason: "already_stopped" });
-		expect(runs.cancelTaskRun).not.toHaveBeenCalled();
-		expect(runs.terminateSandbox).toHaveBeenCalledWith("sbx-dead");
-		expect(comments).toHaveLength(1);
-		expect(comments[0]?.body).toContain("**Triage** was cancelled: cleared by @alice; the run had already stopped without finishing.");
-		expect(labels.has(WORKING_LABEL)).toBe(false);
+	it("says when Render won't confirm the stop, and retries the cleanup on the next cancel", async () => {
+		const gh = new FakeGitHub();
+		await autopilotAtSpecToPr(gh);
+		const runs = new FakeRuns({ "trn-root": "running" });
+		runs.cancelTaskRun.mockRejectedValueOnce(new Error("render is down"));
+		runs.terminateSandbox.mockRejectedValueOnce(new Error("render is down"));
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const first = await runCancel(ctx, input(), { gh: gh.asClient(), runs, db });
+
+		expect(first).toMatchObject({ state: "failed", outcome: "cancel_unconfirmed" });
+		expect(first.summary).toContain("Render hasn't confirmed that `trn-root`, `sbx-1` stopped");
+		expect(gh.status()).toContain("Comment `/factory cancel` to try again.");
+		expect(await runRow(db, "trn-root")).toMatchObject({ state: "cancelled" });
+
+		const second = await runCancel({ metadata: { taskRunId: "trn-cancel-2" } }, input(), { gh: gh.asClient(), runs, db });
+		warn.mockRestore();
+
+		expect(second).toMatchObject({ state: "done", outcome: "cleaned_up", summary: "finished stopping `trn-root`, `sbx-1`." });
+		expect(runs.cancelled).toEqual(["trn-root"]);
+		expect(runs.terminated).toEqual(["sbx-1"]);
+		const third = await runCancel({ metadata: { taskRunId: "trn-cancel-3" } }, input(), { gh: gh.asClient(), runs, db });
+		expect(third).toMatchObject({ outcome: "nothing_running" });
 	});
 
 	it("cancels the root without reclassifying a child that already finished", async () => {
-		const { gh, comments, labels, add } = fakeGitHub("write");
-		const marker = renderMarker("status", {
-			runId: "trn-child",
-			traceId: "trn-root",
-			rootStage: "autopilot",
-			stage: "triage",
-			title: "Triage",
-			state: "done",
-		});
-		add(BOT, `done\n\n${marker}`);
-		const runs = fakeRuns({ "trn-root": "running" });
-		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "alice" }, { gh, runs });
+		const gh = new FakeGitHub();
+		await autopilotAtSpecToPr(gh, "done");
+		const runs = new FakeRuns({ "trn-root": "running" });
 
-		expect(result).toEqual({ cancelled: true, runId: "trn-root" });
-		expect(runs.cancelTaskRun).toHaveBeenCalledWith("trn-root");
-		expect(parseMarker(comments[0]?.body ?? "", "status")).toMatchObject({
-			runId: "trn-root",
-			traceId: "trn-root",
-			stage: "autopilot",
-			state: "cancelled",
-		});
-		expect(labels.has(WORKING_LABEL)).toBe(false);
-		expect(events.map((event) => event.runId)).toEqual(["trn-root", "trn-cancel"]);
+		const result = await runCancel(ctx, input(), { gh: gh.asClient(), runs, db });
+
+		expect(result).toMatchObject({ outcome: "cancelled", summary: "cancelled `trn-root`." });
+		expect(runs.terminated).toEqual([]);
+		expect(await runRow(db, "trn-1")).toMatchObject({ state: "done" });
+		expect(gh.status()).toContain("**Cancel** finished: cancelled `trn-root`.");
 	});
 
-	it("refuses an actor without permission and leaves the run alone", async () => {
-		const { gh, comments, add } = fakeGitHub("read");
-		add(BOT, renderMarker("status", { runId: "trn-1", stage: "triage", state: "running" }));
-		const runs = fakeRuns({ "trn-1": "running" });
-		const result = await cancelRun(ctx, { repo: REPO, installationId: 5, number: 12, kind: "issue", actor: "bob" }, { gh, runs });
-		expect(result).toEqual({ cancelled: false, reason: "permission_denied" });
+	it("closes runs left running by a trace Render already stopped, and terminates their sandbox", async () => {
+		const gh = new FakeGitHub();
+		await startRun(db, REPO, thread, { traceId: "trn-dead", sandboxId: "sbx-dead" });
+		const runs = new FakeRuns();
+
+		expect(await runCancel(ctx, input(), { gh: gh.asClient(), runs, db })).toMatchObject({ outcome: "cancelled", summary: "cancelled `trn-dead`." });
 		expect(runs.cancelTaskRun).not.toHaveBeenCalled();
+		expect(runs.terminated).toEqual(["sbx-dead"]);
+		expect(await runRow(db, "trn-dead")).toMatchObject({ state: "cancelled" });
+	});
+
+	it.each([
+		{
+			thread: "a finished trace",
+			seed: async (gh: FakeGitHub) => {
+				await autopilotAtSpecToPr(gh, "done");
+				const finished = { state: "done" as const, outcome: "completed", summary: "done.", links: [], duration_ms: 1 };
+				await db.withTx((tx) => append(tx, runEvent(runFinished, "trn-root", KEY, finished)));
+			},
+		},
+		{ thread: "no runs", seed: async () => {} },
+	])("shows that nothing was running on a thread with $thread in one status comment, and posts nothing else", async ({ seed }) => {
+		const gh = new FakeGitHub();
+		await seed(gh);
+		const runs = new FakeRuns();
+
+		expect(await runCancel(ctx, input(), { gh: gh.asClient(), runs, db })).toMatchObject({
+			outcome: "nothing_running",
+			summary: "nothing was running.",
+		});
+		expect(gh.comments).toHaveLength(1);
+		expect(gh.status()).toContain("**Cancel** finished: nothing was running.");
+		expect(runs.getTaskRun).not.toHaveBeenCalled();
+	});
+
+	it("refuses actors without permission without touching the run or commenting on a busy thread", async () => {
+		const gh = new FakeGitHub();
+		await autopilotAtSpecToPr(gh);
+		const runs = new FakeRuns({ "trn-root": "running" });
+
+		for (const taskRunId of ["trn-bob-1", "trn-bob-2", "trn-bob-3"]) {
+			const result = await runCancel({ metadata: { taskRunId } }, input("bob"), { gh: gh.asClient(), runs, db });
+			expect(result).toMatchObject({ state: "rejected", outcome: "permission_denied" });
+			expect(await runRow(db, taskRunId)).toMatchObject({ state: "rejected" });
+		}
+		expect(gh.comments).toHaveLength(1);
+		expect(gh.status()).toContain("**Spec-to-PR** is running");
+		expect(runs.getTaskRun).not.toHaveBeenCalled();
 		expect(runs.terminateSandbox).not.toHaveBeenCalled();
-		expect(comments.at(-1)?.body).toContain("@bob needs `write` permission");
-		expect(parseMarker(comments[0]?.body ?? "", "status")?.state).toBe("running");
+		expect(await runRow(db, "trn-1")).toMatchObject({ state: "running" });
+	});
+
+	it("tells an actor without permission once on a thread with no runs", async () => {
+		const gh = new FakeGitHub();
+		await runCancel({ metadata: { taskRunId: "trn-bob-1" } }, input("bob"), { gh: gh.asClient(), db });
+		await runCancel({ metadata: { taskRunId: "trn-bob-2" } }, input("bob"), { gh: gh.asClient(), db });
+		expect(gh.comments).toHaveLength(1);
+		expect(gh.status()).toContain("**Cancel** did not run: @bob needs `write` permission");
 	});
 });

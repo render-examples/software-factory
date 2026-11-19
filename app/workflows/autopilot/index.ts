@@ -1,16 +1,15 @@
 import type { TaskDefinition } from "@renderinc/sdk/workflows";
-import type { Claim, Outcome, TaskResult } from "../../claims/index.js";
 import { config, TASKS } from "../../config/index.js";
+import type { Outcome, Run, TaskResult } from "../../runs/index.js";
 import { AutopilotInput, type PrReviewInput, type SpecToPrInput, type TriageInput } from "../../schemas/index.js";
-import { prReviewWorkflow } from "../pr-review/index.js";
-import { type SpecToPrHandoff, specToPrWorkflow } from "../spec-to-pr/index.js";
-import { triageWorkflow } from "../triage/index.js";
-import type { TriageHandoff } from "../triage/spec.js";
 import { defineGitHubTask, type GitHubTaskContext, type GitHubTaskDeps } from "../github-task.js";
+import { type SpecToPrHandoff, specToPrWorkflow } from "../spec-to-pr/index.js";
+import { startTask } from "../start-task.js";
+import { type TriageHandoff, triageWorkflow } from "../triage/index.js";
 
 const TIMEOUT_SECONDS = 8 * 60 * 60;
 
-type StageName = "triage" | "spec-to-pr" | "pr-review";
+type StageName = "triage" | "spec-to-pr";
 type StageTaskResult = TaskResult<TriageHandoff | SpecToPrHandoff | undefined>;
 
 export interface AutopilotStage {
@@ -28,15 +27,10 @@ export interface AutopilotData {
 export interface AutopilotDeps extends GitHubTaskDeps {
 	triage?: (input: TriageInput) => Promise<TaskResult<TriageHandoff>>;
 	specToPr?: (input: SpecToPrInput) => Promise<TaskResult<SpecToPrHandoff>>;
-	prReview?: (input: PrReviewInput) => Promise<TaskResult>;
+	startPrReview?: (input: PrReviewInput, idempotencyKey: string) => Promise<{ id: string }>;
 }
 
-/**
- * Runs the three built-in GitHub tasks as children of one issue-level root.
- * Child results, not GitHub labels, move the workflow to its next stage.
- */
-async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, ctx: GitHubTaskContext): Promise<Outcome<AutopilotData>> {
-	const gh = claim.gh;
+async function autopilot(run: Run, input: TriageInput, deps: AutopilotDeps, ctx: GitHubTaskContext): Promise<Outcome<AutopilotData>> {
 	const stages: AutopilotStage[] = [];
 	const record = <Data>(task: StageName, result: TaskResult<Data>): TaskResult<Data> => {
 		stages.push({ task, runId: result.runId, state: result.state, outcome: result.outcome, summary: result.summary });
@@ -63,22 +57,17 @@ async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, 
 
 	const runTriage = child(deps.triage, triageWorkflow);
 	const runSpecToPr = child(deps.specToPr, specToPrWorkflow);
-	const runPrReview = child(deps.prReview, prReviewWorkflow);
+	const startPrReview = deps.startPrReview ?? ((reviewInput, key) => startTask(ctx, TASKS.prReview, reviewInput, key));
 
 	const base = { repo: input.repo, installationId: input.installationId, actor: input.actor };
-	// Trigger labels are consumed when a run starts. Autopilot adds its label
-	// back only while it is waiting for a human answer.
-	await gh.removeLabel(input.issue, config.labels.autopilot);
-	await claim.reportProgress("running Triage");
+	await run.reportProgress("running Triage");
 	const triage = record("triage", await runTriage({ ...base, issue: input.issue, commentId: input.commentId }));
-	if (triage.state === "done" && triage.outcome === "asked") {
-		await claim.assertCurrent();
-		await gh.addLabels(input.issue, [config.labels.autopilot]);
-		return finish("waiting_for_answers", triage.summary);
+	if (triage.state === "done" && (triage.outcome === "asked" || triage.outcome === "skipped")) {
+		return { ...finish("waiting_for_answers", triage.summary), waiting: "reply" };
 	}
 	if (triage.state !== "done" || triage.data?.kind !== "spec") return stop("triage", triage);
 
-	await claim.reportProgress("implementing the spec");
+	await run.reportProgress("implementing the spec");
 	const specToPr = record(
 		"spec-to-pr",
 		await runSpecToPr({
@@ -94,14 +83,16 @@ async function autopilot(claim: Claim, input: TriageInput, deps: AutopilotDeps, 
 	);
 	if (specToPr.state !== "done" || specToPr.data?.kind !== "pull_request") return stop("spec-to-pr", specToPr);
 
-	await claim.reportProgress("reviewing the draft pull request");
-	const review = record(
-		"pr-review",
-		await runPrReview({ ...base, pr: specToPr.data.pr, headSha: specToPr.data.headSha, workflowIssue: input.issue }),
-	);
-	if (review.state !== "done" || !["reviewed", "already_reviewed"].includes(review.outcome)) return stop("pr-review", review);
-
-	return finish("completed", `opened and reviewed draft PR #${specToPr.data.pr}.`);
+	const { pr, headSha } = specToPr.data;
+	await run.assertCurrent();
+	try {
+		await startPrReview({ ...base, pr, headSha }, `${run.traceId}:pr-review:${headSha}`);
+	} catch (error) {
+		console.error(JSON.stringify({ level: "warn", msg: "could not start PR Reviewer", pr, error: String(error) }));
+		const summary = `opened draft PR #${pr}, but PR Reviewer couldn't start. Apply \`${config.labels.prReview}\` to the pull request to review it.`;
+		return finish("review_not_started", summary, "failed");
+	}
+	return finish("pr_opened", `opened draft PR #${pr}; PR Reviewer is reviewing it on the pull request.`);
 }
 
 export const autopilotWorkflow = defineGitHubTask(
@@ -109,7 +100,9 @@ export const autopilotWorkflow = defineGitHubTask(
 		name: TASKS.autopilot,
 		title: "Autopilot",
 		input: AutopilotInput,
-		subject: (input) => ({ kind: "issue", number: input.issue }),
+		thread: (input) => ({ kind: "issue", number: input.issue }),
+		trigger: (input) => (input.commentId === undefined ? { label: config.labels.autopilot, number: input.issue } : undefined),
+		replyTo: (input) => input.replyTo,
 		timeoutSeconds: TIMEOUT_SECONDS,
 	},
 	autopilot,

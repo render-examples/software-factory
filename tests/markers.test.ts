@@ -22,25 +22,24 @@ describe("markers", () => {
 		expect(parseMarker(marker, "spec")).toEqual({ spec, hash: contentHash(spec), version: 2 });
 	});
 
-	it("validates question and review marker data", () => {
-		const questions = renderMarker("questions", { round: 2, questions: ["Which API should this use?"] });
-		const review = renderMarker("review", { headSha: "a".repeat(40), runId: "trn-2" });
-		expect(parseMarker(questions, "questions")).toEqual({ round: 2, questions: ["Which API should this use?"] });
-		expect(parseMarker(review, "review")).toEqual({ headSha: "a".repeat(40), runId: "trn-2" });
+	it("parses valid question and review markers, and returns null for missing, other-kind, corrupted, or invalid ones", () => {
+		const questions = { round: 2, questions: ["Which API should this use?"] };
+		const review = { headSha: "a".repeat(40), runId: "trn-2" };
+		expect(parseMarker(renderMarker("questions", questions), "questions")).toEqual(questions);
+		expect(parseMarker(renderMarker("review", review), "review")).toEqual(review);
 
-		const invalidQuestions = Buffer.from(JSON.stringify({ round: 2 })).toString("base64url");
-		const invalidReview = Buffer.from(JSON.stringify({ headSha: "short", runId: "trn-2" })).toString("base64url");
-		expect(parseMarker(`<!-- software-factory:questions ${invalidQuestions} -->`, "questions")).toBeNull();
-		expect(parseMarker(`<!-- software-factory:review ${invalidReview} -->`, "review")).toBeNull();
-	});
-
-	it("returns null for missing, other-kind, corrupted, or invalid markers", () => {
 		const status = renderMarker("status", { runId: "trn-1", stage: "triage", state: "done" });
-		expect(parseMarker("no marker here", "status")).toBeNull();
-		expect(parseMarker(status, "spec")).toBeNull();
-		expect(parseMarker(status.replace(/ [A-Za-z0-9_-]+ -->/, " AAAA -->"), "status")).toBeNull();
-		const wrongShape = Buffer.from(JSON.stringify({ runId: "x", stage: "triage", state: "exploded" })).toString("base64url");
-		expect(parseMarker(`<!-- software-factory:status ${wrongShape} -->`, "status")).toBeNull();
+		const raw = (kind: string, data: object) => `<!-- software-factory:${kind} ${Buffer.from(JSON.stringify(data)).toString("base64url")} -->`;
+		for (const [body, kind] of [
+			["no marker here", "status"],
+			[status, "spec"],
+			[status.replace(/ [A-Za-z0-9_-]+ -->/, " AAAA -->"), "status"],
+			[raw("status", { runId: "x", stage: "triage", state: "exploded" }), "status"],
+			[raw("questions", { round: 2 }), "questions"],
+			[raw("review", { headSha: "short", runId: "trn-2" }), "review"],
+		] as const) {
+			expect(parseMarker(body, kind)).toBeNull();
+		}
 	});
 });
 

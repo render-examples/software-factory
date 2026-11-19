@@ -5,9 +5,7 @@ export interface CurrentSpec {
 	comment: IssueComment;
 	version: number;
 	hash: string;
-	/** Null when the marker's spec no longer parses as a Spec; the comment is still revised in place. */
 	spec: Spec | null;
-	/** What the spec writer learned last round; null when absent or invalid. */
 	notes: SpecNotes | null;
 }
 
@@ -16,10 +14,8 @@ interface CurrentQuestions {
 	round: number;
 }
 
-/** What the agents read about an issue, and the factory's own comments on it. */
 interface Thread {
 	issue: Issue;
-	/** The issue and its comments, oldest first, each in a tagged block. */
 	conversation: string;
 	spec: CurrentSpec | null;
 	questions: CurrentQuestions | null;
@@ -82,7 +78,6 @@ export function specWriterMessage(repo: string, thread: Thread, decision: Triage
 	].join("\n\n");
 }
 
-/** The spec writer's second attempt: the first message plus what validation rejected. */
 export function retryMessage(message: string, rejected: SpecDraft, errors: readonly string[]): string {
 	return [
 		message,
@@ -108,7 +103,6 @@ function currentSpec(thread: Thread): string[] {
 	return sections;
 }
 
-/** A tagged block whose body can't close it or forge another block. */
 function block(tag: string, attrs: Record<string, string | number>, body: string): string {
 	const attributes = Object.entries(attrs)
 		.map(([k, v]) => ` ${k}="${String(v).replace(/[<>"&]/g, "")}"`)

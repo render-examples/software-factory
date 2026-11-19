@@ -1,4 +1,3 @@
-/** Read-only local/runtime or pre-deployment prerequisite checks. */
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";

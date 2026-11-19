@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { SHA } from "../util/index.js";
 
-const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = "0".repeat(40);
 const RAW_HEADER = /^:(\d{6}) (\d{6}) ([0-9a-f]{40}) ([0-9a-f]{40}) ([ADMT])$/;
 const MAGIC = "software-factory-changes 1";
@@ -11,9 +11,7 @@ export type ChangeStatus = "A" | "M" | "D" | "T";
 export interface ChangedFile {
 	status: ChangeStatus;
 	path: string;
-	/** The new mode; "000000" for a deletion. */
 	mode: string;
-	/** The new blob SHA; null for a deletion. */
 	sha: string | null;
 }
 
@@ -28,9 +26,7 @@ export interface PublishLimits {
 	maxFileBytes: number;
 }
 
-/** The sections of the file `collect-changes.sh` writes, split but not yet trusted. */
 export interface ChangesFile {
-	/** The sandbox's `git write-tree` of the staged working tree. */
 	treeSha: string;
 	count: number;
 	diff: Buffer;
@@ -40,12 +36,10 @@ export interface ChangesFile {
 
 export type CheckedChanges = { refused: RefusalReason[] } | { treeSha: string; files: ChangedFile[]; blobs: Map<string, Buffer> };
 
-/** Git's object ID for a blob: sha1("blob <size>\0<content>"). */
 export function blobSha(content: Buffer): string {
 	return createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");
 }
 
-/** Splits the output file into its sections. Throws on anything but the exact layout. */
 export function parseChangesFile(buf: Buffer): ChangesFile {
 	let pos = 0;
 	const line = (): string => {
@@ -87,7 +81,6 @@ export function parseChangesFile(buf: Buffer): ChangesFile {
 	return file;
 }
 
-/** Parses `git diff-tree -r -z --no-renames --no-abbrev` output strictly, keeping each path's raw bytes. */
 function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
 	const files: Array<ChangedFile & { rawPath: Buffer }> = [];
 	let pos = 0;
@@ -118,7 +111,6 @@ function parseRawDiff(diff: Buffer): Array<ChangedFile & { rawPath: Buffer }> {
 	return files;
 }
 
-/** Parses "<sha> <size>\n" lines. */
 function parseSizes(sizes: Buffer): Map<string, number> {
 	const result = new Map<string, number>();
 	const text = sizes.toString("latin1");
@@ -132,7 +124,6 @@ function parseSizes(sizes: Buffer): Map<string, number> {
 	return result;
 }
 
-/** Parses `git cat-file --batch` output and checks every object's bytes against its SHA. */
 function parseBlobs(blobs: Buffer, expected: ReadonlyMap<string, number>): Map<string, Buffer> {
 	const result = new Map<string, Buffer>();
 	let pos = 0;
@@ -157,7 +148,6 @@ function parseBlobs(blobs: Buffer, expected: ReadonlyMap<string, number>): Map<s
 	return result;
 }
 
-/** Why a path can't be published, or null. Paths come from git, but the sandbox could forge them. */
 function unsafePath(path: string, rawPath: Buffer): string | null {
 	if (!Buffer.from(path, "utf8").equals(rawPath)) return "is not valid UTF-8";
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
@@ -170,10 +160,6 @@ function unsafePath(path: string, rawPath: Buffer): string | null {
 	return null;
 }
 
-/**
- * Applies every publishing rule to the parsed file. Rules are re-derived here from the diff and sizes rather
- * than trusted from the sandbox; blob bytes are checked only when nothing is refused.
- */
 export function checkChanges(file: ChangesFile, limits: PublishLimits): CheckedChanges {
 	if (file.count > limits.maxChangedFiles) {
 		const detail = `${file.count} files changed; the limit is ${limits.maxChangedFiles}`;

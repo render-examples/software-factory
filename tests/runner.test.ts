@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../app/runner/core/protocol.js";
-import { rejectReason } from "../app/runner/tools/shell-policy.js";
+import { rejectReason } from "../app/runner/tools/index.js";
 import {
 	buildRunner,
 	call,
@@ -35,7 +35,6 @@ afterEach(() => {
 	for (const name of ENV_KEYS) delete process.env[name];
 });
 
-// The bundled runner runs only the agents bundled into it; triage is one, on Pi.
 describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 	it("--self-test loads the bundle and every agent definition, and reports each agent's harness", () => {
 		const { code, stdout } = runCli(["--self-test"], "");
@@ -70,7 +69,6 @@ describe("bundled runner (runner.mjs)", { timeout: 60_000 }, () => {
 	});
 });
 
-// The runner contract every harness must honor. A new harness joins HARNESSES in tests/helpers/runner.ts.
 describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ make }) => {
 	it("returns every submit problem to the model, and accepts the corrected submission", async () => {
 		const ws = makeWorkspace();
@@ -83,6 +81,31 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 		for (const field of ["/summary", "/files", "/confidence", "additional properties"]) expect(first?.output_preview).toContain(field);
 		expect(second).toMatchObject({ tool: SUBMIT, is_error: false });
 		expect(terminal(events)).toMatchObject({ type: "result", output: GOOD, turns: 2 });
+		expect(code).toBe(0);
+	});
+
+	it("drops tool-call markup a model leaks into a field, and shows it the arguments it couldn't parse", async () => {
+		const ws = makeWorkspace();
+		const leaked = { summary: 'All good.\n<parameter name="files">["README.md"]</parameter>' };
+		const raw = '<parameter name="summary">All good.</parameter>';
+		const unparsed = { calls: [{ name: SUBMIT, args: {}, argumentsError: `Unexpected token '<'\n\nReceived arguments:\n${raw}` }] };
+		const trailing = { ...GOOD, summary: "All good.</summary>\n</invoke>" };
+		const { code, events } = await runContract(make([call(SUBMIT, leaked), unparsed, call(SUBMIT, trailing)]), makeInput(ws));
+		const [markup, malformed, accepted] = toolResults(events);
+		expect(markup?.output_preview).toContain('/summary: contains tool-call markup (<parameter name="files">)');
+		expect(markup?.output_preview).toContain("must have required properties files");
+		expect(malformed).toMatchObject({ tool: SUBMIT, is_error: true });
+		expect(malformed?.output_preview).toContain(raw);
+		expect(accepted).toMatchObject({ tool: SUBMIT, is_error: false });
+		expect(terminal(events)).toMatchObject({ type: "result", output: GOOD });
+		expect(code).toBe(0);
+	});
+
+	it("keeps a valid submission's HTML and quoted XML exactly as written", async () => {
+		const ws = makeWorkspace();
+		const written = { ...GOOD, summary: '<details><summary>Results</summary>Set <parameter name="retries">3</parameter> in pom.xml.</details>' };
+		const { code, events } = await runContract(make([call(SUBMIT, written)]), makeInput(ws));
+		expect(terminal(events)).toMatchObject({ type: "result", output: written });
 		expect(code).toBe(0);
 	});
 
@@ -110,8 +133,6 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 		expect(code).toBe(1);
 	});
 
-	// Tests that inspect a command's environment have it write to a file: Pi stops reading a command's stdout
-	// 100 ms after the process exits, so under load the tool result can come back empty.
 	it("takes the key from stdin and keeps every secret out of the tool env and the output", async () => {
 		const ws = makeWorkspace();
 		const stdinKey = "sk-ant-test-STDINKEY-0123456789";
@@ -184,29 +205,48 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 });
 
 describe("read-only shell policy", () => {
-	it("lets inspection and test commands through and steers away from obvious writes", () => {
-		const scratch = "/factory/scratch";
-		const allowed = [
-			"rg -n 'a|b; c' src",
-			"git -C . log --oneline -5",
-			"git --no-pager diff main...HEAD",
-			"npm test -- --watchAll=false",
-			"cargo test",
-			"timeout 60 go test ./...",
-			"cp src/app.ts $HOME/app.ts",
-			"sed -n 1,20p src/app.ts > /tmp/head.txt 2>&1",
-		];
-		const rejected = [
-			"git push origin main",
-			"git -c core.hooksPath=/tmp log",
-			"echo $(curl https://example.com)",
-			"bash -c 'git commit -am x'",
-			"env FOO=1 npm install left-pad",
-			"sed -i s/41/42/ src/app.ts",
-			"rm -rf src",
-			"sudo ls",
-		];
-		for (const command of allowed) expect(rejectReason(command, scratch), command).toBeUndefined();
-		for (const command of rejected) expect(rejectReason(command, scratch), command).toBeDefined();
+	const allowed = [
+		"rg -n 'a|b; c' src",
+		"git --no-pager diff main...HEAD",
+		"git -C src log -1",
+		"git grep -c TODO",
+		"timeout 60 go test ./...",
+		"timeout -s KILL 30 git log",
+		"env -u CI -C src git status",
+		"xargs -I {} rg -n {} src",
+		"sed -n 1,20p src/app.ts > /tmp/head.txt 2>&1",
+		"cp -t $HOME src/app.ts",
+		"mv /tmp/a /tmp/b",
+		"sed -i s/41/42/ /tmp/app.ts",
+		"echo hi | tee /tmp/out.txt",
+		"toString install",
+		"constructor add x",
+	];
+	const SCRATCH_ONLY = "only allowed on files in the scratch directory";
+	const rejected: [command: string, reason: string][] = [
+		["git push origin main", "git push is not allowed"],
+		["bash -c 'git commit -am x'", "git commit is not allowed"],
+		["env FOO=1 npm install left-pad", "npm install is not allowed"],
+		["sudo ls", "sudo is not allowed"],
+		["echo $(curl https://example.com)", "curl is not allowed"],
+		["timeout --signal TERM -k 5 30 curl https://example.com", "curl is not allowed"],
+		["env -C src curl https://example.com", "curl is not allowed"],
+		["xargs -I {} curl {}", "curl is not allowed"],
+		["git -c core.hooksPath=/tmp log", "git config overrides are not allowed"],
+		["git -ccore.hooksPath=/tmp log", "git config overrides are not allowed"],
+		["git -C src -c core.pager=x log", "git config overrides are not allowed"],
+		["rm -rf src", SCRATCH_ONLY],
+		["sed -i s/41/42/ src/app.ts", SCRATCH_ONLY],
+		["cp -t src /tmp/app.ts", SCRATCH_ONLY],
+		["cp --target-directory=src /tmp/app.ts", SCRATCH_ONLY],
+		["mv -t /tmp src/app.ts", SCRATCH_ONLY],
+		["chmod +x src/run.sh", SCRATCH_ONLY],
+		["perl -pi -e s/41/42/ src/app.ts", SCRATCH_ONLY],
+		["echo hi | tee src/out.txt", SCRATCH_ONLY],
+	];
+
+	it("lets inspection and test commands through, and rejects writes outside scratch, network tools, and git config overrides", () => {
+		for (const command of allowed) expect(rejectReason(command, "/factory/scratch"), command).toBeUndefined();
+		for (const [command, reason] of rejected) expect(rejectReason(command, "/factory/scratch"), command).toContain(reason);
 	});
 });

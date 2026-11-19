@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import { emit } from "../events/index.js";
-import { errorMessage } from "../runner/core/emit.js";
-import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/core/protocol.js";
-import { APP_DIR, REPO_DIR, SCRATCH_DIR, type Sandbox } from "../sandbox/types.js";
-import type { Agent, OutputSchema } from "./define.js";
+import type { Agent, OutputSchema } from "../agents/index.js";
+import { type Db, workflowsDb } from "../db/index.js";
+import { PROTOCOL_VERSION, type RunnerErrorCode, RunnerEvent, type RunnerInput, type ToolName, type Usage } from "../runner/index.js";
+import { APP_DIR, type ExecStreamOptions, REPO_DIR, type Sandbox, SCRATCH_DIR } from "../sandbox/index.js";
+import type { ThreadKey } from "../threads/index.js";
+import { errorMessage } from "../util/index.js";
+import { AgentRunRecorder } from "./recorder.js";
+import { followRun, LineRelay } from "./relay.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
-/** Extra time the host gives run-agent.sh beyond the runner's own timeout, to flush events and exit. */
 const EXEC_GRACE_MS = 60_000;
+const STDERR_KEPT = 2000;
 
 export type AgentErrorCode = RunnerErrorCode | "output_invalid" | "runner_lost";
 
@@ -24,16 +27,13 @@ export class AgentError extends Error {
 }
 
 export interface RunAgentOptions {
-	/** Tools run only here, never in a Workflows task. */
 	sandbox: Sandbox;
-	/** Root task run of the GitHub task; every event this run emits carries it. */
 	traceId: string;
 	runId?: string;
-	repo?: string;
-	subject?: string;
-	/** Default 30 minutes. */
+	thread?: ThreadKey;
 	timeoutMs?: number;
 	signal?: AbortSignal;
+	db?: Db;
 }
 
 export interface AgentRun<Output extends OutputSchema> {
@@ -43,10 +43,6 @@ export interface AgentRun<Output extends OutputSchema> {
 	turns: number;
 }
 
-/**
- * Runs `agent` in `opts.sandbox` on `message`, the task for this run, and returns the submission parsed by the
- * agent's Zod schema. Every failure throws an AgentError; usage and cost are recorded on `agent.finished` either way.
- */
 export async function runAgent<Tools extends readonly ToolName[], Output extends OutputSchema>(
 	agent: Agent<Tools, Output>,
 	message: string,
@@ -55,25 +51,21 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 	const { sandbox, ...base } = opts;
 	const { harness } = agent;
 	const timeoutMs = base.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	const recorder = new AgentRunRecorder({
+		db: base.db ?? workflowsDb(),
+		runId: base.runId ?? base.traceId,
+		thread: base.thread,
+	});
+	recorder.start({ agentId: agent.id, harness: harness.name, model: harness.label });
 	const finish = (outcome: string, summary: Summary, message?: string) =>
-		emit({
-			traceId: base.traceId,
-			runId: base.runId,
-			repo: base.repo,
-			subject: base.subject,
-			type: "agent.finished",
-			payload: {
-				agentId: agent.id,
-				harness: harness.name,
-				...(summary.harnessVersion ? { harnessVersion: summary.harnessVersion } : {}),
-				model: summary.model ?? harness.label,
-				outcome,
-				turns: summary.turns,
-				usage: summary.usage,
-				costUsd: summary.costUsd,
-				...(summary.invalidLines ? { invalidLines: summary.invalidLines } : {}),
-				...(message ? { message } : {}),
-			},
+		recorder.finish({
+			outcome,
+			turns: summary.turns,
+			usage: summary.usage,
+			costUsd: summary.costUsd,
+			harnessVersion: summary.harnessVersion,
+			message,
+			invalidLines: summary.invalidLines,
 		});
 
 	let summary = emptySummary();
@@ -95,8 +87,13 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 		const apiKey = process.env[harness.credential]?.trim();
 		if (!apiKey) throw failure("agent_error", `${harness.credential} is not set: the ${harness.name} harness needs it`);
 
-		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, base.signal);
-		summary = summarize(stdout.text);
+		const relay = new LineRelay((line) => {
+			const event = parseLine(line);
+			if (event) recorder.onRunnerEvent(event);
+		});
+		const stdout = await runInSandbox(sandbox, runnerInput, apiKey, timeoutMs, relay, base.signal);
+		const { events, invalidLines } = parseEvents(stdout.text);
+		summary = summarize(events, invalidLines);
 		const end = summary.terminal;
 		if (!end) {
 			throw failure("runner_lost", `the runner ended without a result or error event${stdout.detail ? ` (${stdout.detail})` : ""}`);
@@ -107,30 +104,28 @@ export async function runAgent<Tools extends readonly ToolName[], Output extends
 			const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 			throw failure("output_invalid", `agent ${agent.id} submitted output its schema rejects: ${issues}`);
 		}
-		finish("ok", summary);
+		await finish("ok", summary);
 		return { output: parsed.data, usage: summary.usage, costUsd: summary.costUsd, turns: summary.turns };
 	} catch (err) {
 		const error = err instanceof AgentError ? err : failure("agent_error", errorMessage(err));
-		finish(error.code, summary, error.message);
+		await finish(error.code, summary, error.message);
 		throw error;
 	}
 }
 
 interface RunnerOutput {
-	/** The runner's stdout: RunnerEvent JSONL. */
 	text: string;
-	/** What went wrong around the runner, for a runner_lost message. */
 	detail?: string;
 }
 
-/**
- * Contract with `${APP_DIR}/run-agent.sh <runDir> <timeoutSeconds>`: as root, it reads and deletes
- * `<runDir>/key` before handing `<runDir>` to the unprivileged user, then runs the runner as that user from
- * REPO_DIR with `--key-stdin`, feeding the key as the first line of stdin followed by `<runDir>/input.json`. It
- * writes stdout to `<runDir>.jsonl` and the exit status to `<runDir>.exit`. `<runDir>` must be root-only (mode
- * 700) when the key is uploaded, so the runner user can't reach the key file before it's deleted.
- */
-async function runInSandbox(sandbox: Sandbox, input: RunnerInput, apiKey: string, timeoutMs: number, signal?: AbortSignal): Promise<RunnerOutput> {
+async function runInSandbox(
+	sandbox: Sandbox,
+	input: RunnerInput,
+	apiKey: string,
+	timeoutMs: number,
+	relay: LineRelay,
+	signal?: AbortSignal,
+): Promise<RunnerOutput> {
 	const runDir = `/tmp/agent-${randomUUID()}`;
 	const mkdir = await sandbox.exec(`mkdir -m 700 ${runDir}`, { signal });
 	if (mkdir.exitCode !== 0) return { text: "", detail: `mkdir ${runDir} exited ${mkdir.exitCode}: ${tail(mkdir.stderr)}` };
@@ -138,26 +133,37 @@ async function runInSandbox(sandbox: Sandbox, input: RunnerInput, apiKey: string
 		await sandbox.upload(`${runDir}/input.json`, JSON.stringify(input));
 		await sandbox.upload(`${runDir}/key`, apiKey);
 		const details: string[] = [];
+		const deadline = Date.now() + timeoutMs + EXEC_GRACE_MS;
+		let stderr = "";
+		const onData: ExecStreamOptions["onData"] = (stream, data) => {
+			if (stream === "stdout") relay.push(data);
+			else stderr = (stderr + data).slice(-STDERR_KEPT);
+		};
 		try {
-			const res = await sandbox.exec(`bash ${APP_DIR}/run-agent.sh ${runDir} ${Math.ceil(timeoutMs / 1000)}`, {
-				timeoutMs: timeoutMs + EXEC_GRACE_MS,
+			const exitCode = await sandbox.execStream(`bash ${APP_DIR}/run-agent.sh ${runDir} ${Math.ceil(timeoutMs / 1000)}`, {
+				onData,
+				timeoutMs: deadline - Date.now(),
 				signal,
 			});
-			if (res.exitCode !== 0) details.push(`run-agent.sh exited ${res.exitCode}: ${tail(res.stderr)}`);
+			if (exitCode !== 0) details.push(`run-agent.sh exited ${exitCode}: ${tail(stderr)}`);
 		} catch (err) {
 			if (signal?.aborted) throw err;
 			details.push(`run-agent.sh failed: ${errorMessage(err)}`);
+			const stopped = await followRun(sandbox, runDir, relay, deadline, signal);
+			if (stopped) details.push(stopped);
 		}
 		let text = "";
 		try {
-			text = (await sandbox.download(`${runDir}.jsonl`, signal)).toString("utf8");
+			const file = await sandbox.download(`${runDir}.jsonl`, signal);
+			relay.finish(file);
+			text = file.toString("utf8");
 		} catch (err) {
 			if (signal?.aborted) throw err;
 			details.push(`cannot download ${runDir}.jsonl: ${errorMessage(err)}`);
 		}
 		return { text, detail: details.join("; ") || undefined };
 	} finally {
-		await sandbox.exec(`rm -rf ${runDir} ${runDir}.jsonl ${runDir}.exit`).catch(() => {});
+		await sandbox.exec(`rm -rf ${runDir} ${runDir}.jsonl ${runDir}.exit ${runDir}.pid`).catch(() => {});
 	}
 }
 
@@ -168,10 +174,7 @@ interface Summary {
 	costUsd: number;
 	turns: number;
 	terminal?: Extract<RunnerEvent, { type: "result" | "error" }>;
-	/** From the runner's `started` event: what actually ran, which the host can't always know. */
 	harnessVersion?: string;
-	model?: string;
-	/** Lines that aren't valid RunnerEvents. */
 	invalidLines: number;
 }
 
@@ -184,23 +187,33 @@ function emptySummary(): Summary {
 	};
 }
 
-/** Sums usage over the runner's events and finds the terminal one. Turns come from `result`, else count model calls. */
-function summarize(jsonl: string): Summary {
-	const summary = emptySummary();
-	let calls = 0;
+function parseEvents(jsonl: string): { events: RunnerEvent[]; invalidLines: number } {
+	const events: RunnerEvent[] = [];
+	let invalidLines = 0;
 	for (const line of jsonl.split("\n")) {
 		if (!line.trim()) continue;
-		let event: RunnerEvent;
-		try {
-			event = RunnerEvent.parse(JSON.parse(line));
-		} catch {
-			summary.invalidLines++;
-			continue;
-		}
-		if (summary.terminal) continue;
+		const event = parseLine(line);
+		if (event) events.push(event);
+		else invalidLines++;
+	}
+	return { events, invalidLines };
+}
+
+function parseLine(line: string): RunnerEvent | undefined {
+	try {
+		return RunnerEvent.parse(JSON.parse(line));
+	} catch {
+		return undefined;
+	}
+}
+
+function summarize(events: readonly RunnerEvent[], invalidLines: number): Summary {
+	const summary = { ...emptySummary(), invalidLines };
+	let calls = 0;
+	for (const event of events) {
+		if (summary.terminal) break;
 		if (event.type === "started") {
 			summary.harnessVersion = event.harness_version;
-			summary.model = event.model;
 		} else if (event.type === "usage") {
 			const u = summary.usage;
 			u.input_tokens += event.usage.input_tokens;

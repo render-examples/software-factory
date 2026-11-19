@@ -1,7 +1,7 @@
 # Contributing
 
-Read [Architecture](docs/architecture.md) before changing claims, credentials,
-Sandboxes, publishing, or GitHub authority. Use the
+Read [Architecture](docs/architecture.md) before changing run coordination,
+credentials, Sandboxes, publishing, or GitHub authority. Use the
 [extension runbook](docs/runbooks/extend.md) for agents, Workflows tasks, and
 GitHub triggers.
 
@@ -18,7 +18,9 @@ npm ci
 cp .env.example .env
 ```
 
-Fill `.env` without committing it. Start each process in its own terminal:
+Fill `.env` without committing it. `DATABASE_URL` can point at a local
+Postgres; see [Database](docs/configuration.md#database). Start each process
+in its own terminal:
 
 ```bash
 # Terminal 1
@@ -27,6 +29,9 @@ npm run dev:workflows
 # Terminal 2
 RENDER_USE_LOCAL_DEV=true npm run dev:gateway
 ```
+
+`RENDER_USE_LOCAL_DEV=true` directs the Render SDK to start tasks on the local
+`dev:workflows` server instead of the Render API.
 
 Expose port 3000 over public HTTPS:
 
@@ -67,6 +72,17 @@ calls. Vitest replaces `factory.config.ts` with the explicit configuration in
 subjects, permissions, or expected verification commands. Keep configuration
 compatibility cases in that fixture and exercise them through routing and tasks.
 
+Database tests run on PGlite, in-process Postgres, through
+`tests/helpers/db.ts`. PGlite runs one transaction at a time, so tests that
+need concurrent transactions or connections run only when `TEST_DATABASE_URL`
+points at a Postgres server where the user can create databases. CI sets it.
+Name those files `*-postgres.test.ts`: Vitest runs them one at a time, since a
+transaction anywhere on the server holds back readers of a thread's events.
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npx vitest run --project postgres
+```
+
 Run additional checks when relevant:
 
 ```bash
@@ -100,31 +116,13 @@ Follow [docs/runbooks/extend.md](docs/runbooks/extend.md) to:
 The runbook is the canonical procedure. Keep implementation details in code
 and architectural reasons in [Architecture](docs/architecture.md).
 
-## Add persistent state
-
-The default template has no database. GitHub owns collaboration artifacts,
-Render Workflows owns task execution, and telemetry goes to logs.
-
-Add a database only for new data with its own lifecycle, such as a searchable
-spec library, budgets, or retained run history:
-
-1. Add a Render Postgres database to the `production` environment's
-   `databases` list in `render.yaml`.
-2. Wire `DATABASE_URL` into only the services that need it.
-3. Run migrations from a service `preDeployCommand`.
-4. Use the internal connection string on Render. Local tools use the external
-   connection with TLS.
-
-Do not move claim ownership into the database. The status comment must remain
-the single source of truth for the run that owns an issue or pull request.
-
 ## Documentation ownership
 
 - `README.md`: product entry point.
 - `docs/quickstart.md`: human setup handoff.
 - `docs/runbooks/setup.md`: first-deployment agent protocol.
-- `docs/configuration.md`: settings, run control, deployment checks, and
-  snapshot procedures.
+- `docs/configuration.md`: settings, environment groups, and Day-2 operations
+  (runs, event streams, snapshots, deployment checks, and the database).
 - `docs/architecture.md`: state, boundaries, invariants, and accepted risks.
 - `docs/runbooks/extend.md`: extension agent protocol.
 - `CONTRIBUTING.md`: local development and verification.

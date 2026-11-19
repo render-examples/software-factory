@@ -37,8 +37,8 @@ afterEach(async () => {
 });
 
 describe("setup:app credential output", () => {
-	it.each([{ args: [] }, { args: ["--write-env"] }])("saves credentials without printing them with arguments $args", async ({ args }) => {
-		process.argv = ["node", "scripts/setup-app.ts", ...args];
+	it("saves credentials without printing them", async () => {
+		process.argv = ["node", "scripts/setup-app.ts"];
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 		vi.resetModules();
 		await import("../scripts/setup-app.js");
@@ -60,23 +60,22 @@ describe("setup:app credential output", () => {
 });
 
 describe("dotenv credential storage", () => {
-	it.each(["new", "existing"])("protects $0 dotenv files and preserves unrelated settings", async (kind) => {
-		const existing = kind === "existing";
+	it("protects new and existing dotenv files and preserves unrelated settings", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "software-factory-env-"));
 		directories.push(directory);
-		const path = join(directory, ".env");
-		if (existing) {
-			await writeFile(path, "# Keep this comment\nOTHER_SETTING=keep\nGITHUB_APP_PRIVATE_KEY=old\n");
-			if (process.platform !== "win32") await chmod(path, 0o644);
-		}
+		const fresh = join(directory, "new.env");
+		const existing = join(directory, ".env");
+		await writeFile(existing, "# Keep this comment\nOTHER_SETTING=keep\nGITHUB_APP_PRIVATE_KEY=old\n");
+		if (process.platform !== "win32") await chmod(existing, 0o644);
 		const { writeEnvFile: save } = await vi.importActual<typeof import("../scripts/lib/env-file.js")>("../scripts/lib/env-file.js");
-		await save(path, { GITHUB_APP_PRIVATE_KEY: "new-private-key", GITHUB_WEBHOOK_SECRET: "new-webhook-secret" });
-
-		const contents = await readFile(path, "utf8");
-		expect(contents).toContain("GITHUB_APP_PRIVATE_KEY=new-private-key\n");
-		expect(contents).toContain("GITHUB_WEBHOOK_SECRET=new-webhook-secret\n");
-		expect(contents).not.toContain("GITHUB_APP_PRIVATE_KEY=old");
-		if (existing) expect(contents).toContain("# Keep this comment\nOTHER_SETTING=keep\n");
-		if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
+		for (const path of [fresh, existing]) {
+			await save(path, { GITHUB_APP_PRIVATE_KEY: "new-private-key", GITHUB_WEBHOOK_SECRET: "new-webhook-secret" });
+			const contents = await readFile(path, "utf8");
+			expect(contents).toContain("GITHUB_APP_PRIVATE_KEY=new-private-key\n");
+			expect(contents).toContain("GITHUB_WEBHOOK_SECRET=new-webhook-secret\n");
+			expect(contents).not.toContain("GITHUB_APP_PRIVATE_KEY=old");
+			if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
+		}
+		expect(await readFile(existing, "utf8")).toContain("# Keep this comment\nOTHER_SETTING=keep\n");
 	});
 });

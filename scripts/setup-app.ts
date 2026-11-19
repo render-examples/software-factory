@@ -1,15 +1,7 @@
-/**
- * Step 1 of setup: create the factory's GitHub App with GitHub's manifest flow, before anything is deployed.
- *
- *   npm run setup:app [-- --org <org>] [--name <name>] [--write-env]
- *
- * The App's webhook starts inactive at a placeholder URL; `npm run setup:github` points it at the gateway once the
- * Blueprint is deployed. `npm run setup:render` copies the App's values into Render env groups before that.
- */
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { config } from "../app/config/index.js";
-import { githubApiUrl } from "../app/github/auth.js";
+import { githubApiUrl } from "../app/github/index.js";
 import { writeEnvFile } from "./lib/env-file.js";
 import { githubWebUrl } from "./lib/github.js";
 import { buildManifest, exchangeManifestCode, formPage, newState, registrationUrl, startCallbackServer } from "./lib/manifest.js";
@@ -20,8 +12,6 @@ const { values } = parseArgs({
 		org: { type: "string" },
 		name: { type: "string" },
 		port: { type: "string" },
-		// Accepted for compatibility; credentials are always saved instead of printed.
-		"write-env": { type: "boolean", default: true },
 	},
 });
 
@@ -71,8 +61,8 @@ for (const repo of repos) console.log(`   - ${repo}`);
 await writeEnvFile(".env", env);
 console.log(`\n${green("✓")} Wrote GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_WEBHOOK_SECRET to .env`);
 
-console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY, RENDER_WORKSPACE_ID, and ANTHROPIC_API_KEY to .env:`);
-console.log("   npm run setup:render");
+console.log(`\n${bold("2. Create the Render env groups")} after adding RENDER_API_KEY and ANTHROPIC_API_KEY to .env:`);
+console.log("   npm run setup:render -- --workspace <tea-...>");
 
 console.log(`\n${bold("3. Deploy the Blueprint")}, then connect the webhook once the gateway is live:`);
 console.log("   npm run setup:github -- --gateway-url https://<gateway>.onrender.com");

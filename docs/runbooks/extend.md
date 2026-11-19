@@ -32,10 +32,10 @@ Decide which change you need:
   task.
 - **Agent harness:** another agent library or model client behind the runner
   contract.
-- **Claiming task:** work attached to one issue or pull request that must stop
+- **GitHub task:** work attached to one issue or pull request that must stop
   when another run takes over.
-- **Plain task:** maintenance work without an issue or pull request claim,
-  such as snapshot refresh.
+- **Plain task:** maintenance work without an issue or pull request, such as
+  snapshot refresh.
 - **GitHub trigger:** a new authenticated event, label, or command that starts
   a task.
 
@@ -116,7 +116,7 @@ must not import host-only code.
 Call the agent inside a Sandbox owned by the task:
 
 ```typescript
-const result = await runAgent(finder, message, claim.agentRunOptions(sandbox));
+const result = await runAgent(finder, message, run.agentRunOptions(sandbox));
 ```
 
 Use the typed `result.output`. Do not parse assistant text or accept a target
@@ -153,6 +153,9 @@ driver that only translates the library.
    - offer the model exactly `ctx.tools` and `ctx.submit`, bound to the
      library's tool type. Never offer the library's own shell, file, network,
      or subagent tools: their authority isn't the factory's;
+   - turn off the library's discovery of instructions, skills, prompt
+     templates, and plugins. `ctx.cwd` is the untrusted checkout, and a plugin
+     would run its code beside the key;
    - call `ctx.requestModel()` before every model request, retries included,
      and don't send the request when it returns false;
    - report text, usage, and tool calls and results through `ctx.report`; and
@@ -185,7 +188,7 @@ of the task body.
 3. Export the schema from `app/schemas/index.ts`.
 
 Task input must carry trusted routing data from the authenticated webhook:
-repository, installation, actor, subject number, and any commit SHA the task
+repository, installation, actor, issue or pull request number, and any commit SHA the task
 must pin. Do not accept these values from agent output.
 
 ### 2. Declare the task
@@ -198,10 +201,11 @@ export const exampleWorkflow = defineGitHubTask(
     name: TASKS.example,
     title: "Example",
     input: ExampleInput,
-    subject: (input) => ({ kind: "issue", number: input.issue }),
+    thread: (input) => ({ kind: "issue", number: input.issue }),
+    trigger: (input) => ({ label: config.labels.example, number: input.issue }),
     timeoutSeconds: 3600,
   },
-  async (claim, input, deps): Promise<Outcome> => {
+  async (run, input, deps): Promise<Outcome> => {
     // Code in the Workflows service owns all external writes.
     return { outcome: "completed", summary: "completed the example task." };
   },
@@ -217,21 +221,30 @@ export const runExample = exampleWorkflow.run;
 - `exampleWorkflow.run` calls the same body in-process with injectable
   dependencies for tests.
 
+`trigger` names the label that started a root run, if one did, and the issue
+or pull request it's on (`defineGitHubTask()` removes the command label once
+the run starts; omit `trigger` for tasks started only by comments or parent
+workflows).
+
 GitHub tasks do not retry automatically. A retry can repeat model spend or
 durable writes; a person starts a fresh run instead.
 
-### 3. Use the claim correctly
+### 3. Use the run correctly
 
-- Call `claim.reportProgress()` before a major step.
+- Call `run.reportProgress()` before a major step.
 - Open Sandboxes only through `withSandbox`.
-- Call `claim.trackSandbox(sandbox)` immediately after opening one.
-- Pass `claim.agentRunOptions(sandbox)` to `runAgent`.
-- Call `claim.assertCurrent()` before a durable effect that is not already
-  guarded by the claim helper.
+- Call `run.trackSandbox(sandbox)` immediately after opening one.
+- Pass `run.agentRunOptions(sandbox)` to `runAgent`.
+- Call `run.assertCurrent()` immediately before a durable effect that
+  `reportProgress()` does not already guard, and pass it to `publish()` as
+  `assertOwned`.
 - Throw `ExpectedFailure` only for an expected message safe to show on
   GitHub.
 - Return a short snake_case `outcome`, user-facing `summary`, and relevant
   links.
+- Call `run.awaitReply()` just before posting the comment that asks for a
+  reply, return `waiting: "reply"`, and route the reply in `route()` with
+  `replyTo` set to the waiting run (see [Workflow](../architecture.md#workflow)).
 
 Only code in the Workflows service may call GitHub write methods. Format model
 text through `app/format/` before publishing it.
@@ -250,28 +263,33 @@ Use a GitHub-task parent to run registered child tasks in order:
 ```typescript
 export const pipeline = defineGitHubTask(
   {
-    name: "pipeline",
+    name: TASKS.pipeline,
     title: "Pipeline",
     input: PipelineInput,
-    subject: input => ({ kind: "issue", number: input.issue }),
+    thread: (input) => ({ kind: "issue", number: input.issue }),
     timeoutSeconds: 3600,
   },
-  async (_claim, input, _deps, ctx) => {
+  async (_run, input, _deps, ctx) => {
     if (!ctx.run) throw new Error("pipeline requires a Workflows context");
     const first = await ctx.run(firstWorkflow.task, input);
     if (first.state !== "done" || !first.data) {
-      return { state: "failed", outcome: "stopped", summary: first.summary };
+      const state = first.state === "done" ? "done" : "failed";
+      return { state, outcome: "stopped_at_first", summary: first.summary };
     }
     const second = await ctx.run(secondWorkflow.task, first.data);
+    if (second.state !== "done") {
+      return { state: "failed", outcome: "stopped_at_second", summary: second.summary };
+    }
     return { outcome: "completed", summary: second.summary };
   },
 );
 ```
 
 Each `ctx.run()` starts a child task on separate compute and waits for its
-typed result. The parent owns the subject's root claim; its children continue
-that claim, update the current stage and Sandbox, and run their own permission
-checks.
+typed result. The parent is the trace that owns the thread; each child starts
+on the thread only while that trace is still its latest, becomes the current
+stage in the status comment, records its own Sandbox, and runs its own
+permission check.
 
 Keep parent retries disabled. Retrying a parent can create new child runs and
 repeat model spend. Return immediately after a child is cancelled, rejected,
@@ -283,7 +301,7 @@ is the complete example.
 ## Add a plain Workflows task
 
 Use the Render SDK's `task()` directly only when the work has no issue or pull
-request claim. `app/workflows/refresh-snapshot.ts` is the reference.
+request. `app/workflows/refresh-snapshot.ts` is the reference.
 
 A plain task must still:
 
@@ -299,13 +317,18 @@ ownership for issue or pull request work.
 
 ## Add a GitHub trigger
 
-The gateway route is a pure mapping from an authenticated delivery to a
-validated task input.
+`route()` maps an authenticated delivery to a validated task input without I/O.
+GitHub labels and other payload state never carry thread state on their own.
+When a delivery's meaning depends on thread state, `route()` returns a
+`lookup`: the gateway reads `waiting` (the root run waiting for a reply, and its
+task) from Postgres and passes it to `decide()`. The gateway records each
+decision and replays it on redelivery.
 
 1. Add the task name and input schema first.
 2. Update `route()` in `app/gateway/routes.ts`.
 3. Derive repository, installation, actor, issue or pull request, and commit
-   from the authenticated payload.
+   from the authenticated payload. Work on a pull request runs on the pull
+   request's own thread.
 4. Use the GitHub delivery ID as the task idempotency key. For content-addressed
    maintenance work, use a deterministic key such as `repo@sha`.
 5. Update `REQUIRED_EVENTS`, `REQUIRED_PERMISSIONS`, or `LABELS` in
@@ -337,27 +360,24 @@ Before handing off, confirm:
 - the new agent has the minimum tools it needs;
 - model output cannot select an external write target;
 - the gateway still imports no GitHub auth, Sandbox, agent, or workflow code;
-- the runner bundle (`app/runner/`, `app/harness/`, agent definitions, and
-  schemas) still imports no host-only code;
+- the runner bundle (`app/runner/`, `app/harness/`, agent definitions,
+  schemas, and `app/util/`) still imports no host-only code;
 - GitHub tasks record their Sandbox before running an agent;
 - tests cover the user-visible success and important failures; and
 - documentation and setup requirements changed when the App contract changed.
 
 ## Deploy the extension
 
-- Prompt, agent, schema, or Workflows changes require a Workflows deploy.
-- Gateway route changes require a gateway deploy.
-- App permission, event, or label changes require `npm run setup:github`.
-- A new secret, such as another provider key, goes in `ENV_GROUPS` in
-  `scripts/lib/requirements.ts`. Add it to `.env`, rerun
-  `npm run setup:render`, and redeploy the services that link its group. See
-  [Environment groups](../configuration.md#environment-groups).
-- A harness whose key is new needs the key in `.env`, `npm run setup:render`,
-  and a Workflows deploy. Setup and `doctor` derive the key list from the
-  agents' harnesses.
-- Changes under `app/runner/`, `app/harness/`, or agent definitions reach
-  Sandboxes with the Workflows deploy: each Sandbox gets the new runner bundle
-  when it opens. Changes under `sandbox/` also require a snapshot refresh for
-  every configured repository.
+Check [What must be redeployed](../configuration.md#what-must-be-redeployed)
+for which services and snapshots your change affects, plus:
+
+- For a new environment variable, add it to `.env.example`, `SERVICE_ENV`, and
+  `ENV_GROUPS` in `scripts/lib/requirements.ts` (and `SECRET_ENV` if it is a
+  non-harness secret), add the value to `.env`, rerun `npm run setup:render`,
+  and redeploy affected services (see
+  [Environment groups](../configuration.md#environment-groups)).
+- For a harness that introduces a new provider key, setup and `doctor` derive
+  its `credential` automatically; add the key to `.env`, rerun
+  `npm run setup:render`, and deploy `factory-workflows`.
 
 State the required deploy and refresh actions in the handoff.

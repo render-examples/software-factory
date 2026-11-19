@@ -1,16 +1,7 @@
-/** What the factory needs from GitHub and from each service's environment, in one place for setup and doctor. */
-import { AGENTS } from "../../app/agents/registry.js";
+import { AGENTS } from "../../app/agents/index.js";
 import { config } from "../../app/config/index.js";
-import { WORKING_LABEL } from "../../app/claims/status.js";
+import { WORKING_LABEL } from "../../app/runs/index.js";
 
-/**
- * Repository permissions the App requests. Each is used by app/:
- * - contents: write — Git Data API publishing (blobs, trees, commits, refs) and read-only clone tokens.
- * - issues: write — comments, status labels, the label timeline, and creating labels.
- * - pull_requests: write — opening draft PRs, reading diffs and files, posting COMMENT reviews.
- * - metadata: read — collaborator permission checks; GitHub grants it to every App.
- * No `workflows` permission: publishing refuses changes under .github/workflows.
- */
 export const REQUIRED_PERMISSIONS: Readonly<Record<string, "read" | "write">> = {
 	contents: "write",
 	issues: "write",
@@ -18,7 +9,6 @@ export const REQUIRED_PERMISSIONS: Readonly<Record<string, "read" | "write">> = 
 	metadata: "read",
 };
 
-/** Webhook events the gateway routes (app/gateway/routes.ts). */
 export const REQUIRED_EVENTS: readonly string[] = ["issues", "issue_comment", "pull_request", "push"];
 
 export const WEBHOOK_PATH = "/webhooks/github";
@@ -27,7 +17,6 @@ export interface LabelSpec {
 	name: string;
 	color: string;
 	description: string;
-	/** A trigger label must exist so people can apply it; the working label is created on demand. */
 	trigger: boolean;
 }
 
@@ -61,30 +50,22 @@ export const LABELS: readonly LabelSpec[] = [
 
 export type Service = "gateway" | "workflows";
 
-/** The credential each agent's harness declares (app/agents/), once each, in agent order. Workflows sends them to its sandboxes. */
 export const HARNESS_KEY_ENV: readonly string[] = [...new Set(AGENTS.map((agent) => agent.harness.credential))];
 
-/** Each service's env vars, exactly as render.yaml declares them (through its env groups or directly). */
 export const SERVICE_ENV: Readonly<Record<Service, readonly string[]>> = {
-	gateway: ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG"],
-	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", ...HARNESS_KEY_ENV],
+	gateway: ["GITHUB_WEBHOOK_SECRET", "EVENTS_READ_TOKEN", "RENDER_API_KEY", "RENDER_WORKFLOW_SLUG", "DATABASE_URL"],
+	workflows: ["RENDER_API_KEY", "RENDER_WORKSPACE_ID", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "DATABASE_URL", ...HARNESS_KEY_ENV],
 };
 
 export interface EnvGroupSpec {
 	name: string;
-	/** The services whose render.yaml entry links the group with `fromGroup`. */
 	services: readonly Service[];
 	keys: readonly string[];
 }
 
-/**
- * The environment groups setup:render creates from .env and render.yaml links. Each service gets every key in
- * SERVICE_ENV from these except RENDER_WORKFLOW_SLUG, which the Blueprint wires from the Workflows service.
- * The gateway links no group that holds GitHub App credentials or a model key.
- */
 export const ENV_GROUPS: readonly EnvGroupSpec[] = [
 	{ name: "software-factory-shared", services: ["gateway", "workflows"], keys: ["RENDER_API_KEY"] },
-	{ name: "software-factory-gateway", services: ["gateway"], keys: ["GITHUB_WEBHOOK_SECRET"] },
+	{ name: "software-factory-gateway", services: ["gateway"], keys: ["GITHUB_WEBHOOK_SECRET", "EVENTS_READ_TOKEN"] },
 	{
 		name: "software-factory-workflows",
 		services: ["workflows"],
@@ -92,17 +73,22 @@ export const ENV_GROUPS: readonly EnvGroupSpec[] = [
 	},
 ];
 
-/** The group a service reads `key` from, if any. */
+export const WORKFLOWS_DATABASE_GROUP: EnvGroupSpec = { name: "software-factory-workflows", services: ["workflows"], keys: ["DATABASE_URL"] };
+
 export function envGroupFor(service: Service, key: string): EnvGroupSpec | undefined {
 	return ENV_GROUPS.find((group) => group.services.includes(service) && group.keys.includes(key));
 }
 
-/** Values doctor must never print. */
-export const SECRET_ENV: readonly string[] = ["GITHUB_WEBHOOK_SECRET", "RENDER_API_KEY", "GITHUB_APP_PRIVATE_KEY"];
+export const SECRET_ENV: readonly string[] = [
+	"GITHUB_WEBHOOK_SECRET",
+	"EVENTS_READ_TOKEN",
+	"RENDER_API_KEY",
+	"GITHUB_APP_PRIVATE_KEY",
+	"DATABASE_URL",
+];
 
 const LEVELS = ["none", "read", "write", "admin"];
 
-/** Required permissions the granted set lacks, as "name:level" strings. */
 export function missingPermissions(granted: Record<string, string> | undefined): string[] {
 	const have = granted ?? {};
 	return Object.entries(REQUIRED_PERMISSIONS)

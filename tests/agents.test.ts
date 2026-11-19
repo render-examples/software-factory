@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineAgent, piOpus, runAgent } from "../app/agents/index.js";
-import { emit } from "../app/events/index.js";
+import { runAgent } from "../app/agent-runs/index.js";
+import { defineAgent, piOpus } from "../app/agents/index.js";
+import { type Db, readStream } from "../app/db/index.js";
 import { PROTOCOL_VERSION, RunnerInput } from "../app/runner/core/protocol.js";
 import { REPO_DIR } from "../app/sandbox/types.js";
+import { pgliteDb } from "./helpers/db.js";
 import { eventLine, FakeSandbox } from "./helpers/fake-sandbox.js";
-
-vi.mock("../app/events/index.js", () => ({ emit: vi.fn(async () => {}) }));
 
 const PROMPT = "../../tests/fixtures/agents/echo.md";
 const HOST_KEY = "sk-ant-test-HOSTKEY-0123456789";
@@ -26,23 +26,13 @@ const reviewer = defineAgent({
 	maxTurns: 40,
 });
 
-const emitted = () => vi.mocked(emit).mock.calls.map(([e]) => e);
-
-beforeEach(() => {
-	vi.mocked(emit).mockClear();
-	vi.mocked(emit).mockImplementation(async () => {});
+let db: Db;
+beforeAll(async () => {
+	({ db } = await pgliteDb());
 });
+afterAll(() => db.end());
 afterEach(() => {
 	delete process.env.ANTHROPIC_API_KEY;
-});
-
-describe("defineAgent", () => {
-	it("reads the prompt file verbatim and converts the output schema (fields with defaults optional)", () => {
-		expect(reviewer.prompt).toBe("You are a test agent.\n\nReport on the task and submit exactly once.\n");
-		expect(reviewer.promptPath).toMatch(/tests\/fixtures\/agents\/echo\.md$/);
-		expect(reviewer.outputJsonSchema).toMatchObject({ type: "object", required: ["verdict", "findings"] });
-		expect(reviewer.tools).toEqual(["read", "ls", "bash"]);
-	});
 });
 
 const cannedRun = (output: unknown) =>
@@ -54,6 +44,13 @@ const cannedRun = (output: unknown) =>
 		eventLine({ type: "result", output, turns: 2 }),
 	].join("\n");
 
+async function recordedEvents(runId: string) {
+	const { rows } = await db.query<{ id: string }>("select id from agent_runs where run_id = $1", [runId]);
+	return rows[0] ? readStream(db, `agent_run:${rows[0].id}`, 0) : [];
+}
+
+const recorded = async (runId: string) => (await recordedEvents(runId)).map((e) => e.type);
+
 describe("runAgent in a sandbox", () => {
 	beforeEach(() => {
 		process.env.ANTHROPIC_API_KEY = HOST_KEY;
@@ -61,7 +58,14 @@ describe("runAgent in a sandbox", () => {
 
 	it("runs tool-using agents in the sandbox without exposing the model key to commands or events", async () => {
 		const sandbox = new FakeSandbox({ jsonl: `${cannedRun({ verdict: "ok", findings: ["x"] })}\n` });
-		const run = await runAgent(reviewer, "Review it.", { traceId: "trace-2", sandbox, timeoutMs: 600_000 });
+		const run = await runAgent(reviewer, "Review it.", {
+			traceId: "trace-2",
+			runId: "trn-7",
+			thread: "github:acme/web#issue-12",
+			sandbox,
+			timeoutMs: 600_000,
+			db,
+		});
 
 		expect(run).toEqual({
 			output: { verdict: "ok", findings: ["x"], priority: 2 },
@@ -85,19 +89,96 @@ describe("runAgent in a sandbox", () => {
 		for (const { command } of sandbox.execs) expect(command).not.toContain(HOST_KEY);
 		expect(sandbox.uploads.get(`${runDir}/input.json`)).not.toContain(HOST_KEY);
 
-		expect(emitted()).toHaveLength(1);
-		expect(emitted()[0]).toMatchObject({
-			type: "agent.finished",
-			traceId: "trace-2",
-			payload: {
-				outcome: "ok",
-				turns: 2,
-				harness: "pi",
-				harnessVersion: "0.83.0",
+		const { rows } = await db.query("select * from agent_runs where run_id = 'trn-7'");
+		expect(rows).toEqual([
+			expect.objectContaining({
+				thread: "github:acme/web#issue-12",
+				agent_id: "reviewer",
 				model: "anthropic/claude-opus-5",
-				costUsd: run.costUsd,
+				state: "ok",
+				turns: 2,
+				tool_calls: 1,
 				usage: run.usage,
-			},
+			}),
+		]);
+		expect(Number(rows[0]?.cost_usd)).toBeCloseTo(run.costUsd, 10);
+		const events = await readStream(db, `agent_run:${rows[0]?.id}`, 0);
+		expect(events.map((e) => e.type)).toEqual(["agent_run.started", "usage", "tool.call", "usage", "agent_run.finished"]);
+		expect(events.every((e) => e.thread === "github:acme/web#issue-12" && e.source === "workflow:trn-7")).toBe(true);
+		expect(events.at(-1)?.payload).toMatchObject({ outcome: "ok", turns: 2, harness_version: "0.83.0" });
+		expect(JSON.stringify(events)).not.toContain(HOST_KEY);
+	});
+
+	it("records a failed run with its error code and message, and still throws the AgentError", async () => {
+		const sandbox = new FakeSandbox({ jsonl: `${eventLine({ type: "error", code: "max_turns", message: "turn limit (40) reached" })}\n` });
+		await expect(runAgent(reviewer, "Review it.", { traceId: "trn-8", sandbox, db })).rejects.toMatchObject({
+			name: "AgentError",
+			code: "max_turns",
 		});
+		const { rows } = await db.query<{ id: string; state: string; thread: string | null }>(
+			"select id, state, thread from agent_runs where run_id = 'trn-8'",
+		);
+		expect(rows).toEqual([expect.objectContaining({ state: "max_turns", thread: null })]);
+		const [finished] = (await readStream(db, `agent_run:${rows[0]?.id}`, 0)).slice(-1);
+		expect(finished?.payload).toMatchObject({ outcome: "max_turns", message: "turn limit (40) reached" });
+	});
+
+	it("follows the output file from the last complete line when the command stream drops, with no gap or repeat", async () => {
+		const lines = [
+			eventLine({ type: "tool_call", tool_call_id: "c1", tool: "read", args: { path: "docs/café-🚀.md" } }),
+			eventLine({ type: "assistant_text", message_id: "m1", text: "Läuft – naïve résumé 👍" }),
+			eventLine({ type: "tool_call", tool_call_id: "c2", tool: "ls", args: {} }),
+			eventLine({ type: "result", output: { verdict: "ok", findings: [] }, turns: 1 }),
+		];
+		const jsonl = `${lines.join("\n")}\n`;
+		const third = lines[2] as string;
+		const sandbox = new FakeSandbox({
+			jsonl,
+			live: [`${lines[0]}\n${lines[1]}`, `\n${third.slice(0, 20)}`, new Error("connection reset")],
+		});
+		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-drop", sandbox, db });
+
+		expect(run.output).toEqual({ verdict: "ok", findings: [], priority: 2 });
+		expect(await recorded("trn-drop")).toEqual(["agent_run.started", "tool.call", "assistant.message", "tool.call", "agent_run.finished"]);
+		const events = await recordedEvents("trn-drop");
+		expect(events[1]?.payload).toMatchObject({ args: JSON.stringify({ path: "docs/café-🚀.md" }) });
+		expect(events[2]?.payload).toMatchObject({ text: "Läuft – naïve résumé 👍" });
+	});
+
+	it("fails as runner_lost at once when the command stream drops and there is no output to follow", async () => {
+		const sandbox = new FakeSandbox({ jsonl: null, live: [new Error("connection reset")] });
+		await expect(runAgent(reviewer, "Review it.", { traceId: "trn-gone", sandbox, db })).rejects.toMatchObject({
+			code: "runner_lost",
+			message: expect.stringMatching(/connection reset; following \S+ exited 1/),
+		});
+	});
+
+	it.each([
+		{ how: "cut short", traceId: "trn-short", live: (jsonl: string) => [jsonl.slice(0, jsonl.indexOf("\n") + 10)] },
+		{
+			how: "forged",
+			traceId: "trn-forged",
+			live: () => [
+				`${eventLine({ type: "usage", usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 99 } })}\n`,
+				`${eventLine({ type: "result", output: { verdict: "ok, forged", findings: [] }, turns: 99 })}\n`,
+			],
+		},
+	])("takes the result, turns, and cost from the downloaded file when the live copy is $how", async ({ traceId, live }) => {
+		const jsonl = `${cannedRun({ verdict: "ok", findings: ["real"] })}\n`;
+		const run = await runAgent(reviewer, "Review it.", { traceId, sandbox: new FakeSandbox({ jsonl, live: live(jsonl) }), db });
+
+		expect(run).toMatchObject({ output: { verdict: "ok", findings: ["real"] }, turns: 2, costUsd: expect.closeTo(0.03, 10) });
+		const finished = (await recordedEvents(traceId)).at(-1);
+		expect(finished?.payload).toMatchObject({ outcome: "ok", turns: 2, cost_usd: expect.closeTo(0.03, 10) });
+	});
+
+	it("returns the agent's result when the event log is unreachable", async () => {
+		const down: Db = { ...db, query: () => Promise.reject(new Error("db down")), withTx: () => Promise.reject(new Error("db down")) };
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		const sandbox = new FakeSandbox({ jsonl: `${cannedRun({ verdict: "ok", findings: [] })}\n` });
+		const run = await runAgent(reviewer, "Review it.", { traceId: "trn-9", sandbox, db: down });
+		expect(run.output).toEqual({ verdict: "ok", findings: [], priority: 2 });
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("agent run events not recorded"));
+		warn.mockRestore();
 	});
 });

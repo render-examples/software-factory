@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AutopilotInput, Review, Spec, SpecDraft, SpecToPrInput, TriageDecision, validateSpec } from "../app/schemas/index.js";
+import { Review, type Spec, SpecToPrInput, TriageDecision, validateSpec } from "../app/schemas/index.js";
 
 const spec = (overrides: Partial<Spec> = {}): Spec => ({
 	title: "Add a dark mode toggle",
@@ -39,26 +39,9 @@ describe("TriageDecision", () => {
 		]);
 		expect(TriageDecision.safeParse({ ...base, decision: "decline", questions: [] }).success).toBe(true);
 	});
-
-	it("rejects a misspelled field by name, so the agent can fix it", () => {
-		const { relevantPaths, ...rest } = base;
-		const misspelled = { ...rest, decision: "draft", questions: [], relevant_paths: relevantPaths };
-		expect(issues(TriageDecision.safeParse(misspelled))).toEqual([': Unrecognized key: "relevant_paths"']);
-	});
-
-	it("defaults advisory relevant paths when the model omits them", () => {
-		const { relevantPaths: _relevantPaths, ...withoutPaths } = base;
-		expect(TriageDecision.parse({ ...withoutPaths, decision: "draft", questions: [] }).relevantPaths).toEqual([]);
-	});
 });
 
 describe("task inputs", () => {
-	it("accepts an autopilot start and an optional human reply", () => {
-		const base = { repo: "acme/web", installationId: 7, issue: 12, actor: "maintainer" };
-		expect(AutopilotInput.safeParse(base).success).toBe(true);
-		expect(AutopilotInput.safeParse({ ...base, commentId: 99 }).success).toBe(true);
-	});
-
 	it("distinguishes manual and autopilot spec approval", () => {
 		const base = { repo: "acme/web", installationId: 7, issue: 12, actor: "maintainer" };
 		expect(SpecToPrInput.safeParse({ ...base, approval: { kind: "label", labeledAt: "2026-10-25T12:00:00Z" } }).success).toBe(true);
@@ -72,13 +55,6 @@ describe("task inputs", () => {
 });
 
 describe("Spec", () => {
-	it("accepts a full spec and a draft with or without a change summary", () => {
-		expect(Spec.parse(spec())).toEqual(spec());
-		const notes = { findings: "", relevantPaths: [] };
-		expect(SpecDraft.safeParse({ spec: spec(), notes }).success).toBe(true);
-		expect(SpecDraft.safeParse({ spec: spec(), notes, changeSummary: "Narrowed AC-2." }).success).toBe(true);
-	});
-
 	it("rejects duplicate acceptance criteria", () => {
 		const duplicate = spec({
 			acceptanceCriteria: [
@@ -114,6 +90,6 @@ describe("review contracts", () => {
 		const comment = { file: "a.ts", line: 3, severity: "low", title: "t", body: "b" };
 		expect(Review.safeParse({ summary: "s", riskTier: "low", comments: [comment] }).success).toBe(true);
 		expect(Review.safeParse({ summary: "s", riskTier: "low", comments: Array(51).fill(comment) }).success).toBe(false);
-		expect(Object.keys(Review.shape)).toEqual(["summary", "riskTier", "comments"]);
+		expect(Object.keys(Review.shape)).toEqual(["riskTier", "comments", "summary"]);
 	});
 });

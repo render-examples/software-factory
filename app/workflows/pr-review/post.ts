@@ -4,17 +4,12 @@ import { type GitHubClient, GitHubError, parseMarker, type PullRequestReview, re
 
 type ReviewGitHub = Pick<GitHubClient, "botLogin" | "listReviews" | "createReview">;
 
-/** The bot's earlier review of this head commit, found by its marker. Anyone can paste a marker, so only the bot's count. */
 export async function findReview(gh: ReviewGitHub, pr: number, headSha: string): Promise<PullRequestReview | null> {
 	const bot = (await gh.botLogin()).toLowerCase();
 	const reviews = await gh.listReviews(pr);
 	return reviews.find((r) => r.author.login.toLowerCase() === bot && parseMarker(r.body, "review")?.headSha === headSha) ?? null;
 }
 
-/**
- * Posts one COMMENT review on `headSha` with the review marker. If GitHub rejects an inline comment (422), posts
- * once more with every comment folded into the body.
- */
 export async function postReview(
 	gh: ReviewGitHub,
 	args: {

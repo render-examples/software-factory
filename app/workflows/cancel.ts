@@ -1,84 +1,25 @@
-import type { TaskContext } from "@renderinc/sdk/workflows";
-import { task } from "@renderinc/sdk/workflows";
-import { checkPermission, finishStatus, type RunControl, readStatus, type StatusGitHub, stopRun, traceIds, workflowRuns } from "../claims/index.js";
-import { config, requireRepo, TASKS } from "../config/index.js";
-import { emit } from "../events/index.js";
-import { type GitHubClient, githubFor } from "../github/index.js";
+import { config, TASKS } from "../config/index.js";
 import { CancelInput } from "../schemas/index.js";
+import { defineGitHubTask } from "./github-task.js";
 
-type CancelGitHub = StatusGitHub & Pick<GitHubClient, "getPermission">;
+const codes = (ids: readonly string[]) => ids.map((id) => `\`${id}\``).join(", ");
 
-interface CancelResult {
-	cancelled: boolean;
-	/** Root workflow run that was cancelled. */
-	runId?: string;
-	/** Child task that was active when the root was cancelled. */
-	currentRunId?: string;
-	reason?: "permission_denied" | "nothing_running" | "already_stopped";
-}
-
-/**
- * `/factory cancel`: stops the run the status comment names, if it's still active, and terminates its sandbox. A
- * comment that still says "running" for a run that already stopped (it was killed before it could finish) is
- * marked cancelled too, so the stale status and working label don't linger.
- */
-export async function cancelRun(
-	ctx: Pick<TaskContext, "metadata">,
-	raw: unknown,
-	deps: { gh?: CancelGitHub; runs?: RunControl } = {},
-): Promise<CancelResult> {
-	const input = CancelInput.parse(raw);
-	const repo = requireRepo(input.repo, input.installationId);
-	const gh = deps.gh ?? githubFor(repo);
-	const { traceId, runId } = traceIds(ctx);
-	const event = { traceId, runId, repo: repo.fullName, subject: `${input.kind}#${input.number}` };
-
-	const result = await (async (): Promise<CancelResult> => {
-		if (!(await checkPermission(gh, input.actor))) {
-			await gh.createComment(
-				input.number,
-				`@${input.actor} needs \`${config.minimumPermission}\` permission on this repository to cancel factory runs.`,
-			);
-			return { cancelled: false, reason: "permission_denied" };
+export const cancelWorkflow = defineGitHubTask(
+	{ name: TASKS.cancel, title: "Cancel", input: CancelInput, thread: (input) => ({ kind: input.kind, number: input.number }), timeoutSeconds: 120 },
+	async ({ displaced, cleanup }) => {
+		if (cleanup.unconfirmed.length) {
+			const tookOver = displaced ? `stopped \`${displaced.traceId}\` from working here, but ` : "";
+			const retry = `Comment \`${config.commandPrefix} cancel\` to try again.`;
+			const summary = `${tookOver}Render hasn't confirmed that ${codes(cleanup.unconfirmed)} stopped. ${retry}`;
+			return { outcome: "cancel_unconfirmed", state: "failed", summary };
 		}
-		const current = await readStatus(gh, input.number);
-		const stop = { repo: repo.fullName, subject: event.subject, by: runId, outcome: "cancelled" } as const;
-		const active = current ? await stopRun(deps.runs ?? workflowRuns(), current.data, stop) : false;
-		if (!current || (!active && current.data.state !== "running")) {
-			await gh.createComment(input.number, `@${input.actor} no factory run is in progress here.`);
-			return { cancelled: false, reason: "nothing_running" };
+		if (displaced) {
+			const child = displaced.runIds.find((runId) => runId !== displaced.traceId);
+			return { outcome: "cancelled", summary: `cancelled \`${displaced.traceId}\`${child ? ` and its current run \`${child}\`` : ""}.` };
 		}
-		const { runId: currentRunId, traceId: stoppedTrace, rootStage, stage, title } = current.data;
-		const rootRunId = stoppedTrace ?? currentRunId;
-		const childWasRunning = current.data.state === "running";
-		const displayedRunId = childWasRunning ? currentRunId : rootRunId;
-		const displayedStage = childWasRunning ? stage : (rootStage ?? stage);
-		const displayedTitle = childWasRunning ? (title ?? stage) : (rootStage ?? title ?? stage);
-		const summary = active ? `cancelled by @${input.actor}.` : `cleared by @${input.actor}; the run had already stopped without finishing.`;
-		await finishStatus(
-			{
-				gh,
-				number: input.number,
-				runId: displayedRunId,
-				traceId: rootRunId,
-				rootStage,
-				task: displayedStage,
-				title: displayedTitle,
-				state: "cancelled",
-				summary,
-			},
-			{ rootFinished: true },
-		);
-		const child = childWasRunning && rootRunId !== currentRunId ? { currentRunId } : {};
-		return active ? { cancelled: true, runId: rootRunId, ...child } : { cancelled: false, runId: rootRunId, ...child, reason: "already_stopped" };
-	})();
-
-	emit({ ...event, type: "run.finished", payload: { stage: TASKS.cancel, state: "done", ...result } });
-	return result;
-}
-
-/** Not retried: a retry after a successful cancel would report that nothing is running. */
-export const cancel = task(
-	{ name: TASKS.cancel, timeoutSeconds: 120, retry: { maxRetries: 0, waitDurationMs: 5_000, backoffScaling: 1 } },
-	(ctx, raw: unknown) => cancelRun(ctx, raw),
+		if (cleanup.confirmed.length) return { outcome: "cleaned_up", summary: `finished stopping ${codes(cleanup.confirmed)}.` };
+		return { outcome: "nothing_running", summary: "nothing was running." };
+	},
 );
+
+export const runCancel = cancelWorkflow.run;

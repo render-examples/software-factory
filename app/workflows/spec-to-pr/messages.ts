@@ -24,10 +24,6 @@ export function repairMessage(repo: RepoContext, issue: IssueRef, spec: Spec, ru
 	return `${implementMessage(repo, issue, spec)}\n\n${failureReport(runs)}\n\nThis is repair round ${round} of ${rounds}.`;
 }
 
-/**
- * Folds a repair submission into the first one. The first summary describes the whole change, so it stays; files
- * and follow-ups accumulate.
- */
 export function mergeImplementation(first: Implementation, next: Implementation): Implementation {
 	return {
 		summary: first.summary,

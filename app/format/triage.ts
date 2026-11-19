@@ -1,7 +1,6 @@
 import { config } from "../config/index.js";
 import { BODY_MAX_CHARS, codeSpan, fitAround, sanitize, sanitizeInline } from "./text.js";
 
-/** The comment body when triage asks the maintainer questions. */
 export function triageQuestionsBody(questions: readonly string[]): string {
 	const numbered = questions.map((q, i) => `${i + 1}. ${sanitizeInline(q)}`).join("\n");
 	return fitAround(
@@ -12,12 +11,11 @@ export function triageQuestionsBody(questions: readonly string[]): string {
 	);
 }
 
-/** The comment body when triage declines the issue. */
 export function triageDeclineBody(rationale: string): string {
 	return fitAround(
 		"The factory declined this issue:\n\n",
 		sanitize(rationale),
-		`\n\nTo try again, remove and reapply the ${codeSpan(config.labels.triage)} label.`,
+		`\n\nTo try again, apply the ${codeSpan(config.labels.triage)} label.`,
 		BODY_MAX_CHARS,
 	);
 }

@@ -5,11 +5,8 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export type PermissionSet = Record<string, string>;
 
 export interface GitHubTokenOptions {
-	/** The installation that delivered the webhook. */
 	installationId: number;
-	/** Repository name without the owner; the token is restricted to this one repository. */
 	repo: string;
-	/** Omit for every permission the installation has. */
 	permissions?: PermissionSet;
 	fetch?: typeof fetch;
 }
@@ -32,16 +29,11 @@ function appCredentials(): AppCredentials {
 	return { appId, privateKey: normalizePrivateKey(privateKey) };
 }
 
-/**
- * Accepts the PEM as-is, with escaped newlines, or base64-encoded: env vars make real newlines awkward and
- * every deployment tool escapes them differently.
- */
 export function normalizePrivateKey(value: string): string {
 	if (value.includes("BEGIN")) return value.replace(/\\n/g, "\n");
 	return Buffer.from(value, "base64").toString("utf8");
 }
 
-/** A JWT signed with the App's private key, valid for nine minutes (backdated one for clock skew). */
 export function appJwt(credentials: AppCredentials = appCredentials()): string {
 	const now = Math.floor(Date.now() / 1000);
 	const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -61,10 +53,6 @@ function cacheKey({ installationId, repo, permissions }: GitHubTokenOptions): st
 	return `${installationId}/${repo}/${perms}`;
 }
 
-/**
- * Mints a GitHub App installation token restricted to one repository, cached per (installation, repository,
- * permissions) until five minutes before it expires.
- */
 export async function githubToken(opts: GitHubTokenOptions): Promise<string> {
 	const key = cacheKey(opts);
 	const cached = tokenCache.get(key);
@@ -92,11 +80,12 @@ export async function githubToken(opts: GitHubTokenOptions): Promise<string> {
 	const result = (await response.json()) as { token?: string; expires_at?: string };
 	const expiresAt = Date.parse(result.expires_at ?? "");
 	if (!result.token || Number.isNaN(expiresAt)) throw new Error("GitHub App token exchange returned no token or expiry");
+	const now = Date.now();
+	for (const [k, entry] of tokenCache) if (entry.expiresAt - REFRESH_MARGIN_MS <= now) tokenCache.delete(k);
 	tokenCache.set(key, { token: result.token, expiresAt });
 	return result.token;
 }
 
-/** Test seam. */
 export function resetTokenCache(): void {
 	tokenCache.clear();
 }

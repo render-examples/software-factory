@@ -3,7 +3,6 @@ import { requireRepo, TASKS } from "../config/index.js";
 import { RefreshSnapshotInput } from "../schemas/index.js";
 import { buildSnapshot, sandboxClient } from "../sandbox/index.js";
 
-/** Rebuilds a repository's named snapshot at a pushed base-branch commit. Started by the gateway on push. */
 export const refreshSnapshot = task(
 	{
 		name: TASKS.refreshSnapshot,

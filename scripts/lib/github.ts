@@ -1,16 +1,12 @@
-/** GitHub App access for the setup scripts and doctor, from injected env and fetch rather than process globals. */
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
-import { appJwt, githubApiUrl, normalizePrivateKey } from "../../app/github/auth.js";
-import { GitHubHttp } from "../../app/github/request.js";
-import { GitHubError } from "../../app/github/types.js";
+import { appJwt, GitHubError, GitHubHttp, githubApiUrl, normalizePrivateKey } from "../../app/github/index.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
 export interface ScriptDeps {
 	env: Env;
 	fetch?: typeof fetch;
-	/** Test seam: GitHubHttp's retry sleep. */
 	sleep?: (ms: number) => Promise<void>;
 }
 
@@ -32,7 +28,7 @@ export interface HookConfig {
 }
 
 const hookDelivery = z.object({
-	id: z.number().int().positive(),
+	id: z.string().regex(/^[1-9]\d*$/),
 	delivered_at: z.iso.datetime(),
 	status_code: z.number().int().min(0).max(599),
 	event: z.string().min(1).max(100),
@@ -52,14 +48,19 @@ export interface RepoLabel {
 	description: string | null;
 }
 
-/** github.com for the public API; for GitHub Enterprise Server, the host the `/api/v3` API is served from. */
 export function githubWebUrl(apiUrl: string): string {
 	const url = new URL(apiUrl);
 	if (url.hostname === "api.github.com") return "https://github.com";
 	return `${url.protocol}//${url.host}`;
 }
 
-/** Reads and validates the App credentials. Throws a message that never includes the key. */
+function parseWithExactIds(text: string): unknown {
+	if (!text) return undefined;
+	return JSON.parse(text, (key, value, context?: { source?: string }) =>
+		key === "id" && typeof value === "number" && context?.source ? context.source : value,
+	);
+}
+
 export function appCredentialsFrom(env: Env): { appId: string; privateKey: string } {
 	const appId = env.GITHUB_APP_ID?.trim();
 	const raw = env.GITHUB_APP_PRIVATE_KEY?.trim();
@@ -74,11 +75,9 @@ export function appCredentialsFrom(env: Env): { appId: string; privateKey: strin
 	return { appId, privateKey };
 }
 
-/** Calls GitHub as the App (JWT) or as one of its installations. */
 export class GitHubApp {
 	readonly apiUrl: string;
 	private readonly http: GitHubHttp;
-	/** Installation tokens minted during this run, so callers can redact them. */
 	readonly mintedTokens: string[] = [];
 
 	constructor(private readonly deps: ScriptDeps) {
@@ -99,23 +98,20 @@ export class GitHubApp {
 		return this.http.json<HookConfig>("PATCH", "/app/hook/config", { body, idempotent: true });
 	}
 
-	/** The most recent deliveries, newest first. */
 	async recentDeliveries(perPage = 10): Promise<HookDelivery[]> {
-		const response = await this.http.json<unknown>("GET", "/app/hook/deliveries", { query: { per_page: perPage } });
+		const response = parseWithExactIds(await this.http.text("GET", "/app/hook/deliveries", { query: { per_page: perPage } }));
 		const result = z.array(hookDelivery).max(100).safeParse(response);
 		if (!result.success) throw new Error("GitHub returned an invalid webhook delivery list");
 		return result.data;
 	}
 
-	/** Only retain delivery metadata: request/response payloads can contain private repository content. */
-	async hookDelivery(id: number): Promise<HookDelivery & { url: string }> {
-		const response = await this.http.json<unknown>("GET", `/app/hook/deliveries/${id}`);
+	async hookDelivery(id: string): Promise<HookDelivery & { url: string }> {
+		const response = parseWithExactIds(await this.http.text("GET", `/app/hook/deliveries/${id}`));
 		const result = hookDelivery.extend({ url: z.url() }).safeParse(response);
 		if (!result.success) throw new Error("GitHub returned invalid webhook delivery metadata");
 		return result.data;
 	}
 
-	/** The App's installation on a repository, or null when it isn't installed there. */
 	async repoInstallation(owner: string, repo: string): Promise<Installation | null> {
 		try {
 			return await this.http.json<Installation>("GET", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`);
@@ -125,7 +121,6 @@ export class GitHubApp {
 		}
 	}
 
-	/** An installation token restricted to one repository. */
 	async installationToken(installationId: number, repo: string, permissions?: Record<string, string>): Promise<string> {
 		const result = await this.http.json<{ token?: string }>("POST", `/app/installations/${installationId}/access_tokens`, {
 			body: permissions ? { repositories: [repo], permissions } : { repositories: [repo] },
@@ -135,7 +130,6 @@ export class GitHubApp {
 		return result.token;
 	}
 
-	/** A client for one repository, authenticated with an installation token. */
 	repo(owner: string, name: string, token: string): RepoClient {
 		return new RepoClient(
 			owner,
@@ -177,7 +171,6 @@ class RepoClient {
 	}
 }
 
-/** Splits "owner/name". */
 export function splitRepo(fullName: string): { owner: string; name: string } {
 	const [owner, name, ...rest] = fullName.split("/");
 	if (!owner || !name || rest.length > 0) throw new Error(`repository must be "owner/name", got "${fullName}"`);

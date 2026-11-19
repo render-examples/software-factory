@@ -1,4 +1,4 @@
-/** Terminal output for the setup scripts and doctor: colors, check lines, and secret redaction. */
+export { errorMessage } from "../../app/util/index.js";
 
 const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
 
@@ -17,7 +17,6 @@ export type Level = "pass" | "warn" | "fail" | "skip";
 export interface CheckResult {
 	level: Level;
 	message: string;
-	/** What to do about it; shown for warn, fail, and skip. */
 	fix?: string;
 }
 
@@ -28,7 +27,6 @@ const MARKS: Record<Level, (text: string) => string> = {
 	skip: dim,
 };
 
-/** Replaces every occurrence of each secret with `***`. Secrets shorter than 4 characters are ignored. */
 function redact(text: string, secrets: readonly string[]): string {
 	let out = text;
 	for (const secret of secrets) {
@@ -37,14 +35,12 @@ function redact(text: string, secrets: readonly string[]): string {
 	return out;
 }
 
-/** Prints check lines through a redaction filter and counts them by level. */
 export class Reporter {
 	readonly results: CheckResult[] = [];
 	private readonly secrets: string[] = [];
 
 	constructor(private readonly write: (line: string) => void = (line) => console.log(line)) {}
 
-	/** Values that must never appear in output, such as keys and tokens. */
 	addSecrets(...values: (string | undefined)[]): void {
 		for (const value of values) {
 			const trimmed = value?.trim();
@@ -87,7 +83,6 @@ export class Reporter {
 		return this.results.filter((r) => r.level === level).length;
 	}
 
-	/** Prints the totals and returns the process exit code: 1 when anything failed. */
 	summary(): number {
 		const failed = this.count("fail");
 		const warned = this.count("warn");
@@ -101,8 +96,4 @@ export class Reporter {
 	private clean(text: string): string {
 		return redact(text, this.secrets);
 	}
-}
-
-export function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

@@ -1,20 +1,19 @@
 import { readdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
-	type AgentTool,
-	type BashToolDetails,
+	type BashOperations,
 	createBashTool,
 	createEditTool,
+	createLocalBashOperations,
 	createReadTool,
 	createWriteTool,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
-	type ExecutionToolContext,
-	type ReadToolDetails,
-} from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+} from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
+import { errorMessage } from "../../util/index.js";
 import type { ToolName } from "../core/protocol.js";
 import { rejectReason } from "./shell-policy.js";
 
@@ -32,13 +31,8 @@ export interface ToolOptions {
 	scratchDir: string;
 }
 
-/** Without edit or write the agent is read-only, and bash applies the read-only shell policy. */
 const isReadOnly = (tools: readonly ToolName[]): boolean => !tools.includes("edit") && !tools.includes("write");
 
-/**
- * Builds the child env from an allowlist so nothing from the runner's environment (model credentials,
- * the Render API key) can reach a model-controlled process.
- */
 function shellEnv(path: string | undefined, scratchDir: string): Record<string, string> {
 	return {
 		PATH: path || "/usr/local/bin:/usr/bin:/bin",
@@ -50,46 +44,34 @@ function shellEnv(path: string | undefined, scratchDir: string): Record<string, 
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_TERMINAL_PROMPT: "0",
 		GIT_OPTIONAL_LOCKS: "0",
-		// The checkout can be owned by another uid; without this git refuses "dubious ownership".
 		GIT_CONFIG_COUNT: "1",
 		GIT_CONFIG_KEY_0: "safe.directory",
 		GIT_CONFIG_VALUE_0: "*",
 	};
 }
 
-/** The tools named in `opts.tools`, in that order, all rooted at `opts.cwd`. */
 // biome-ignore lint/suspicious/noExplicitAny: tools with different parameter schemas share one list, as in Pi.
-export function createTools(opts: ToolOptions): AgentTool<any>[] {
-	const context: ExecutionToolContext = {
-		env: new NodeExecutionEnv({ cwd: opts.cwd, shellEnv: shellEnv(process.env.PATH, opts.scratchDir) }),
-	};
+function createTools(opts: ToolOptions): AgentTool<any>[] {
 	// biome-ignore lint/suspicious/noExplicitAny: see above.
 	const factories: Record<ToolName, () => AgentTool<any>> = {
-		read: () => createTextReadTool(context, opts),
+		read: () => createTextReadTool(opts),
 		ls: () => createLsTool(opts),
-		bash: () => createShellTool(context, opts, isReadOnly(opts.tools)),
-		edit: () => withContext(createEditTool(), context),
-		write: () => withContext(createWriteTool(), context),
+		bash: () => createShellTool(opts, isReadOnly(opts.tools)),
+		edit: () => createEditTool(opts.cwd),
+		write: () => createWriteTool(opts.cwd),
 	};
 	return [...new Set(opts.tools)].map((name) => factories[name]());
 }
 
-/** A factory tool as any harness registers it: JSON Schema parameters and a text result, no library types. */
 export interface FactoryTool {
 	name: ToolName;
 	description: string;
-	/** JSON Schema of the arguments. */
 	parameters: Record<string, unknown>;
-	/** Validates `args`, runs the tool, and never throws: a failure comes back with `isError`. */
 	execute(args: unknown, signal?: AbortSignal): Promise<{ text: string; isError: boolean }>;
 }
 
 let nextCallId = 0;
 
-/**
- * The tools named in `opts.tools` as FactoryTools: the same implementations, environment, policy, and limits as
- * `createTools`, so every harness gives an agent identical tool behavior.
- */
 export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
 	return createTools(opts).map((tool) => ({
 		name: tool.name as ToolName,
@@ -102,42 +84,28 @@ export function createFactoryTools(opts: ToolOptions): FactoryTool[] {
 			}
 			try {
 				const result = await tool.execute(`factory-${++nextCallId}`, args, signal);
-				return { text: contentText(result.content), isError: false };
+				return { text: contentText(result.content), isError: result.isError === true };
 			} catch (err) {
-				return { text: err instanceof Error ? err.message : String(err), isError: true };
+				return { text: errorMessage(err), isError: true };
 			}
 		},
 	}));
 }
 
-/** A tool result's text content; other content types become a placeholder. */
 export function contentText(content: unknown): string {
 	if (!Array.isArray(content)) return "";
 	return content.map((c: { type?: string; text?: string }) => (c?.type === "text" ? (c.text ?? "") : `[${c?.type ?? "unknown"}]`)).join("\n");
 }
 
-type ContextTool = ReturnType<typeof createEditTool> | ReturnType<typeof createWriteTool>;
-
-/** Binds one of Pi's harness tools (which take the execution context per call) to `context`. */
-// biome-ignore lint/suspicious/noExplicitAny: see createTools.
-function withContext(inner: ContextTool, context: ExecutionToolContext): AgentTool<any> {
-	return {
-		...inner,
-		// biome-ignore lint/suspicious/noExplicitAny: the params match inner.parameters, validated by Pi.
-		execute: (toolCallId: string, params: any, signal?: AbortSignal) => inner.execute(toolCallId, params, signal, undefined, context),
-	};
-}
-
-/** Pi's read tool without image attachments: images only cost tokens. */
-function createTextReadTool(context: ExecutionToolContext, { cwd }: ToolOptions) {
-	const inner = createReadTool();
-	const tool: AgentTool<typeof inner.parameters, ReadToolDetails | undefined> = {
+function createTextReadTool({ cwd }: ToolOptions) {
+	const inner = createReadTool(cwd, { autoResizeImages: false });
+	const tool: typeof inner = {
 		...inner,
 		description:
 			`Read a text file. path is relative to ${cwd} or absolute. offset is the first line to read (1-based) and ` +
 			`limit the number of lines. Output is truncated to ${OUTPUT_LIMIT}; continue with offset for the rest.`,
 		async execute(toolCallId, params, signal) {
-			const result = await inner.execute(toolCallId, params, signal, undefined, context);
+			const result = await inner.execute(toolCallId, params, signal);
 			const content = result.content.map((c) => (c.type === "image" ? { type: "text" as const, text: "[image omitted]" } : c));
 			return { ...result, content };
 		},
@@ -169,15 +137,13 @@ function createLsTool({ cwd }: ToolOptions): AgentTool<typeof LsParams> {
 	};
 }
 
-/** Pi's bash tool with an allowlisted env and bounded timeouts; read-only agents also get the shell policy. */
-function createShellTool(context: ExecutionToolContext, { cwd, scratchDir }: ToolOptions, readOnly: boolean) {
-	const inner = createBashTool({
-		prepare: (execution) => {
-			execution.cwd = cwd;
-			execution.env = shellEnv(process.env.PATH, scratchDir);
-			execution.inheritEnv = false;
-		},
-	});
+function localShell(env: Record<string, string>): BashOperations {
+	const local = createLocalBashOperations();
+	return { exec: (command, cwd, options) => local.exec(command, cwd, { ...options, env }) };
+}
+
+function createShellTool({ cwd, scratchDir }: ToolOptions, readOnly: boolean) {
+	const inner = createBashTool(cwd, { operations: localShell(shellEnv(process.env.PATH, scratchDir)), exposeSessionEnvironment: false });
 	const limits = `Output keeps the last ${OUTPUT_LIMIT}. timeout is in seconds: default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}.`;
 	const description = readOnly
 		? `Run a bash command for read-only inspection. Working directory: ${cwd}. Writable scratch directory: ${scratchDir} ` +
@@ -185,7 +151,7 @@ function createShellTool(context: ExecutionToolContext, { cwd, scratchDir }: Too
 			"sed -n, wc, and scripts or tests that do not modify the working directory. Commands that write outside scratch, " +
 			`mutating git commands, network tools, package installs, and sudo are rejected. ${limits}`
 		: `Run a bash command. Working directory: ${cwd}. Scratch directory: ${scratchDir} ($HOME and $TMPDIR point there). ${limits}`;
-	const tool: AgentTool<typeof inner.parameters, BashToolDetails | undefined> = {
+	const tool: typeof inner = {
 		...inner,
 		description,
 		async execute(toolCallId, params, signal, onUpdate) {
@@ -197,7 +163,7 @@ function createShellTool(context: ExecutionToolContext, { cwd, scratchDir }: Too
 				);
 			}
 			const timeout = Math.min(Math.max(params.timeout ?? DEFAULT_TIMEOUT_S, 1), MAX_TIMEOUT_S);
-			return inner.execute(toolCallId, { ...params, timeout }, signal, onUpdate, context);
+			return inner.execute(toolCallId, { ...params, timeout }, signal, onUpdate);
 		},
 	};
 	return tool;

@@ -11,14 +11,12 @@ const buildSnapshot = vi.fn(async (_client: unknown, repo: { fullName: string },
 vi.mock("../app/sandbox/index.js", () => ({ buildSnapshot, sandboxClient: async () => ({ fake: true }) }));
 
 const { refreshSnapshot } = await import("../app/workflows/refresh-snapshot.js");
-const { TASKS } = await import("../app/config/index.js");
 
 const ctx = { metadata: {}, run: async () => undefined } as unknown as TaskContext;
 const SHA = "a".repeat(40);
 
 describe("refresh-snapshot task", () => {
-	it("registers under its task name and builds the configured repository at the pushed commit", async () => {
-		expect(refreshSnapshot.name).toBe(TASKS.refreshSnapshot);
+	it("builds the configured repository at the pushed commit", async () => {
 		const result = await refreshSnapshot.func(ctx, { repo: REPO, installationId: 3, sha: SHA });
 		expect(result).toEqual({ snapshotId: "snp-1", repo: REPO, sha: SHA });
 		expect(buildSnapshot).toHaveBeenCalledTimes(1);

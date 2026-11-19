@@ -2,30 +2,24 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ClientError, Render, ServerError } from "@renderinc/sdk";
 import type { SandboxesClient, SandboxUploadContentType } from "@renderinc/sdk/experimental";
 import { requireEnv } from "../config/index.js";
-import { errorMessage, log } from "./shell.js";
-import type { ExecResult } from "./types.js";
+import { errorMessage } from "../util/index.js";
+import { log } from "./shell.js";
+import type { ExecResult, ExecStreamOptions } from "./types.js";
 
-/** The subset of the SDK's SandboxesClient used here; tests substitute a fake. */
 export type SandboxApi = Pick<SandboxesClient, "create" | "get" | "exec" | "upload" | "download" | "terminate"> & {
 	snapshots: Pick<SandboxesClient["snapshots"], "create" | "get" | "list" | "delete">;
 };
 
 export interface SandboxTimings {
-	/** Client-side pacing for the Sandbox API's limit of 100 requests a minute per workspace. */
-	minRequestIntervalMs: number;
-	/** Gap between status polls. */
 	pollMs: number;
 	bootTimeoutMs: number;
-	/** Long build steps: tool install, clone, dependency install. */
 	prepareTimeoutMs: number;
 	snapshotTimeoutMs: number;
 	verifyTimeoutMs: number;
-	/** Default for `Sandbox.exec` when the caller gives no timeout. */
 	execTimeoutMs: number;
 }
 
 const DEFAULT_TIMINGS: SandboxTimings = {
-	minRequestIntervalMs: 1_000,
 	pollMs: 3_000,
 	bootTimeoutMs: 5 * 60_000,
 	prepareTimeoutMs: 40 * 60_000,
@@ -36,10 +30,6 @@ const DEFAULT_TIMINGS: SandboxTimings = {
 
 const OUTPUT_TAIL = 256 * 1024;
 export const TRANSIENT = [429, 503];
-/**
- * A just-created sandbox can answer 404 to `get` and to `exec` for a short while (and `exec` can fail
- * briefly after it reports `running`), so readiness checks treat 404 as "not yet".
- */
 const READY_RETRY = [404, ...TRANSIENT];
 
 export interface ClientExecOptions {
@@ -48,16 +38,8 @@ export interface ClientExecOptions {
 	signal?: AbortSignal;
 }
 
-/**
- * The SDK's sandbox client (@renderinc/sdk 1.2.0, experimental) plus what it leaves to callers:
- * - pacing: the Sandbox API allows 100 requests/min per workspace and the SDK neither paces nor retries 429s;
- * - retries on 429/503, which the SDK surfaces as errors;
- * - `waitRunning`: `create` returns while the sandbox is still `creating`, and there is no wait helper;
- * - `exec` collection: the SDK returns the raw event stream; `exec` here gathers output and the exit code.
- */
 export class SandboxClient {
 	readonly t: SandboxTimings;
-	#nextRequestAt = 0;
 
 	constructor(
 		readonly api: SandboxApi,
@@ -66,15 +48,10 @@ export class SandboxClient {
 		this.t = { ...DEFAULT_TIMINGS, ...timings };
 	}
 
-	/** Paces every API call and retries the given statuses (429 by default, which is never processed server-side). */
 	async call<T>(fn: () => Promise<T>, opts: { retryOn?: readonly number[]; attempts?: number; signal?: AbortSignal } = {}): Promise<T> {
 		const retryOn = opts.retryOn ?? [429];
 		const attempts = opts.attempts ?? 5;
 		for (let attempt = 1; ; attempt++) {
-			const now = Date.now();
-			const at = Math.max(now, this.#nextRequestAt);
-			this.#nextRequestAt = at + this.t.minRequestIntervalMs;
-			if (at > now) await sleep(at - now, undefined, { signal: opts.signal });
 			try {
 				return await fn();
 			} catch (err) {
@@ -86,19 +63,29 @@ export class SandboxClient {
 	}
 
 	async exec(id: string, command: string, opts: ClientExecOptions): Promise<ExecResult> {
+		let stdout = "";
+		let stderr = "";
+		const exitCode = await this.execStream(id, command, {
+			...opts,
+			onData: (stream, data) => {
+				if (stream === "stdout") stdout = (stdout + data).slice(-OUTPUT_TAIL);
+				else stderr = (stderr + data).slice(-OUTPUT_TAIL);
+			},
+		});
+		return { exitCode, stdout, stderr };
+	}
+
+	async execStream(id: string, command: string, opts: ClientExecOptions & Pick<ExecStreamOptions, "onData">): Promise<number> {
 		const timeout = AbortSignal.timeout(opts.timeoutMs);
 		const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
 		const retry = opts.waitReady
 			? { retryOn: READY_RETRY, attempts: Math.ceil(this.t.bootTimeoutMs / Math.max(this.t.pollMs, 1)) }
 			: { retryOn: TRANSIENT };
-		let stdout = "";
-		let stderr = "";
 		try {
 			const stream = await this.call(() => this.api.exec(id, command, undefined, signal), { ...retry, signal });
 			for await (const ev of stream) {
-				if (ev.type === "exit") return { exitCode: ev.exit_code, stdout, stderr };
-				if (ev.stream === "stdout") stdout = (stdout + ev.data).slice(-OUTPUT_TAIL);
-				else stderr = (stderr + ev.data).slice(-OUTPUT_TAIL);
+				if (ev.type === "exit") return ev.exit_code;
+				opts.onData(ev.stream, ev.data);
 			}
 		} catch (err) {
 			if (timeout.aborted) throw new Error(`exec in ${id} timed out after ${opts.timeoutMs}ms: ${command}`);
@@ -107,7 +94,6 @@ export class SandboxClient {
 		throw new Error(`exec in ${id} ended without an exit event: ${command}`);
 	}
 
-	/** Like `exec`, but throws on a non-zero exit. Returns stdout. */
 	async check(id: string, command: string, opts: ClientExecOptions): Promise<string> {
 		const res = await this.exec(id, command, opts);
 		if (res.exitCode !== 0) {
@@ -141,7 +127,6 @@ export class SandboxClient {
 		}
 	}
 
-	/** Idempotent: a sandbox that no longer exists counts as terminated. */
 	async terminate(id: string): Promise<void> {
 		try {
 			await this.call(() => this.api.terminate(id), { retryOn: TRANSIENT });
@@ -158,12 +143,10 @@ export class SandboxClient {
 
 let shared: SandboxClient | undefined;
 
-/** The process-wide client, configured from RENDER_API_KEY and RENDER_WORKSPACE_ID on first use. */
 export function sandboxClient(): SandboxClient {
 	if (!shared) {
 		const workspaceId = requireEnv("RENDER_WORKSPACE_ID");
 		if (!workspaceId.startsWith("tea-")) throw new Error("RENDER_WORKSPACE_ID must be a tea-… workspace id");
-		// useLocalDev: false keeps sandbox calls on api.render.com even under a local workflows dev server.
 		const render = new Render({ useLocalDev: false, token: requireEnv("RENDER_API_KEY"), ownerId: workspaceId });
 		shared = new SandboxClient(render.experimental.sandboxes);
 	}

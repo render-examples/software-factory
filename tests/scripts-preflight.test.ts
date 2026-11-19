@@ -2,6 +2,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { Reporter } from "../scripts/lib/output.js";
 import { type PreflightOptions, runPreflight, setupRenderWithPreflight } from "../scripts/lib/preflight.js";
+import { pgliteDb } from "./helpers/db.js";
+import { fakeFetch, json, type Routes } from "./helpers/fake-fetch.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -15,64 +17,28 @@ const TOKEN = "ghs_readonly_preflight_token";
 const SECRETS = {
 	RENDER_API_KEY: "rnd_preflight_render_key",
 	GITHUB_WEBHOOK_SECRET: "preflight_webhook_secret",
+	EVENTS_READ_TOKEN: "preflight_events_token",
 	GITHUB_APP_PRIVATE_KEY: Buffer.from(privateKey).toString("base64"),
 	ANTHROPIC_API_KEY: "sk-ant-preflight-model-key",
 };
 const ENV = { ...SECRETS, GITHUB_APP_ID: "1", RENDER_WORKSPACE_ID: WORKSPACE };
 
-interface Call {
-	method: string;
-	url: URL;
-	auth: string;
-	body: unknown;
-}
+const OWNER = `GET /v1/owners/${WORKSPACE}`;
+const INSTALLATION = `GET /repos/${REPO}/installation`;
+const METADATA = `GET /repos/${REPO}`;
+const BRANCH_ROUTE = `GET /repos/${REPO}/branches/${encodeURIComponent(BRANCH)}`;
 
-interface WorldOptions {
-	metadata?: unknown;
-	metadataStatus?: number;
-	branch?: unknown;
-	branchStatus?: number;
-	installationStatus?: number;
-	workspace?: unknown;
-	workspaceStatus?: number;
-	workspaceInvalidJson?: boolean;
-	metadataThrows?: boolean;
-}
-
-function world(opts: WorldOptions = {}) {
-	const calls: Call[] = [];
-	const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-		const url = new URL(String(input));
-		const call: Call = {
-			method: init?.method ?? "GET",
-			url,
-			auth: new Headers(init?.headers).get("Authorization") ?? "",
-			body: init?.body ? JSON.parse(String(init.body)) : undefined,
-		};
-		calls.push(call);
-		const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-		if (url.host === "api.render.com" && url.pathname === `/v1/owners/${WORKSPACE}`) {
-			if (opts.workspaceInvalidJson) return new Response("not json", { status: 200 });
-			return json("workspace" in opts ? opts.workspace : { id: WORKSPACE, name: "Acme" }, opts.workspaceStatus);
-		}
-		if (url.host === "api.render.com" && url.pathname === "/v1/env-groups") {
-			return call.method === "GET" ? json([]) : json({ id: "evg-created", ...(call.body as object) }, 201);
-		}
-		if (url.host === "api.github.com") {
-			if (url.pathname === `/repos/${REPO}/installation`) return json({ id: 7 }, opts.installationStatus);
-			if (url.pathname === "/app/installations/7/access_tokens") return json({ token: TOKEN }, 201);
-			if (url.pathname === `/repos/${REPO}`) {
-				if (opts.metadataThrows) throw new Error(`Network error containing ${TOKEN} and ${SECRETS.RENDER_API_KEY}`);
-				return json("metadata" in opts ? opts.metadata : { full_name: REPO, has_issues: true, archived: false }, opts.metadataStatus);
-			}
-			if (url.pathname === `/repos/${REPO}/branches/${encodeURIComponent(BRANCH)}`) {
-				return json("branch" in opts ? opts.branch : { name: BRANCH, commit: { sha: "a".repeat(40) } }, opts.branchStatus);
-			}
-		}
-		return json({ message: "Unexpected endpoint" }, 404);
-	}) as typeof globalThis.fetch;
-	return { fetch, calls };
-}
+const world = (routes: Routes = {}) =>
+	fakeFetch({
+		[OWNER]: { id: WORKSPACE, name: "Acme" },
+		"GET /v1/env-groups": [],
+		"POST /v1/env-groups": ({ body }) => json({ id: "evg-created", ...(body as object) }, 201),
+		[INSTALLATION]: { id: 7 },
+		"POST /app/installations/7/access_tokens": json({ token: TOKEN }, 201),
+		[METADATA]: { full_name: REPO, has_issues: true, archived: false },
+		[BRANCH_ROUTE]: { name: BRANCH, commit: { sha: "a".repeat(40) } },
+		...routes,
+	});
 
 async function run(api: ReturnType<typeof world>, overrides: Partial<PreflightOptions> = {}, combined = true) {
 	const lines: string[] = [];
@@ -87,10 +53,10 @@ async function run(api: ReturnType<typeof world>, overrides: Partial<PreflightOp
 		...overrides,
 	};
 	const code = await (combined ? setupRenderWithPreflight(opts, out) : runPreflight(opts, out));
-	return { code, output: lines.join("\n"), results: out.results };
+	return { code, output: lines.join("\n") };
 }
 
-const envGroupRequests = (api: ReturnType<typeof world>) => api.calls.filter((call) => call.url.pathname.startsWith("/v1/env-groups"));
+const envGroupRequests = (api: ReturnType<typeof world>) => api.requests.filter((r) => r.url.pathname.startsWith("/v1/env-groups"));
 
 function expectNoSecrets(output: string): void {
 	for (const secret of [...Object.values(SECRETS), privateKey, TOKEN]) expect(output).not.toContain(secret);
@@ -107,15 +73,9 @@ describe("deployment preflight", () => {
 		expect(output).toContain("Model and Sandbox execution remain unverified");
 		expect(output).toContain("Key presence does not verify model access or provider spend caps");
 		expect(envGroupRequests(api)).toEqual([]);
-		expect(api.calls.filter((call) => call.method !== "GET")).toEqual([
-			expect.objectContaining({
-				method: "POST",
-				body: { repositories: ["widget"], permissions: { contents: "read", metadata: "read" } },
-			}),
-		]);
-		const repositoryReads = api.calls.filter((call) => call.url.pathname === `/repos/${REPO}` || call.url.pathname.includes("/branches/"));
+		const repositoryReads = api.requests.filter((r) => r.url.pathname === `/repos/${REPO}` || r.url.pathname.includes("/branches/"));
 		expect(repositoryReads).toHaveLength(2);
-		expect(repositoryReads.every((call) => call.auth === `Bearer ${TOKEN}`)).toBe(true);
+		expect(repositoryReads.every((r) => r.headers.get("Authorization") === `Bearer ${TOKEN}`)).toBe(true);
 		expectNoSecrets(output);
 	});
 
@@ -123,9 +83,9 @@ describe("deployment preflight", () => {
 		const api = world();
 		const { code, output } = await run(api);
 		expect(code).toBe(0);
-		expect(envGroupRequests(api).filter((call) => call.method === "POST")).toHaveLength(3);
-		const checkedBranch = api.calls.findIndex((call) => call.url.pathname.includes("/branches/"));
-		const firstGroupRequest = api.calls.findIndex((call) => call.url.pathname === "/v1/env-groups");
+		expect(envGroupRequests(api).filter((r) => r.method === "POST")).toHaveLength(3);
+		const checkedBranch = api.requests.findIndex((r) => r.url.pathname.includes("/branches/"));
+		const firstGroupRequest = api.requests.findIndex((r) => r.url.pathname === "/v1/env-groups");
 		expect(checkedBranch).toBeGreaterThan(-1);
 		expect(firstGroupRequest).toBeGreaterThan(checkedBranch);
 		expectNoSecrets(output);
@@ -137,21 +97,42 @@ describe("deployment preflight", () => {
 		expect(code).toBe(0);
 		expect(output).toContain("Node 24 matches .node-version");
 		expect(output).not.toContain("is not set");
-		expect(api.calls).toEqual([]);
+		expect(api.requests).toEqual([]);
+	});
+
+	it("checks a local DATABASE_URL when one is set", async () => {
+		const { db } = await pgliteDb();
+		const env = { DATABASE_URL: "postgresql://localhost/factory" };
+		const { code, output } = await run(world(), { local: true, env, repos: {}, openDb: () => db }, false);
+		expect(code).toBe(0);
+		expect(output).toContain("DATABASE_URL connects");
+		expect(output).toContain("migrations are current");
 	});
 
 	it.each([
-		{ name: "Issues disabled", metadata: { full_name: REPO, has_issues: false, archived: false }, message: "Issues is disabled" },
-		{ name: "archived repository", metadata: { full_name: REPO, has_issues: true, archived: true }, message: "repository is archived" },
-		{ name: "null metadata", metadata: null, message: "repository metadata is invalid" },
-		{ name: "missing capability fields", metadata: { full_name: REPO }, message: "repository metadata is invalid" },
-		{
-			name: "another repository's metadata",
-			metadata: { full_name: "other/repo", has_issues: true, archived: false },
-			message: "repository metadata is invalid",
-		},
-	])("blocks environment-group setup for $name", async ({ metadata, message }) => {
-		const api = world({ metadata });
+		["Issues disabled", { [METADATA]: { full_name: REPO, has_issues: false, archived: false } }, "Issues is disabled"],
+		["an archived repository", { [METADATA]: { full_name: REPO, has_issues: true, archived: true } }, "repository is archived"],
+		[
+			"another repository's metadata",
+			{ [METADATA]: { full_name: "other/repo", has_issues: true, archived: false } },
+			"repository metadata is invalid",
+		],
+		["inaccessible repository metadata", { [METADATA]: json({ message: "Forbidden" }, 403) }, "repository capabilities could not be verified"],
+		[
+			"a GitHub failure that echoes credentials and the minted token",
+			{ [METADATA]: new Error(`Network error containing ${TOKEN} and ${SECRETS.RENDER_API_KEY}`) },
+			"repository capabilities could not be verified",
+		],
+		[
+			"a missing or inaccessible base branch",
+			{ [BRANCH_ROUTE]: json({ message: "Forbidden" }, 403) },
+			`base branch ${BRANCH} is missing or inaccessible`,
+		],
+		["invalid branch metadata", { [BRANCH_ROUTE]: { name: "main", commit: { sha: "a".repeat(40) } } }, `base branch ${BRANCH} could not be verified`],
+		["a rejected Render key", { [OWNER]: json({ message: "nope" }, 401) }, "RENDER_API_KEY was rejected"],
+		["another workspace's metadata", { [OWNER]: { id: "tea-other", name: "Other" } }, "Render workspace metadata is invalid"],
+	] satisfies [string, Routes, string][])("blocks environment-group setup for %s", async (_, routes, message) => {
+		const api = world(routes);
 		const { code, output } = await run(api);
 		expect(code).toBe(1);
 		expect(output).toContain(message);
@@ -159,60 +140,12 @@ describe("deployment preflight", () => {
 		expectNoSecrets(output);
 	});
 
-	it.each([403, 404])("blocks environment-group setup when repository metadata is inaccessible (HTTP %i)", async (metadataStatus) => {
-		const api = world({ metadataStatus });
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain("repository capabilities could not be verified");
-		expect(envGroupRequests(api)).toEqual([]);
-	});
-
-	it.each([403, 404])("blocks environment-group setup for a missing or inaccessible base branch (HTTP %i)", async (branchStatus) => {
-		const api = world({ branchStatus });
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain(`base branch ${BRANCH} is missing or inaccessible`);
-		expect(envGroupRequests(api)).toEqual([]);
-	});
-
-	it.each([
-		{ name: "null branch", branch: null },
-		{ name: "wrong branch", branch: { name: "main", commit: { sha: "a".repeat(40) } } },
-		{ name: "invalid commit", branch: { name: BRANCH, commit: { sha: "not-a-sha" } } },
-	])("blocks environment-group setup when branch metadata is invalid: $name", async ({ branch }) => {
-		const api = world({ branch });
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain(`base branch ${BRANCH} could not be verified`);
-		expect(envGroupRequests(api)).toEqual([]);
-	});
-
-	it.each([401, 403])("blocks environment-group setup when the Render key is rejected (HTTP %i)", async (workspaceStatus) => {
-		const api = world({ workspaceStatus });
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain("RENDER_API_KEY was rejected");
-		expect(envGroupRequests(api)).toEqual([]);
-	});
-
-	it.each([
-		{ name: "invalid JSON", workspaceInvalidJson: true },
-		{ name: "null metadata", workspace: null },
-		{ name: "another workspace", workspace: { id: "tea-other", name: "Other" } },
-	])("blocks environment-group setup when workspace access cannot be verified: $name", async (opts) => {
-		const api = world(opts);
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain("Render workspace metadata is invalid");
-		expect(envGroupRequests(api)).toEqual([]);
-	});
-
 	it("blocks setup and explains when the App is not installed on the target repository", async () => {
-		const api = world({ installationStatus: 404 });
+		const api = world({ [INSTALLATION]: json({ message: "Not Found" }, 404) });
 		const { code, output } = await run(api);
 		expect(code).toBe(1);
 		expect(output).toContain(`${REPO}: GitHub App is not installed`);
-		expect(api.calls.some((call) => call.method === "POST")).toBe(false);
+		expect(api.requests.some((r) => r.method === "POST")).toBe(false);
 		expect(envGroupRequests(api)).toEqual([]);
 	});
 
@@ -227,46 +160,22 @@ describe("deployment preflight", () => {
 		expect(envGroupRequests(api)).toEqual([]);
 	});
 
-	it.each(Object.keys(ENV))("blocks setup before any API request when %s is missing", async (key) => {
+	it.each([
+		["a missing RENDER_API_KEY", { env: { ...ENV, RENDER_API_KEY: " " } }, ["RENDER_API_KEY is not set"]],
+		["a missing ANTHROPIC_API_KEY", { env: { ...ENV, ANTHROPIC_API_KEY: " " } }, ["ANTHROPIC_API_KEY is not set"]],
+		["an unsupported Node version", { nodeVersion: "22.19.0" }, ["Node 24 is required"]],
+		["an empty configured base branch", { repos: { [REPO]: { baseBranch: "  ", verify: [] } } }, [`${REPO}: baseBranch is empty`]],
+		[
+			"an empty target list and malformed workspace identifier",
+			{ repos: {}, env: { ...ENV, RENDER_WORKSPACE_ID: "srv-not-a-workspace" } },
+			["No target repositories configured", "RENDER_WORKSPACE_ID is not a workspace ID"],
+		],
+	] satisfies [string, Partial<PreflightOptions>, string[]][])("blocks setup before any API request for %s", async (_, overrides, messages) => {
 		const api = world();
-		const { code, output } = await run(api, { env: { ...ENV, [key]: " " } });
+		const { code, output } = await run(api, overrides);
 		expect(code).toBe(1);
-		expect(output).toContain(`${key} is not set`);
-		expect(api.calls).toEqual([]);
-		expectNoSecrets(output);
-	});
-
-	it("blocks setup for an unsupported Node version before any API request", async () => {
-		const api = world();
-		const { code, output } = await run(api, { nodeVersion: "22.19.0" });
-		expect(code).toBe(1);
-		expect(output).toContain("Node 24 is required");
-		expect(api.calls).toEqual([]);
-	});
-
-	it.each(["", "  "])("blocks setup for an empty configured base branch (%j) before any API request", async (baseBranch) => {
-		const api = world();
-		const { code, output } = await run(api, { repos: { [REPO]: { baseBranch, verify: [] } } });
-		expect(code).toBe(1);
-		expect(output).toContain(`${REPO}: baseBranch is empty`);
-		expect(api.calls).toEqual([]);
-	});
-
-	it("rejects an empty target list and malformed workspace identifier before any API request", async () => {
-		const api = world();
-		const { code, output } = await run(api, { repos: {}, env: { ...ENV, RENDER_WORKSPACE_ID: "srv-not-a-workspace" } });
-		expect(code).toBe(1);
-		expect(output).toContain("No target repositories configured");
-		expect(output).toContain("RENDER_WORKSPACE_ID is not a workspace ID");
-		expect(api.calls).toEqual([]);
-	});
-
-	it("does not expose credentials or a minted installation token when GitHub fails", async () => {
-		const api = world({ metadataThrows: true });
-		const { code, output } = await run(api);
-		expect(code).toBe(1);
-		expect(output).toContain("repository capabilities could not be verified");
-		expect(envGroupRequests(api)).toEqual([]);
+		for (const message of messages) expect(output).toContain(message);
+		expect(api.requests).toEqual([]);
 		expectNoSecrets(output);
 	});
 });

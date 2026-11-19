@@ -1,15 +1,12 @@
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
+import { errorMessage } from "../../util/index.js";
 
 export const SUBMIT_TOOL = "submit";
 export const MAX_SUBMIT_ATTEMPTS = 3;
 
 type JsonOutputSchema = Record<string, unknown>;
 
-/**
- * Why `schema` can't be a submit tool's parameters, or undefined if it can. Pi's Anthropic adapter sends only
- * the top-level `properties` and `required`, so the root must be a plain object schema, not a union or a ref.
- */
 export function outputSchemaProblem(schema: JsonOutputSchema): string | undefined {
 	if (schema.type !== "object") return 'output_schema must have type "object" at its root';
 	const props = schema.properties;
@@ -19,12 +16,11 @@ export function outputSchemaProblem(schema: JsonOutputSchema): string | undefine
 	try {
 		Value.Check(schema as TSchema, {});
 	} catch (err) {
-		return `output_schema is not a usable JSON Schema: ${err instanceof Error ? err.message : String(err)}`;
+		return `output_schema is not a usable JSON Schema: ${errorMessage(err)}`;
 	}
 	return undefined;
 }
 
-/** The submit tool's parameters as the model sees them: the output schema without JSON Schema metadata. */
 export function submitParameters(schema: JsonOutputSchema): JsonOutputSchema {
 	const { $schema: _schema, $id: _id, ...rest } = schema;
 	return rest;
@@ -42,17 +38,8 @@ export function submitDescription(schema: JsonOutputSchema): string {
 export const SUBMIT_ACCEPTED = "Submission recorded. You are done.";
 export const SUBMIT_DUPLICATE = "Already submitted; this call was ignored.";
 
-export type SubmitCheck =
-	| { ok: true; checked: unknown }
-	/** `exhausted` is set on the last allowed attempt: the run must stop with `invalid_submission` and this message. */
-	| { ok: false; message: string; exhausted?: string };
+export type SubmitCheck = { ok: true; checked: unknown } | { ok: false; message: string; exhausted?: string };
 
-/**
- * One run's submission: checks each attempt against the output JSON Schema with TypeBox, which validates plain
- * JSON Schema (including what `z.toJSONSchema` emits), and counts rejections. A usability check so the model can
- * fix its submission: the host revalidates the accepted output with the agent's Zod schema, and that check is
- * authoritative. Every harness's submit tool goes through this.
- */
 export class Submission {
 	#accepted: { output: unknown } | undefined;
 	#rejected = 0;
@@ -63,11 +50,15 @@ export class Submission {
 		return this.#accepted;
 	}
 
-	/** Checks `args` without recording them. The checked copy is what `accept` should record. */
 	check(args: unknown): SubmitCheck {
-		if (Value.Check(this.schema as TSchema, args)) return { ok: true, checked: structuredClone(args) };
-		const found = [...Value.Errors(this.schema as TSchema, args)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
-		const problems = found.length > 0 ? [...new Set(found)] : ["(root): does not match the output schema"];
+		if (schemaProblems(this.schema, args).length === 0) {
+			const trimmed = mapStrings(args, (text) => text.replace(TRAILING_TOOL_CALL, ""));
+			return { ok: true, checked: schemaProblems(this.schema, trimmed).length === 0 ? trimmed : structuredClone(args) };
+		}
+		const recovered = mapStrings(args, (text) => text.replace(LEAKED_TOOL_CALL, "").trimEnd());
+		const invalid = schemaProblems(this.schema, recovered);
+		if (invalid.length === 0) return { ok: true, checked: recovered };
+		const problems = [...markupProblems(args), ...invalid];
 		this.#rejected++;
 		const remaining = MAX_SUBMIT_ATTEMPTS - this.#rejected;
 		const message =
@@ -75,7 +66,6 @@ export class Submission {
 			(remaining > 0 ? "Fix every problem below and call it again:\n" : "No attempts remain:\n") +
 			problems.map((p) => `- ${p}`).join("\n");
 		if (remaining > 0) return { ok: false, message };
-		// Schema paths, rule names, and field names only: TypeBox's errors don't quote the submitted values.
 		const fields = args && typeof args === "object" && !Array.isArray(args) ? Object.keys(args) : [];
 		const names =
 			fields
@@ -86,10 +76,39 @@ export class Submission {
 		return { ok: false, message, exhausted };
 	}
 
-	/** Records the first accepted output; false when one was already recorded. */
 	accept(output: unknown): boolean {
 		if (this.#accepted) return false;
 		this.#accepted = { output };
 		return true;
 	}
+}
+
+function schemaProblems(schema: JsonOutputSchema, args: unknown): string[] {
+	if (Value.Check(schema as TSchema, args)) return [];
+	const found = [...Value.Errors(schema as TSchema, args)].map((e) => `${e.instancePath || "(root)"}: ${e.message}`);
+	return found.length > 0 ? [...new Set(found)] : ["(root): does not match the output schema"];
+}
+
+const TOOL_CALL = /<\/?(?:parameter|invoke)\b[^>]*>|<\/submit>/;
+const LEAKED_TOOL_CALL = new RegExp(`(?:<\\/[A-Za-z][\\w-]*>\\s*)*(?:${TOOL_CALL.source})[\\s\\S]*$`);
+const TRAILING_TOOL_CALL = /(?:\s*<\/[A-Za-z][\w-]*>)*\s*<\/(?:invoke|parameter|submit)>\s*$/;
+
+function mapStrings(value: unknown, fn: (text: string) => string): unknown {
+	if (typeof value === "string") return fn(value);
+	if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn));
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, fn)]));
+	return value;
+}
+
+function markupProblems(value: unknown, path = ""): string[] {
+	if (typeof value === "string") {
+		const markup = TOOL_CALL.exec(value)?.[0];
+		if (!markup) return [];
+		return [
+			`${path || "(root)"}: contains tool-call markup (${markup.slice(0, 60)}); send every field as its own JSON property, not as markup inside a string`,
+		];
+	}
+	if (Array.isArray(value)) return value.flatMap((item, i) => markupProblems(item, `${path}/${i}`));
+	if (value && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => markupProblems(item, `${path}/${key}`));
+	return [];
 }

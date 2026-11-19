@@ -1,10 +1,8 @@
-/** Repository permission levels, lowest first. Custom roles map to the base level they extend. */
 export const PERMISSIONS = ["none", "read", "triage", "write", "maintain", "admin"] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 export interface Actor {
 	login: string;
-	/** "User", "Bot", "Organization", ... */
 	type: string;
 }
 
@@ -15,7 +13,6 @@ export interface Issue {
 	state: string;
 	labels: string[];
 	author: Actor;
-	/** True when the number is a pull request (the issues API serves both). */
 	isPull: boolean;
 	htmlUrl: string;
 }
@@ -53,7 +50,6 @@ export interface PullFile {
 	additions: number;
 	deletions: number;
 	changes: number;
-	/** Absent for binary files and very large diffs. */
 	patch?: string;
 	previousFilename?: string;
 }

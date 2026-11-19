@@ -29,21 +29,35 @@ software-factory deploys two processes:
 - `app/entrypoints/workflows.ts` registers and runs tasks.
 
 Agents run inside Render Sandboxes. Only code in the Workflows service writes
-to GitHub. GitHub and Render Workflows hold application state; there is no
-database.
+to GitHub. Postgres holds factory state as an append-only event log
+(`app/db/`), including which run owns each thread (a GitHub issue or pull
+request, keyed `github:owner/name#issue-12`); only the two services connect to
+it, and both apply its migrations at startup. GitHub holds
+issues, specifications, pull requests, and reviews, and Render Workflows holds
+task execution. The status comment is a view and is never read back.
+
+Postgres, not GitHub labels, decides what a delivery means. Trigger labels are
+commands, removed when their run starts. A comment resumes an issue only while
+its latest root run finished waiting for a reply. Every issue and pull request
+is its own thread; Autopilot starts PR Reviewer as a separate run on the draft
+pull request it opens.
 
 Two dependency rules are mandatory:
 
 1. The Sandbox runner bundle (`app/runner/`, `app/harness/`, the agent
-   definitions in `app/agents/registry.ts`, and `app/schemas/`) imports no
-   host-only code: GitHub, Sandboxes, Workflows, claims, events, or config.
-   `tests/agents-catalog.test.ts` enforces it.
+   definitions in `app/agents/`, `app/schemas/`, and `app/util/`)
+   imports no host-only code: GitHub, Sandboxes, Workflows, runs, events, the
+   database, config, `app/agent-runs/` (running an agent from the host), or
+   `app/runner-bundle/` (building the bundle). `tests/agents-catalog.test.ts`
+   enforces it.
 2. `app/gateway/` does not import GitHub authentication, Sandboxes, agents, or
-   workflows. The gateway holds no GitHub credential and runs no model.
+   workflows. The gateway holds no GitHub credential and runs no model. It
+   builds thread keys with the dependency-free `app/threads/`.
 
 Read the canonical
 [security invariants](docs/architecture.md#security-invariants) before
-changing credentials, claims, Sandboxes, publishing, or GitHub writes.
+changing credentials, run coordination, Sandboxes, publishing, or GitHub
+writes.
 
 ## Code conventions
 
@@ -56,7 +70,7 @@ changing credentials, claims, Sandboxes, publishing, or GitHub writes.
 - Build agent output objects with `z.strictObject`. Bound strings and arrays.
 - Keep task inputs and results small and JSON-serializable.
 - Open Sandboxes through `withSandbox`. In GitHub tasks, call
-  `claim.trackSandbox()` immediately after opening one.
+  `run.trackSandbox()` immediately after opening one.
 - Use `ExpectedFailure` only for expected messages safe to publish on GitHub.
   Keep outcome names in snake_case.
 - Quote generated shell arguments with `shq`. Put long or
@@ -64,8 +78,9 @@ changing credentials, claims, Sandboxes, publishing, or GitHub writes.
 - Pass model text through `app/format/` before writing it to GitHub.
 - Inject GitHub, Sandbox, agent, and run-control dependencies into task
   implementations. Tests use fakes, never live services.
-- Comment security reasons, platform constraints, and required ordering. Do
-  not narrate obvious code.
+- Don't write code comments. Name things so the code explains itself, and
+  put constraints in docs or tests. Tool directives (`biome-ignore`,
+  `shellcheck`, shebangs) are the only exception.
 
 ## Tests
 
@@ -92,9 +107,10 @@ strict output schemas.
 - Configuration key: update `FactoryConfig` in `factory.config.ts` and
   `docs/configuration.md`. Check what the type system can't in
   `validateConfig` (`app/config/index.ts`).
-- Environment variable: update `.env.example`, `SERVICE_ENV` and, for a
-  secret, `ENV_GROUPS` in `scripts/lib/requirements.ts`, and
-  `docs/configuration.md`. Secrets belong in an env group, not a
+- Environment variable: update `.env.example`, `SERVICE_ENV` and `ENV_GROUPS`
+  in `scripts/lib/requirements.ts` (unless `render.yaml` wires it directly),
+  and `docs/configuration.md`. Add non-harness secrets to `SECRET_ENV` so
+  `doctor` and `preflight` redact them. Secrets belong in an env group, not a
   `sync: false` entry in `render.yaml`. Never link a group with GitHub App
   credentials or a model key to the gateway.
 - App permission, event, or label: update
@@ -104,9 +120,12 @@ strict output schemas.
   derive the key list, and Sandbox allow-lists include every harness's
   hosts. It must give the model only the factory's tools; add it to `HARNESSES` in
   `tests/helpers/runner.ts` if it can run the conformance suite.
-- `sandbox/`: refresh every repository snapshot after deployment. Changes to
-  `app/runner/`, `app/harness/`, or agents reach Sandboxes with the Workflows
-  deploy, because each Sandbox replaces a stale runner bundle when it opens.
+- Database migration: keep `app/db/migrations/` additive, because one service
+  can run old code while the other migrates. Derive projections in
+  `app/db/projections.ts` only from events so `npm run db:rebuild` can
+  recreate them.
+- Deploy and snapshot impact: check
+  [What must be redeployed](docs/configuration.md#what-must-be-redeployed).
 
 ## Verify
 

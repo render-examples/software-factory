@@ -1,7 +1,7 @@
 import { config } from "../../config/index.js";
-import { Spec, type SpecApproval } from "../../schemas/index.js";
 import { findMarkedComment, type GitHubClient, type IssueComment } from "../../github/index.js";
-import { ExpectedFailure } from "../../claims/index.js";
+import { ExpectedFailure } from "../../runs/index.js";
+import { Spec, type SpecApproval } from "../../schemas/index.js";
 
 type ApprovalGitHub = Pick<GitHubClient, "botLogin" | "listIssueComments" | "getLabelEvents">;
 
@@ -10,10 +10,6 @@ interface ApprovedSpec {
 	comment: IssueComment;
 }
 
-/**
- * Loads the exact approved spec. Manual runs use the approval label's timestamp;
- * autopilot names the App-authored spec comment and marker it received from Triage.
- */
 export async function loadApprovedSpec(gh: ApprovalGitHub, issue: number, approval: SpecApproval): Promise<ApprovedSpec> {
 	const label = config.labels.specApproved;
 	const found = findMarkedComment(await gh.listIssueComments(issue), "spec", await gh.botLogin());

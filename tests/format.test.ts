@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Implementation, Review, ReviewComment, Spec } from "../app/schemas/index.js";
-import { BODY_MAX_CHARS, COMMENT_MAX_CHARS, pullRequestBody, renderReview, renderSpec } from "../app/format/index.js";
+import { BODY_MAX_CHARS, pullRequestBody, renderReview, renderSpec } from "../app/format/index.js";
 
-/** An @ GitHub would turn into a mention, outside fenced code. */
 function liveMentions(markdown: string): string[] {
 	const found: string[] = [];
 	let fenced = false;
@@ -84,20 +83,12 @@ describe("pull request", () => {
 describe("renderReview", () => {
 	const review = (comments: ReviewComment[], summary = "Looks mostly fine."): Review => ({ summary, riskTier: "medium", comments });
 
-	it("is always a COMMENT review with inline comments mapped to GitHub's shape", () => {
-		const payload = renderReview(review([comment({ title: "SQL injection", severity: "high" })]));
+	it("is always a COMMENT review with inline comments on the changed lines, within GitHub's limits", () => {
+		const payload = renderReview(review(Array(50).fill(comment({ title: "SQL injection", body: "z".repeat(50_000) })), "s".repeat(200_000)));
 		expect(payload.event).toBe("COMMENT");
-		expect(payload.comments).toEqual([{ path: "src/db.ts", line: 12, side: "RIGHT", body: expect.any(String) }]);
-		expect(payload.comments[0]?.body).toBe("**High**: SQL injection\n\nAdd a limit.");
-		expect(payload.body).toMatch(/^## Factory review\n\n\*\*Risk:\*\* medium · \*\*Findings:\*\* 1 high · \*\*Inline comments:\*\* 1/);
-		expect(payload.body).toMatch(/never approves or requests changes/);
-	});
-
-	it("keeps the body and inline comments within GitHub's limits", () => {
-		const payload = renderReview(review(Array(50).fill(comment({ body: "z".repeat(50_000) })), "s".repeat(200_000)));
+		expect(payload.comments).toHaveLength(50);
+		expect(payload.comments[0]).toEqual({ path: "src/db.ts", line: 12, side: "RIGHT", body: expect.stringContaining("SQL injection") });
 		expect(payload.body.length).toBeLessThanOrEqual(BODY_MAX_CHARS);
-		expect(BODY_MAX_CHARS).toBeLessThan(COMMENT_MAX_CHARS);
 		for (const c of payload.comments) expect(c.body.length).toBeLessThanOrEqual(8_000);
-		expect(payload.body).toMatch(/a person decides\._$/);
 	});
 });

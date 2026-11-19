@@ -11,11 +11,10 @@ export const ReviewComment = z.strictObject({
 	body: z.string().min(1).max(4000),
 });
 
-/** The PR reviewer's submission. It summarizes and assesses risk; it never approves or requests changes. */
 export const Review = z.strictObject({
-	summary: z.string().min(1).max(8000).describe("Markdown overview of the review, including findings that don't fit an inline comment."),
 	riskTier: z.enum(["trivial", "low", "medium", "high"]).describe("The overall assessment."),
 	comments: z.array(ReviewComment).max(50).describe("Actionable inline comments, most important first."),
+	summary: z.string().min(1).max(8000).describe("Markdown overview of the review, including findings that don't fit an inline comment."),
 });
 
 export type Severity = z.infer<typeof Severity>;

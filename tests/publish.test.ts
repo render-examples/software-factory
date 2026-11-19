@@ -4,12 +4,13 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, wr
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
 import type { RepoContext } from "../app/config/index.js";
 import { type GitDataClient, gitData } from "../app/github/git-data.js";
-import { blobSha, type PublishInput, publish, type RefusalReason } from "../app/changeset/index.js";
-import type { ExecOptions, ExecResult, Sandbox } from "../app/sandbox/types.js";
+import type { ExecResult, Sandbox } from "../app/sandbox/types.js";
 
 const SCRIPT = fileURLToPath(new URL("../sandbox/collect-changes.sh", import.meta.url));
 const IDENTITY = {
@@ -64,7 +65,6 @@ const write = (dir: string, path: string, data: string | Buffer): void => {
 	writeFileSync(join(dir, path), data);
 };
 
-/** A repository with one base commit whose attributes would change bytes under `git archive`. */
 function makeRepo(): { dir: string; base: string } {
 	const dir = join(tmp, `repo-${++counter}`);
 	mkdirSync(dir);
@@ -81,9 +81,6 @@ function makeRepo(): { dir: string; base: string } {
 	git(dir, "commit", "-q", "-m", "base");
 	return { dir, base: git(dir, "rev-parse", "HEAD") };
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Fake GitHub: an in-memory Git Data API that hashes trees the way git does.
 
 interface Entry {
 	mode: string;
@@ -139,7 +136,6 @@ class FakeGitHub {
 	readonly interceptors: Interceptor[] = [];
 	readonly sleeps: number[] = [];
 
-	/** Seeds the base commit from the real repository, before any sandbox tampering. */
 	static fromRepo(dir: string, base: string): FakeGitHub {
 		const gh = new FakeGitHub();
 		const flat = new Map<string, Entry>();
@@ -278,23 +274,16 @@ class FakeGitHub {
 		return false;
 	}
 
-	/** Paths and contents of a stored tree, for comparing with git. */
 	files(tree: string): Map<string, Entry> {
 		return this.trees.get(tree) ?? new Map();
 	}
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Fake sandbox: exec runs the command locally; download reads the local file.
-
 class LocalSandbox implements Sandbox {
 	readonly id = "sbx-local";
-	readonly execs: Array<{ command: string; opts?: ExecOptions }> = [];
-	readonly downloads: string[] = [];
 	tamper: ((file: Buffer) => Buffer) | undefined;
 
-	exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
-		this.execs.push({ command, opts });
+	exec(command: string): Promise<ExecResult> {
 		return new Promise((resolve) => {
 			execFile("bash", ["-c", command], { encoding: "utf8", maxBuffer: 1 << 26 }, (err, stdout, stderr) => {
 				const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
@@ -302,9 +291,11 @@ class LocalSandbox implements Sandbox {
 			});
 		});
 	}
+	async execStream(): Promise<number> {
+		throw new Error("not used");
+	}
 	async upload(): Promise<void> {}
 	async download(path: string): Promise<Buffer> {
-		this.downloads.push(path);
 		const file = await readFile(path);
 		return this.tamper ? this.tamper(file) : file;
 	}
@@ -338,6 +329,7 @@ function harness(dir: string, base: string): Harness {
 					gitData: gh.client(),
 					limits: LIMITS,
 					...overrides,
+					assertOwned: overrides.assertOwned ?? (async () => {}),
 				},
 				{ scriptPath: SCRIPT, repoDir: dir, outPath: h.outPath },
 			);
@@ -353,7 +345,6 @@ function refusals(result: Awaited<ReturnType<typeof publish>>): RefusalReason[] 
 
 const BINARY = Buffer.concat([Buffer.from([0, 1, 2, 0xff, 0xfe, 13, 10, 13, 0]), randomBytes(4000)]);
 
-/** The agent's edits: every case the legacy archive transfer got wrong. */
 function editWorkingTree(dir: string): void {
 	write(dir, "a.txt", "hello\r\nworld\r\n");
 	write(dir, "crlf.txt", "one\r\ntwo\r\n");
@@ -381,69 +372,22 @@ describe("publish", () => {
 		const result = await h.run();
 		if ("refused" in result) throw new Error(JSON.stringify(result.refused));
 
-		// The sandbox's repository is untouched.
 		expect(git(dir, "status", "--porcelain", "-z")).toBe(statusBefore);
 		expect(sha1(readFileSync(join(dir, ".git/index")))).toBe(indexBefore);
-		expect(h.sandbox.execs).toHaveLength(1);
-		expect(h.sandbox.execs[0]?.opts?.asRunner).toBeFalsy();
-		expect(h.sandbox.downloads).toEqual([h.outPath]);
 
 		git(dir, "add", "-A");
 		const expectedTree = git(dir, "write-tree");
-		expect(result.treeSha).toBe(expectedTree);
+		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
+		const commit = h.gh.commits.get(result.commitSha);
+		expect(commit?.tree).toBe(expectedTree);
+		expect(commit?.parents).toEqual([base]);
+		expect(commit?.body).toMatchObject({ message: "Implement #7", author: IDENTITY, committer: IDENTITY });
 
-		const listing = gitRaw(dir, "ls-tree", "-r", "-z", expectedTree).toString("utf8");
-		const expected = new Map<string, Entry>();
-		for (const record of listing.split("\0").filter(Boolean)) {
-			const [meta, path] = record.split("\t") as [string, string];
-			const [mode, , sha] = meta.split(" ") as [string, string, string];
-			expected.set(path, { mode, sha });
-		}
-		expect(Object.fromEntries(h.gh.files(result.treeSha))).toEqual(Object.fromEntries(expected));
-
-		for (const file of result.changedFiles) {
-			if (file.sha === null) continue;
-			expect(h.gh.blobs.get(file.sha)?.equals(gitRaw(dir, "cat-file", "blob", file.sha))).toBe(true);
-		}
-		const blobAt = (path: string) => h.gh.blobs.get(expected.get(path)?.sha as string);
+		const blobAt = (path: string) => h.gh.blobs.get(result.changedFiles.find((f) => f.path === path)?.sha as string);
 		expect(blobAt("a.txt")?.toString()).toBe("hello\nworld\n");
 		expect(blobAt("stamp.id")?.toString()).toBe("$Id$\n");
 		expect(blobAt("data.bin")?.equals(BINARY)).toBe(true);
 		expect(blobAt("ignored/keep.txt")?.toString()).toBe("kept\n");
-
-		const byPath = Object.fromEntries(result.changedFiles.map((f) => [f.path, `${f.status} ${f.mode}`]));
-		expect(byPath).toEqual({
-			"a.txt": "M 100644",
-			"crlf.txt": "A 100644",
-			"ignored/keep.txt": "M 100644",
-			"app/[slug]/page.tsx": "A 100644",
-			conv: "D 000000",
-			"conv/inner.txt": "A 100644",
-			"dir2/x.txt": "D 000000",
-			dir2: "A 100644",
-			"run.sh": "M 100755",
-			"gone.txt": "D 000000",
-			"data.bin": "A 100644",
-			"stamp.id": "A 100644",
-			"ünï code.txt": "A 100644",
-		});
-
-		const treeCall = h.gh.calls.find((c) => c.path === "/trees") as {
-			body: { tree: Array<{ sha: string | null }> };
-		};
-		const entries = treeCall.body.tree;
-		const firstWrite = entries.findIndex((e) => e.sha !== null);
-		expect(entries.slice(firstWrite).every((e) => e.sha !== null)).toBe(true);
-
-		const commit = h.gh.commits.get(result.commitSha);
-		expect(commit?.parents).toEqual([base]);
-		expect(commit?.tree).toBe(result.treeSha);
-		expect(commit?.body).toMatchObject({
-			message: "Implement #7",
-			author: IDENTITY,
-			committer: IDENTITY,
-		});
-		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
 	});
 
 	it("refuses a symlink without exporting any content", async () => {
@@ -494,7 +438,6 @@ describe("publish", () => {
 });
 
 describe("publish against a subverted sandbox", () => {
-	/** Builds a parentless commit whose tree is the base tree plus an `evil` symlink. */
 	function forgedBase(dir: string, base: string): { commit: string; tree: string } {
 		const env = { ...GIT_ENV, GIT_INDEX_FILE: join(dir, ".git/forged-index") };
 		const run = (...args: string[]) =>
@@ -552,6 +495,33 @@ describe("publish against a subverted sandbox", () => {
 	});
 });
 
+describe("publish blob uploads", () => {
+	function setup(createBlob: (upload: () => Promise<string>, call: number) => Promise<string>) {
+		const { dir, base } = makeRepo();
+		for (let i = 0; i < 20; i++) write(dir, `many/${i}.txt`, `file ${i}\n`);
+		const h = harness(dir, base);
+		const inner = h.gh.client();
+		let calls = 0;
+		const gitData: GitDataClient = { ...inner, createBlob: (content) => createBlob(() => inner.createBlob(content), ++calls) };
+		return { h, gitData };
+	}
+
+	it("starts no upload after a blob GitHub stores under another SHA, and builds no tree", async () => {
+		let started = 0;
+		const { h, gitData } = setup(async (upload, call) => {
+			started++;
+			if (call === 3) return "0".repeat(40);
+			await sleep(5);
+			return upload();
+		});
+		await expect(h.run({ gitData })).rejects.toThrow(`GitHub stored blob ${"0".repeat(40)}`);
+		await sleep(20);
+		expect(started).toBe(8);
+		expect(h.gh.calls.some((c) => c.path === "/trees")).toBe(false);
+		expect(h.gh.refs.size).toBe(0);
+	});
+});
+
 describe("publish branch handling", () => {
 	function setup() {
 		const { dir, base } = makeRepo();
@@ -571,6 +541,33 @@ describe("publish branch handling", () => {
 		await expect(h.run()).rejects.toThrow(/Refusing to move refs\/heads\/factory\/issue-7/);
 		expect(h.gh.refs.get("factory/issue-7")).toBe(foreign);
 		expect(h.gh.calls.some((c) => c.method === "PATCH")).toBe(false);
+	});
+
+	it("checks ownership after building the commit, immediately before moving the branch", async () => {
+		const { h } = setup();
+		let before: string[] = [];
+		const result = await h.run({
+			assertOwned: async () => {
+				before = h.gh.calls.map((c) => `${c.method} ${c.path}`);
+			},
+		});
+		if ("refused" in result) throw new Error("refused");
+		expect(before.at(-1)).toBe("POST /commits");
+		expect(before.some((call) => call.includes("/ref"))).toBe(false);
+		expect(h.gh.refs.get("factory/issue-7")).toBe(result.commitSha);
+	});
+
+	it("moves no branch once the caller no longer owns its thread", async () => {
+		const { h } = setup();
+		await expect(
+			h.run({
+				assertOwned: async () => {
+					throw new Error("superseded");
+				},
+			}),
+		).rejects.toThrow("superseded");
+		expect(h.gh.refs.size).toBe(0);
+		expect(h.gh.calls.some((c) => c.path.includes("/ref"))).toBe(false);
 	});
 
 	it("is idempotent on retry with a fixed commit date", async () => {

@@ -1,16 +1,21 @@
-/**
- * setup:render: create or update the environment groups render.yaml links, from local values. Idempotent.
- * It writes only the keys in ENV_GROUPS and leaves other variables in a group alone.
- */
+import { randomBytes } from "node:crypto";
 import type { Env, ScriptDeps } from "./github.js";
 import { errorMessage, type Reporter } from "./output.js";
-import { ENV_GROUPS, type EnvGroupSpec } from "./requirements.js";
+import { ENV_GROUPS, type EnvGroupSpec, WORKFLOWS_DATABASE_GROUP } from "./requirements.js";
 
-/** Values safe to show; every other group value is redacted from output. */
+export function newEventsReadToken(env: Env): string | undefined {
+	return env.EVENTS_READ_TOKEN?.trim() ? undefined : randomBytes(32).toString("hex");
+}
+
 const NOT_SECRET = new Set(["RENDER_WORKSPACE_ID", "GITHUB_APP_ID"]);
 
 export interface SetupRenderOptions extends ScriptDeps {
 	renderApiUrl?: string;
+}
+
+interface Service {
+	id: string;
+	name: string;
 }
 
 interface EnvGroup {
@@ -73,26 +78,11 @@ export async function setupRender(opts: SetupRenderOptions, out: Reporter): Prom
 		missing = true;
 		out.fail("RENDER_WORKSPACE_ID is not a workspace ID", "It looks like tea-…; find it in Workspace Settings");
 	}
-	// Writing nothing until every value is present keeps a half-filled group from reaching a deploy.
 	if (missing || !workspace) return out.summary();
 	out.pass(`all ${ENV_GROUPS.reduce((n, group) => n + group.keys.length, 0)} values are set`);
 
 	const api = new RenderApi(env.RENDER_API_KEY?.trim() ?? "", opts);
-	out.heading(`Render workspace ${workspace}`);
-	const owner = await api.request<{ name?: string }>("GET", `/owners/${encodeURIComponent(workspace)}`);
-	if (owner.status === 401 || owner.status === 403) {
-		out.fail(`RENDER_API_KEY was rejected by the Render API (${owner.status})`, "Create a key in Account Settings > API Keys");
-		return out.summary();
-	}
-	if (owner.status === 404) {
-		out.fail(`workspace ${workspace} was not found`, "Check RENDER_WORKSPACE_ID and that the API key's user belongs to the workspace");
-		return out.summary();
-	}
-	if (owner.status < 200 || owner.status >= 300) {
-		out.fail(`the Render API returned ${owner.status} for the workspace`);
-		return out.summary();
-	}
-	out.pass(`RENDER_API_KEY can access ${owner.data?.name ?? workspace}`);
+	if (!(await canAccessWorkspace(api, workspace, out))) return out.summary();
 
 	for (const group of ENV_GROUPS) {
 		try {
@@ -104,11 +94,98 @@ export async function setupRender(opts: SetupRenderOptions, out: Reporter): Prom
 	return out.summary();
 }
 
+const APPLY_BLUEPRINT_FIRST = "Apply the Blueprint first: it links factory-db to factory-gateway. Then rerun this command";
+
+export async function linkDatabase(opts: SetupRenderOptions, out: Reporter): Promise<number> {
+	const { env } = opts;
+	const apiKey = env.RENDER_API_KEY?.trim();
+	const workspace = env.RENDER_WORKSPACE_ID?.trim();
+	out.addSecrets(apiKey);
+
+	out.heading("Values from .env");
+	if (!apiKey) out.fail("RENDER_API_KEY is not set", "Add it to .env");
+	if (!workspace) out.fail("RENDER_WORKSPACE_ID is not set", "Pass --workspace tea-… or add it to .env");
+	else if (!workspace.startsWith("tea-")) out.fail("RENDER_WORKSPACE_ID is not a workspace ID", "It looks like tea-…; find it in Workspace Settings");
+	if (!apiKey || !workspace?.startsWith("tea-")) return out.summary();
+	out.pass("RENDER_API_KEY and RENDER_WORKSPACE_ID are set");
+
+	const api = new RenderApi(apiKey, opts);
+	if (!(await canAccessWorkspace(api, workspace, out))) return out.summary();
+
+	try {
+		const databaseUrl = await gatewayDatabaseUrl(api, workspace, out);
+		if (!databaseUrl) return out.summary();
+		await syncGroup(api, WORKFLOWS_DATABASE_GROUP, workspace, { DATABASE_URL: databaseUrl }, out);
+	} catch (error) {
+		out.fail(`could not link the database: ${errorMessage(error)}`);
+	}
+	if (!out.count("fail")) out.line("factory-workflows picks up DATABASE_URL on its next deploy: redeploy it from the Render Dashboard");
+	return out.summary();
+}
+
+const GATEWAY_NAME = /^factory-gateway(-[a-z0-9]+)?$/;
+const PAGE_SIZE = 100;
+
+async function gatewayDatabaseUrl(api: RenderApi, workspace: string, out: Reporter): Promise<string | undefined> {
+	out.heading("factory-gateway");
+	const gateways: Service[] = [];
+	let cursor: string | undefined;
+	do {
+		const query = new URLSearchParams({ ownerId: workspace, type: "web_service", limit: String(PAGE_SIZE), ...(cursor ? { cursor } : {}) });
+		const page = (await api.expect<{ cursor: string; service: Service }[]>("GET", `/services?${query}`)) ?? [];
+		gateways.push(...page.map((item) => item.service).filter((service) => GATEWAY_NAME.test(service.name)));
+		cursor = page.length === PAGE_SIZE ? page.at(-1)?.cursor : undefined;
+	} while (cursor);
+
+	const [gateway] = gateways;
+	if (!gateway) {
+		out.fail(`no factory-gateway service in workspace ${workspace}`, APPLY_BLUEPRINT_FIRST);
+		return undefined;
+	}
+	if (gateways.length > 1) {
+		out.fail(
+			`${gateways.length} web services could be the gateway: ${gateways.map((s) => s.name).join(", ")}`,
+			"Rename the ones the Blueprint didn't create in the Render Dashboard",
+		);
+		return undefined;
+	}
+
+	const path = `/services/${encodeURIComponent(gateway.id)}/env-vars/DATABASE_URL`;
+	const { status, data } = await api.request<{ value?: string }>("GET", path);
+	if (status !== 404 && (status < 200 || status >= 300)) throw new Error(`GET ${path} returned ${status}`);
+	const value = status === 404 ? undefined : data?.value?.trim();
+	out.addSecrets(value);
+	if (!value) {
+		out.fail(`${gateway.name} has no DATABASE_URL`, APPLY_BLUEPRINT_FIRST);
+		return undefined;
+	}
+	out.pass(`${gateway.name} has DATABASE_URL`);
+	return value;
+}
+
+async function canAccessWorkspace(api: RenderApi, workspace: string, out: Reporter): Promise<boolean> {
+	out.heading(`Render workspace ${workspace}`);
+	const owner = await api.request<{ name?: string }>("GET", `/owners/${encodeURIComponent(workspace)}`);
+	if (owner.status === 401 || owner.status === 403) {
+		out.fail(`RENDER_API_KEY was rejected by the Render API (${owner.status})`, "Create a key in Account Settings > API Keys");
+		return false;
+	}
+	if (owner.status === 404) {
+		out.fail(`workspace ${workspace} was not found`, "Check RENDER_WORKSPACE_ID and that the API key's user belongs to the workspace");
+		return false;
+	}
+	if (owner.status < 200 || owner.status >= 300) {
+		out.fail(`the Render API returned ${owner.status} for the workspace`);
+		return false;
+	}
+	out.pass(`RENDER_API_KEY can access ${owner.data?.name ?? workspace}`);
+	return true;
+}
+
 async function syncGroup(api: RenderApi, spec: EnvGroupSpec, workspace: string, env: Env, out: Reporter): Promise<void> {
 	out.heading(`Env group ${spec.name} (${spec.services.map((s) => `factory-${s}`).join(", ")})`);
 	const query = new URLSearchParams({ name: spec.name, ownerId: workspace, limit: "100" });
 	const listed = await api.expect<{ envGroup: EnvGroup }[]>("GET", `/env-groups?${query}`);
-	// Blueprints link groups by name, so a second group with the same name makes the link ambiguous.
 	const matches = (listed ?? []).map((item) => item.envGroup).filter((group) => group.name === spec.name && group.ownerId === workspace);
 	if (matches.length > 1) {
 		out.fail(`${matches.length} env groups are named ${spec.name}`, "Delete or rename the extra groups in the Render Dashboard");

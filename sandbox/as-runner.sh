@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Runs a command as $FACTORY_RUN_AS from the repository checkout with a minimal environment. As root it drops
-# privileges with setpriv; otherwise it only scrubs the environment.
-# Usage: as-runner.sh <command> [args...]
 set -euo pipefail
 
 # shellcheck source=/dev/null
