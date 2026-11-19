@@ -7,6 +7,12 @@ software-factory is a GitHub-native coding agent template for Render. AI agents
 triage issues, write specs, implement them in isolated Render Sandboxes, and
 review pull requests. You make the judgment calls.
 
+It's a foundation, not a finished product. The template handles authenticating
+GitHub events, running agents in isolated Sandboxes, coordinating overlapping
+runs and cancellation, validating agent output, publishing code safely, and
+recording every run. You bring the agents, prompts, triggers, approval gates,
+and channels your workflow needs.
+
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
 
 ## How it works
@@ -23,7 +29,7 @@ review pull requests. You make the judgment calls.
 - **Autopilot** runs Triage and Spec-to-PR with no approval between them, then
   starts PR Reviewer on the draft pull request.
 
-Each stage is a Render Workflows task, and each agent runs in its own Sandbox,
+Each stage is a Render Workflows task that runs its agents in its own Sandbox,
 created from a snapshot pre-baked with your repository, its dependencies, and
 the agent runner. Agents propose typed results and file trees; code in the
 Workflows service checks them and decides every repository, branch, issue, and
@@ -40,25 +46,6 @@ The factory deploys as one Render project:
 - **Postgres** (`factory-db`) is the source of truth: an append-only event log
   of every delivery, task run, and agent run. It records which run owns each
   issue or pull request, and the status comment on GitHub is rendered from it.
-
-Credentials stay out of reach of the agents:
-
-- GitHub write credentials never enter a Sandbox. Clone and fetch credentials
-  are read-only and removed before repository code or agents run.
-- Sandboxes reach only an HTTPS allow-list: GitHub, the agents' model APIs,
-  and the hosts each repository's install and verify commands need.
-- Nothing in a Sandbox holds a database credential. The Workflows host records
-  agent runs, and their outcomes and costs come from its own reading of the
-  result.
-- Agents load no instructions, skills, or extensions from the repository.
-- Publishing rejects unsafe paths and modes, workflow files, symlinks,
-  submodules, oversized changes, and branches with human commits, and GitHub
-  must reproduce the candidate tree SHA before the factory publishes it.
-
-Allowed hosts can still carry data out, and the model key exists in runner
-memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
-and [residual risks](docs/architecture.md#residual-risks) before using private
-code or untrusted pull requests.
 
 ## How work arrives
 
@@ -87,6 +74,27 @@ Apply a label to start a stage:
 
 Only people with `minimumPermission` on the repository (`write` by default)
 can start a run.
+
+## Security
+
+Credentials stay out of reach of the agents:
+
+- GitHub write credentials never enter a Sandbox. Clone and fetch credentials
+  are read-only and removed before repository code or agents run.
+- Sandboxes reach only an HTTPS allow-list: GitHub and the agents' model APIs.
+  Add anything your repository's install and verify commands need.
+- Nothing in a Sandbox holds a database credential. The Workflows host records
+  agent runs, and their outcomes and costs come from its own reading of the
+  result.
+- Agents load no instructions, skills, or extensions from the repository.
+- Publishing rejects unsafe paths and modes, workflow files, symlinks,
+  submodules, oversized changes, and branches with human commits, and GitHub
+  must reproduce the candidate tree SHA before the factory publishes it.
+
+Allowed hosts can still carry data out, and the model key exists in runner
+memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
+and [residual risks](docs/architecture.md#residual-risks) before using private
+code or untrusted pull requests.
 
 ## Deploy
 
@@ -123,24 +131,19 @@ You take over at each checkpoint: committing, creating the App, entering
 secrets, approving paid resources, activating the webhook, and labeling the
 first issue. See the [Quickstart](docs/quickstart.md) for the full list.
 
-Configuration lives in [`factory.config.ts`](factory.config.ts):
+Configure each repository in [`factory.config.ts`](factory.config.ts):
 
-| Setting | Default | What it does |
+| Setting | Required | What it does |
 | --- | --- | --- |
-| `repos.<owner/name>.baseBranch` | none | Branch used for Triage, implementation, and snapshots |
-| `repos.<owner/name>.install` | none | Dependency command, run after clone credentials are removed |
-| `repos.<owner/name>.verify` | none | Commands that must pass before publishing, and that PR Reviewer runs |
-| `repos.<owner/name>.egress` | none | Extra HTTPS hosts the repository's Sandboxes may reach, or `"allow-all"` |
-| `labels.*` | `factory:triage`, `factory:spec-approved`, `factory:pr-review`, `factory:autopilot` | Trigger label names |
-| `commandPrefix` | `/factory` | Prefix for commands such as `/factory cancel` |
-| `minimumPermission` | `write` | Repository permission required to start work |
-| `limits.repairRounds` | `2` | Repair attempts after failed verification |
-| `limits.maxChangedFiles` | `200` | Maximum files in a published change |
-| `limits.maxFileBytes` | `1000000` | Maximum size of one changed file, in bytes |
-| `sandbox.timeoutSeconds` | `14400` | Sandbox lifetime in seconds |
+| `baseBranch` | Yes | Branch used for Triage, implementation, and snapshots |
+| `verify` | Yes | Commands that must pass before publishing, and that PR Reviewer runs |
+| `install` | No | Dependency command, run after clone credentials are removed |
+| `egress` | No | Extra HTTPS hosts the repository's Sandboxes may reach, or `"allow-all"` |
 
-Agent models are set in [`app/agents/models.ts`](app/agents/models.ts). Secrets
-and environment groups are covered in [Configuration](docs/configuration.md).
+Labels, `minimumPermission`, and limits are set in the same file, with their
+defaults listed in [Configuration](docs/configuration.md#labels-permission-and-limits).
+Agent models are set in [`app/agents/models.ts`](app/agents/models.ts), and
+secrets and environment groups are covered in [Configuration](docs/configuration.md).
 
 ## Watch agents work
 
