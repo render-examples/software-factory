@@ -44,22 +44,21 @@ export class Submission {
 	#accepted: { output: unknown } | undefined;
 	#rejected = 0;
 
-	readonly #markup: RegExp;
-
-	constructor(private readonly schema: JsonOutputSchema) {
-		const fields = Object.keys((schema.properties as Record<string, unknown>) ?? {}).map(escapeRegExp);
-		this.#markup = new RegExp(`<\\/?(?:parameter|invoke)\\b[^>]*>|<\\/(?:${[SUBMIT_TOOL, ...fields].join("|")})\\b[^>]*>`);
-	}
+	constructor(private readonly schema: JsonOutputSchema) {}
 
 	get accepted(): { output: unknown } | undefined {
 		return this.#accepted;
 	}
 
 	check(args: unknown): SubmitCheck {
-		const cleaned = cutAtMarkup(this.#markup, args);
-		const invalid = schemaProblems(this.schema, cleaned);
-		if (invalid.length === 0) return { ok: true, checked: cleaned };
-		const problems = [...markupProblems(this.#markup, args), ...invalid];
+		if (schemaProblems(this.schema, args).length === 0) {
+			const trimmed = mapStrings(args, (text) => text.replace(TRAILING_TOOL_CALL, ""));
+			return { ok: true, checked: schemaProblems(this.schema, trimmed).length === 0 ? trimmed : structuredClone(args) };
+		}
+		const recovered = mapStrings(args, (text) => text.replace(LEAKED_TOOL_CALL, "").trimEnd());
+		const invalid = schemaProblems(this.schema, recovered);
+		if (invalid.length === 0) return { ok: true, checked: recovered };
+		const problems = [...markupProblems(args), ...invalid];
 		this.#rejected++;
 		const remaining = MAX_SUBMIT_ATTEMPTS - this.#rejected;
 		const message =
@@ -90,27 +89,26 @@ function schemaProblems(schema: JsonOutputSchema, args: unknown): string[] {
 	return found.length > 0 ? [...new Set(found)] : ["(root): does not match the output schema"];
 }
 
-function cutAtMarkup(pattern: RegExp, value: unknown): unknown {
-	if (typeof value === "string") {
-		const at = value.search(pattern);
-		return at === -1 ? value : value.slice(0, at).trimEnd();
-	}
-	if (Array.isArray(value)) return value.map((item) => cutAtMarkup(pattern, item));
-	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cutAtMarkup(pattern, item)]));
+const TOOL_CALL = /<\/?(?:parameter|invoke)\b[^>]*>|<\/submit>/;
+const LEAKED_TOOL_CALL = new RegExp(`(?:<\\/[A-Za-z][\\w-]*>\\s*)*(?:${TOOL_CALL.source})[\\s\\S]*$`);
+const TRAILING_TOOL_CALL = /(?:\s*<\/[A-Za-z][\w-]*>)*\s*<\/(?:invoke|parameter|submit)>\s*$/;
+
+function mapStrings(value: unknown, fn: (text: string) => string): unknown {
+	if (typeof value === "string") return fn(value);
+	if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn));
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, fn)]));
 	return value;
 }
 
-function markupProblems(pattern: RegExp, value: unknown, path = ""): string[] {
+function markupProblems(value: unknown, path = ""): string[] {
 	if (typeof value === "string") {
-		const markup = pattern.exec(value)?.[0];
+		const markup = TOOL_CALL.exec(value)?.[0];
 		if (!markup) return [];
 		return [
 			`${path || "(root)"}: contains tool-call markup (${markup.slice(0, 60)}); send every field as its own JSON property, not as markup inside a string`,
 		];
 	}
-	if (Array.isArray(value)) return value.flatMap((item, i) => markupProblems(pattern, item, `${path}/${i}`));
-	if (value && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => markupProblems(pattern, item, `${path}/${key}`));
+	if (Array.isArray(value)) return value.flatMap((item, i) => markupProblems(item, `${path}/${i}`));
+	if (value && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => markupProblems(item, `${path}/${key}`));
 	return [];
 }
-
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

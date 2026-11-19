@@ -101,6 +101,14 @@ describe.each(HARNESSES)("$name harness conformance", { timeout: 30_000 }, ({ ma
 		expect(code).toBe(0);
 	});
 
+	it("keeps a valid submission's HTML and quoted XML exactly as written", async () => {
+		const ws = makeWorkspace();
+		const written = { ...GOOD, summary: '<details><summary>Results</summary>Set <parameter name="retries">3</parameter> in pom.xml.</details>' };
+		const { code, events } = await runContract(make([call(SUBMIT, written)]), makeInput(ws));
+		expect(terminal(events)).toMatchObject({ type: "result", output: written });
+		expect(code).toBe(0);
+	});
+
 	it("stops after the last rejected submission and says what was wrong with it", async () => {
 		const ws = makeWorkspace();
 		const bad = call(SUBMIT, { summary: "ok summary", files: "README.md" });

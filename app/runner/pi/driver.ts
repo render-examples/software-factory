@@ -102,7 +102,7 @@ async function openSession(
 	tools: ToolDefinition[],
 ): Promise<AgentSession> {
 	const agentDir = await mkdtemp(join(ctx.scratchDir, "pi-agent-"));
-	const settingsManager = SettingsManager.inMemory(SETTINGS);
+	const settingsManager = SettingsManager.inMemory(SETTINGS, { projectTrusted: false });
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: ctx.cwd,
 		agentDir,
@@ -113,6 +113,7 @@ async function openSession(
 		noThemes: true,
 		noContextFiles: true,
 		systemPrompt: ctx.systemPrompt,
+		appendSystemPrompt: [],
 	});
 	await resourceLoader.reload();
 	const { session } = await createAgentSession({

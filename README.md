@@ -15,6 +15,13 @@ and channels your workflow needs.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
 
+> [!IMPORTANT]
+> Follow the [Setup runbook](docs/runbooks/setup.md) before you apply the
+> Blueprint. It configures your fork and creates the environment groups the
+> Blueprint expects. The Blueprint creates a paid Postgres database, and after
+> applying it you link the database to Workflows
+> (`npm run setup:render -- --link-database`) and redeploy `factory-workflows`.
+
 ## How it works
 
 - **Triage** reads the issue, the discussion, and the repository, then asks
@@ -99,6 +106,13 @@ code or untrusted pull requests.
 ## Deploy
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
+
+> [!IMPORTANT]
+> Follow the [Setup runbook](docs/runbooks/setup.md) before you apply the
+> Blueprint. It configures your fork and creates the environment groups the
+> Blueprint expects. The Blueprint creates a paid Postgres database, and after
+> applying it you link the database to Workflows
+> (`npm run setup:render -- --link-database`) and redeploy `factory-workflows`.
 
 The [Blueprint](render.yaml) creates a `software-factory` project with
 `factory-gateway` (a Starter web service), `factory-workflows` (a Workflows

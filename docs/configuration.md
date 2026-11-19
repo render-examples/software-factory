@@ -279,6 +279,32 @@ shell where it runs.
 | Database migration in `app/db/migrations/` | Deploy both services; whichever starts first applies it |
 | Repository `install` command or lockfiles | Refresh the snapshot, or let the next task reinstall |
 
+## Upgrade an existing deployment
+
+A deployment from before the event log has no database and no
+`EVENTS_READ_TOKEN`. The gateway won't start without the token, so provision it
+before the new code deploys:
+
+1. Let running factory tasks finish, or comment `/factory cancel` on them.
+2. With the new version checked out locally and your `.env` in place, run
+   `npm run setup:render`. It adds `EVENTS_READ_TOKEN` to the
+   `software-factory-gateway` group and saves it to `.env`.
+3. Push the new version to the branch your Blueprint deploys, then sync the
+   Blueprint. It creates the paid `factory-db` and gives the gateway its
+   `DATABASE_URL`; the gateway applies the migrations when it starts.
+4. Run `npm run setup:render -- --link-database`, then redeploy
+   `factory-workflows`, so Workflows can reach the database.
+5. Run `npm run doctor` for both services, as in [Check a deployment](#check-a-deployment).
+6. Refresh every repository's snapshot (see [Refresh a snapshot](#refresh-a-snapshot)),
+   because `sandbox/run-agent.sh` changed.
+7. Restart issues that were waiting for a reply. The new database has no record
+   of earlier runs, so a reply on an issue where Triage asked questions starts
+   nothing. Apply `factory:triage` (or `factory:autopilot`) again; Triage
+   rereads the whole conversation, including the answers.
+
+Trigger labels are now removed when their run starts. Labels left on open
+issues from the previous version no longer mean anything; remove them.
+
 ## Follow and control runs
 
 Active issues and pull requests carry `factory:working`. The App-authored
