@@ -1,107 +1,148 @@
 # software-factory
 
-software-factory is an extensible template for building GitHub-native coding agent
-workflows on Render. It includes a complete issue-to-PR workflow that you can
-run, change, or use as the foundation for your own automations.
+[![Render](https://img.shields.io/badge/Render-000?style=flat-square&logo=render&logoColor=FFF&labelColor=000&color=000)](https://render.com/docs/workflows)
+[![MIT License](https://img.shields.io/badge/License-MIT-000?style=flat-square&logo=opensourceinitiative&logoColor=white&labelColor=000&color=000)](LICENSE)
+
+software-factory is a GitHub-native coding agent template for Render. AI agents
+triage issues, write specs, implement them in isolated Render Sandboxes, and
+review pull requests. You make the judgment calls.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
 
-## Setup
-
-Setup is agent-guided:
-
-1. Check the prerequisites in the [Quickstart](docs/quickstart.md).
-2. Ask a coding agent to follow the [Setup runbook](docs/runbooks/setup.md).
-3. Approve the GitHub, secret, and paid-resource checkpoints when prompted.
-
-**What software-factory solves for you:**
-1. Authenticating GitHub events and routing them to durable Render Workflows tasks.
-2. Running agents and tools inside short-lived, isolated Render Sandboxes.
-3. Handling overlapping runs, cancellation, cleanup, and idempotency.
-4. Validating typed agent output and safely publishing proposed code to GitHub.
-5. Recording every delivery, task run, and agent run in a Postgres event log, and streaming agent runs live.
-6. Providing deployment configuration, setup scripts, and health checks.
-
-**What software-factory leaves for you:**
-1. The agents, prompts, and workflow logic for your use case.
-2. Repository-specific install and verification commands.
-3. The GitHub triggers, approval gates, and permissions your workflow needs.
-4. Model selection, budgets, and evaluation strategy.
-5. Channel integrations.
-6. Data your workflows persist beyond the factory's event log.
-
-## Included workflows
-
-- **Triage:** reads the issue, discussion, and repository. It asks questions,
-  writes a specification, or declines the request.
-- **Spec-to-PR:** implements the approved specification, runs your verification
-  commands, and opens a draft pull request.
-- **PR Reviewer:** runs verification and reviews security, correctness,
-  performance, and tests. It posts a non-approving GitHub COMMENT review.
-
 ## How it works
 
-### Architecture
+- **Triage** reads the issue, the discussion, and the repository, then asks
+  questions, drafts a spec, or declines. A reply to its questions, or a request
+  for changes to its spec, resumes it.
+- **Spec-to-PR** implements the approved spec, runs your verification
+  commands, repairs failures a bounded number of times, and opens a draft pull
+  request.
+- **PR Reviewer** runs your verification commands against a pull request and
+  reviews security, correctness, performance, and tests. It posts one COMMENT
+  review and never approves or requests changes.
+- **Autopilot** runs Triage and Spec-to-PR with no approval between them, then
+  starts PR Reviewer on the draft pull request.
 
-The factory deploys as one Render project with two services and a database,
-and creates Sandboxes as it needs them:
+Each stage is a Render Workflows task, and each agent runs in its own Sandbox,
+created from a snapshot pre-baked with your repository, its dependencies, and
+the agent runner. Agents propose typed results and file trees; code in the
+Workflows service checks them and decides every repository, branch, issue, and
+pull request the factory touches.
 
-- **GitHub** holds the conversation: issues, labels, specs, pull requests, and
-  reviews. People work there, and the factory writes its results back.
+The factory deploys as one Render project:
+
 - **Gateway** (`factory-gateway`, a web service) verifies each GitHub webhook,
   records it, and starts the matching Workflows task. It also serves the live
   event streams. It holds no GitHub credentials and runs no model.
-- **Workflows** (`factory-workflows`, a Render Workflows service) runs each
-  task, such as Triage or Spec-to-PR, as a durable task run. It's the only
-  part that writes to GitHub, and it decides every repository, branch, and
-  pull request the factory touches.
-- **Sandboxes** run the agents and your verification commands, each in an
-  isolated VM created from a snapshot pre-baked with the repository, its
-  dependencies, and the agent runner. A Sandbox reaches only an HTTPS
-  allow-list and holds no GitHub write or database credentials.
+- **Workflows** (`factory-workflows`) runs each task as a durable task run.
+  It's the only part that writes to GitHub.
+- **Sandboxes** run the agents and your verification commands in isolated VMs.
 - **Postgres** (`factory-db`) is the source of truth: an append-only event log
-  of every delivery, task run, and agent run, with tables derived from it. It
-  records which run owns each issue or pull request, and the status comment
-  on GitHub is rendered from it.
+  of every delivery, task run, and agent run. It records which run owns each
+  issue or pull request, and the status comment on GitHub is rendered from it.
 
-A label on an issue becomes a webhook to the gateway, which starts a task in
-Workflows. The task opens a Sandbox, runs an agent there, records what happens
-in Postgres, and writes the result back to GitHub.
+Credentials stay out of reach of the agents:
 
-### Labels
+- GitHub write credentials never enter a Sandbox. Clone and fetch credentials
+  are read-only and removed before repository code or agents run.
+- Sandboxes reach only an HTTPS allow-list: GitHub, the agents' model APIs,
+  and the hosts each repository's install and verify commands need.
+- Nothing in a Sandbox holds a database credential. The Workflows host records
+  agent runs, and their outcomes and costs come from its own reading of the
+  result.
+- Agents load no instructions, skills, or extensions from the repository.
+- Publishing rejects unsafe paths and modes, workflow files, symlinks,
+  submodules, oversized changes, and branches with human commits, and GitHub
+  must reproduce the candidate tree SHA before the factory publishes it.
 
-The factory uses GitHub labels to trigger actions:
+Allowed hosts can still carry data out, and the model key exists in runner
+memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
+and [residual risks](docs/architecture.md#residual-risks) before using private
+code or untrusted pull requests.
+
+## How work arrives
+
+Apply a label to start a stage:
 
 | Label | Apply to | Starts |
 | --- | --- | --- |
-| `factory:triage` | Issue | Triage, which asks questions, drafts a spec, or declines. |
-| `factory:spec-approved` | Issue | Spec-to-PR, which implements the current spec and opens a draft pull request. |
-| `factory:pr-review` | Pull request | PR Reviewer, which reviews the pull request's head commit. |
-| `factory:autopilot` | Issue | Triage and Spec-to-PR with no approval between them, then PR Reviewer on the draft pull request. |
+| `factory:triage` | Issue | Triage |
+| `factory:spec-approved` | Issue | Spec-to-PR, on the issue's current spec |
+| `factory:pr-review` | Pull request | PR Reviewer, on the pull request's head commit |
+| `factory:autopilot` | Issue | Triage and Spec-to-PR, then PR Reviewer on the draft pull request |
 
-Each label is a command. The factory removes it when the run starts, so apply
-it again to run the stage again. The factory shows `factory:working` while a
-run is in progress.
-
-- **Approval:** apply `factory:spec-approved` after you review a spec.
-- **Replies:** after Triage asks questions or drafts a spec, a comment resumes
-  it, so answer the questions or ask for changes in the issue. Comments at
-  other times start nothing. Autopilot waits the same way when Triage asks
-  questions.
-- **One run at a time:** starting a run on an issue or pull request stops
+- **Labels are commands.** The factory removes a label when its run starts, so
+  apply it again to run the stage again. It shows `factory:working` while a run
+  is in progress.
+- **Replies resume Triage.** After Triage asks questions or drafts a spec, a
+  comment on the issue resumes it. Comments at other times start nothing.
+  Autopilot waits the same way when Triage asks questions.
+- **One run at a time.** Starting a run on an issue or pull request stops
   whatever was running there.
-- **Cancel:** comment `/factory cancel` on the issue or pull request.
-- **Each issue and pull request stands alone:** work runs on the issue or pull
-  request it acts on, and its status appears there. When Autopilot opens a
-  draft pull request, it starts PR Reviewer on that pull request, so you follow,
-  cancel, or rerun the review there like any other.
-- **Permission:** only people with `minimumPermission` on the repository
-  (`write` by default) can start a run.
+- **Cancel** by commenting `/factory cancel` on the issue or pull request.
+- **Each issue and pull request stands alone.** Work runs on the issue or pull
+  request it acts on, and its status appears there. Follow, cancel, or rerun
+  the review Autopilot starts on its draft pull request like any other.
+- **A push to a base branch** refreshes that repository's Sandbox snapshot.
 
-Label names and `minimumPermission` are set in `factory.config.ts`.
+Only people with `minimumPermission` on the repository (`write` by default)
+can start a run.
 
+## Deploy
 
-### Watch agents work
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy-template/api/github/start?template_repo=software-factory)
+
+The [Blueprint](render.yaml) creates a `software-factory` project with
+`factory-gateway` (a Starter web service), `factory-workflows` (a Workflows
+service), and `factory-db` (a Basic-256mb Postgres database). Sandbox and model
+usage are billed separately.
+
+Setup is agent-guided. Prepare a fork of this repository, a Render workspace
+with Sandboxes access, a Render API key, an Anthropic API key with a spend
+limit, and admin access to each target repository. Then open your fork in a
+coding agent:
+
+```text
+Set up software-factory by following docs/runbooks/setup.md.
+Configure <owner/repository> with base branch <branch>.
+Stop at every human checkpoint. Do not print or expose secrets.
+```
+
+The [Setup runbook](docs/runbooks/setup.md) walks the agent through:
+
+1. Configuring your repositories in `factory.config.ts` and publishing the fork.
+2. Creating and installing the GitHub App (`npm run setup:app`).
+3. Creating the Render environment groups from `.env` (`npm run setup:render`).
+4. Applying the Blueprint, then linking the database to Workflows
+   (`npm run setup:render -- --link-database`).
+5. Configuring the App's webhook and labels (`npm run setup:github`) and
+   activating the webhook.
+6. Checking both services with `npm run doctor`, then smoke-testing Triage.
+
+You take over at each checkpoint: committing, creating the App, entering
+secrets, approving paid resources, activating the webhook, and labeling the
+first issue. See the [Quickstart](docs/quickstart.md) for the full list.
+
+Configuration lives in [`factory.config.ts`](factory.config.ts):
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `repos.<owner/name>.baseBranch` | none | Branch used for Triage, implementation, and snapshots |
+| `repos.<owner/name>.install` | none | Dependency command, run after clone credentials are removed |
+| `repos.<owner/name>.verify` | none | Commands that must pass before publishing, and that PR Reviewer runs |
+| `repos.<owner/name>.egress` | none | Extra HTTPS hosts the repository's Sandboxes may reach, or `"allow-all"` |
+| `labels.*` | `factory:triage`, `factory:spec-approved`, `factory:pr-review`, `factory:autopilot` | Trigger label names |
+| `commandPrefix` | `/factory` | Prefix for commands such as `/factory cancel` |
+| `minimumPermission` | `write` | Repository permission required to start work |
+| `limits.repairRounds` | `2` | Repair attempts after failed verification |
+| `limits.maxChangedFiles` | `200` | Maximum files in a published change |
+| `limits.maxFileBytes` | `1000000` | Maximum size of one changed file, in bytes |
+| `sandbox.timeoutSeconds` | `14400` | Sandbox lifetime in seconds |
+
+Agent models are set in [`app/agents/models.ts`](app/agents/models.ts). Secrets
+and environment groups are covered in [Configuration](docs/configuration.md).
+
+## Watch agents work
 
 Every agent run is recorded in Postgres with its messages, tool calls, usage,
 and cost. The gateway streams them as server-sent events, with the model's
@@ -117,6 +158,27 @@ Use `pr` for a pull request. A dropped connection resumes where it left off
 when the client sends the last event ID it saw as `Last-Event-ID`. See
 [Event streams](docs/configuration.md#event-streams) for the per-run endpoint
 and the event types.
+
+## Local development
+
+Local development uses real Render Sandboxes, a real GitHub App, and a real
+model, so use a test repository and, when possible, a separate App:
+
+```bash
+npm ci
+cp .env.example .env
+npm run dev:workflows                               # terminal 1
+RENDER_USE_LOCAL_DEV=true npm run dev:gateway       # terminal 2
+```
+
+Before you push a change to the factory itself:
+
+```bash
+npm run check   # lint, typecheck, and tests; GitHub, Render, and models are faked
+```
+
+See [Contributing](CONTRIBUTING.md) for exposing the gateway to GitHub,
+starting tasks directly, and the real-Postgres tests.
 
 ## Extend the template
 
@@ -134,36 +196,11 @@ The built-in agents and tasks are examples of the template's extension model:
   the gateway and key its conversations as `<channel>:<id>` threads in
   `app/threads/`. The event log, thread ownership, and live streams work for
   any channel; you add its tasks, permission check, and status updates.
-- Change repositories, verification commands, permissions, and limits in
-  `factory.config.ts`, and agent models in `app/agents/models.ts`.
 
 The Sandbox runner, run lifecycle, GitHub client, formatting helpers, and
 publishing boundary are reusable building blocks. Start with the
 [extension runbook](docs/runbooks/extend.md), which covers the required files,
 tests, authority rules, deploys, and snapshot refreshes.
-
-## Security
-
-- Model-directed code and tools run inside Sandboxes, not on the Workflow task.
-- GitHub write credentials never enter a Sandbox.
-- Clone and fetch credentials are read-only and removed before repository code
-  or agents run.
-- Models propose typed results and file trees. Code in the Workflows service
-  chooses every repository, ref, branch, issue, pull request, and write target.
-- Publishing rejects unsafe paths and modes, workflow files, symlinks,
-  submodules, oversized changes, and branches with human commits.
-- GitHub must reproduce the candidate tree SHA before the factory publishes
-  it.
-- Sandboxes reach only an HTTPS allow-list: GitHub, the agents' model APIs,
-  and the hosts each repository's install and verify commands need.
-- Nothing in a Sandbox holds a database credential. The Workflows host
-  records agent runs, and their outcomes and costs come from its own reading
-  of the result.
-
-Allowed hosts can still carry data out, and the model key exists in runner
-memory during a call. Read the [trust boundaries](docs/architecture.md#trust-boundaries)
-and [residual risks](docs/architecture.md#residual-risks) before using private
-code or untrusted pull requests.
 
 ## Limits
 
@@ -172,20 +209,18 @@ code or untrusted pull requests.
   budget.
 - Anyone with `minimumPermission` can start model spend.
 - PR Reviewer runs configured commands against the labeled pull request.
-- Sandbox API calls count against the Render workspace's request limit.
 
-## Documentation
+## Resources
 
-- [Quickstart](docs/quickstart.md) — what you need and how to start setup.
-- [Setup runbook](docs/runbooks/setup.md) — agent protocol for the first
-  deployment.
-- [Configuration](docs/configuration.md) — settings, environment groups, run
-  control, event streams, snapshots, deployment checks, and the database.
-- [Architecture](docs/architecture.md) — execution, state, the event log,
-  coordination, and trust boundaries.
-- [Extension runbook](docs/runbooks/extend.md) — add agents, Workflows tasks,
-  and GitHub triggers.
-- [Contributing](CONTRIBUTING.md) — local development and verification.
+- [Quickstart](docs/quickstart.md) and [Setup runbook](docs/runbooks/setup.md)
+- [Configuration](docs/configuration.md): settings, environment groups, run
+  control, event streams, snapshots, deployment checks, and the database
+- [Architecture](docs/architecture.md): execution, state, the event log,
+  coordination, and trust boundaries
+- [Extension runbook](docs/runbooks/extend.md)
+- [Render Workflows](https://render.com/docs/workflows),
+  [Render Sandboxes](https://render.com/docs/sandboxes), and
+  [Blueprints](https://render.com/docs/blueprint-spec)
 
 ## License
 
